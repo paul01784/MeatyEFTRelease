@@ -1,0 +1,146 @@
+{
+    "aimGlobals": {
+        "aiBone": 1,
+        "aimDistance": 100,
+        "aimEnabled": false,
+        "aimFOV": 50.0,
+        "pmcBone": 1
+    },
+    "app": {
+        "appFuserFullScreen": false,
+        "appFuserMaxFPS": 60.0,
+        "appFuserScreen": -1,
+        "appRadarMaxFPS": 60.0,
+        "appWindowAlpha": 0.699999988079071
+    },
+    "coloursGlobals": {
+        "aiBTR": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "crosshair": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "exfils": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "fovCircle": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "grenades": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerAI": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerBoss": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerCorpse": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerFriendly": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerGroupLine": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerLocal": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerPMC": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerScav": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "playerWatched": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        },
+        "questMarker": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+        }
+    },
+    "espGlobals": {
+        "drawBoxPlayers": false,
+        "drawCorpse": false,
+        "drawCrosshair": false,
+        "drawGrenades": false,
+        "drawGrenadesDist": 100,
+        "drawHeadDot": false,
+        "drawHealthPlayers": false,
+        "drawLoot": false,
+        "drawLootDist": 40,
+        "drawPlayerDist": 200,
+        "drawPlayers": false,
+        "drawQuestHelper": false,
+        "drawSkeletons": false,
+        "espEnabled": false,
+        "gameRes": {
+            "x": 1920.0,
+            "y": 1080.0
+        },
+        "gameResInt": 0,
+        "skeletonsOnlyClosest": false
+    },
+    "keyGlobals": {
+        "aimKey": 162,
+        "toggleEsp": 123,
+        "toggleFollow": 13
+    },
+    "radarGlobals": {
+        "drawExfils": false,
+        "drawGrenades": false,
+        "drawLoot": false,
+        "drawPlayers": false,
+        "drawQuestHelper": false,
+        "enemyAimLine": 100,
+        "friendAimLine": 100,
+        "getPlayerStats": false,
+        "localAimLine": 100
+    }
+}

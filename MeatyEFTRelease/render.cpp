@@ -1,0 +1,2925 @@
+#include "app/includes.h"
+#include "memory/Memory.h"
+#include "app/debug.h"
+#include "app/globals.h"
+
+#include "external/glm/glm.hpp"
+#include "external/glm/gtc/matrix_access.hpp"
+#include "app/maps.h"
+#include "game/headers/maingame.h"
+#include "game/headers/loot.h"
+#include "app/market.h"
+#include "game/headers/players.h"
+#include "app/draw.h"
+#include "app/config.h"
+#include "app/fuserapp.h"
+#include "game/headers/exfil.h"
+#include "game/headers/tarkovdevquery.h"
+#include "game/headers/questManager.h"
+#include "game/headers/wishlist.h"
+#include "app/DogTagAPI.h"
+
+
+ConfigManager configManager("config.json", "lootFilters.json");
+
+// select what window to not close on run
+// settings,lootfilters,players,fuser
+void closeSettingWindows(std::string dontClose)
+{
+    if (dontClose != "settings")
+        appMenu::appSettings = false;
+    if (dontClose != "lootfilters")
+        appMenu::appLootFilters = false;
+    if (dontClose != "quests")
+        appMenu::appQuests = false;
+    if (dontClose != "fuser")
+        appMenu::appFuser = false;
+}
+
+// Function to convert enum to string for display purposes
+const char* WindowsKeyToString(WindowsKey key) {
+    switch (key) {
+    case WindowsKey::LeftControl: return "Left Control";
+    case WindowsKey::LeftAlt: return "Left Alt";
+    case WindowsKey::LeftShift: return "Left Shift";
+    case WindowsKey::Mouse0: return "Mouse 0";
+    case WindowsKey::Mouse1: return "Mouse 1";
+    case WindowsKey::Mouse2: return "Mouse 2";
+    case WindowsKey::Mouse3: return "Mouse 3";
+    case WindowsKey::Mouse4: return "Mouse 4";
+    case WindowsKey::Enter: return "Enter";
+    case WindowsKey::F12: return "F12";
+    default: return "Unknown";
+    }
+}
+
+const char* BoneToString(boneListIndexes key) {
+    switch (key) {
+    case boneListIndexes::Head: return "Head";
+    case boneListIndexes::Pelvis: return "Pelvis";
+    case boneListIndexes::Neck: return "Neck";
+    case boneListIndexes::Spine: return "Spine";
+    case boneListIndexes::LForearm: return "LForearm";
+    case boneListIndexes::LPalm: return "LPalm";
+    case boneListIndexes::RForearm: return "RForearm";
+    case boneListIndexes::RPalm: return "RPalm";
+    case boneListIndexes::LThigh: return "LThigh";
+    case boneListIndexes::LFoot: return "LFoot";
+    case boneListIndexes::RThigh: return "RThigh";
+    case boneListIndexes::RFoot: return "RFoot";
+    default: return "Unknown";
+    }
+}
+
+int WindowsKeyToIndex(WindowsKey key) {
+    switch (key) {
+    case WindowsKey::Mouse0: return 0;
+    case WindowsKey::Mouse1: return 1;
+    case WindowsKey::Mouse2: return 2;
+    case WindowsKey::Mouse3: return 3;
+    case WindowsKey::Mouse4: return 4;
+    case WindowsKey::LeftControl: return 5;
+    case WindowsKey::LeftAlt: return 6;
+    case WindowsKey::LeftShift: return 7;
+    case WindowsKey::Enter: return 8;
+    case WindowsKey::F12: return 9;
+    default: return -1;
+    }
+}
+
+WindowsKey IndexToWindowsKey(int index) {
+    switch (index) {
+    case 0: return WindowsKey::Mouse0;
+    case 1: return WindowsKey::Mouse1;
+    case 2: return WindowsKey::Mouse2;
+    case 3: return WindowsKey::Mouse3;
+    case 4: return WindowsKey::Mouse4;
+    case 5: return WindowsKey::LeftControl;
+    case 6: return WindowsKey::LeftAlt;
+    case 7: return WindowsKey::LeftShift;
+    case 8: return WindowsKey::Enter;
+    case 9: return WindowsKey::F12;
+    default: return WindowsKey::LeftControl;
+    }
+}
+
+std::vector<WindowsKey> GetAllWindowsKeys() {
+    return {
+        WindowsKey::Mouse0,
+        WindowsKey::Mouse1,
+        WindowsKey::Mouse2,
+        WindowsKey::Mouse3,
+        WindowsKey::Mouse4,
+        WindowsKey::LeftControl,
+        WindowsKey::LeftAlt,
+        WindowsKey::LeftShift,
+        WindowsKey::Enter,
+        WindowsKey::F12,
+    };
+}
+
+boneListIndexes IndexToBoneList(int index) {
+    switch (index) {
+    case 0: return boneListIndexes::Pelvis;
+    case 1: return boneListIndexes::Head;
+    case 2: return boneListIndexes::Neck;
+    case 3: return boneListIndexes::Spine;
+    case 4: return boneListIndexes::LForearm;
+    case 5: return boneListIndexes::LPalm;
+    case 6: return boneListIndexes::RForearm;
+    case 7: return boneListIndexes::RPalm;
+    case 8: return boneListIndexes::LThigh;
+    case 9: return boneListIndexes::LFoot;
+    case 10: return boneListIndexes::RThigh;
+    case 11: return boneListIndexes::RFoot;
+    }
+}
+
+std::vector<boneListIndexes> getAllBones() {
+    return {
+        boneListIndexes::Pelvis,
+        boneListIndexes::Head,
+        boneListIndexes::Neck,
+        boneListIndexes::Spine,
+        boneListIndexes::LForearm,
+        boneListIndexes::LPalm,
+        boneListIndexes::RForearm,
+        boneListIndexes::RPalm,
+        boneListIndexes::LThigh,
+        boneListIndexes::LFoot,
+        boneListIndexes::RThigh,
+        boneListIndexes::RFoot
+    };
+}
+
+bool showResSelectionBox()
+{
+    espGlobals::gameResInt = (espGlobals::gameRes.x == 2560 && espGlobals::gameRes.y == 1440) ? RES_1440P : RES_1080P;
+
+    // Resolution options
+    const char* resolutionOptions[] = { "1920x1080", "2560x1440" };
+
+    if (ImGui::Combo(" Game Resolution", &espGlobals::gameResInt, resolutionOptions, IM_ARRAYSIZE(resolutionOptions))) {
+        // Update resolution based on selection
+        switch (espGlobals::gameResInt) {
+        case RES_1080P:
+            espGlobals::gameRes = { 1920, 1080 };
+            break;
+        case RES_1440P:
+            espGlobals::gameRes = { 2560, 1440 };
+            break;
+        }
+        return true;
+    }
+    return false;
+}
+bool showBoneSelectionBox(boneListIndexes& bone, std::string selection_name)
+{
+    static std::vector<boneListIndexes> keys = getAllBones();
+    static std::vector<const char*> items;
+
+    if (items.empty()) {
+        for (const auto& key : keys) {
+            items.push_back(BoneToString(key));
+        }
+    }
+
+    int currentItem = std::distance(keys.begin(), std::find(keys.begin(), keys.end(), bone));
+
+    if (ImGui::BeginCombo(selection_name.c_str(), items[currentItem])) {
+        for (int i = 0; i < items.size(); i++) {
+            bool isSelected = (currentItem == i);
+            if (ImGui::Selectable(items[i], isSelected)) {
+                currentItem = i;
+                bone = IndexToBoneList(i); // Map selection to enum
+            }
+            if (isSelected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    return true;
+
+}
+
+bool ShowKeySelectionBox(WindowsKey& aimKey, std::string selection_name) {
+    static std::vector<WindowsKey> keys = GetAllWindowsKeys();
+    static std::vector<const char*> items;
+
+    if (items.empty()) {
+        for (const auto& key : keys) {
+            items.push_back(WindowsKeyToString(key));
+        }
+    }
+
+    int currentItem = std::distance(keys.begin(), std::find(keys.begin(), keys.end(), aimKey));
+
+
+    if (ImGui::BeginCombo(selection_name.c_str(), items[currentItem])) {
+        for (int i = 0; i < items.size(); i++) {
+            bool isSelected = (currentItem == i);
+            if (ImGui::Selectable(items[i], isSelected)) {
+                currentItem = i;
+                aimKey = IndexToWindowsKey(i); // Map selection to enum
+            }
+            if (isSelected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    return true;
+}
+
+bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, int* out_width, int* out_height)
+{
+    // Load texture from disk
+    PDIRECT3DTEXTURE9 texture;
+    HRESULT hr = D3DXCreateTextureFromFile(g_pd3dDevice, filename, &texture);
+    if (hr != S_OK)
+        return false;
+
+    // Retrieve description of the texture surface so we can access its size
+    D3DSURFACE_DESC my_image_desc;
+    texture->GetLevelDesc(0, &my_image_desc);
+    *out_texture = texture;
+    *out_width = (int)my_image_desc.Width;
+    *out_height = (int)my_image_desc.Height;
+    return true;
+}
+
+static void renderMapDetails()
+{
+    static float map_orgW = 0;
+    static float map_orgH = 0;
+    PDIRECT3DTEXTURE9 texture = NULL;
+
+    //current height in gameWorld! Localplayer
+    float height = mainGame.localLocation.y;
+
+    //filter by current map
+    if (strcmp(mainGame.selectedLocation.c_str(), "bigmap") == 0) // Customs
+    {
+        currentMap::configX = customs_configX;
+        currentMap::configY = customs_configY;
+        currentMap::configScale = customs_configScale;
+
+        map_orgW = customs_orgW;
+        map_orgH = customs_orgH;
+        texture = customs_texture;
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "factory4_day") == 0 || strcmp(mainGame.selectedLocation.c_str(), "factory4_night") == 0) // factory
+    {
+        currentMap::configX = factory_configX;
+        currentMap::configY = factory_configY;
+        currentMap::configScale = factory_configScale;
+
+        map_orgW = factory_orgW;
+        map_orgH = factory_orgH;
+
+        //texture based on height
+        if (height < factory_texture0_MinHeight) 
+            texture = factory_textureBase;
+        else
+            texture = factory_texture0;
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "Interchange") == 0) // interchange
+    {
+        currentMap::configX = interchange_configX;
+        currentMap::configY = interchange_configY;
+        currentMap::configScale = interchange_configScale;
+
+        map_orgW = interchange_orgW;
+        map_orgH = interchange_orgH;
+
+        //texture based on height
+        if (height < interchange_texture1_MinHeight)
+            texture = interchange_texture0;
+        else if (height < interchange_texture2_MinHeight && height > interchange_texture1_MinHeight)
+            texture = interchange_texture1;
+        else if (height > interchange_texture2_MinHeight)
+            texture = interchange_texture2;
+
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "laboratory") == 0) // labs
+    {
+        currentMap::configX = labs_configX;
+        currentMap::configY = labs_configY;
+        currentMap::configScale = labs_configScale;
+
+        map_orgW = labs_orgW;
+        map_orgH = labs_orgH;
+
+        //texture based on height
+        if (height < labs_texture1_MinHeight)
+            texture = labs_texture0;
+        else if (height < labs_texture2_MinHeight && height > labs_texture1_MinHeight)
+            texture = labs_texture1;
+        else if (height > labs_texture2_MinHeight)
+            texture = labs_texture2;
+
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "Lighthouse") == 0) // lighthouse
+    {
+        currentMap::configX = lighthouse_configX;
+        currentMap::configY = lighthouse_configY;
+        currentMap::configScale = lighthouse_configScale;
+
+        map_orgW = lighthouse_orgW;
+        map_orgH = lighthouse_orgH;
+
+        texture = lighthouse_texture;
+
+
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "RezervBase") == 0) // Reserve
+    {
+        currentMap::configX = reserve_configX;
+        currentMap::configY = reserve_configY;
+        currentMap::configScale = reserve_configScale;
+
+        map_orgW = reserve_orgW;
+        map_orgH = reserve_orgH;
+
+        //texture based on height
+        if (height < reserve_texture0_MinHeight)
+            texture = reserve_texture_base;
+        else
+            texture = reserve_texture0;
+
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "Shoreline") == 0) // Shoreline
+    {
+        currentMap::configX = shoreline_configX;
+        currentMap::configY = shoreline_configY;
+        currentMap::configScale = shoreline_configScale;
+
+        map_orgW = shoreline_orgW;
+        map_orgH = shoreline_orgH;
+
+        texture = shoreline_texture0;
+
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "TarkovStreets") == 0) // Streets
+    {
+        currentMap::configX = streets_configX;
+        currentMap::configY = streets_configY;
+        currentMap::configScale = streets_configScale;
+
+        map_orgW = streets_orgW;
+        map_orgH = streets_orgH;
+
+        texture = streets_texture0;
+
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "Woods") == 0) // Woods
+    {
+        currentMap::configX = woods_configX;
+        currentMap::configY = woods_configY;
+        currentMap::configScale = woods_configScale;
+
+        map_orgW = woods_orgW;
+        map_orgH = woods_orgH;
+
+        texture = woods_texture0;
+
+    }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "Sandbox_high") == 0 || strcmp(mainGame.selectedLocation.c_str(), "Sandbox") == 0) // GroundZero
+    {
+        currentMap::configX = gz_configX;
+        currentMap::configY = gz_configY;
+        currentMap::configScale = gz_configScale;
+
+        map_orgW = gz_orgW;
+        map_orgH = gz_orgH;
+
+        texture = gz_texture0;
+
+    }
+    else // only for testing uncomment
+    {
+        currentMap::configX = customs_configX;
+        currentMap::configY = customs_configY;
+        currentMap::configScale = customs_configScale;
+
+        map_orgW = customs_orgW;
+        map_orgH = customs_orgH;
+        texture = NULL;
+    }
+
+
+    mapControl.Update(ImVec2((float)map_orgW, (float)map_orgH));
+    mapControl.RenderImage(texture, mapGlobals::focusPoint, mapGlobals::followLocal);
+}
+
+void CustomChildWindowWithTitle(const char* title, const ImVec2& size) {
+    // Get current ImGui window and draw list
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    // Calculate positions and sizes
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    float title_height = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.y * 2;
+
+    // Draw custom border around the child window
+    ImU32 border_color = ImGui::GetColorU32(ImGuiCol_Border);
+    draw_list->AddRect(ImVec2(pos.x, pos.y), ImVec2(pos.x + size.x, pos.y + size.y), border_color);
+
+    // Draw the title background to cover the border behind the title
+    ImVec2 title_pos = ImVec2(pos.x + ImGui::GetStyle().FramePadding.x, pos.y - title_height / 2);
+    ImVec2 title_size = ImGui::CalcTextSize(title);
+    draw_list->AddRectFilled(title_pos, ImVec2(title_pos.x + title_size.x, title_pos.y + title_height), ImGui::GetColorU32(ImGuiCol_WindowBg));
+
+    // Draw the title background
+    ImGui::SetCursorScreenPos(ImVec2(pos.x + 7, pos.y + 6 - title_height / 2));
+    ImGui::Text("%s", title);
+
+}
+char filterName[128] = "";
+void ShowAddFilterPopup(bool* open) {
+    if (*open) {
+        ImGui::OpenPopup("Add Filter");
+        *open = false;
+    }
+
+    if (ImGui::BeginPopupModal("Add Filter", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+
+        //default values
+        static bool filterActive = false;
+        static ImVec4 filterColour = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+        ImGui::InputText("Filter Name", filterName, IM_ARRAYSIZE(filterName));
+
+
+        if (ImGui::Button("Add", ImVec2(90, 29))) {
+            // Generate a new ID
+            long newId = lootFilters.empty() ? 1 : lootFilters.back().id + 1;
+            // Add new filter to the vector
+            lootFilters.push_back({ newId, filterActive, filterName, glm::vec4(filterColour.x, filterColour.y, filterColour.z, filterColour.w) });
+            //save updated json!
+            configManager.SaveLootFilterConfig();
+
+            // Close the popup
+            filterName[0] = '\0';
+
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(90, 29))) {
+            // Close the popup without adding
+            filterName[0] = '\0';
+            ImGui::CloseCurrentPopup();
+
+
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
+// Function to compare items for sorting
+bool CompareGameItems(const gameItemList& a, const gameItemList& b, ImGuiTableSortSpecs* sortSpecs) {
+    for (int n = 0; n < sortSpecs->SpecsCount; n++) {
+        const ImGuiTableColumnSortSpecs* sortSpec = &sortSpecs->Specs[n];
+        int delta = 0;
+        switch (sortSpec->ColumnIndex) {
+        case 0: delta = (a.name < b.name) ? -1 : (a.name > b.name) ? 1 : 0; break;
+        case 1: delta = (a.traderPrice < b.traderPrice) ? -1 : (a.traderPrice > b.traderPrice) ? 1 : 0; break;
+        case 2: delta = (a.marketPrice < b.marketPrice) ? -1 : (a.marketPrice > b.marketPrice) ? 1 : 0; break;
+        }
+        if (delta != 0)
+            return (sortSpec->SortDirection == ImGuiSortDirection_Ascending) ? delta < 0 : delta > 0;
+    }
+    return false;
+}
+
+// Convert a string to lowercase
+std::string ToLower(const std::string& str) {
+    std::string lowerStr = str;
+    std::transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(),
+        [](unsigned char c) { return std::tolower(c); });
+    return lowerStr;
+}
+
+// Function to format the price
+std::string FormatPrice(long price) {
+    std::ostringstream oss;
+    if (price >= 1000000) {
+        oss << std::fixed << std::setprecision(2) << static_cast<float>(price) / 1000000 << "m";
+    }
+    else if (price >= 1000) {
+        oss << price / 1000 << "k";
+    }
+    else {
+        oss << price;
+    }
+    return oss.str();
+}
+
+bool IsItemInAnyLootFilters(const std::vector<LootFilters>& lootFilters, const std::string& bsgid) {
+    for (const auto& filter : lootFilters) {
+        if (std::any_of(filter.lootItems.begin(), filter.lootItems.end(),
+            [&bsgid](const lootFilterItems& item) { return item.bsgid == bsgid; })) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string searchQuery;
+void ShowGameItemListTable(LootFilters& currentLootFilter) {
+    ImVec2 tableSize = ImVec2(586.f, 600.0f); // Set the desired size for the table
+
+    if (ImGui::BeginTable("GameItemListTable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable, tableSize)) {
+        // Set up the table columns
+        ImGui::TableSetupColumn("Item Name", ImGuiTableColumnFlags_WidthFixed, 370.f);
+        ImGui::TableSetupColumn("Trader", ImGuiTableColumnFlags_WidthFixed, 60.f);
+        ImGui::TableSetupColumn("Market", ImGuiTableColumnFlags_WidthFixed, 60.f);
+        ImGui::TableSetupColumn("Add", ImGuiTableColumnFlags_WidthFixed, 50.f);
+        ImGui::TableHeadersRow();
+
+        // Handle sorting
+        ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
+        if (sortSpecs && sortSpecs->SpecsDirty) {
+            std::sort(marketList.begin(), marketList.end(),
+                [sortSpecs](const gameItemList& a, const gameItemList& b) { return CompareGameItems(a, b, sortSpecs); });
+            sortSpecs->SpecsDirty = false;
+        }
+
+
+        // Iterate through the gameItems vector and display each entry
+        std::string lowerSearchQuery = ToLower(searchQuery);
+        for (size_t i = 0; i < marketList.size(); ++i) {
+            std::string lowerItemName = ToLower(marketList[i].name);
+            if (lowerSearchQuery.empty() || lowerItemName.find(lowerSearchQuery) != std::string::npos) {
+                ImGui::TableNextRow();
+
+                // Name column
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%s", marketList[i].name.c_str());
+
+                // Trader Price column
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%s", FormatPrice(marketList[i].traderPrice).c_str());
+
+                // Market Price column
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text("%s", FormatPrice(marketList[i].marketPrice).c_str());
+
+                // Add button column
+                ImGui::TableSetColumnIndex(3);
+
+                if (!IsItemInAnyLootFilters(lootFilters, marketList[i].bsgid)) {
+                    //if (ImGui::Button(("+##" + marketList[i].bsgid).c_str(),ImVec2(20,20))) {
+                    if (ImGui::Selectable((" + ##" + marketList[i].bsgid).c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+                        // Create a new lootFilterItems entry and populate it with data from gameItems[i]
+                        lootFilterItems newItem;
+                        newItem.bsgid = marketList[i].bsgid;
+                        newItem.name = marketList[i].name;
+                        newItem.shortName = marketList[i].shortName;
+                        newItem.traderPrice = marketList[i].traderPrice;
+                        newItem.marketPrice = marketList[i].marketPrice;
+
+                        // Add the new item to the currentLootFilter's lootItems vector
+                        currentLootFilter.lootItems.push_back(newItem);
+                        configManager.SaveLootFilterConfig();
+                    }
+                }
+
+
+            }
+        }
+
+        ImGui::EndTable();
+    }
+}
+
+// Function to show the add loot popup
+char searchBuffer[128] = "";
+void ShowAddLootPopup(bool* open, LootFilters& currentLootFilter) {
+    if (*open) {
+        ImGui::OpenPopup("Add Loot");
+        *open = false;
+    }
+
+    // Set the next window size to a fixed size
+    ImGui::SetNextWindowSize(ImVec2(600, 700), ImGuiCond_Always);
+    bool isOpen = true;
+
+    if (ImGui::BeginPopupModal("Add Loot", &isOpen, ImGuiWindowFlags_NoResize)) {
+        if (!isOpen) {
+            searchBuffer[0] = '\0';
+            searchQuery.clear();
+            ImGui::CloseCurrentPopup();
+
+
+        }
+        // Text input for search
+
+        if (ImGui::InputText("Search", searchBuffer, IM_ARRAYSIZE(searchBuffer))) {
+            searchQuery = searchBuffer;
+        }
+
+        ImGui::SetCursorPos(ImVec2(5, 80));
+        ShowGameItemListTable(currentLootFilter);
+
+        ImGui::EndPopup();
+    }
+
+}
+
+//helpers for render
+static void DrawLootListInfoTooltip(const LootList& loot)
+{
+    ImGui::BeginTooltip();
+
+    ImGui::Text("m_itemObject: 0x%llX", loot.m_itemObject);
+    ImGui::Text("m_interactiveClass: 0x%llX", loot.m_interactiveClass);
+    ImGui::Text("m_baseObject: 0x%llX", loot.m_baseObject);
+    ImGui::Text("m_gameObject: 0x%llX", loot.m_gameObject);
+    ImGui::Text("m_pGameObjectName: 0x%llX", loot.m_pGameObjectName);
+    ImGui::Text("m_objectClassName: %s", loot.m_objectClassName.c_str());
+    ImGui::Text("m_objectClass: 0x%llX", loot.m_objectClass);
+    ImGui::Text("m_pointerToTransform1: 0x%llX", loot.m_pointerToTransform1);
+    ImGui::Text("m_pointerToTransform2: 0x%llX", loot.m_pointerToTransform2);
+
+    ImGui::Separator();
+
+    ImGui::Text("worldLocation: %.2f, %.2f, %.2f",
+        loot.worldLocation.x, loot.worldLocation.y, loot.worldLocation.z);
+
+    ImGui::Text("gameObjectName: %s", loot.gameObjectName.c_str());
+    ImGui::Text("bsgId: %s", loot.bsgId.c_str());
+    ImGui::Text("longName: %s", loot.longName.c_str());
+    ImGui::Text("shortName: %s", loot.shortName.c_str());
+
+    ImGui::Separator();
+
+    ImGui::Text("avgMarketPrice: %d", loot.avgMarketPrice);
+    ImGui::Text("traderPrice: %d", loot.traderPrice);
+    ImGui::Text("corpseValue: %d", loot.corpseValue);
+
+    ImGui::Separator();
+
+    ImGui::Text("isItem: %s", loot.isItem ? "true" : "false");
+    ImGui::Text("isContainer: %s", loot.isContainer ? "true" : "false");
+    ImGui::Text("isQuestItem: %s", loot.isQuestItem ? "true" : "false");
+    ImGui::Text("isCorpse: %s", loot.isCorpse ? "true" : "false");
+    ImGui::Text("wanted: %s", loot.wanted ? "true" : "false");
+    ImGui::Text("forceWanted: %s", loot.forceWanted ? "true" : "false");
+
+    ImGui::Text("color: %.2f, %.2f, %.2f, %.2f",
+        loot.color.x, loot.color.y, loot.color.z, loot.color.w);
+
+    ImGui::EndTooltip();
+}
+
+static void BuildLootListDebugRows(
+    std::vector<LootList>& lootCache,
+    std::vector<LootList*>& normalLootRows,
+    std::vector<LootList*>& questLootRows,
+    std::vector<LootList*>& wantedRows)
+{
+    normalLootRows.clear();
+    questLootRows.clear();
+    wantedRows.clear();
+
+    normalLootRows.reserve(lootCache.size());
+    questLootRows.reserve(lootCache.size());
+    wantedRows.reserve(lootCache.size());
+
+    for (auto& loot : lootCache)
+    {
+        if (loot.isContainer)
+            continue;
+
+        if (loot.isCorpse)
+            continue;
+
+        if (loot.isQuestItem)
+        {
+            questLootRows.push_back(&loot);
+
+            if (loot.wanted || loot.forceWanted)
+                wantedRows.push_back(&loot);
+
+            continue;
+        }
+
+        if (loot.isItem)
+        {
+            normalLootRows.push_back(&loot);
+
+            if (loot.wanted || loot.forceWanted)
+                wantedRows.push_back(&loot);
+        }
+    }
+}
+
+static void DrawLootListDebugTable(std::vector<LootList*>& rows, const char* tableId)
+{
+    if (!ImGui::BeginTable(tableId, 4,
+        ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_Borders |
+        ImGuiTableFlags_ScrollY |
+        ImGuiTableFlags_Resizable))
+    {
+        return;
+    }
+
+    ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+    ImGui::TableSetupColumn("Short Name", ImGuiTableColumnFlags_WidthStretch, 220.0f);
+    ImGui::TableSetupColumn("BSG ID", ImGuiTableColumnFlags_WidthStretch, 260.0f);
+    ImGui::TableSetupColumn("Info", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+    ImGui::TableHeadersRow();
+
+    for (size_t i = 0; i < rows.size(); ++i)
+    {
+        LootList* loot = rows[i];
+        if (!loot)
+            continue;
+
+        ImGui::TableNextRow();
+        ImGui::PushID(loot);
+
+        // Wanted toggle
+        ImGui::TableSetColumnIndex(0);
+        bool wantedTick = (loot->wanted || loot->forceWanted);
+        if (ImGui::Checkbox("##wanted", &wantedTick))
+        {
+            loot->wanted = wantedTick;
+            loot->forceWanted = wantedTick;
+        }
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Toggle wanted and forceWanted");
+        }
+
+        // Short Name
+        ImGui::TableSetColumnIndex(1);
+        const std::string shortName = TrimEFT(loot->shortName);
+        const std::string longName = TrimEFT(loot->longName);
+        const std::string displayName = shortName.empty() ? longName : shortName;
+
+        ImGui::TextUnformatted(displayName.c_str());
+
+        if (ImGui::IsItemHovered() && !longName.empty())
+        {
+            ImGui::SetTooltip("%s", longName.c_str());
+        }
+
+        // BSG ID
+        ImGui::TableSetColumnIndex(2);
+        const std::string bsgId = TrimEFT(loot->bsgId);
+        ImGui::TextUnformatted(bsgId.c_str());
+
+        // Info
+        ImGui::TableSetColumnIndex(3);
+        ImGui::TextUnformatted("(i)");
+        if (ImGui::IsItemHovered())
+        {
+            DrawLootListInfoTooltip(*loot);
+        }
+
+        ImGui::PopID();
+    }
+
+    ImGui::EndTable();
+}
+
+// Variable to hold the selected ID
+//static LootFilters currentLootFilter;
+static long selectedLootFilterID = -1;
+LootFilters* currentLootFilter = nullptr;
+
+static void renderLootFiltersMenu()
+{
+
+
+
+    std::string windowNameMain = "Loot Filters";
+
+    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetNextWindowPos(ImVec2((viewport->Pos.x + viewport->Size.x) - 810, viewport->Pos.y + 10));
+
+    ImGui::SetNextWindowSize(ImVec2(750, viewport->Size.y - 50));
+    //ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
+
+    static bool addFilterPopupOpen = false;
+    static bool addLootPopupOpen = false;
+
+
+
+    if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appLootFilters, flagss))
+    {
+        //left top
+        {
+            //set position
+            ImGui::SetCursorPos(ImVec2(10, 45));
+
+            // draw window frame
+            CustomChildWindowWithTitle(" Loot Filter Settings ", ImVec2(250, 300));
+
+            //draw inside window
+            ImGui::SetCursorPos(ImVec2(20, 60));
+
+            if (ImGui::Checkbox(" Show Quest Loot", &lootGlobals::enableQuestLoot)) configManager.SaveConfig();
+            ImGui::SameLine(); ImGui::SetCursorPosX(200);
+            if (ImGui::ColorEdit4("##questcolour", (float*)&coloursGlobals::questColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+            
+            ImGui::SetCursorPosX(20);
+            
+            if (ImGui::Checkbox(" Show WishList Loot", &lootGlobals::enableWishListLoot)) configManager.SaveConfig();
+            ImGui::SameLine(); ImGui::SetCursorPosX(200);
+            if (ImGui::ColorEdit4("##wishlistcolour", (float*)&coloursGlobals::wishListColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+
+            ImGui::SetCursorPosX(20);
+
+            if (ImGui::Checkbox(" Show Value Loot", &lootGlobals::enableValueLoot)) configManager.SaveConfig();
+            ImGui::SameLine(); ImGui::SetCursorPosX(200);
+            if (ImGui::ColorEdit4("##valuelistcolour", (float*)&coloursGlobals::valueLootColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+            ImGui::SetCursorPosX(20);
+            ImGui::PushItemWidth(150);
+            if (ImGui::SliderInt("R (over)", &lootGlobals::valueLootFrom, 0, 1000000, "%d")) configManager.SaveConfig();
+            ImGui::PopItemWidth();
+            
+
+            ImGui::SetCursorPos(ImVec2(20, 200));
+            static bool containerPopupOpen = false;
+
+            if (ImGui::Button("Container Options"))
+            {
+                containerPopupOpen = true;
+                ImGui::OpenPopup("Container Settings");
+            }
+
+            if (ImGui::BeginPopupModal("Container Settings", &containerPopupOpen, ImGuiWindowFlags_NoResize))
+            {
+                ImGui::SetWindowSize(ImVec2(520, 600));
+
+                struct ContainerOption
+                {
+                    const char* label;
+                    bool* value;
+                };
+
+                ContainerOption options[] =
+                {
+                    { "Drawer",        &Loot.drawDrawer },
+                    { "Duffle",        &Loot.drawDuffle },
+                    { "Safe",          &Loot.drawSafe },
+                    { "Weapon Box",    &Loot.drawWeaponBox },
+                    { "Tech Crate",    &Loot.drawTechCrate },
+                    { "Ration Crate",  &Loot.drawRationCrate },
+                    { "Medical Crate", &Loot.drawMedicalCrate },
+                    { "Jacket",        &Loot.drawJacket },
+                    { "Med Package",   &Loot.drawMedPackage },
+                    { "Med Box",       &Loot.drawMedBox },
+                    { "Toolbox",       &Loot.drawToolbox },
+                    { "Grenade Box",   &Loot.drawGrenadeBox },
+                    { "Buried Stash",  &Loot.drawBuriedStash },
+                    { "Ground Cache",  &Loot.drawGroundCache },
+                    { "Wooden Crate",  &Loot.drawWoodenCrate },
+                    { "Suitcase",      &Loot.drawSuitcase },
+                    { "Ammo Box",      &Loot.drawAmmoBox },
+                    { "Dead Body",     &Loot.drawDeadBody },
+                    { "PC Block",      &Loot.drawPCBlock },
+                    { "Register",      &Loot.drawRegister },
+                    { "Airdrop",       &Loot.drawAirDrops },
+                    // { "Xmas Loot",   &Loot.drawXmas },
+                };
+
+                const int optionCount = sizeof(options) / sizeof(options[0]);
+                const int splitIndex = (optionCount + 1) / 2;
+
+                ImGui::Text("Container Settings");
+                ImGui::Separator();
+
+                
+                if (ImGui::Button("Disable All", ImVec2(120, 0)))
+                {
+                    for (int i = 0; i < optionCount; i++)
+                        *options[i].value = false;
+                }
+
+                ImGui::Separator();
+
+                if (ImGui::BeginChild("##container_settings_child", ImVec2(0, -45), true))
+                {
+                    if (ImGui::BeginTable("##container_settings_table", 2, ImGuiTableFlags_BordersInnerV))
+                    {
+                        ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthStretch);
+                        ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthStretch);
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        for (int i = 0; i < splitIndex; i++)
+                        {
+                            ImGui::Checkbox(options[i].label, options[i].value);
+                        }
+
+                        ImGui::TableSetColumnIndex(1);
+                        for (int i = splitIndex; i < optionCount; i++)
+                        {
+                            ImGui::Checkbox(options[i].label, options[i].value);
+                        }
+
+                        ImGui::EndTable();
+                    }
+
+                    ImGui::EndChild();
+                }
+
+               
+
+                ImGui::EndPopup();
+            }
+
+
+            ImGui::SetCursorPosX(20);
+            //wishlist items
+            static bool wishListPopupOpen = false;
+            if (ImGui::Button("Wishlist Items"))
+            {
+                wishListPopupOpen = true;
+                ImGui::OpenPopup("WishList");
+            }
+
+            if (ImGui::BeginPopupModal("WishList", &wishListPopupOpen, ImGuiWindowFlags_NoResize))
+            {
+                ImGui::SetWindowSize(ImVec2(700, 400));
+
+                ImGui::Text("Wishlist Items");
+                ImGui::Separator();
+
+                if (wishListData.empty())
+                {
+                    ImGui::TextDisabled("Wishlist data empty.. In raid?");
+                }
+                else
+                {
+                    if (ImGui::BeginChild("##wishlist_child", ImVec2(0, -40), true))
+                    {
+                        if (ImGui::BeginTable("##wishlist_table", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY))
+                        {
+                            ImGui::TableSetupColumn("BSG ID", ImGuiTableColumnFlags_WidthStretch, 0.55f);
+                            ImGui::TableSetupColumn("Short Name", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+                            ImGui::TableHeadersRow();
+
+                            for (const auto& wishList : wishListData)
+                            {
+                                ImGui::TableNextRow();
+
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::TextUnformatted(wishList.bsgId.c_str());
+
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::TextUnformatted(wishList.shortName.c_str());
+                            }
+
+                            ImGui::EndTable();
+                        }
+                        ImGui::EndChild();
+                    }
+                }
+
+
+                ImGui::EndPopup();
+            }
+
+            //questloot items etc
+            ImGui::SetCursorPosX(20);
+            
+            static bool questLootPopupOpen = false;
+
+            if (ImGui::Button("Quest Loot"))
+            {
+                questLootPopupOpen = true;
+                ImGui::OpenPopup("Quest Loot Manager");
+            }
+
+            if (ImGui::BeginPopupModal("Quest Loot Manager", &questLootPopupOpen, ImGuiWindowFlags_NoResize))
+            {
+                ImGui::SetWindowSize(ImVec2(900, 500));
+
+                std::vector<LootList>& cacheLoot = Loot.getCacheLoot();
+
+                // ---------------------------------------------------------
+                // Search state for Tab 1
+                // ---------------------------------------------------------
+                static char questLootSearch[128] = "";
+                std::string searchText = TrimEFT(std::string(questLootSearch));
+
+                auto containsInsensitive = [](const std::string& text, const std::string& search) -> bool
+                    {
+                        if (search.empty())
+                            return true;
+
+                        std::string a = text;
+                        std::string b = search;
+
+                        std::transform(a.begin(), a.end(), a.begin(),
+                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+                        std::transform(b.begin(), b.end(), b.begin(),
+                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+                        return a.find(b) != std::string::npos;
+                    };
+
+                // ---------------------------------------------------------
+                // Lookup for current raid loot (Tab 1)
+                // ---------------------------------------------------------
+                std::unordered_map<std::string, LootList*> lootById;
+                lootById.reserve(cacheLoot.size());
+
+                for (auto& loot : cacheLoot)
+                {
+                    std::string id = TrimEFT(loot.bsgId);
+                    if (id.empty())
+                        continue;
+
+                    lootById[id] = &loot;
+                }
+
+                // ---------------------------------------------------------
+                // Lookup for full market item database (Tab 2)
+                // ---------------------------------------------------------
+                std::unordered_map<std::string, const gameItemList*> marketById;
+                marketById.reserve(marketList.size());
+
+                for (const auto& item : marketList)
+                {
+                    std::string id = TrimEFT(item.bsgid); // adjust if your field name differs
+                    if (id.empty())
+                        continue;
+
+                    marketById[id] = &item;
+                }
+
+                ImGui::Text("Quest Loot Manager");
+                ImGui::Separator();
+
+                if (ImGui::BeginTabBar("##QuestLootTabs"))
+                {
+                    // =========================================================
+                    // TAB 1 - CURRENT RAID QUEST LOOT
+                    // =========================================================
+                    if (ImGui::BeginTabItem("Current Raid Quest Loot"))
+                    {
+                        if (ImGui::BeginChild("##CurrentRaidLootChild", ImVec2(0, -40), true))
+                        {
+                            ImGui::SetNextItemWidth(300.0f);
+                            ImGui::InputTextWithHint("##QuestLootSearch", "Search short name or BSG ID...", questLootSearch, IM_ARRAYSIZE(questLootSearch));
+                            ImGui::Separator();
+
+                            int visibleRows = 0;
+
+                            for (const auto& loot : cacheLoot)
+                            {
+                                if (!loot.isQuestItem)
+                                    continue;
+
+                                std::string shortName = TrimEFT(loot.shortName);
+                                std::string bsgId = TrimEFT(loot.bsgId);
+
+                                if (!containsInsensitive(shortName, searchText) &&
+                                    !containsInsensitive(bsgId, searchText))
+                                {
+                                    continue;
+                                }
+
+                                visibleRows++;
+                            }
+
+                            if (visibleRows == 0)
+                            {
+                                ImGui::TextDisabled("No matching quest loot found in current raid.");
+                            }
+                            else if (ImGui::BeginTable("##CurrentRaidLootTable", 3,
+                                ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_Borders |
+                                ImGuiTableFlags_ScrollY |
+                                ImGuiTableFlags_Resizable))
+                            {
+                                ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.35f);
+                                ImGui::TableSetupColumn("BSG ID", ImGuiTableColumnFlags_WidthStretch, 0.65f);
+                                ImGui::TableHeadersRow();
+
+                                int row = 0;
+                                for (auto& loot : cacheLoot)
+                                {
+                                    if (!loot.isQuestItem)
+                                        continue;
+
+                                    std::string shortName = TrimEFT(loot.shortName);
+                                    std::string bsgId = TrimEFT(loot.bsgId);
+
+                                    if (!containsInsensitive(shortName, searchText) &&
+                                        !containsInsensitive(bsgId, searchText))
+                                    {
+                                        continue;
+                                    }
+
+                                    ImGui::PushID(row++);
+
+                                    ImGui::TableNextRow();
+
+                                    ImGui::TableSetColumnIndex(0);
+                                    bool wanted = loot.wanted;
+                                    if (ImGui::Checkbox("##wanted", &wanted))
+                                    {
+                                        loot.wanted = wanted;
+
+                                        if (loot.wanted)
+                                            loot.color = coloursGlobals::questColour;
+                                    }
+
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::TextUnformatted(loot.longName.c_str());
+
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::TextUnformatted(bsgId.c_str());
+
+                                    ImGui::PopID();
+                                }
+
+                                ImGui::EndTable();
+                            }
+                        }
+
+                        ImGui::EndChild();
+                        ImGui::EndTabItem();
+                    }
+
+                    // =========================================================
+                    // TAB 2 - QUEST ITEMS FROM MASTER ITEM DATABASE
+                    // =========================================================
+                    if (ImGui::BeginTabItem("Quest Items"))
+                    {
+                        if (ImGui::BeginChild("##MasterItemsChild", ImVec2(0, -40), true))
+                        {
+                            std::unordered_set<std::string> seenMasterIds;
+                            seenMasterIds.reserve(masterItems.size());
+
+                            int visibleRows = 0;
+                            for (const auto& rawMasterId : masterItems)
+                            {
+                                std::string masterId = TrimEFT(rawMasterId);
+                                if (masterId.empty())
+                                    continue;
+
+                                if (!seenMasterIds.insert(masterId).second)
+                                    continue;
+
+                                visibleRows++;
+                            }
+
+                            if (visibleRows == 0)
+                            {
+                                ImGui::TextDisabled("Task Quest Items list is empty.");
+                            }
+                            else if (ImGui::BeginTable("##MasterItemsTable", 2,
+                                ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_Borders |
+                                ImGuiTableFlags_ScrollY |
+                                ImGuiTableFlags_Resizable))
+                            {
+                                ImGui::TableSetupColumn("Short Name", ImGuiTableColumnFlags_WidthStretch, 0.35f);
+                                ImGui::TableSetupColumn("BSG ID", ImGuiTableColumnFlags_WidthStretch, 0.65f);
+                                ImGui::TableHeadersRow();
+
+                                seenMasterIds.clear();
+
+                                for (const auto& rawMasterId : masterItems)
+                                {
+                                    std::string masterId = TrimEFT(rawMasterId);
+                                    if (masterId.empty())
+                                        continue;
+
+                                    if (!seenMasterIds.insert(masterId).second)
+                                        continue;
+
+                                    std::string shortName = "Unknown";
+
+                                    auto it = marketById.find(masterId);
+                                    if (it != marketById.end() && it->second)
+                                    {
+                                        shortName = TrimEFT(it->second->shortName); // adjust if your field name differs
+                                        if (shortName.empty())
+                                            shortName = "Unknown";
+                                    }
+
+                                    ImGui::PushID(masterId.c_str());
+
+                                    ImGui::TableNextRow();
+
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::TextUnformatted(shortName.c_str());
+
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::TextUnformatted(masterId.c_str());
+
+                                    ImGui::PopID();
+                                }
+
+                                ImGui::EndTable();
+                            }
+                        }
+
+                        ImGui::EndChild();
+                        ImGui::EndTabItem();
+                    }
+
+                    ImGui::EndTabBar();
+                }
+
+                ImGui::EndPopup();
+            }
+
+            ImGui::SetCursorPosX(20);
+            //fullLootListPopupOpen items
+            static bool fullLootListPopupOpen = false;
+            if (ImGui::Button("Debug LootList"))
+            {
+                fullLootListPopupOpen = true;
+                ImGui::OpenPopup("lootList");
+            }
+
+            std::vector<LootList>& lootCache = Loot.getCacheLoot();
+
+            if (ImGui::BeginPopupModal("lootList", &fullLootListPopupOpen, ImGuiWindowFlags_NoResize))
+            {
+                ImGui::SetWindowSize(ImVec2(950, 500), ImGuiCond_Always);
+
+                static std::vector<LootList*> normalLootRows;
+                static std::vector<LootList*> questLootRows;
+                static std::vector<LootList*> wantedRows;
+
+                BuildLootListDebugRows(lootCache, normalLootRows, questLootRows, wantedRows);
+
+                if (ImGui::BeginTabBar("##lootListTabs"))
+                {
+                    if (ImGui::BeginTabItem("Loot"))
+                    {
+                        ImGui::Separator();
+                        DrawLootListDebugTable(normalLootRows, "##lootListNormalTable");
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("Quest Items"))
+                    {
+                        ImGui::Separator();
+                        DrawLootListDebugTable(questLootRows, "##lootListQuestTable");
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("Wanted"))
+                    {
+                        ImGui::Separator();
+                        DrawLootListDebugTable(wantedRows, "##lootListWantedTable");
+                        ImGui::EndTabItem();
+                    }
+
+                    ImGui::EndTabBar();
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+
+                if (ImGui::Button("Close", ImVec2(120, 0)))
+                {
+                    fullLootListPopupOpen = false;
+                    ImGui::CloseCurrentPopup();
+                }
+
+                ImGui::EndPopup();
+            }
+
+        }
+
+        //right top
+        {
+            // Set position
+            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 480, 45));
+
+            // Draw window frame
+            CustomChildWindowWithTitle(" Loot Filters ", ImVec2(470, 300));
+
+            // Draw inside window
+            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 110, 55)); // Top right corner
+
+            // Button to open the add filter popup
+            if (ImGui::Button("+ Add Filter", ImVec2(90, 29))) {
+                addFilterPopupOpen = true;
+            }
+
+            // Position for filter list
+            ImVec2 tableSize = ImVec2(450.0f, 250.0f); // Set the desired size for the table
+
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+
+            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 470, 90));
+
+            if (ImGui::BeginTable("##LootFiltersTable", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, tableSize)) {
+                // Set up the table headers
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 1.f);
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 30.f);
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 30.f);
+                ImGui::TableSetupColumn("Filter Name", ImGuiTableColumnFlags_WidthFixed, 320.f);
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 30.f);
+
+
+                // Iterate through the lootFilters vector and display each entry
+                for (size_t i = 0; i < lootFilters.size(); ++i) {
+                    ImGui::TableNextRow();
+
+                    // Make the row selectable and check if it is clicked
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::PushID(i); // Ensure unique ID for each row
+                    bool isSelected = (selectedLootFilterID == lootFilters[i].id);
+                    if (ImGui::Selectable(("##row" + std::to_string(i)).c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
+                        selectedLootFilterID = lootFilters[i].id;
+                    }
+                    ImGui::PopID();
+
+                    // Active column
+                    ImGui::TableSetColumnIndex(1);
+                    if (ImGui::Checkbox(("##Active" + std::to_string(lootFilters[i].id)).c_str(), &lootFilters[i].active))
+                    {
+                        configManager.SaveLootFilterConfig();
+                    }
+
+
+                    // Filter colour column
+                    ImGui::TableSetColumnIndex(2);
+                    if (ImGui::ColorEdit4(("##Color" + std::to_string(lootFilters[i].id)).c_str(), (float*)&lootFilters[i].filterColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs))
+                    {
+                        configManager.SaveLootFilterConfig();
+                    }
+
+
+                    // Filter Name column
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%s", lootFilters[i].filterName.c_str());
+
+                    // Delete button column
+                    ImGui::TableSetColumnIndex(4);
+                    if (ImGui::Button(("X##" + std::to_string(lootFilters[i].id)).c_str())) {
+                        // Delete the current row
+                        lootFilters.erase(lootFilters.begin() + i);
+                        // Adjust the index after deletion to avoid skipping an entry
+                        --i;
+                        configManager.SaveLootFilterConfig();
+                    }
+
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::PopStyleVar(2);
+
+
+
+        }
+
+        //bottom
+        {
+            //set position
+            ImGui::SetCursorPos(ImVec2(10, 360));
+
+            // draw window frame
+            CustomChildWindowWithTitle(" Loot Filter Items ", ImVec2(ImGui::GetWindowSize().x - 20, ImGui::GetWindowSize().y - 365));
+
+            if (selectedLootFilterID != -1)
+            {
+                
+                ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 110, 370)); // top right corner
+
+                if (ImGui::Button("+ Add Loot", ImVec2(90, 29))) {
+                    addLootPopupOpen = true;
+                }
+
+                //position for table
+                ImGui::SetCursorPos(ImVec2(20, 410)); // top right corner
+
+                ImVec2 tableSize = ImVec2(ImGui::GetWindowSize().x - 40, (ImGui::GetWindowSize().y - ImGui::GetCursorPosY()) - 15); // Set the desired size for the table
+
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+
+                if (ImGui::BeginTable("##LootInFilter", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable, tableSize)) {
+                    // Set up the table columns
+                    ImGui::TableSetupColumn("Item Name", ImGuiTableColumnFlags_WidthFixed, 470.f);
+                    ImGui::TableSetupColumn("Trader", ImGuiTableColumnFlags_WidthFixed, 60.f);
+                    ImGui::TableSetupColumn("Market", ImGuiTableColumnFlags_WidthFixed, 60.f);
+                    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 50.f);
+                    ImGui::TableHeadersRow();
+
+                    //get loot items from selected filter
+                    for (auto& lootFilter : lootFilters)
+                    {
+                        if (lootFilter.id == selectedLootFilterID)
+                        {
+
+
+                            // Iterate through the lootFilterItems
+                            for (size_t i = 0; i < lootFilter.lootItems.size(); ++i) {
+                                ImGui::TableNextRow();
+
+                                // Name column
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::Text("%s", lootFilter.lootItems[i].name.c_str());
+
+                                // Trader Price column
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::Text("%s", FormatPrice(lootFilter.lootItems[i].traderPrice).c_str());
+
+                                // Market Price column
+                                ImGui::TableSetColumnIndex(2);
+                                ImGui::Text("%s", FormatPrice(lootFilter.lootItems[i].marketPrice).c_str());
+
+                                // Delete button column
+                                ImGui::TableSetColumnIndex(3);
+                                if (ImGui::Button(("X##" + lootFilter.lootItems[i].bsgid).c_str())) {
+                                    // Delete the current row
+                                    lootFilter.lootItems.erase(lootFilter.lootItems.begin() + i);
+                                    // Adjust the index after deletion to avoid skipping an entry
+                                    --i;
+                                    configManager.SaveLootFilterConfig();
+                                }
+                            }
+
+                            break;
+                        }
+                    }
+
+
+
+
+
+
+                    ImGui::EndTable();
+                }
+
+                ImGui::PopStyleVar(2);
+            }
+        }
+
+    }
+    ImGui::End();
+
+    // Get the currentLootFilter reference based on selectedLootFilterID
+    for (auto& filter : lootFilters) {
+        if (filter.id == selectedLootFilterID) {
+            currentLootFilter = &filter;
+            break;
+        }
+    }
+
+    ShowAddFilterPopup(&addFilterPopupOpen);
+    ShowAddLootPopup(&addLootPopupOpen, *currentLootFilter);
+}
+
+
+bool showActive = false; 
+const char* options[] = { "All", "Active" };
+static int currentSelection = 0; // 0 = All, 1 = Active
+
+static void renderQuestsWindow()
+{
+    std::string windowNameMain = "Quests Manager";
+    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2((viewport->Pos.x + viewport->Size.x) - 810, viewport->Pos.y + 10));
+    ImGui::SetNextWindowSize(ImVec2(750, viewport->Size.y - 50));
+
+    if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appQuests, flagss))
+    {
+        {
+            ImGui::SetCursorPos(ImVec2(10, 45));
+
+            if (ImGui::Combo("Filter", &currentSelection, options, IM_ARRAYSIZE(options)))
+            {
+                showActive = (currentSelection == 1);
+            }
+        }
+
+        {
+            ImGui::SetCursorPos(ImVec2(10, 105));
+
+            CustomChildWindowWithTitle(" Quest Manager ", ImVec2(ImGui::GetWindowSize().x - 20, ImGui::GetWindowSize().y - 20));
+
+            ImGui::SetCursorPos(ImVec2(20, 120));
+
+            ImVec2 tableSize = ImVec2(ImGui::GetWindowSize().x - 40,
+                (ImGui::GetWindowSize().y - ImGui::GetCursorPosY()) - 15);
+
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+
+            if (ImGui::BeginTable("##QuestDatabase", 2,
+                ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable,
+                tableSize))
+            {
+                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 290.f);
+                ImGui::TableSetupColumn("Objectives", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
+
+                // -------------------------
+                // Static (API) renderer
+                // -------------------------
+                auto RenderTaskRow_Static = [&](const TarkovDevTasks& quest)
+                    {
+                        ImGui::PushID(quest.qID.c_str());
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(quest.qName.c_str());
+                        if (!quest.qID.empty())
+                        {
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("(%s)", quest.qID.c_str());
+                        }
+
+                        ImGui::TableSetColumnIndex(1);
+
+                        const int objCount = (int)quest.objectives.size();
+                        if (ImGui::TreeNode("##obj_tree", "Show (%d) Objectives", objCount))
+                        {
+                            for (int i = 0; i < objCount; ++i)
+                            {
+                                const auto& obj = quest.objectives[i];
+                                ImGui::PushID(i);
+
+                                if (!obj.id.empty())
+                                    ImGui::BulletText("Type: %s  |  ObjID: %s", obj.type.c_str(), obj.id.c_str());
+                                else
+                                    ImGui::BulletText("Type: %s", obj.type.c_str());
+
+                                if (!obj.itemId.empty())
+                                    ImGui::Text("Item ID: %s", obj.itemId.c_str());
+
+                                if (!obj.questItemId.empty())
+                                    ImGui::Text("QuestItem ID: '%s'", obj.questItemId.c_str());
+
+                                if (!obj.maps.empty())
+                                {
+                                    ImGui::Text("Maps (%d):", (int)obj.maps.size());
+                                    ImGui::Indent();
+                                    for (int mi = 0; mi < (int)obj.maps.size(); ++mi)
+                                        ImGui::BulletText("%s", obj.maps[mi].c_str());
+                                    ImGui::Unindent();
+                                }
+
+                                if (!obj.zones.empty())
+                                {
+                                    ImGui::Text("Zones (%d):", (int)obj.zones.size());
+                                    ImGui::Indent();
+                                    for (int zi = 0; zi < (int)obj.zones.size(); ++zi)
+                                    {
+                                        const auto& z = obj.zones[zi];
+                                        ImGui::PushID(zi);
+
+                                        ImGui::BulletText("Map: %s", z.mapNameId.c_str());
+                                        ImGui::Text("Pos: (%.2f, %.2f, %.2f)", z.position.x, z.position.y, z.position.z);
+
+                                        ImGui::PopID();
+                                    }
+                                    ImGui::Unindent();
+                                }
+
+                                ImGui::Separator();
+                                ImGui::PopID();
+                            }
+
+                            ImGui::TreePop();
+                        }
+
+                        ImGui::PopID();
+                    };
+
+                // -------------------------
+                // Active (memory) renderer
+                // -------------------------
+                auto RenderTaskRow_Active = [&](const QuestData& quest)
+                    {
+                        ImGui::PushID(quest.questId.c_str());
+
+                        ImGui::TableNextRow();
+
+                        // Column 0: Quest Name (+ optional ID)
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(quest.questName.c_str());
+                        if (!quest.questId.empty())
+                        {
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("(%s)", quest.questId.c_str());
+                        }
+
+                        // Column 1: Objectives (Tree)
+                        ImGui::TableSetColumnIndex(1);
+
+                        const int objCount = (int)quest.objectives.size();
+                        const int condCount = (int)quest.completedConditions.size();
+
+                        if (ImGui::TreeNode("##active_obj_tree", "Show (%d) Objectives  |  CompletedConditions (%d)", objCount, condCount))
+                        {
+                            for (int i = 0; i < objCount; ++i)
+                            {
+                                const auto& obj = quest.objectives[i];
+                                ImGui::PushID(i);
+
+                                // Header line
+                                if (!obj.objectiveId.empty())
+                                    ImGui::BulletText("Type: %s  |  ObjID: %s", obj.type.c_str(), obj.objectiveId.c_str());
+                                else
+                                    ImGui::BulletText("Type: %s", obj.type.c_str());
+
+                                // Item / QuestItem IDs
+                                if (!obj.itemId.empty())
+                                    ImGui::Text("Item ID: %s", obj.itemId.c_str());
+
+                                if (!obj.questItemId.empty())
+                                    ImGui::Text("QuestItem ID: %s", obj.questItemId.c_str());
+
+                                // Maps
+                                if (!obj.maps.empty())
+                                {
+                                    ImGui::Text("Maps (%d):", (int)obj.maps.size());
+                                    ImGui::Indent();
+                                    for (int mi = 0; mi < (int)obj.maps.size(); ++mi)
+                                        ImGui::BulletText("%s", obj.maps[mi].c_str());
+                                    ImGui::Unindent();
+                                }
+
+                                // Zones (positions)
+                                if (!obj.zones.empty())
+                                {
+                                    ImGui::Text("Zones (%d):", (int)obj.zones.size());
+                                    ImGui::Indent();
+                                    for (int zi = 0; zi < (int)obj.zones.size(); ++zi)
+                                    {
+                                        const auto& z = obj.zones[zi];
+                                        ImGui::PushID(zi);
+
+                                        ImGui::BulletText("Map: %s", z.mapNameId.c_str());
+                                        ImGui::Text("Pos: (%.2f, %.2f, %.2f)", z.position.x, z.position.y, z.position.z);
+
+                                        ImGui::PopID();
+                                    }
+                                    ImGui::Unindent();
+                                }
+
+                                ImGui::Separator();
+                                ImGui::PopID();
+                            }
+
+                            ImGui::TreePop();
+                        }
+
+                        ImGui::PopID();
+                    };
+
+                if (!showActive)
+                {
+                    for (const auto& quest : tarkovDevTasksData)
+                        RenderTaskRow_Static(quest);
+                }
+                else
+                {
+                    for (const auto& quest : questDataActive)
+                        RenderTaskRow_Active(quest);
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::PopStyleVar(2);
+        }
+    }
+    ImGui::End();
+}
+
+
+static void renderFuserWindow()
+{
+    std::string windowNameMain = "Fuser";
+
+    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetNextWindowPos(ImVec2((viewport->Pos.x + viewport->Size.x) - 410, viewport->Pos.y + 10));
+
+    ImGui::SetNextWindowSize(ImVec2(350, 250));
+    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
+
+    testApp.monitors = testApp.EnumerateMonitors();
+
+    if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appFuser, flagss))
+    {
+
+        if (ImGui::BeginTabBar("##espTabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+        {
+            if (ImGui::BeginTabItem("Control"))
+            {
+
+
+                ImGui::SeparatorText("Fuser Window");
+                if (!espGlobals::runEsp)
+                {
+                    if (ImGui::Button("Launch", ImVec2(140, 30))) {
+
+                        espGlobals::runEsp = TRUE;
+
+                        std::thread fuser(&TestApp::fuserMain, &testApp);
+                        fuser.detach();
+
+                    }
+
+                    if (ImGui::Checkbox("Enable Fullscreen", &globals::fuserFullscreen)) {
+                        globals::fuserFullscreen != globals::fuserFullscreen;
+                        configManager.SaveConfig();
+                    }
+
+                    // Generate list of monitor names for the combo box
+                    std::vector<std::string> monitorLabels;
+                    for (const auto& monitor : testApp.monitors) {
+                        monitorLabels.push_back(monitor.name + " (" +
+                            std::to_string(monitor.coordinates.left) + ", " +
+                            std::to_string(monitor.coordinates.top) + ")");
+                    }
+                    ImGui::Text("Selected Monitor");
+                    testApp.selectedMonitorIndex = globals::fuserScreen;
+                    if (ImGui::BeginCombo("##Monitor",
+                        testApp.selectedMonitorIndex >= 0 ? monitorLabels[testApp.selectedMonitorIndex].c_str() : "Select")) {
+                        for (size_t i = 0; i < testApp.monitors.size(); ++i) {
+                            bool isSelected = (testApp.selectedMonitorIndex == static_cast<int>(i));
+                            if (ImGui::Selectable(monitorLabels[i].c_str(), isSelected)) {
+                                testApp.selectedMonitorIndex = static_cast<int>(i); // Update the selected monitor index
+                                globals::fuserScreen = static_cast<int>(i);
+                                configManager.SaveConfig();
+                            }
+                            if (isSelected) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+
+                }
+                else
+                {
+                    if (ImGui::Button("Stop", ImVec2(140, 30))) {
+                        espGlobals::runEsp = FALSE;
+                    }
+
+                }
+
+
+
+
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        }
+
+
+
+
+
+
+        ImGui::End();
+    }
+}
+
+static void renderMenuSettings()
+{
+
+
+    std::string windowNameMain = "App Settings";
+
+    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetNextWindowPos(ImVec2((viewport->Pos.x + viewport->Size.x) - 410, viewport->Pos.y + 10));
+
+    ImGui::SetNextWindowSize(ImVec2(350, viewport->Size.y - 50));
+    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
+
+
+
+    if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appSettings, flagss))
+    {
+
+        if (ImGui::BeginTabBar("##Tabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+        {
+            if (ImGui::BeginTabItem("App"))
+            {
+
+
+                ImGui::SeparatorText("Radar Control");
+                if (!memoryGlobals::dmaConnected)
+                {
+                    if (ImGui::Button("DMA Connect", ImVec2(140, 30))) { mem.doDMAConnect(); }
+                   
+                    //auto connect if not connected and auto connect ticked
+                    if (!memoryGlobals::dmaConnected && memoryGlobals::dmaAutoConnect)
+                    {
+                        mem.doDMAConnect();
+                    }
+
+                }
+                else
+                {
+                    if (ImGui::Button("Disconnect", ImVec2(140, 30))) { mem.~Memory(); exit(1); }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Soft Restart", ImVec2(140, 30))) {
+                        //std::unique_lock<std::mutex> lockPlayers(playerMtx);
+                        players.softRestart();
+                    }
+                }
+
+
+                if (!memoryGlobals::dmaConnected)
+                {
+                    if (ImGui::Checkbox(" Auto Connect", &memoryGlobals::dmaAutoConnect)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::Checkbox(" Close Connections", &memoryGlobals::dmaCloseAll);
+
+                }
+                ImGui::Checkbox(" Show Stats", &memoryGlobals::dmaShowStats);
+
+                ImGui::NewLine();
+
+                ImGui::SeparatorText("App Settings");
+                ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Window Alpha", &globals::appWindowAlpha, 0.f, 1.f, "%.1f")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Radar Max FPS", &globals::appRadarMaxFPS, 30.f, 60.f, "%.f")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Fuser Max FPS", &globals::appFuserMaxFPS, 30.f, 255.f, "%.f")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                ImGui::PushItemWidth(150); if (showResSelectionBox()) configManager.SaveConfig(); ImGui::PopItemWidth();
+
+                ImGui::NewLine();
+                //dogtag api connect details
+                {
+                    ImGui::SeparatorText("Dogtag Cloud API");
+
+                    static char apiKeyBuffer[256]{};
+                    static bool keyLoadedToBuffer = false;
+
+                    static bool keyStatusChecked = false;
+                    static bool keyIsValid = false;
+                    static std::string keyStatusText = "Not checked";
+                    static std::string lastError;
+
+                    if (!keyLoadedToBuffer)
+                    {
+                        strncpy_s(apiKeyBuffer, globals::dogTagAPIKey.c_str(), sizeof(apiKeyBuffer) - 1);
+
+                        keyLoadedToBuffer = true;
+                    }
+
+                    ImGui::TextWrapped(" Visit apicloud.meatyradar.co.uk/ for FREE\n Help build the database of players!\n");
+
+                    ImGui::InputText(" API Key", apiKeyBuffer, IM_ARRAYSIZE(apiKeyBuffer), ImGuiInputTextFlags_Password);
+
+                    if (ImGui::Button("Save Key", ImVec2(140, 30)))
+                    {
+                        std::string key = apiKeyBuffer;
+                        g_DogTagAPI.setApiKey(key);
+
+                        
+                        globals::dogTagAPIKey = key;
+                        configManager.SaveConfig();
+
+                        keyStatusChecked = false;
+                        keyIsValid = false;
+                        keyStatusText = "Saved. Not checked yet.";
+                        lastError.clear();
+                    }
+
+                    ImGui::SameLine();
+
+                    if (ImGui::Button("Check Status", ImVec2(140, 30)))
+                    {
+                        std::string key = apiKeyBuffer;
+                        g_DogTagAPI.setApiKey(key);
+
+                        keyStatusChecked = true;
+                        keyIsValid = false;
+                        keyStatusText = "Checking...";
+                        lastError.clear();
+
+                        auto status = g_DogTagAPI.getKeyStatus();
+
+                        if (status && status->valid)
+                        {
+                            keyIsValid = true;
+                            keyStatusText = "Active";
+                        }
+                        else
+                        {
+                            keyIsValid = false;
+                            keyStatusText = "Invalid / Disabled / Banned";
+
+                            if (status && !status->error.empty())
+                                lastError = status->error;
+                            else
+                                lastError = "Failed to check API key status.";
+                        }
+                    }
+
+                    if (globals::dogTagAPIKey != "")
+                    {
+                        ImGui::NewLine();
+
+                        if (ImGui::Button("Clear Key", ImVec2(140, 30)))
+                        {
+                            memset(apiKeyBuffer, 0, sizeof(apiKeyBuffer));
+                            g_DogTagAPI.clearApiKey();
+
+                            globals::dogTagAPIKey = "";
+                            configManager.SaveConfig();
+
+                            keyStatusChecked = false;
+                            keyIsValid = false;
+                            keyStatusText = "No key set";
+                            lastError.clear();
+                        }
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Status");
+
+                    if (!keyStatusChecked)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "Status: %s", keyStatusText.c_str());
+                    }
+                    else if (keyIsValid)
+                    {
+                        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.35f, 1.0f), "Status: Active");
+                    }
+                    else
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "Status: %s", keyStatusText.c_str());
+                    }
+
+                    if (!lastError.empty())
+                        ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "Error: %s", lastError.c_str());
+                }
+
+
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Settings"))
+            {
+                ImGui::SeparatorText("Radar Settings");
+                if (ImGui::Checkbox(" Draw Players", &radarGlobals::drawPlayers)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Grenades", &radarGlobals::drawGrenades)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Exfils", &radarGlobals::drawExfils)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Loot", &radarGlobals::drawLoot)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Quest Helper", &radarGlobals::drawQuestHelper)) configManager.SaveConfig();
+                ImGui::Text("Local AimLine     "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##localAimLine", &radarGlobals::localAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                ImGui::Text("Friend AimLine    "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##friendAimLine", &radarGlobals::friendAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                ImGui::Text("Enemy AimLine   "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##enemyAimLine", &radarGlobals::enemyAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+
+
+                ImGui::SeparatorText("Fuser/ESP Settings");
+
+                if (ImGui::Checkbox(" Draw Players        ", &espGlobals::drawPlayers)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##player", &espGlobals::drawPlayerDist, 10, 1000, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                if (ImGui::Checkbox(" Draw Grenades    ", &espGlobals::drawGrenades)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##grenade", &espGlobals::drawGrenadesDist, 10, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                if (ImGui::Checkbox(" Draw Loot             ", &espGlobals::drawLoot)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##loot", &espGlobals::drawLootDist, 5, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                if (ImGui::Checkbox(" Draw Corpse          ", &espGlobals::drawCorpse)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##corpse", &espGlobals::drawCorpseDist, 5, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                if (ImGui::Checkbox(" Draw Box's", &espGlobals::drawBoxPlayers)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Quest Helper. ", &espGlobals::drawQuestHelper)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Skeleton", &espGlobals::drawSkeletons)) configManager.SaveConfig(); ImGui::SameLine(); if (ImGui::Checkbox(" Only closest", &espGlobals::skeletonsOnlyClosest)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Head Dot", &espGlobals::drawHeadDot)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Crosshair", &espGlobals::drawCrosshair)) configManager.SaveConfig();
+
+                //ImGui::SeparatorText("Aim & RCS Settings");
+                //ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Aim FOV", &aimGlobals::aimFOV, 1.f, 300.f, "%.f")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                //ImGui::PushItemWidth(150); if (ImGui::SliderInt(" Aim Distance", &aimGlobals::aimDistance, 1, 1000, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                //ImGui::PushItemWidth(100); if (showBoneSelectionBox(aimGlobals::aiBone, " Ai Bone")) configManager.SaveConfig(); ImGui::PopItemWidth(); ImGui::SameLine();
+                //ImGui::PushItemWidth(100); if (showBoneSelectionBox(aimGlobals::pmcBone, " PMC Bone")) configManager.SaveConfig(); ImGui::PopItemWidth();
+
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Features"))
+            {
+                ImGui::SeparatorText("Safe Features");
+                if (ImGui::Checkbox(" Get Equipment Info", &radarGlobals::getPlayerEquip)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Get TarkovDev Info", &radarGlobals::getPlayerStats)) configManager.SaveConfig();
+                //if (ImGui::Checkbox(" Enable Aimbot", &aimGlobals::aimEnabled)) configManager.SaveConfig();
+
+
+                ImGui::SeparatorText("Risky Features");
+                
+
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Colours"))
+            {
+                ImGui::SeparatorText("Player Colours");
+                if (ImGui::ColorEdit4(" PMC Player", (float*)&coloursGlobals::playerPMC, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Player Scav", (float*)&coloursGlobals::playerScav, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" AI Player", (float*)&coloursGlobals::playerAI, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Local Player", (float*)&coloursGlobals::playerLocal, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Friendly Player", (float*)&coloursGlobals::playerFriendly, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" AI Boss", (float*)&coloursGlobals::playerBoss, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" BTR", (float*)&coloursGlobals::aiBTR, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Watched Player", (float*)&coloursGlobals::playerWatched, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+
+                ImGui::SeparatorText("Radar / ESP Colours");
+                if (ImGui::ColorEdit4(" Player GroupLine", (float*)&coloursGlobals::playerGroupLine, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Player Corpse", (float*)&coloursGlobals::playerCorpse, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Grenades", (float*)&coloursGlobals::grenades, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Exfils", (float*)&coloursGlobals::exfils, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Crosshair", (float*)&coloursGlobals::crosshair, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" FOV Circle", (float*)&coloursGlobals::fovCircle, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Quest Markers", (float*)&coloursGlobals::questMarker, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+
+
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Misc"))
+            {
+                ImGui::SeparatorText("Keybind Settings");
+                if (ShowKeySelectionBox(keyGlobals::aimKey, " Aim Key")) configManager.SaveConfig();
+                if (ShowKeySelectionBox(keyGlobals::toggleFollow, " Toggle Follow")) configManager.SaveConfig();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+
+
+
+
+
+    }
+    ImGui::End();
+}
+
+std::string formatDataRate(size_t bytes) {
+    const char* suffix[] = { "B/s", "KB/s", "MB/s", "GB/s", "TB/s" };
+    size_t i = 0;
+    double dblBytes = static_cast<double>(bytes);
+
+    while (dblBytes >= 1024 && i < 4) {
+        dblBytes /= 1024;
+        i++;
+    }
+
+    char formatted[32];
+    snprintf(formatted, sizeof(formatted), "%.2f %s", dblBytes, suffix[i]);
+    return std::string(formatted);
+}
+
+static void renderBottomInfo()
+{
+    // view port
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    // Render our app version always
+    ImGui::SetCursorPos(ImVec2(viewport->Size.x - 180, viewport->Size.y - 30));
+    ImGui::Text("MeatyEFT: %s", globals::appVersion);
+
+    // Render DMA Stats if selected
+    // Data
+    if (memoryGlobals::dmaShowStats)
+    {
+        std::string connected = "Disconnected";
+        if (memoryGlobals::processFound)
+        {
+            connected = "Connected";
+
+
+            //std::string formattedDataRate = formatDataRate(dataValue);
+            //ImGui::SetCursorPos(ImVec2(viewport->Size.x - 690, viewport->Size.y - 30));
+            //ImGui::Text("DMA Status : %s (%d R/S - %d W/S) Data Rate : (%s)", connected, readsValue, writesValue, formattedDataRate.c_str());
+        }
+        else
+        {
+            ImGui::SetCursorPos(ImVec2(viewport->Size.x - 360, viewport->Size.y - 30));
+            ImGui::Text("DMA Status : %s ", connected);
+        }
+    }
+
+    // thread info
+    ImGui::SetCursorPos(ImVec2(viewport->Size.x - viewport->Size.x + 20, viewport->Size.y - 30));
+    //ImGui::Text("Timings : Players ( %d ms ), Camera ( %d ms ) ", playerTimerValue, cameraTimerValue);
+}
+// Helper function to convert MessageLevel to string
+std::string messageLevelToString(MessageLevel level) {
+    switch (level) {
+    case MessageLevel::INFO:
+        return "INFO";
+    case MessageLevel::WARN:
+        return "WARN";
+    case MessageLevel::ERR:
+        return "ERROR";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+// Helper function to export messages to a text file
+void exportMessagesToFile(const std::vector<Message>& messages, const std::string& filename) {
+    std::ofstream file(filename);
+    if (!file.is_open()) return;
+
+    for (const auto& msg : messages) {
+        file << "Timestamp: " << msg.timestamp << "s, Type: " << messageLevelToString(msg.level).c_str()
+            << ", Message: " << msg.text << std::endl;
+    }
+
+    file.close();
+}
+
+int CountNonZeroEntries(const uint64_t* buffer, int size) {
+    int count = 0;
+    for (int i = 0; i < size; ++i) {
+        if (buffer[i] != 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// Function to convert glm::mat4 to string
+std::string Mat4ToString(const glm::highp_mat4& mat) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2);
+    for (int i = 0; i < 4; ++i) {
+        const glm::vec4& row = glm::row(mat, i);
+        oss << "[" << row.x << ", " << row.y << ", " << row.z << ", " << row.w << "]\n";
+    }
+    return oss.str();
+}
+
+// Function to display matrix as tooltip in ImGui
+void ShowMatrixTooltip(const glm::highp_mat4& mat) {
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(Mat4ToString(mat).c_str());
+        ImGui::EndTooltip();
+    }
+}
+
+static void renderDebugWindow()
+{
+    std::string windowNameMain = "Debug";
+    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+
+    ImGui::SetNextWindowSize(ImVec2(600, 500));
+
+    static bool showInfo = true;
+    static bool showWarn = true;
+    static bool showError = true;
+
+    if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetDebug, flagss))
+    {
+        if (ImGui::BeginTabBar("##Tabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+        {
+            if (ImGui::BeginTabItem("Console"))
+            {
+
+                ImGui::Checkbox("Show Info", &showInfo); ImGui::SameLine(); ImGui::Checkbox("Show Warn", &showWarn); ImGui::SameLine(); ImGui::Checkbox("Show Error", &showError);
+
+                if (ImGui::Button("Export to file")) {
+                    exportMessagesToFile(LOGS.getMessages(), "debug_log.txt");
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear Logs")) {
+                    LOGS.clearLog();
+                }
+
+                ImGui::Separator();
+
+                // Setup table
+                if (ImGui::BeginTable("DebugTable", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+                    ImGui::TableSetupColumn("Timestamp", ImGuiTableColumnFlags_WidthFixed);
+                    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed);
+                    ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableHeadersRow();
+
+                    const auto& messages = LOGS.getMessages();
+
+                    if (messages.size() > 3000)
+                        LOGS.clearLog();
+
+                    for (const auto& msg : messages) {
+                        bool showMessage = false;
+                        ImVec4 color;
+
+                        switch (msg.level) {
+                        case MessageLevel::INFO:
+                            showMessage = showInfo;
+                            color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+                            break;
+                        case MessageLevel::WARN:
+                            showMessage = showWarn;
+                            color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
+                            break;
+                        case MessageLevel::ERR:
+                            showMessage = showError;
+                            color = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
+                            break;
+                        }
+
+                        if (showMessage) {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%.2fs", msg.timestamp);
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::TextColored(color, "%s", messageLevelToString(msg.level).c_str());
+
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextColored(color, "%s", msg.text.c_str());
+                        }
+                    }
+
+
+                }
+                ImGui::EndTable();
+                ImGui::EndTabItem();
+            }
+/*            if (ImGui::BeginTabItem("Memory"))
+            {
+                if (ImGui::BeginTabBar("##Tabsmemory", ImGuiTabBarFlags_FittingPolicyResizeDown))
+                {
+                    if (ImGui::BeginTabItem("mainGame"))
+                    {
+                        ImGui::Text("gameObjectManager: %llu", mainGame.gameObjectManager);
+
+                        ImGui::Text("gameWorld: %llu", mainGame.gameWorld);
+                        ImGui::Text("localGameWorld: %llu", mainGame.localGameWorld);
+
+                        ImGui::Text("registeredPlayers: %llu", mainGame.registeredPlayers);
+                        ImGui::Text("registeredPlayersList: %llu", mainGame.registeredPlayersList);
+                        ImGui::Text("registeredPlayersCount: %d", mainGame.registeredPlayersCount);
+
+                        int playerBufferCount = CountNonZeroEntries(mainGame.player_buffer, 127);
+                        ImGui::Text("player_buffer entries: %d", playerBufferCount);
+
+                        ImGui::Text("selectedLocation: %s", mainGame.selectedLocation.c_str());
+                        ImGui::Text("onlineRaid: %s", mainGame.onlineRaid ? "true" : "false");
+
+                        ImGui::Text("localPlayerPtr: %llu", mainGame.localPlayerPtr);
+
+
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("local"))
+                    {
+
+                        ImGui::Text("rootLocationBase: %llu", localPlayer.rootLocationBase);
+                        ImGui::Text("rootLocationBase2: %llu", localPlayer.rootLocationBase2);
+                        ImGui::Text("movementContext: %llu", localPlayer.movementContext);
+                        ImGui::Text("proceduralWeaponAnimation: %llu", localPlayer.proceduralWeaponAnimation);
+                        ImGui::Text("fireportPositionPtr: %llu", localPlayer.fireportPositionPtr);
+
+                        ImGui::Text("worldLocation: (%.2f, %.2f, %.2f)", localPlayer.worldLocation.x, localPlayer.worldLocation.y, localPlayer.worldLocation.z);
+                        ImGui::Text("worldLocationBackup: (%.2f, %.2f, %.2f)", localPlayer.worldLocationBackup.x, localPlayer.worldLocationBackup.y, localPlayer.worldLocationBackup.z);
+                        ImGui::Text("mapLocation: (%.2f, %.2f)", localPlayer.mapLocation.x, localPlayer.mapLocation.y);
+                        ImGui::Text("rotation: (%.2f, %.2f)", localPlayer.rotation.x, localPlayer.rotation.y);
+
+                        ImGui::Text("groupid: %s", localPlayer.groupid.c_str());
+                        if (localPlayer.isScoped) ImGui::Text("isScoped: TRUE"); else ImGui::Text("isScoped: FALSE");
+
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("player"))
+                    {
+                        //std::shared_lock<std::shared_mutex> lock(players.getMutex());
+                        const std::vector<PlayerCache>& cache = players.getCache();
+                        ImGui::Text("Player Cache Count: %zu", cache.size());
+                        
+
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("camera"))
+                    {
+                        ImGui::Text("fpsCamera: %llu", camera.fpsCamera);
+                        ImGui::Text("opticCamera: %llu", camera.opticCamera);
+                        ImGui::Text("fps Matrix: %llu", camera.fpsMatrixAddr);
+                        ImGui::Text("optic Matrix: %llu", camera.opticMatrixAddr);
+                        ImGui::NewLine();
+                        ImGui::Text("gameFov: %.f", camera.gameFOV);
+                        ImGui::Text("gameAspect: %.f", camera.gameAspect);
+                        ImGui::NewLine();
+                        if (mainGame.localIsScoped) ImGui::Text("local Aiming: TRUE"); else ImGui::Text("Local Aiming: FALSE");
+                        if (camera.localmpCamera) ImGui::Text("localmpCamera: TRUE"); else ImGui::Text("localmpCamera: FALSE");
+                        ImGui::NewLine();
+                        ImGui::Text("fpsCamera RAW: (hover)"); ShowMatrixTooltip(camera.g_viewMatrixRAW);
+                        ImGui::Text("fpsCamera Transposed: (hover)"); ShowMatrixTooltip(camera.g_viewMatrix);
+                        ImGui::Text("opticCamera RAW: (hover)"); ShowMatrixTooltip(camera.g_viewMatrixOpticRAW);
+                        ImGui::Text("opticCamera Transposed: (hover)"); ShowMatrixTooltip(camera.g_viewMatrixOptic);
+
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("aim"))
+                    {
+                        if (aim.aimActive) ImGui::Text("aimActive: TRUE"); else ImGui::Text("aimActive: FALSE");
+                        ImGui::NewLine();
+                        ImGui::Text("localMatrices: %llu", aim.localMatrices);
+                        ImGui::Text("localIndex: %llu", aim.localIndex);
+                        ImGui::Text("movementContext: %llu", aim.movementContext);
+                        ImGui::NewLine();
+                        ImGui::Text("firePortPosition: (%.2f, %.2f, %.2f)", aim.firePortPosition.x, aim.firePortPosition.y, aim.firePortPosition.z);
+                        ImGui::Text("velocityTarget: (%.2f, %.2f, %.2f)", aim.velocityTarget.x, aim.velocityTarget.y, aim.velocityTarget.z);
+                        ImGui::Text("targetPosition: (%.2f, %.2f, %.2f)", aim.targetPosition.x, aim.targetPosition.y, aim.targetPosition.z);
+                        ImGui::NewLine();
+                        ImGui::Text("ammo_speed: %.f", aim.ammo_speed);
+                        ImGui::Text("ammo_size: %.f", aim.ammo_size);
+                        ImGui::Text("ammo_mass: %.f", aim.ammo_mass);
+
+
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("features"))
+                    {
+
+                        ImGui::SeparatorText("Exfils");
+
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("loot"))
+                    {
+
+                        ImGui::SeparatorText("Main Pointers");
+                        ImGui::Text("lootListP: %llu", Loot.lootListP);
+                        ImGui::Text("lootListPtr: %llu", Loot.lootListPtr);
+                        ImGui::Text("lootCount: %d", Loot.lootCount);
+                        const std::vector<LootList>& cacheLoot = Loot.getCacheLoot();
+                        ImGui::Text("LoolList Cache Size: %zu", cacheLoot.size());
+
+
+                        ImGui::EndTabItem();
+                    }
+
+                    ImGui::EndTabBar();
+                }
+                ImGui::EndTabItem();
+            }
+            */
+
+            ImGui::EndTabBar();
+        }
+    }
+    ImGui::End();
+
+}
+
+static void renderLeftIcons()
+{
+    //icons
+    std::string followIcon = ICON_FK_STREET_VIEW;
+
+    // view port
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - viewport->Size.x + 10.f), 10.f });
+
+    if (ImGui::ButtonMenu(followIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10)))
+    {
+        mapGlobals::followLocal = !mapGlobals::followLocal;
+        mapGlobals::focusPoint = { 0.f, 0.f, 0.f };
+
+    }
+    else
+    {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Follow Toggle");
+            ImGui::EndTooltip();
+        }
+    }
+}
+
+static void renderMenuIcons()
+{
+    // Icons Menu
+
+    std::string settingIcon = ICON_FK_COGS;
+    std::string fuserIcon = ICON_FK_TELEVISION;
+    std::string filterIcon = ICON_FK_FILTER;
+    std::string questsIcon = ICON_FK_USER;
+
+
+    std::string widgetExitIcon = ICON_FK_SIGN_OUT;
+    std::string widgetLootIcon = ICON_FK_CUBES;
+    std::string widgetPlayersIcon = ICON_FK_USERS;
+    std::string widgetDebugIcon = ICON_FK_STETHOSCOPE;
+
+    // view port
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 10.f });
+
+    // Settings Icon
+    if (ImGui::ButtonMenu(settingIcon.c_str(), ImVec2(40, 40), ImVec2(60, 10)))
+    {
+        appMenu::appSettings = !appMenu::appSettings;
+        closeSettingWindows("settings");
+    }
+    else
+    {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Settings");
+            ImGui::EndTooltip();
+        }
+    }
+
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 55.f });
+    if (ImGui::ButtonMenu(fuserIcon.c_str(), ImVec2(40, 40), ImVec2(22, 10))) {
+        appMenu::appFuser = !appMenu::appFuser;
+        closeSettingWindows("fuser");
+    }
+    else
+    {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("ESP");
+            ImGui::EndTooltip();
+        }
+    }
+
+
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 100.f });
+    if (ImGui::ButtonMenu(filterIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) {
+        appMenu::appLootFilters = !appMenu::appLootFilters;
+        closeSettingWindows("lootfilters");
+    }
+    else
+    {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Loot Filters");
+            ImGui::EndTooltip();
+        }
+    }
+
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 145.f });
+    if (ImGui::ButtonMenu(questsIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) {
+        appMenu::appQuests = !appMenu::appQuests;
+        closeSettingWindows("quests");
+    }
+    else
+    {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Quests");
+            ImGui::EndTooltip();
+        }
+    }
+
+
+
+    //widgets
+
+
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 200.f });
+    if (ImGui::ButtonMenu(widgetDebugIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) { appMenu::widgetDebug = !appMenu::widgetDebug; }
+
+
+
+    //should only display the other items below when in raid
+    if (mainGame.localPlayerPtr)
+    {
+
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 245.f });
+        if (ImGui::ButtonMenu(widgetExitIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) { appMenu::widgetExfil = !appMenu::widgetExfil; }
+
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 290.f });
+        if (ImGui::ButtonMenu(widgetLootIcon.c_str(), ImVec2(40, 40), ImVec2(30, 10))) { appMenu::widgetTopLoot = !appMenu::widgetTopLoot; }
+
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 335.f });
+        if (ImGui::ButtonMenu(widgetPlayersIcon.c_str(), ImVec2(40, 40), ImVec2(30, 10))) { appMenu::widgetPlayers = !appMenu::widgetPlayers; }
+
+
+    }
+
+    if (appMenu::appSettings)
+        renderMenuSettings(); // display settings menu screen
+    if (appMenu::appLootFilters)
+        renderLootFiltersMenu(); // display loot filters screen
+
+    if (appMenu::widgetDebug)
+        renderDebugWindow();
+
+    if (appMenu::appFuser)
+        renderFuserWindow();
+
+    if (appMenu::appQuests)
+        renderQuestsWindow();
+
+
+
+}
+
+//This is where we render certain screens depending on conditions and selections/inputs
+static void renderMainScreen()
+{
+
+
+    // Viewport Info
+    static ImGuiWindowFlags flags = ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDecoration;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, viewport->Size.y));
+
+    if (ImGui::Begin("MainScreen", NULL, flags))
+    {
+        const char* Text = "";
+
+        //enable testing of in raid view, comment out for production
+        //memoryGlobals::dmaConnected, memoryGlobals::processFound, appGlobals::runRadar = true; mapGlobals::currentMapName = "bigmap";
+
+        if (!memoryGlobals::dmaConnected)
+        {
+            Text = "Waiting for DMA Connection";
+        }
+        if (memoryGlobals::dmaConnected && !memoryGlobals::processFound)
+        {
+            Text = "Waiting for EFT Process";
+        }
+        if (memoryGlobals::dmaConnected && memoryGlobals::processFound && !appGlobals::runRadar)
+        {
+
+            if (gameGlobals::inHideout)
+                Text = "In Hideout Session";
+            else
+                Text = "Waiting for Raid Start";
+
+        }
+
+
+        //display text if not in raid or runRadar is not set true
+        if (!appGlobals::runRadar)
+        {
+            ImVec2 centerScreen = viewport->GetWorkCenter();
+
+            DrawRadarMainText(centerScreen.x, centerScreen.y, { 1,0,0,1 }, Text);
+            DrawRadarSubText(centerScreen.x, centerScreen.y + 45, { 1,0,0,1 }, globals::radarSubText.c_str());
+
+        }
+        else
+        {
+            // consider in raid? render what we only have access to in raid!
+            renderMapDetails();
+
+            //render what we want on map as runRadar is true
+            drawLocalPlayer();
+            drawPlayers();
+            drawExfils();
+            drawGrenades();
+            drawLoot();
+            drawTripWire();
+
+            drawQuests();
+
+            drawWidgetPlayers();
+            drawWidgetExfils();
+            drawWidgetTopLoot();
+
+
+            renderLeftIcons();
+
+
+        }
+
+        renderMenuIcons();
+        renderBottomInfo();
+    }
+    ImGui::End();
+
+}
+
+static void load_styles()
+{
+    ImVec4* colors = ImGui::GetStyle().Colors;
+    {
+        colors[ImGuiCol_WindowBg] = ImVec4(0.00f, 0.00f, 0.00f, 255.00f);
+
+        colors[ImGuiCol_FrameBg] = ImColor(11, 11, 11, 255);
+        colors[ImGuiCol_FrameBgHovered] = ImColor(11, 11, 11, 255);
+
+        colors[ImGuiCol_Button] = ImColor(0, 0, 255, 255);
+        colors[ImGuiCol_ButtonActive] = ImColor(0, 0, 255, 255);
+        colors[ImGuiCol_ButtonHovered] = ImColor(0, 0, 255, 100);
+
+        colors[ImGuiCol_TextDisabled] = ImVec4(0.37f, 0.37f, 0.37f, 1.00f);
+    }
+
+    ImGuiStyle* style = &ImGui::GetStyle();
+    {
+        style->WindowPadding = ImVec2(6, 6);
+        style->WindowBorderSize = 1.f;
+        style->WindowRounding = 5.f;
+
+        style->FramePadding = ImVec2(8, 6);
+        style->FrameRounding = 3.f;
+        style->FrameBorderSize = 1.f;
+    }
+}
+
+
+bool renderThread()
+{
+    bool done = false;
+    bool doOnce = false;
+
+    // Create application window
+    //ImGui_ImplWin32_EnableDpiAwareness();
+    std::wstring windowTitle = L"MeatyEFT - " + std::wstring(globals::appVersion.begin(), globals::appVersion.end());
+
+    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, windowTitle.c_str(), nullptr };
+    ::RegisterClassExW(&wc);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
+
+    // Initialize Direct3D
+    if (!CreateDeviceD3D(hwnd))
+    {
+        CleanupDeviceD3D();
+        ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+        return 1;
+    }
+
+
+
+    // Show the window
+    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ::UpdateWindow(hwnd);
+
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    //io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows
+    //io.ConfigViewportsNoAutoMerge = true;
+    //io.ConfigViewportsNoTaskBarIcon = true;
+
+    io.IniFilename = "INImeatyEFT.ini";
+
+    // Setup Dear ImGui style
+    ImGui::StyleColorsDark();
+    //ImGui::StyleColorsLight();
+
+    // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
+
+    if (!doOnce)
+    {
+        load_styles();
+        doOnce = true;
+    }
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX9_Init(g_pd3dDevice);
+
+    // Load Fonts
+    // - If no fonts are loaded, dear imgui will use the default font. You can also load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
+    // - AddFontFromFileTTF() will return the ImFont* so you can store it if you need to select the font among multiple.
+    // - If the file cannot be loaded, the function will return a nullptr. Please handle those errors in your application (e.g. use an assertion, or display an error and quit).
+    // - The fonts will be rasterized at a given size (w/ oversampling) and stored into a texture when calling ImFontAtlas::Build()/GetTexDataAsXXXX(), which ImGui_ImplXXXX_NewFrame below will call.
+    // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use Freetype for higher quality font rendering.
+    // - Read 'docs/FONTS.md' for more instructions and details.
+    // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
+    //io.Fonts->AddFontDefault();
+    //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
+    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf", 16.0f);
+    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf", 16.0f);
+    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf", 15.0f);
+    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, nullptr, io.Fonts->GetGlyphRangesJapanese());
+    //IM_ASSERT(font != nullptr);
+
+    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\Calibri.ttf", 12.0f, NULL, io.Fonts->GetGlyphRangesDefault());
+
+    // Other Fonts
+    //io.Fonts->AddFontFromMemoryTTF((void*)Font, sizeof(Font), 16.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
+    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesCyrillic());
+
+    // Font Awesome
+    float iconFontSize = 24.f; //24
+    static const ImWchar icons_ranges[] = { ICON_MIN_FK, ICON_MAX_16_FK, 0 };
+    ImFontConfig icons_config;
+    icons_config.MergeMode = true;
+    icons_config.PixelSnapH = true;
+    io.Fonts->AddFontFromFileTTF(FONT_ICON_FILE_NAME_FK, iconFontSize, &icons_config, icons_ranges);
+
+
+
+
+    //IM_ASSERT(font != nullptr);
+
+    // Our state
+    ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
+
+    // Main loop
+
+    while (!done)
+    {
+        // Poll and handle messages (inputs, window resize, etc.)
+        // See the WndProc() function below for our to dispatch events to the Win32 backend.
+        MSG msg;
+        while (::PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE))
+        {
+            ::TranslateMessage(&msg);
+            ::DispatchMessage(&msg);
+            if (msg.message == WM_QUIT)
+                done = true;
+        }
+        if (done)
+            break;
+
+        // Handle lost D3D9 device
+        if (g_DeviceLost)
+        {
+            HRESULT hr = g_pd3dDevice->TestCooperativeLevel();
+            if (hr == D3DERR_DEVICELOST)
+            {
+                ::Sleep(10);
+                continue;
+            }
+            if (hr == D3DERR_DEVICENOTRESET)
+                ResetDevice();
+            g_DeviceLost = false;
+        }
+
+        // Handle window resize (we don't resize directly in the WM_SIZE handler)
+        if (g_ResizeWidth != 0 && g_ResizeHeight != 0)
+        {
+            g_d3dpp.BackBufferWidth = g_ResizeWidth;
+            g_d3dpp.BackBufferHeight = g_ResizeHeight;
+            g_ResizeWidth = g_ResizeHeight = 0;
+            ResetDevice();
+        }
+
+        
+
+
+
+        // Start the Dear ImGui frame
+        ImGui_ImplDX9_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        // Our app function for rendering whats on screen
+        renderMainScreen();
+
+        // Rendering
+        ImGui::EndFrame();
+
+        ImGui::GetIO().FontGlobalScale = globals::appTextScale;
+
+
+        g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
+        g_pd3dDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        g_pd3dDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+        g_pd3dDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+        D3DCOLOR clear_col_dx = D3DCOLOR_RGBA((int)(clear_color.x * clear_color.w * 255.0f), (int)(clear_color.y * clear_color.w * 255.0f), (int)(clear_color.z * clear_color.w * 255.0f), (int)(clear_color.w * 255.0f));
+        g_pd3dDevice->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, clear_col_dx, 1.0f, 0);
+        if (g_pd3dDevice->BeginScene() >= 0)
+        {
+            ImGui::Render();
+
+            ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+
+            g_pd3dDevice->EndScene();
+        }
+
+        // Update and Render additional Platform Windows
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+        {
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+        }
+
+        HRESULT result = g_pd3dDevice->Present(nullptr, nullptr, nullptr, nullptr);
+        if (result == D3DERR_DEVICELOST)
+            g_DeviceLost = true;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    }
+
+    // Cleanup
+    ImGui_ImplDX9_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+
+    CleanupDeviceD3D();
+    ::DestroyWindow(hwnd);
+    ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+
+    return 0;
+}
+
+// Helper functions
+bool CreateDeviceD3D(HWND hWnd)
+{
+    if ((g_pD3D = Direct3DCreate9(D3D_SDK_VERSION)) == nullptr)
+        return false;
+
+    // Create the D3DDevice
+    ZeroMemory(&g_d3dpp, sizeof(g_d3dpp));
+    g_d3dpp.Windowed = TRUE;
+    g_d3dpp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    g_d3dpp.BackBufferFormat = D3DFMT_UNKNOWN; // Need to use an explicit format with alpha if needing per-pixel alpha composition.
+    g_d3dpp.EnableAutoDepthStencil = TRUE;
+    g_d3dpp.AutoDepthStencilFormat = D3DFMT_D16;
+    g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_ONE;           // Present with vsync
+    //g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;   // Present without vsync, maximum unthrottled framerate
+    if (g_pD3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hWnd, D3DCREATE_HARDWARE_VERTEXPROCESSING, &g_d3dpp, &g_pd3dDevice) < 0)
+        return false;
+
+    return true;
+}
+
+void CleanupDeviceD3D()
+{
+    if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
+    if (g_pD3D) { g_pD3D->Release(); g_pD3D = nullptr; }
+}
+
+void ResetDevice()
+{
+    ImGui_ImplDX9_InvalidateDeviceObjects();
+    HRESULT hr = g_pd3dDevice->Reset(&g_d3dpp);
+    if (hr == D3DERR_INVALIDCALL)
+        IM_ASSERT(0);
+    ImGui_ImplDX9_CreateDeviceObjects();
+}
+
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0 // From Windows SDK 8.1+ headers
+#endif
+
+// Forward declare message handler from imgui_impl_win32.cpp
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+// Win32 message handler
+// You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
+// - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
+// - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
+// Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return true;
+
+    switch (msg)
+    {
+    case WM_SIZE:
+        if (wParam == SIZE_MINIMIZED)
+            return 0;
+        g_ResizeWidth = (UINT)LOWORD(lParam); // Queue resize
+        g_ResizeHeight = (UINT)HIWORD(lParam);
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+            return 0;
+        break;
+    case WM_DESTROY:
+        ::PostQuitMessage(0);
+        return 0;
+    case WM_DPICHANGED:
+        if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DpiEnableScaleViewports)
+        {
+            //const int dpi = HIWORD(wParam);
+            //printf("WM_DPICHANGED to %d (%.0f%%)\n", dpi, (float)dpi / 96.0f * 100.0f);
+            const RECT* suggested_rect = (RECT*)lParam;
+            ::SetWindowPos(hWnd, nullptr, suggested_rect->left, suggested_rect->top, suggested_rect->right - suggested_rect->left, suggested_rect->bottom - suggested_rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        break;
+    }
+    return ::DefWindowProcW(hWnd, msg, wParam, lParam);
+}

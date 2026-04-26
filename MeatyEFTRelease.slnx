@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="MeatyEFTRelease/MeatyEFTRelease.vcxproj" Id="efd399cd-fe27-44ea-82b4-b4f076df3266" />
+</Solution>
