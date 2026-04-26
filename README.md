@@ -1,3 +1,4 @@
+
 # MeatyEFTRelease
 
 Advanced external DMA radar and companion toolkit for **Escape from Tarkov** focused on performance, clean visuals, and live data features.
@@ -20,6 +21,12 @@ Im pretty certain the maps in this project came from Marazm, so credit to this g
 
 I've tried to make this work easy. You should be able to download, open is visual studio, select release then build. If you have issues you can ask in the Discord or Google it
 
+To get the assets needed after building to run you can download them here
+https://www.dropbox.com/scl/fo/ww5zu4nxm5f4w96vbgdwm/ADMHHuq2uaEGMbRHIxcF5uk?rlkey=bcik8g428iadfow3bgjzmdchj&st=lf5twyrg&dl=0
+
+You should acquire your own vmm.dll, leechcore.dll and FTD3XX.dll but i have included these if you require
+
+NOTE THIS SHOULD BE RAN ON YOUR 2nd PC AND NOT GAME PC
 ---
 
 # Status
