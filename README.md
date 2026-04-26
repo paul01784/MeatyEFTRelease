@@ -1,10 +1,32 @@
 # MeatyEFTRelease
 
-Advanced external radar and companion toolkit for **Escape from Tarkov** focused on performance, clean visuals, and live data features.
+Advanced external DMA radar and companion toolkit for **Escape from Tarkov** focused on performance, clean visuals, and live data features.
 
 You can find out more on https://discord.gg/GXmBagdP5s and get support, pass on suggestions etc etc
+This is a DMA Radar and Fuser support is included but not required. There are no memory writing included in this release and is considered as safe as can be if your firmware is upto date
 
 Please note, dlcks will be banned or ignored, use your brain
+
+---
+
+# Credits
+
+There are a lot of credits to go about. All of this information has come from unknowncheats, earwigging, discord posts, and other public sources, including DMA Educational Resources, so credit goes to x0m, mamboo and co.
+Im pretty certain the maps in this project came from Marazm, so credit to this guy for doing maps for the general public to use.
+
+---
+
+# Building
+
+I've tried to make this work easy. You should be able to download, open is visual studio, select release then build. If you have issues you can ask in the Discord or Google it
+
+---
+
+# Status
+
+Active development & Updates will be published
+
+Features, offsets, and integrations may require maintenance after game updates.
 
 ---
 
@@ -71,14 +93,6 @@ Typical dependencies:
 - DirectX SDK / Windows SDK
 - vcpkg packages
 - C++ latest standard enabled
-
----
-
-# Status
-
-Active development.
-
-Features, offsets, and integrations may require maintenance after game updates.
 
 ---
 
