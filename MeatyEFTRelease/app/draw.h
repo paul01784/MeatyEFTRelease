@@ -700,17 +700,3 @@ void drawGrenades()
 
     }
 }
-
-void drawTripWire()
-{
-
-    std::vector<TripwireList>& cacheTrip = explosiveManager.getTripwires();
-
-    for (auto& tripWire : cacheTrip)
-    {
-        glm::vec3 location = mapControl.getMapPosition(tripWire.worldLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
-
-        DrawTripWire(location.x, location.y, coloursGlobals::grenades, mapControl.zoomLevel);
-    }
-
-}

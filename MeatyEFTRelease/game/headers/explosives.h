@@ -28,12 +28,8 @@ enum class SynchronizableObjectType
 struct GrenadeList
 {
 	uint64_t instance = 0;
-	bool isSmoke = false;
-	bool isDestroyed = false;
 
-	std::chrono::steady_clock::time_point addedAt{};
-
-	UnityTransform _transform = NULL;
+	uint64_t transformInternal = 0;
 	glm::vec3 worldLocation{ 0.f, 0.f, 0.f };
 
 };
@@ -54,17 +50,11 @@ class ExplosiveManager
 {
 public:
 	std::vector<GrenadeList>& getGrenades();
-	std::vector<TripwireList>& getTripwires();
 	
 	void initManager();
 	void clearCacheNades();
 	void clearCacheTripwires();
 	void clearCache();
-
-	void tryAddGrenade(uint64_t instance);
-	void tryAddTripwire(uint64_t instance);
-
-	void pruneGrenades();
 
 
 	//manager raid ptrs
@@ -77,7 +67,7 @@ private:
 	std::vector<GrenadeList> grenadeList;
 	std::vector<TripwireList> tripwireList;
 
-	std::unordered_set<uint64_t> grenadeSet; // tracks instances grenades
+	
 	std::unordered_set<uint64_t> tripwireSet; // tracks instances
 
 };

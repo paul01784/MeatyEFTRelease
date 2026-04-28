@@ -26,7 +26,6 @@ public:
 	void RenderLoot();
 
 	void RenderNades(const D3DVIEWPORT9& viewport);
-	void RenderTripWires(const D3DVIEWPORT9& viewport);
 	void RenderPlayers(const D3DVIEWPORT9& viewport);
 	void RenderHUD(const D3DVIEWPORT9& viewport);
 	void RenderTasks(const D3DVIEWPORT9& viewport);

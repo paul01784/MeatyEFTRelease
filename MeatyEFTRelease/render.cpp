@@ -2594,7 +2594,6 @@ static void renderMainScreen()
             drawExfils();
             drawGrenades();
             drawLoot();
-            drawTripWire();
 
             drawQuests();
 

@@ -145,25 +145,6 @@ color_t glmVec4ToColorT(const glm::vec4& vec) {
     return color_t(vec.x, vec.y, vec.z, vec.w);
 }
 
-void TestApp::RenderTripWires(const D3DVIEWPORT9& viewport)
-{
-    std::vector<TripwireList> tripCache = explosiveManager.getTripwires();
-
-    for (auto& trips : tripCache)
-    {
-        int distance = static_cast<int>(glm::distance(mainGame.localLocation, trips.worldLocation));
-
-        if (distance > espGlobals::drawGrenadesDist)
-            continue;
-
-        glm::vec2 screenPos = {};
-        if (!Utils::Camera::world_to_screen(trips.worldLocation, &screenPos)) continue;
-
-        RenderText("TRIPWIRE", screenPos.x, screenPos.y, Vec4ToD3DColor(coloursGlobals::grenades), TRUE);
-
-    }
-}
-
 void TestApp::RenderNades(const D3DVIEWPORT9& viewport)
 {
     std::vector<GrenadeList> nadeCache = explosiveManager.getGrenades();
@@ -452,9 +433,6 @@ void TestApp::Render() {
 
             // Render loot
             if (espGlobals::drawLoot) RenderLoot();
-
-            // Render tripwires
-            RenderTripWires(viewport);
 
             // Render Tasks
             RenderTasks(viewport);
