@@ -677,9 +677,9 @@ void loot::lootTask()
                     std::string questName = GetQuestItemDisplayName(item.bsgId.c_str());
 
                     if (!questName.empty())
-                        item.longName = questName;
+                        item.shortName = questName;
                     else
-                        item.longName = item.gameObjectName;
+                        item.shortName = item.gameObjectName;
 
                     item.shortName = "PICKUP";
                 }

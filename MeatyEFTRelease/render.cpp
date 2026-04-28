@@ -1056,7 +1056,7 @@ static void renderLootFiltersMenu()
 
                 for (const auto& item : marketList)
                 {
-                    std::string id = TrimEFT(item.bsgid); // adjust if your field name differs
+                    std::string id = TrimEFT(item.bsgid);
                     if (id.empty())
                         continue;
 
@@ -1076,7 +1076,7 @@ static void renderLootFiltersMenu()
                         if (ImGui::BeginChild("##CurrentRaidLootChild", ImVec2(0, -40), true))
                         {
                             ImGui::SetNextItemWidth(300.0f);
-                            ImGui::InputTextWithHint("##QuestLootSearch", "Search short name or BSG ID...", questLootSearch, IM_ARRAYSIZE(questLootSearch));
+                            ImGui::InputTextWithHint("##QuestLootSearch", "Search name or BSG ID...", questLootSearch, IM_ARRAYSIZE(questLootSearch));
                             ImGui::Separator();
 
                             int visibleRows = 0;

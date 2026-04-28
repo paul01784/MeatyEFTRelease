@@ -54,6 +54,22 @@ namespace sdk
 		constexpr uint64_t ToPosition = 0x158; // object
 	}
 
+	namespace BtrController
+	{
+		constexpr uint64_t BtrView = 0x50; //_BtrView_k__BackingField
+	}
+
+	namespace BTRView
+	{
+		constexpr uint64_t turret = 0x60;
+		constexpr uint64_t previousPosition = 0xB4;
+	}
+
+	namespace BTRTurretView
+	{
+		constexpr uint64_t attachedBot = 0x60;
+	}
+
 	namespace Player
 	{
 		constexpr uint64_t MovementContext = 0x60; // EFT.MovementContext
