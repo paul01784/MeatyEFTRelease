@@ -869,11 +869,8 @@ void DrawLootItemMarker(int x, int y, glm::vec4 color, float zoomLevel, LootList
 	//	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x - 17, y + 20), ImColor(color.x, color.y, color.z, color.w), hStringVal.c_str(), 0, 0.0f, 0);
 
 	//item name
-	if (!loot.isQuestItem)
-		draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x + 10, y - 7), ImColor(color.x, color.y, color.z, color.w), loot.shortName.c_str(), 0, 0.0f, 0);
-	else
-
-		draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x + 10, y - 7), ImColor(color.x, color.y, color.z, color.w), loot.longName.c_str(), 0, 0.0f, 0);
+	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x + 10, y - 7), ImColor(color.x, color.y, color.z, color.w), loot.shortName.c_str(), 0, 0.0f, 0);
+	
 }
 
 void DrawGrenade(int x, int y, float zoomLevel, GrenadeList grenade)
