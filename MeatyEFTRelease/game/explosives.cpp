@@ -28,27 +28,34 @@ void ExplosiveManager::initManager()
         if (!Utils::valid_pointer(mainGame.localGameWorld))
             return;
 
-        if (!Utils::valid_pointer(this->grenadesListPtr))
+        std::vector<GrenadeList>& grenadeCache = explosiveManager.getGrenades();
+
+        uint64_t grenades = mem.Read<uint64_t>(
+            mainGame.localGameWorld + sdk::ClientLocalGameWorld::Grenades
+        );
+
+        if (!Utils::valid_pointer(grenades))
+            return;
+
+        uint64_t newGrenadesListPtr = mem.Read<uint64_t>(grenades + 0x18);
+
+        if (!Utils::valid_pointer(newGrenadesListPtr))
+            return;
+
+        if (newGrenadesListPtr != this->grenadesListPtr)
         {
-            uint64_t grenades = mem.Read<uint64_t>(
-                mainGame.localGameWorld + sdk::ClientLocalGameWorld::Grenades
-            );
-
-            if (!Utils::valid_pointer(grenades))
-                return;
-
-            this->grenadesListPtr = mem.Read<uint64_t>(grenades + 0x18);
-
-            if (!Utils::valid_pointer(this->grenadesListPtr))
-                return;
+            this->grenadesListPtr = newGrenadesListPtr;
+            grenadeCache.clear();
         }
 
         auto grenadeListRaw = UnityList<uint64_t>::Create(this->grenadesListPtr);
-        std::vector<GrenadeList>& grenadeCache = explosiveManager.getGrenades();
 
         const int rawCount = grenadeListRaw.count();
 
-        if (rawCount <= 0 || rawCount > 256)
+        if (rawCount < 0 || rawCount > 256)
+            return;
+
+        if (rawCount == 0)
         {
             grenadeCache.clear();
             return;
@@ -85,10 +92,12 @@ void ExplosiveManager::initManager()
             GrenadeList newNade{};
             newNade.instance = grenadeInstance;
             newNade.transformInternal = transformPtr;
+            newNade.worldLocation = glm::vec3{ 0.f, 0.f, 0.f };
 
             grenadeCache.push_back(newNade);
         }
 
+        // Remove nades no longer in the raw live list
         grenadeCache.erase(
             std::remove_if(
                 grenadeCache.begin(),
@@ -100,6 +109,7 @@ void ExplosiveManager::initManager()
             grenadeCache.end()
         );
 
+        // Update positions
         for (auto& nade : grenadeCache)
         {
             if (!Utils::valid_pointer(nade.instance))
@@ -109,7 +119,17 @@ void ExplosiveManager::initManager()
                 continue;
 
             UnityTransform transform(nade.transformInternal);
-            nade.worldLocation = transform.UpdatePosition();
+
+            glm::vec3 pos = transform.UpdatePosition();
+
+            if (!std::isfinite(pos.x) ||
+                !std::isfinite(pos.y) ||
+                !std::isfinite(pos.z))
+            {
+                continue;
+            }
+
+            nade.worldLocation = pos;
         }
     }
     catch (const std::exception& e)

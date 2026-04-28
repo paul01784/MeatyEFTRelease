@@ -653,7 +653,7 @@ void loot::lootTask()
                 uint64_t item_template = mem.ReadChain(item.m_interactiveClass, { sdk::InteractiveLootItem::Item, sdk::LootItem::Template }); if (!Utils::valid_pointer(item_template)) continue;
 
                 auto nameptrMonogo = mem.Read<MongoID>(item_template + sdk::ItemTemplate::_id);
-                item.bsgId = nameptrMonogo.ReadString(mem);
+                item.bsgId = TrimEFT(nameptrMonogo.ReadString(mem));
 
                 if (item.bsgId.empty())
                     continue;
@@ -674,14 +674,15 @@ void loot::lootTask()
                     item.isItem = FALSE;
                     item.isQuestItem = TRUE;
 
-                    std::string questName = GetQuestItemDisplayName(item.bsgId.c_str());
+                    std::string questName = GetQuestItemDisplayName(item.bsgId);
 
                     if (!questName.empty())
                         item.shortName = questName;
                     else
                         item.shortName = item.gameObjectName;
+                        
 
-                    item.shortName = "PICKUP";
+                    item.longName = item.gameObjectName;
                 }
 
                 //push item to list

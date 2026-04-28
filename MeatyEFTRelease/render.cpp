@@ -728,10 +728,10 @@ static void DrawLootListDebugTable(std::vector<LootList*>& rows, const char* tab
         return;
     }
 
-    ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+    ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 40.0f);
     ImGui::TableSetupColumn("Short Name", ImGuiTableColumnFlags_WidthStretch, 220.0f);
     ImGui::TableSetupColumn("BSG ID", ImGuiTableColumnFlags_WidthStretch, 260.0f);
-    ImGui::TableSetupColumn("Info", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+    ImGui::TableSetupColumn("Info", ImGuiTableColumnFlags_WidthFixed, 30.0f);
     ImGui::TableHeadersRow();
 
     for (size_t i = 0; i < rows.size(); ++i)
@@ -761,9 +761,8 @@ static void DrawLootListDebugTable(std::vector<LootList*>& rows, const char* tab
         ImGui::TableSetColumnIndex(1);
         const std::string shortName = TrimEFT(loot->shortName);
         const std::string longName = TrimEFT(loot->longName);
-        const std::string displayName = shortName.empty() ? longName : shortName;
 
-        ImGui::TextUnformatted(displayName.c_str());
+        ImGui::TextUnformatted(shortName.c_str());
 
         if (ImGui::IsItemHovered() && !longName.empty())
         {
@@ -1108,7 +1107,7 @@ static void renderLootFiltersMenu()
                                 ImGuiTableFlags_ScrollY |
                                 ImGuiTableFlags_Resizable))
                             {
-                                ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                                ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 40.0f);
                                 ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.35f);
                                 ImGui::TableSetupColumn("BSG ID", ImGuiTableColumnFlags_WidthStretch, 0.65f);
                                 ImGui::TableHeadersRow();
@@ -1143,7 +1142,7 @@ static void renderLootFiltersMenu()
                                     }
 
                                     ImGui::TableSetColumnIndex(1);
-                                    ImGui::TextUnformatted(loot.longName.c_str());
+                                    ImGui::TextUnformatted(loot.shortName.c_str());
 
                                     ImGui::TableSetColumnIndex(2);
                                     ImGui::TextUnformatted(bsgId.c_str());
