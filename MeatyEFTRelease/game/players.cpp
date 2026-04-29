@@ -996,7 +996,7 @@ void Players::tryFindBTR()
 {
     const std::string selectedMap = TrimEFT(mainGame.selectedLocation);
 
-    if (selectedMap != "tarkovstreets" && selectedMap != "woods")
+    if (selectedMap != "TarkovStreets" && selectedMap != "Woods")
         return;
 
     if (!Utils::valid_pointer(mainGame.localGameWorld)) return;
