@@ -1060,7 +1060,6 @@ void Players::updateEntity()
         {
             // We just want to update BTR position and move on
             cachePlayer.location = mem.Read<glm::vec3>(cachePlayer.btrView + sdk::BTRView::previousPosition);
-
             continue;
         }
 
@@ -1105,7 +1104,7 @@ void Players::updateEntity()
         if (cachePlayer.isBTR)
         {
             cachePlayer.colour = coloursGlobals::aiBTR;
-
+            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
             continue;
         }
 

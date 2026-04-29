@@ -189,6 +189,9 @@ void TestApp::RenderPlayers(const D3DVIEWPORT9& viewport) {
                 if (player.distance > espGlobals::drawPlayerDist)
                     continue;
 
+                if (player.distance == 0)
+                    continue;
+
                 glm::vec2 screenPos = {};
                 if (!Utils::Camera::world_to_screen(player.location, &screenPos)) continue;
 

@@ -411,6 +411,11 @@ void DrawRadarPlayerMarkers(int x, int y, float zoomLevel, PlayerCache player)
 
 				equipmentTextY = y + 50;
 			}
+			else if (player.isBTR)
+			{
+				//name text
+				draw_list->AddText(ImGui::GetFont(), fontSize + 8, ImVec2(x - nameSizeHalf, y + 7), ImColor(color.x, color.y, color.z, color.w), name.c_str(), 0, 0.0f, 0);
+			}
 			else
 			{
 				//item in hand
