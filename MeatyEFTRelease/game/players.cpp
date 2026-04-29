@@ -649,6 +649,9 @@ void Players::playersTask()
             }
         }
 
+        // Try find BTR
+        tryFindBTR();
+
         // Update all cachePlayer data
         updateEntity();
 
@@ -989,6 +992,48 @@ glm::vec3 GetBestPlayerBasePosition(const PlayerCache& cachePlayer)
     return feetMid;
 }
 
+void Players::tryFindBTR()
+{
+    const std::string selectedMap = TrimEFT(mainGame.selectedLocation);
+
+    if (selectedMap != "tarkovstreets" && selectedMap != "woods")
+        return;
+
+    if (!Utils::valid_pointer(mainGame.localGameWorld)) return;
+
+    uint64_t btrController = mem.Read<uint64_t>(mainGame.localGameWorld + sdk::ClientLocalGameWorld::btrController); if (!Utils::valid_pointer(btrController)) return;
+    uint64_t btrView = mem.Read<uint64_t>(btrController + sdk::BtrController::BtrView); if (!Utils::valid_pointer(btrView)) return;
+    uint64_t btrTurret = mem.Read<uint64_t>(btrView + sdk::BTRView::turret); if (!Utils::valid_pointer(btrTurret)) return;
+    uint64_t btrOper = mem.Read<uint64_t>(btrTurret + sdk::BTRTurretView::attachedBot); if (!Utils::valid_pointer(btrOper)) return;
+
+    std::vector<PlayerCache>& cache = players.getCache();
+
+    if (cache.empty())
+        return;
+
+    for (auto& playerList : cache)
+    {
+        if (playerList.instance != btrOper)
+            continue;
+
+        if (playerList.isPlayer || playerList.isPlayerScav || playerList.isLocal)
+            continue;
+
+        playerList.isBTR = true;
+        playerList.colour = coloursGlobals::aiBTR;
+        playerList.btrView = btrView;
+        playerList.name = "BTR";
+
+        if (!mainGame.btrAllocated)
+        {
+            mainGame.btrAllocated = true;
+            LOGS.logInfo("[BTR] BTR Allocated");
+        }
+
+        break;
+    }
+}
+
 void Players::updateEntity()
 {
 
@@ -1013,6 +1058,9 @@ void Players::updateEntity()
         //BTR only
         if (cachePlayer.isBTR)
         {
+            // We just want to update BTR position and move on
+            cachePlayer.location = mem.Read<glm::vec3>(cachePlayer.btrView + sdk::BTRView::previousPosition);
+
             continue;
         }
 
@@ -1053,6 +1101,14 @@ void Players::updateEntity()
     //loop our list again and update raw values and other data
     for (auto& cachePlayer : cache)
     {
+        //BTR Only
+        if (cachePlayer.isBTR)
+        {
+            cachePlayer.colour = coloursGlobals::aiBTR;
+
+            continue;
+        }
+
         //location checks
         cachePlayer.location = GetBestPlayerBasePosition(cachePlayer);
         if (cachePlayer.isLocal)
@@ -1063,15 +1119,6 @@ void Players::updateEntity()
 
         if (cachePlayer.isDead || cachePlayer.hasExfiled)
             continue;
-
-        //BTR Only
-        if (cachePlayer.isBTR)
-        {
-            //set colout, maybe add BTR option to menu
-            cachePlayer.colour = coloursGlobals::aiBTR;
-
-            continue;
-        }
 
         // Held item
         cachePlayer.itemInHand = heldItemName(cachePlayer);

@@ -39,6 +39,8 @@ uint64_t MainGame::registeredPlayers = NULL;
 uint64_t MainGame::registeredPlayersList = NULL;
 int MainGame::registeredPlayersCount = 0;
 
+bool MainGame::btrAllocated = FALSE;
+
 std::string MainGame::selectedLocation = "";
 bool MainGame::onlineRaid = false;
 
@@ -83,6 +85,8 @@ void MainGame::clearCache() {
     this->localIsSavage = false;
 
     this->pmcNumber = 1;
+
+    this->btrAllocated = false;
 
     Sleep(500);
 

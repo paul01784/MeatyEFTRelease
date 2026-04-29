@@ -364,3 +364,7 @@ FodyWeavers.xsd
 /.github/workflows/discord.yml
 /.github/workflows/discord.yml
 *.yml
+/MeatyEFTRelease/notes.h
+/.gitignore
+/.gitignore
+/.gitignore

@@ -17,6 +17,7 @@ namespace sdk
 		constexpr uint64_t Grenades = 0x288;
 		constexpr uint64_t ExfiltrationController = 0x58;
 		constexpr uint64_t SynchronizableObjectLogicProcessor = 0x248; // object
+		constexpr uint64_t btrController = 0x28;
 	}
 
 	namespace ExfiltrationController

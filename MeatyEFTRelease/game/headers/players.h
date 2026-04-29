@@ -176,6 +176,7 @@ struct PlayerCache {
 	bool isBoss;
 	bool isWatched;
 	bool isBTR;
+	uint64_t btrView;
 	bool invalidBones;
 
 	bool isDead;
@@ -282,6 +283,7 @@ struct PlayerCache {
 		isBoss(false),
 		isWatched(false),
 		isBTR(false),
+		btrView(0),
 		isDead(false),
 		hasExfiled(false),
 		weaponUpdateInterval{ 600 },
@@ -337,17 +339,15 @@ private:
 	void readDogTagComponent(PlayerCache& players, bool force = false);
 
 	void addEntity(uint64_t instance, bool isLocal);
+	void tryFindBTR();
 	void updateEntity();
-
 	void checkGroupIDs();
-
 	void playerEquipment();
 
 	std::string heldItemName(PlayerCache& player);
 	std::string ReadNameFromHandsItem(uint64_t itemBase);
 
 	void checkExfil();
-
 
 	uint64_t getPlayerHealthControllerPtr(uint64_t instance);
 	uint64_t getPlayerBoneMatrixPtr(uint64_t instance);

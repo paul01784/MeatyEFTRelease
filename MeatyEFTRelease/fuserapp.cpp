@@ -183,6 +183,7 @@ void TestApp::RenderPlayers(const D3DVIEWPORT9& viewport) {
             if (!Utils::valid_pointer(player.instance) ||
                 player.isZombie || player.isLocal || player.hasExfiled) continue;
 
+            
             if (!player.isDead)
             {
                 if (player.distance > espGlobals::drawPlayerDist)
@@ -204,6 +205,10 @@ void TestApp::RenderPlayers(const D3DVIEWPORT9& viewport) {
 
                 std::string info = cleanName + " [" + std::to_string(player.distance) + "m]";
                 RenderText(info.c_str(), screenPos.x, screenPos.y + 5, playerColor, true);
+
+                // Continue if BTR we dont want any more information
+                if (player.isBTR)
+                    continue;
 
                 RenderText(player.itemInHand.c_str(),
                     screenPos.x, screenPos.y + 20, playerColor, true);

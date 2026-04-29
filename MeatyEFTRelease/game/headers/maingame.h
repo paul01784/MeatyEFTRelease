@@ -17,6 +17,8 @@ public:
 	static int registeredPlayersCount;
 	static uint64_t player_buffer[327];
 
+	static bool btrAllocated;
+
 	static std::string selectedLocation;
 	static bool onlineRaid;
 	
