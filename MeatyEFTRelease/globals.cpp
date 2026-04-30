@@ -16,6 +16,7 @@ double globals::taskPlayers = 13;
 double globals::taskPlayersBones = 15;
 double globals::taskPlayersLocal = 22;
 double globals::taskGrenades = 20;
+double globals::taskPlayersEquipment = 1000;
 double globals::taskExfil = 1000;
 double globals::taskLoot = 7000;
 double globals::taskQuest = 7000;

@@ -18,6 +18,7 @@ struct globals {
     static double taskPlayersBones;
     static double taskPlayersLocal;
     static double taskGrenades;
+    static double taskPlayersEquipment;
     static double taskExfil;
     static double taskLoot;
     static double taskQuest;

@@ -661,8 +661,7 @@ void Players::playersTask()
         //check and assign groups based on distance between players that DONT have a group ID set ( Solo people will have GROUP 0, unset players will be blank!)
         checkGroupIDs();
 
-        //equipment scanning
-        playerEquipment();
+        
     }
     catch (const std::exception& e) {
         LOGS.logError("Exception caught in playersTask: " + std::string(e.what()) + ". Retrying...");

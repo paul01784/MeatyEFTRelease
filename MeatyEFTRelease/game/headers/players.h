@@ -287,7 +287,7 @@ struct PlayerCache {
 		isDead(false),
 		hasExfiled(false),
 		weaponUpdateInterval{ 600 },
-		equipmentUpdateInterval{ 10000 },
+		equipmentUpdateInterval{ 2000 },
 		P_Profile(0),
 		P_Info(0),
 		P_PWA(0),
@@ -320,6 +320,7 @@ public:
 	
 	void playersTask();
 	void boneTask();
+	void playerEquipment();
 
 	static bool groupIDSet;
 	
@@ -342,7 +343,7 @@ private:
 	void tryFindBTR();
 	void updateEntity();
 	void checkGroupIDs();
-	void playerEquipment();
+	
 
 	std::string heldItemName(PlayerCache& player);
 	std::string ReadNameFromHandsItem(uint64_t itemBase);
