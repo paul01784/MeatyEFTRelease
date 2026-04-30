@@ -897,7 +897,8 @@ void Players::addEntity(const uint64_t instance, bool isLocal = false) {
 
                     newEntity.name = profile->nickname;
                     newEntity.DT_lvl = ConvertXpToLevel(profile->experience);
-                    newEntity.kd = CalculateKD(profile->killsPMC, profile->deathsPMC);
+                    newEntity.kd = CalculateKD(profile->Kills, profile->deathsPMC);
+                    newEntity.pkd = CalculateKD(profile->killedPMC, profile->deathsPMC);
                 }
             }
             newEntity.isPlayerScav = FALSE;
@@ -1160,7 +1161,8 @@ void Players::updateEntity()
 
                         cachePlayer.name = profile->nickname;
                         cachePlayer.DT_lvl = ConvertXpToLevel(profile->experience);
-                        cachePlayer.kd = CalculateKD(profile->killsPMC, profile->deathsPMC);
+                        cachePlayer.kd = CalculateKD(profile->Kills, profile->deathsPMC);
+                        cachePlayer.pkd = CalculateKD(profile->killedPMC, profile->deathsPMC);
                         cachePlayer.hours = profile->hoursPlayed;
                     }
                 }

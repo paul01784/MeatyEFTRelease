@@ -114,7 +114,8 @@ struct PlayerProfileStats
     //
     // PMC Stats & Counters
     //
-    uint32_t killsPMC = 0;                 // "Kills"
+    uint32_t Kills = 0;                    // "Kills"
+    uint32_t killedPMC = 0;                // "KilledPMC"
     uint32_t deathsPMC = 0;                // "Deaths"
     uint32_t survivedRaids = 0;            // Key: ["ExitStatus","Survived","Pmc"]
     uint32_t killedInRaids = 0;            // Key: ["ExitStatus","Killed","Pmc"]

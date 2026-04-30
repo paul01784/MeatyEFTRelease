@@ -160,6 +160,7 @@ struct PlayerCache {
 
 
 	int kd;
+	int pkd;
 	int hours;
 
 	glm::vec4 colour;

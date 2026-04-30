@@ -477,7 +477,7 @@ void drawWidgetPlayers()
                 // KD
                 ImGui::TableSetColumnIndex(5);
                 if (cache.isPlayer && !cache.isPlayerScav)
-                    ImGui::Text("%d", cache.kd);
+                    ImGui::Text("%d(%d)", cache.kd, cache.pkd);
 
                 // Hours
                 ImGui::TableSetColumnIndex(6);

@@ -163,9 +163,11 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
                     int value = item.value("Value", 0);
 
                     if (keyList.size() == 1 && keyList[0] == "Kills")
-                        info.killsPMC = value;
+                        info.Kills = value;
                     else if (keyList.size() == 1 && keyList[0] == "Deaths")
                         info.deathsPMC = value;
+                    else if (keyList.size() == 1 && keyList[0] == "KilledPmc")
+                        info.killedPMC = value;
                     else if (keyList == std::vector<std::string>{"ExitStatus", "Survived", "Pmc"})
                         info.survivedRaids = value;
                     else if (keyList == std::vector<std::string>{"ExitStatus", "Killed", "Pmc"})
@@ -187,7 +189,8 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
 
         std::cout << "[ProfileClient] Got Profile: " << info.nickname
             << " | Hours: " << info.hoursPlayed
-            << " | Kills: " << info.killsPMC
+            << " | Kills: " << info.Kills
+            << " | KilledPMC: " << info.killedPMC
             << " | Deaths: " << info.deathsPMC
             << std::endl;
 
