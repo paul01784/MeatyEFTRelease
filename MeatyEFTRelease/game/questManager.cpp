@@ -81,10 +81,10 @@ static bool IsConditionMatch(
     const std::vector<std::string>& completedConditions,
     const std::string& needle)
 {
-    if (needle.empty())
-        return false;
-
     const std::string want = TrimEFT(needle);
+
+    if (want.empty())
+        return false;
 
     for (const auto& cond : completedConditions)
     {
@@ -110,32 +110,12 @@ static void FilterConditions(
         if (!IsSupportedObjectiveType(obj.type))
             continue;
 
-        // Completed by objective id
-        if (!obj.id.empty() &&
-            IsConditionMatch(active.completedConditions, obj.id))
-        {
+        // Completed objective pruning
+        // Important: item objectives may complete by obj.id, questItemId, or itemId
+        if (IsObjectiveCompleted(obj, active.completedConditions))
             continue;
-        }
 
-        // Fallback completion for item objectives if no objective id
-        if (obj.id.empty() && IsItemObjectiveType(obj.type))
-        {
-            if (!obj.questItemId.empty() &&
-                IsConditionMatch(active.completedConditions, obj.questItemId))
-            {
-                continue;
-            }
-
-            if (!obj.itemId.empty() &&
-                IsConditionMatch(active.completedConditions, obj.itemId))
-            {
-                continue;
-            }
-        }
-
-        // ----------------------------
         // Keep active objective
-        // ----------------------------
         ActiveObjective ao{};
         ao.objectiveId = obj.id;
         ao.type = obj.type;
@@ -156,10 +136,8 @@ static void FilterConditions(
 
         outObjectives.emplace_back(std::move(ao));
 
-        // ----------------------------
-        // MASTER ITEMS
+        
         // findItem / findQuestItem
-        // ----------------------------
         if (Utils::Text::containsIgnoreCase(obj.type, "findItem"))
         {
             if (!obj.itemId.empty())
@@ -172,10 +150,8 @@ static void FilterConditions(
                 outMasterItems.emplace_back(obj.questItemId);
         }
 
-        // ----------------------------
-        // MASTER LOCATIONS
+        
         // visit / mark / plantItem / findQuestItem
-        // ----------------------------
         if (!IsLocationObjectiveType(obj.type))
             continue;
 
@@ -211,13 +187,12 @@ static void FilterConditions(
             continue;
         }
 
-        // No zones:
-        // use objective-level map only
-        // (plantItem / findQuestItem often rely on this)
+        // No zones
+        // plantItem / findQuestItem
         if (!fallbackMap.empty())
         {
             QuestLocation loc{};
-            loc.pos = {}; // 0,0,0 if no zone coordinates
+            loc.pos = {};
             loc.mapNameId = std::move(fallbackMap);
             loc.questName = active.questName;
             loc.objectiveType = obj.type;
@@ -489,4 +464,26 @@ uint64_t QuestManager::findLiveQuestPtrById(const std::string& wantedQuestId)
     }
 
     return 0;
+}
+
+template <typename TObjective>
+static bool IsObjectiveCompleted(
+    const TObjective& obj,
+    const std::vector<std::string>& completedConditions)
+{
+    // Normal objective id
+    if (IsConditionMatch(completedConditions, obj.id))
+        return true;
+
+    // Item objectives can complete using different IDs
+    if (IsItemObjectiveType(obj.type))
+    {
+        if (IsConditionMatch(completedConditions, obj.questItemId))
+            return true;
+
+        if (IsConditionMatch(completedConditions, obj.itemId))
+            return true;
+    }
+
+    return false;
 }
