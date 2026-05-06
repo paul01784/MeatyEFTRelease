@@ -1159,7 +1159,6 @@ void Players::updateEntity()
                         cachePlayer.profileStats = *profile;
                         cachePlayer.hasProfileData = true;
 
-                        cachePlayer.name = profile->nickname;
                         cachePlayer.DT_lvl = ConvertXpToLevel(profile->experience);
                         cachePlayer.kd = CalculateKD(profile->Kills, profile->deathsPMC);
                         cachePlayer.pkd = CalculateKD(profile->killedPMC, profile->deathsPMC);
