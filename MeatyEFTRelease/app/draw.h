@@ -460,7 +460,7 @@ void drawWidgetPlayers()
                 if (ImGui::IsItemHovered() && cache.profileId != "")
                 {
                     ImGui::BeginTooltip();
-                    ImGui::Text("Memory Account ID: %s", cache.profileId.c_str());
+                    ImGui::Text("Memory ProfileID: %s", cache.profileId.c_str());
 
                     ImGui::EndTooltip();
                 }
