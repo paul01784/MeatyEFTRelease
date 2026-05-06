@@ -407,7 +407,7 @@ void drawWidgetPlayers()
             ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 100.0f);
             ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthFixed, 100.0f);
             ImGui::TableSetupColumn("LvL", ImGuiTableColumnFlags_WidthFixed, 35.0f);
-            ImGui::TableSetupColumn("KD", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+            ImGui::TableSetupColumn("KD(PKD)", ImGuiTableColumnFlags_WidthFixed, 45.0f);
             ImGui::TableSetupColumn("Hours", ImGuiTableColumnFlags_WidthFixed, 50.0f);
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 60.0f);
             ImGui::TableSetupColumn("Container", ImGuiTableColumnFlags_WidthFixed, 120.0f);
@@ -477,7 +477,7 @@ void drawWidgetPlayers()
                 // KD
                 ImGui::TableSetColumnIndex(5);
                 if (cache.isPlayer && !cache.isPlayerScav)
-                    ImGui::Text("%d(%d)", cache.kd, cache.pkd);
+                    ImGui::Text("%d(%.2f)", cache.kd, cache.pkd);
 
                 // Hours
                 ImGui::TableSetColumnIndex(6);

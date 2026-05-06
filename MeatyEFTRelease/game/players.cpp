@@ -94,6 +94,19 @@ int CalculateKD(uint32_t kills, uint32_t deaths)
     return static_cast<int>(std::round(kd));
 }
 
+double CalculatePKD(uint32_t kills, uint32_t deaths)
+{
+    if (deaths == 0)
+    {
+        if (kills > 0)
+            return static_cast<double>(kills);
+        return 0.0;            // no combat
+    }
+    double pkd = static_cast<double>(kills) / static_cast<double>(deaths);
+    // round to two decimal places
+    return std::round(pkd * 100.0) / 100.0;
+}
+
 static int ConvertXpToLevel(int xp)
 {
     const auto& t = LevelXpThresholds;
@@ -1161,7 +1174,7 @@ void Players::updateEntity()
 
                         cachePlayer.DT_lvl = ConvertXpToLevel(profile->experience);
                         cachePlayer.kd = CalculateKD(profile->Kills, profile->deathsPMC);
-                        cachePlayer.pkd = CalculateKD(profile->killedPMC, profile->deathsPMC);
+                        cachePlayer.pkd = CalculatePKD(profile->killedPMC, profile->deathsPMC);
                         cachePlayer.hours = profile->hoursPlayed;
                     }
                 }
