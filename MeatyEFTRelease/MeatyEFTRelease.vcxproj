@@ -140,7 +140,11 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>false</GenerateDebugInformation>
-      <AdditionalDependencies>Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;libcurl.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;
+dxgi.lib;
+d2d1.lib;
+dwrite.lib;
+dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;libcurl.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableUAC>false</EnableUAC>
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
       <UACUIAccess>true</UACUIAccess>
