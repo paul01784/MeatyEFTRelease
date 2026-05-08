@@ -368,3 +368,7 @@ FodyWeavers.xsd
 /.gitignore
 /.gitignore
 /.gitignore
+/MeatyEFTRelease/fuser/fUser.cpp
+/MeatyEFTRelease/fuser/fUser.h
+/MeatyEFTRelease/fuser/fUser_includes.h
+/MeatyEFTRelease/app/fuserapp.h
