@@ -12,7 +12,6 @@
 #include "game/headers/players.h"
 #include "app/draw.h"
 #include "app/config.h"
-#include "app/fuserapp.h"
 #include "app/DxRenderWindow.h"
 #include "app/fuserRender.h"
 #include "game/headers/exfil.h"
