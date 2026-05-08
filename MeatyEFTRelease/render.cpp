@@ -13,6 +13,8 @@
 #include "app/draw.h"
 #include "app/config.h"
 #include "app/fuserapp.h"
+#include "app/DxRenderWindow.h"
+#include "app/fuserRender.h"
 #include "game/headers/exfil.h"
 #include "game/headers/tarkovdevquery.h"
 #include "game/headers/questManager.h"
@@ -1711,95 +1713,547 @@ static void renderQuestsWindow()
     ImGui::End();
 }
 
+static std::string WideToUtf8(const std::wstring& text)
+{
+    if (text.empty())
+        return "";
+
+    const int needed = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        nullptr,
+        0,
+        nullptr,
+        nullptr
+    );
+
+    if (needed <= 1)
+        return "";
+
+    std::string result(static_cast<size_t>(needed - 1), '\0');
+
+    WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        result.data(),
+        needed,
+        nullptr,
+        nullptr
+    );
+
+    return result;
+}
+
+static std::wstring Utf8ToWide(const std::string& text)
+{
+    if (text.empty())
+        return L"";
+
+    const int needed = MultiByteToWideChar(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        nullptr,
+        0
+    );
+
+    if (needed <= 1)
+        return L"";
+
+    std::wstring result(static_cast<size_t>(needed - 1), L'\0');
+
+    MultiByteToWideChar(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        result.data(),
+        needed
+    );
+
+    return result;
+}
+
+static std::string BuildMonitorLabel(const DxMonitorInfo& monitor)
+{
+    std::string name = WideToUtf8(monitor.name);
+
+    if (name.empty())
+        name = WideToUtf8(monitor.deviceName);
+
+    if (name.empty())
+        name = "Monitor";
+
+    std::string label =
+        name +
+        " (" +
+        std::to_string(monitor.x) +
+        ", " +
+        std::to_string(monitor.y) +
+        ") " +
+        std::to_string(monitor.width) +
+        "x" +
+        std::to_string(monitor.height) +
+        " @" +
+        std::to_string(monitor.refreshRate) +
+        "Hz";
+
+    if (monitor.primary)
+        label += " [Primary]";
+
+    return label;
+}
+
+static int GetFontIndexFromName(const std::wstring& fontName)
+{
+    static const wchar_t* fonts[] =
+    {
+        L"Arial",
+        L"Segoe UI",
+        L"Tahoma",
+        L"Verdana",
+        L"Calibri"
+    };
+
+    for (int i = 0; i < IM_ARRAYSIZE(fonts); ++i)
+    {
+        if (_wcsicmp(fontName.c_str(), fonts[i]) == 0)
+            return i;
+    }
+
+    return 0;
+}
+
+static const wchar_t* GetFontNameFromIndex(int index)
+{
+    static const wchar_t* fonts[] =
+    {
+        L"Arial",
+        L"Segoe UI",
+        L"Tahoma",
+        L"Verdana",
+        L"Calibri"
+    };
+
+    index = std::clamp(index, 0, IM_ARRAYSIZE(fonts) - 1);
+    return fonts[index];
+}
+
+static const char* GetFontPreviewName(int index)
+{
+    static const char* fonts[] =
+    {
+        "Arial",
+        "Segoe UI",
+        "Tahoma",
+        "Verdana",
+        "Calibri"
+    };
+
+    index = std::clamp(index, 0, IM_ARRAYSIZE(fonts) - 1);
+    return fonts[index];
+}
+
+static void RestartDxFuserWindow(DxWindowConfig& cfg)
+{
+    if (g_DxWindow.IsRunning())
+        g_DxWindow.Stop();
+
+    g_DxWindow.Init(cfg);
+    g_DxWindow.Start();
+}
+
+static void ApplyAndSaveFuserConfig(DxWindowConfig& cfg)
+{
+    cfg.defaultFont.italic = false;
+
+    g_DxWindow.SetConfig(cfg);
+    configManager.SaveConfig();
+}
+
+static void RestartAndSaveFuserWindow(DxWindowConfig& cfg)
+{
+    cfg.defaultFont.italic = false;
+
+    g_DxWindow.SetConfig(cfg);
+    configManager.SaveConfig();
+
+    RestartDxFuserWindow(cfg);
+}
 
 static void renderFuserWindow()
 {
     std::string windowNameMain = "Fuser";
 
-    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    static ImGuiWindowFlags flagss =
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_AlwaysAutoResize;
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(ImVec2((viewport->Pos.x + viewport->Size.x) - 410, viewport->Pos.y + 10));
+    ImGui::SetNextWindowPos(
+        ImVec2((viewport->Pos.x + viewport->Size.x) - 410, viewport->Pos.y + 10)
+    );
 
-    ImGui::SetNextWindowSize(ImVec2(350, 250));
+    const float windowWidth = 350.0f;
+    const float maxWindowHeight = viewport->Size.y - 20.0f;
+
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(windowWidth, 0.0f),
+        ImVec2(windowWidth, maxWindowHeight)
+    );
+
     ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
-    testApp.monitors = testApp.EnumerateMonitors();
+    static bool firstLoad = true;
+
+    if (firstLoad)
+    {
+        g_DxWindow.RefreshMonitorList();
+        firstLoad = false;
+    }
+
+    DxWindowConfig editorConfig = g_DxWindow.GetConfig();
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appFuser, flagss))
     {
-
-        if (ImGui::BeginTabBar("##espTabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+        if (ImGui::BeginTabBar("##fuserTabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
         {
+            // -------------------------------------------------
+            // CONTROL TAB
+            // -------------------------------------------------
             if (ImGui::BeginTabItem("Control"))
             {
+                ImGui::SeparatorText("Fuser Control");
 
+                const bool isRunning = g_DxWindow.IsRunning();
 
-                ImGui::SeparatorText("Fuser Window");
-                if (!espGlobals::runEsp)
+                if (!isRunning)
                 {
-                    if (ImGui::Button("Launch", ImVec2(140, 30))) {
-
-                        espGlobals::runEsp = TRUE;
-
-                        std::thread fuser(&TestApp::fuserMain, &testApp);
-                        fuser.detach();
-
+                    if (ImGui::Button("Launch", ImVec2(140, 30)))
+                    {
+                        g_DxWindow.Init(editorConfig);
+                        g_DxWindow.Start();
                     }
-
-                    if (ImGui::Checkbox("Enable Fullscreen", &globals::fuserFullscreen)) {
-                        globals::fuserFullscreen != globals::fuserFullscreen;
-                        configManager.SaveConfig();
-                    }
-
-                    // Generate list of monitor names for the combo box
-                    std::vector<std::string> monitorLabels;
-                    for (const auto& monitor : testApp.monitors) {
-                        monitorLabels.push_back(monitor.name + " (" +
-                            std::to_string(monitor.coordinates.left) + ", " +
-                            std::to_string(monitor.coordinates.top) + ")");
-                    }
-                    ImGui::Text("Selected Monitor");
-                    testApp.selectedMonitorIndex = globals::fuserScreen;
-                    if (ImGui::BeginCombo("##Monitor",
-                        testApp.selectedMonitorIndex >= 0 ? monitorLabels[testApp.selectedMonitorIndex].c_str() : "Select")) {
-                        for (size_t i = 0; i < testApp.monitors.size(); ++i) {
-                            bool isSelected = (testApp.selectedMonitorIndex == static_cast<int>(i));
-                            if (ImGui::Selectable(monitorLabels[i].c_str(), isSelected)) {
-                                testApp.selectedMonitorIndex = static_cast<int>(i); // Update the selected monitor index
-                                globals::fuserScreen = static_cast<int>(i);
-                                configManager.SaveConfig();
-                            }
-                            if (isSelected) {
-                                ImGui::SetItemDefaultFocus();
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-
                 }
                 else
                 {
-                    if (ImGui::Button("Stop", ImVec2(140, 30))) {
-                        espGlobals::runEsp = FALSE;
+                    if (ImGui::Button("Stop", ImVec2(140, 30)))
+                    {
+                        g_DxWindow.Stop();
                     }
+                }
+
+                ImGui::Spacing();
+
+                ImGui::SeparatorText("Status");
+
+                if (isRunning)
+                {
+                    ImGui::TextColored(
+                        ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
+                        "Current State: Running"
+                    );
+                }
+                else
+                {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                        "Current State: Stopped"
+                    );
+                }
+
+                ImGui::EndTabItem();
+            }
+
+            // -------------------------------------------------
+            // MONITOR TAB
+            // -------------------------------------------------
+            if (ImGui::BeginTabItem("Monitor"))
+            {
+                bool changed = false;
+
+                ImGui::SeparatorText("Monitor");
+
+                if (ImGui::Button("Refresh Monitors", ImVec2(160, 26)))
+                {
+                    g_DxWindow.RefreshMonitorList();
+                }
+
+                std::vector<DxMonitorInfo> monitors = g_DxWindow.GetMonitors();
+
+                if (monitors.empty())
+                {
+                    g_DxWindow.RefreshMonitorList();
+                    monitors = g_DxWindow.GetMonitors();
+                }
+
+                if (!monitors.empty())
+                {
+                    if (editorConfig.monitorIndex < 0 ||
+                        editorConfig.monitorIndex >= static_cast<int>(monitors.size()))
+                    {
+                        editorConfig.monitorIndex = 0;
+                        changed = true;
+                    }
+
+                    std::vector<std::string> monitorLabels;
+                    monitorLabels.reserve(monitors.size());
+
+                    for (const auto& monitor : monitors)
+                        monitorLabels.push_back(BuildMonitorLabel(monitor));
+
+                    const char* preview =
+                        editorConfig.monitorIndex >= 0 &&
+                        editorConfig.monitorIndex < static_cast<int>(monitorLabels.size())
+                        ? monitorLabels[editorConfig.monitorIndex].c_str()
+                        : "Select";
+
+                    ImGui::Text("Selected Monitor");
+
+                    if (ImGui::BeginCombo("##MonitorCombo", preview))
+                    {
+                        for (size_t i = 0; i < monitorLabels.size(); ++i)
+                        {
+                            const bool selected = editorConfig.monitorIndex == static_cast<int>(i);
+
+                            if (ImGui::Selectable(monitorLabels[i].c_str(), selected))
+                            {
+                                editorConfig.monitorIndex = static_cast<int>(i);
+                                changed = true;
+                            }
+
+                            if (selected)
+                                ImGui::SetItemDefaultFocus();
+                        }
+
+                        ImGui::EndCombo();
+                    }
+                }
+                else
+                {
+                    ImGui::TextUnformatted("No monitors found");
+                }
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Window");
+
+                changed |= ImGui::Checkbox("Auto Start", &editorConfig.autoStart);
+                changed |= ImGui::Checkbox("Fullscreen", &editorConfig.fullscreen);
+
+                if (editorConfig.fullscreen)
+                {
+                    if (!editorConfig.borderless)
+                    {
+                        editorConfig.borderless = true;
+                        changed = true;
+                    }
+
+                    if (!editorConfig.useMonitorSize)
+                    {
+                        editorConfig.useMonitorSize = true;
+                        changed = true;
+                    }
+                }
+                else
+                {
+                    if (editorConfig.useMonitorSize)
+                    {
+                        editorConfig.useMonitorSize = false;
+                        changed = true;
+                    }
+                }
+
+                changed |= ImGui::Checkbox("Borderless", &editorConfig.borderless);
+                changed |= ImGui::Checkbox("Top Most", &editorConfig.topMost);
+                changed |= ImGui::Checkbox("Show In Taskbar", &editorConfig.showInTaskbar);
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Background");
+
+                changed |= ImGui::Checkbox("Transparent Background", &editorConfig.transparentBackground);
+
+                if (!editorConfig.transparentBackground)
+                {
+                    changed |= ImGui::ColorEdit4(
+                        "Background",
+                        (float*)&editorConfig.backgroundColour,
+                        ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs
+                    );
+                }
+
+                if (changed)
+                {
+                    ApplyAndSaveFuserConfig(editorConfig);
+                }
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Apply");
+
+                if (ImGui::Button("Restart Window", ImVec2(160, 28)))
+                {
+                    RestartAndSaveFuserWindow(editorConfig);
+                }
+
+                ImGui::TextWrapped(
+                    "Fullscreen uses the selected monitor size. "
+                    "Restart after monitor, window or transparency changes."
+                );
+
+                ImGui::EndTabItem();
+            }
+
+            // -------------------------------------------------
+            // RENDER TAB
+            // -------------------------------------------------
+            if (ImGui::BeginTabItem("Render"))
+            {
+                bool changed = false;
+
+                ImGui::SeparatorText("Frame Timing");
+
+                changed |= ImGui::Checkbox("Use VSync", &editorConfig.useVSync);
+                changed |= ImGui::Checkbox("Use Monitor Refresh", &editorConfig.useMonitorRefreshRate);
+
+                if (!editorConfig.useVSync && !editorConfig.useMonitorRefreshRate)
+                {
+                    changed |= ImGui::SliderInt("Max FPS", &editorConfig.maxFPS, 30, 360);
+                }
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Scale / Quality");
+
+                changed |= ImGui::Checkbox("Anti Aliasing", &editorConfig.antiAliasing);
+                changed |= ImGui::Checkbox("Use DPI Scale", &editorConfig.useDpiScale);
+
+                changed |= ImGui::SliderFloat(
+                    "Render Scale",
+                    &editorConfig.renderScale,
+                    0.50f,
+                    2.50f,
+                    "%.2f"
+                );
+
+                editorConfig.renderScale = std::clamp(editorConfig.renderScale, 0.05f, 5.0f);
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Font");
+
+                int selectedFontIndex = GetFontIndexFromName(editorConfig.defaultFont.name);
+
+                if (ImGui::BeginCombo("Font", GetFontPreviewName(selectedFontIndex)))
+                {
+                    for (int i = 0; i < 5; ++i)
+                    {
+                        const bool selected = selectedFontIndex == i;
+
+                        if (ImGui::Selectable(GetFontPreviewName(i), selected))
+                        {
+                            selectedFontIndex = i;
+                            editorConfig.defaultFont.name = GetFontNameFromIndex(i);
+                            changed = true;
+                        }
+
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+
+                    ImGui::EndCombo();
+                }
+
+                changed |= ImGui::Checkbox("Bold", &editorConfig.defaultFont.bold);
+
+                if (changed)
+                {
+                    ApplyAndSaveFuserConfig(editorConfig);
+                }
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Apply");
+
+                if (ImGui::Button("Apply Live", ImVec2(140, 28)))
+                {
+                    ApplyAndSaveFuserConfig(editorConfig);
+                }
+
+                ImGui::SameLine();
+
+                if (ImGui::Button("Restart Window", ImVec2(150, 28)))
+                {
+                    RestartAndSaveFuserWindow(editorConfig);
+                }
+
+                ImGui::TextWrapped(
+                    "Use Render Scale to control text and drawing size."
+                );
+
+                ImGui::EndTabItem();
+            }
+
+            // -------------------------------------------------
+            // DEBUG TAB
+            // -------------------------------------------------
+            if (ImGui::BeginTabItem("Debug"))
+            {
+                ImGui::SeparatorText("Debug Rendering");
+
+                bool testSceneEnabled = fuserRender::IsTestSceneEnabled();
+
+                if (ImGui::Checkbox("Render Test Scene", &testSceneEnabled))
+                {
+                    fuserRender::SetTestSceneEnabled(testSceneEnabled);
 
                 }
 
+                ImGui::TextWrapped(
+                    "Shows moving boxes, text, circles, lines, markers and FPS on the fuser window."
+                );
 
+                ImGui::Spacing();
+                ImGui::SeparatorText("Selected Monitor Details");
 
+                std::vector<DxMonitorInfo> monitors = g_DxWindow.GetMonitors();
+
+                if (monitors.empty())
+                {
+                    ImGui::TextUnformatted("No monitor data loaded");
+                }
+                else if (editorConfig.monitorIndex < 0 ||
+                    editorConfig.monitorIndex >= static_cast<int>(monitors.size()))
+                {
+                    ImGui::TextUnformatted("Invalid selected monitor index");
+                }
+                else
+                {
+                    const DxMonitorInfo& selectedMonitor = monitors[editorConfig.monitorIndex];
+
+                    ImGui::Text("Name: %s", WideToUtf8(selectedMonitor.name).c_str());
+                    ImGui::Text("Device: %s", WideToUtf8(selectedMonitor.deviceName).c_str());
+                    ImGui::Text("Position: %d, %d", selectedMonitor.x, selectedMonitor.y);
+                    ImGui::Text("Size: %d x %d", selectedMonitor.width, selectedMonitor.height);
+                    ImGui::Text("Refresh: %d Hz", selectedMonitor.refreshRate);
+                    ImGui::Text("Primary: %s", selectedMonitor.primary ? "Yes" : "No");
+                }
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Runtime");
+
+                ImGui::Text("Window Ready: %s", g_DxWindow.IsWindowReady() ? "Yes" : "No");
+                ImGui::Text("Window Size: %d x %d", g_DxWindow.GetWindowWidth(), g_DxWindow.GetWindowHeight());
+                ImGui::Text("Final Scale: %.2f", g_DxWindow.GetFinalRenderScale());
+                ImGui::Text("HWND: %s", g_DxWindow.GetHWND() ? "Valid" : "None");
 
                 ImGui::EndTabItem();
             }
 
             ImGui::EndTabBar();
         }
-
-
-
-
-
 
         ImGui::End();
     }
@@ -1866,7 +2320,6 @@ static void renderMenuSettings()
                 ImGui::SeparatorText("App Settings");
                 ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Window Alpha", &globals::appWindowAlpha, 0.f, 1.f, "%.1f")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Radar Max FPS", &globals::appRadarMaxFPS, 30.f, 60.f, "%.f")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Fuser Max FPS", &globals::appFuserMaxFPS, 30.f, 255.f, "%.f")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 ImGui::PushItemWidth(150); if (showResSelectionBox()) configManager.SaveConfig(); ImGui::PopItemWidth();
 
                 ImGui::NewLine();

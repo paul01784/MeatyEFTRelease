@@ -6,7 +6,6 @@ std::string globals::appVersion = "1.0.2";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
-float globals::appFuserMaxFPS = 60.f;
 std::string globals::dogTagAPIKey = "";
 
 std::string globals::radarSubText = "";
@@ -27,10 +26,6 @@ double globals::taskCamera = 1;
 double globals::taskRaidMonitor = 800;
 double globals::taskWrites = 50;
 double globals::taskAimBot = 10;
-
-bool globals::fuserFullscreen = false;
-int globals::fuserScreen = -1;
-
 
 // App menu settings/status
 bool appMenu::appSettings = false;

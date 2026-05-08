@@ -8,7 +8,6 @@ struct globals {
     static float appTextScale;
     static float appWindowAlpha;
     static float appRadarMaxFPS;
-    static float appFuserMaxFPS;
     static std::string dogTagAPIKey;
 
     static std::string radarSubText;
@@ -29,9 +28,6 @@ struct globals {
     static double taskRaidMonitor;
     static double taskWrites;
     static double taskAimBot;
-
-    static bool fuserFullscreen;
-    static int fuserScreen;
 
 };
 

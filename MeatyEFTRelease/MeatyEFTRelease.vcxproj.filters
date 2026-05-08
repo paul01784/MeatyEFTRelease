@@ -396,10 +396,6 @@
     <ClInclude Include="libs\leechcore.h" />
     <ClInclude Include="libs\skStr.h" />
     <ClInclude Include="libs\vmmdll.h" />
-    <ClInclude Include="fuser\colour.h" />
-    <ClInclude Include="fuser\fUser.h" />
-    <ClInclude Include="fuser\fUser_includes.h" />
-    <ClInclude Include="app\fuserapp.h" />
     <ClInclude Include="game\headers\unitysdk.h" />
     <ClInclude Include="game\headers\sdk.h" />
     <ClInclude Include="game\unity\gameObjectManager.h" />
@@ -416,6 +412,9 @@
     <ClInclude Include="game\headers\exfil.h" />
     <ClInclude Include="app\DogTagAPI.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="app\DxRenderWindow.h" />
+    <ClInclude Include="app\fuserRender.h" />
+    <ClInclude Include="fuser\colour.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="debug.cpp" />
@@ -442,8 +441,6 @@
     <ClCompile Include="market.cpp" />
     <ClCompile Include="config.cpp" />
     <ClCompile Include="game\utils.cpp" />
-    <ClCompile Include="fuser\fUser.cpp" />
-    <ClCompile Include="fuserapp.cpp" />
     <ClCompile Include="game\players.cpp" />
     <ClCompile Include="game\camera.cpp" />
     <ClCompile Include="game\tarkovdevquery.cpp" />
@@ -455,6 +452,7 @@
     <ClCompile Include="game\dogtag.cpp" />
     <ClCompile Include="game\exfil.cpp" />
     <ClCompile Include="DogTagAPI.cpp" />
+    <ClCompile Include="DxRenderWindow.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Font Include="app\fonts\forkawesome-webfont.ttf" />

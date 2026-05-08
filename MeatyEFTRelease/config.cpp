@@ -9,12 +9,12 @@
 #include "game/headers/loot.h"
 #include "app/market.h"
 #include "game/headers/utils.h"
+#include "app/DxRenderWindow.h"
 
 
 namespace fs = std::filesystem;
 
 
-// Custom serialization for glm::vec4
 namespace glm {
     void to_json(nlohmann::json& j, const glm::vec4& v) {
         j = nlohmann::json{ {"r", v.x}, {"g", v.y}, {"b", v.z}, {"a", v.w} };
@@ -51,6 +51,122 @@ glm::vec2 get_vec2_or_default(const nlohmann::json& j, const std::string& key, c
     return default_value;
 }
 
+static nlohmann::json Vec4ToJson(const glm::vec4& v)
+{
+    return nlohmann::json{
+        { "r", v.r },
+        { "g", v.g },
+        { "b", v.b },
+        { "a", v.a }
+    };
+}
+
+static glm::vec4 JsonToVec4(const nlohmann::json& j, const glm::vec4& fallback)
+{
+    glm::vec4 v = fallback;
+
+    if (!j.is_object())
+        return v;
+
+    v.r = j.value("r", v.r);
+    v.g = j.value("g", v.g);
+    v.b = j.value("b", v.b);
+    v.a = j.value("a", v.a);
+
+    return v;
+}
+
+static std::string ConfigWideToUtf8(const std::wstring& text)
+{
+    if (text.empty())
+        return "";
+
+    const int needed = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        nullptr,
+        0,
+        nullptr,
+        nullptr
+    );
+
+    if (needed <= 1)
+        return "";
+
+    std::string result(static_cast<size_t>(needed - 1), '\0');
+
+    WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        result.data(),
+        needed,
+        nullptr,
+        nullptr
+    );
+
+    return result;
+}
+
+static std::wstring ConfigUtf8ToWide(const std::string& text)
+{
+    if (text.empty())
+        return L"";
+
+    const int needed = MultiByteToWideChar(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        nullptr,
+        0
+    );
+
+    if (needed <= 1)
+        return L"";
+
+    std::wstring result(static_cast<size_t>(needed - 1), L'\0');
+
+    MultiByteToWideChar(
+        CP_UTF8,
+        0,
+        text.c_str(),
+        -1,
+        result.data(),
+        needed
+    );
+
+    return result;
+}
+
+static nlohmann::json ConfigVec4ToJson(const glm::vec4& v)
+{
+    return nlohmann::json{
+        { "r", v.r },
+        { "g", v.g },
+        { "b", v.b },
+        { "a", v.a }
+    };
+}
+
+static glm::vec4 ConfigJsonToVec4(const nlohmann::json& j, const glm::vec4& fallback)
+{
+    glm::vec4 v = fallback;
+
+    if (!j.is_object())
+        return v;
+
+    v.r = j.value("r", v.r);
+    v.g = j.value("g", v.g);
+    v.b = j.value("b", v.b);
+    v.a = j.value("a", v.a);
+
+    return v;
+}
+
 
 // Custom serialization for WindowsKey
 void to_json(nlohmann::json& j, const WindowsKey& k) {
@@ -75,9 +191,6 @@ void to_json(nlohmann::json& j, const globals& r) {
     j = nlohmann::json{
         {"appWindowAlpha", r.appWindowAlpha},
         {"appRadarMaxFPS", r.appRadarMaxFPS},
-        {"appFuserMaxFPS", r.appFuserMaxFPS},
-        {"appFuserFullScreen", r.fuserFullscreen},
-        {"appFuserScreen", r.fuserScreen},
         {"dogTagAPIKey", r.dogTagAPIKey}
     };
 }
@@ -85,9 +198,6 @@ void to_json(nlohmann::json& j, const globals& r) {
 void from_json(const nlohmann::json& j, globals& r) {
     r.appWindowAlpha = j.value("appWindowAlpha", r.appWindowAlpha);
     r.appRadarMaxFPS = j.value("appRadarMaxFPS", r.appRadarMaxFPS);
-    r.appFuserMaxFPS = j.value("appFuserMaxFPS", r.appFuserMaxFPS);
-    r.fuserFullscreen = j.value("appFuserFullScreen", r.fuserFullscreen);
-    r.fuserScreen = j.value("appFuserScreen", r.fuserScreen);
     r.dogTagAPIKey = j.value("dogTagAPIKey", r.dogTagAPIKey);
 }
 
@@ -136,7 +246,109 @@ void from_json(const nlohmann::json& j, coloursGlobals& r) {
     r.valueLootColour = get_vec4_or_default(j, "valueLootColour", r.valueLootColour);
 }
 
+void to_json(nlohmann::json& j, const DxFontSettings& f)
+{
+    j = nlohmann::json{
+        { "name", ConfigWideToUtf8(f.name) },
+        { "size", f.size },
+        { "bold", f.bold },
+        { "italic", f.italic }
+    };
+}
 
+void from_json(const nlohmann::json& j, DxFontSettings& f)
+{
+    const std::string fontName = j.value("name", std::string("Arial"));
+
+    f.name = ConfigUtf8ToWide(fontName);
+    f.size = j.value("size", f.size);
+    f.bold = j.value("bold", f.bold);
+
+    f.italic = false;
+}
+
+void to_json(nlohmann::json& j, const DxWindowConfig& f)
+{
+    j = nlohmann::json{
+        { "autoStart", f.autoStart },
+
+        { "monitorIndex", f.monitorIndex },
+        { "useMonitorSize", f.useMonitorSize },
+
+        { "fullscreen", f.fullscreen },
+        { "borderless", f.borderless },
+
+        { "windowWidth", f.windowWidth },
+        { "windowHeight", f.windowHeight },
+
+        { "topMost", f.topMost },
+        { "showInTaskbar", f.showInTaskbar },
+
+        { "transparentBackground", f.transparentBackground },
+        { "backgroundColour", Vec4ToJson(f.backgroundColour) },
+
+        { "useVSync", f.useVSync },
+        { "useMonitorRefreshRate", f.useMonitorRefreshRate },
+        { "maxFPS", f.maxFPS },
+
+        { "antiAliasing", f.antiAliasing },
+
+        { "useDpiScale", f.useDpiScale },
+        { "renderScale", f.renderScale },
+
+        { "defaultFont", f.defaultFont }
+    };
+}
+
+void from_json(const nlohmann::json& j, DxWindowConfig& f)
+{
+    f.autoStart = j.value("autoStart", f.autoStart);
+
+    f.monitorIndex = j.value("monitorIndex", f.monitorIndex);
+    f.useMonitorSize = j.value("useMonitorSize", f.useMonitorSize);
+
+    f.fullscreen = j.value("fullscreen", f.fullscreen);
+    f.borderless = j.value("borderless", f.borderless);
+
+    f.windowWidth = j.value("windowWidth", f.windowWidth);
+    f.windowHeight = j.value("windowHeight", f.windowHeight);
+
+    f.topMost = j.value("topMost", f.topMost);
+    f.showInTaskbar = j.value("showInTaskbar", f.showInTaskbar);
+
+    f.transparentBackground = j.value("transparentBackground", f.transparentBackground);
+
+    if (j.contains("backgroundColour"))
+        f.backgroundColour = JsonToVec4(j.at("backgroundColour"), f.backgroundColour);
+
+    f.useVSync = j.value("useVSync", f.useVSync);
+    f.useMonitorRefreshRate = j.value("useMonitorRefreshRate", f.useMonitorRefreshRate);
+    f.maxFPS = j.value("maxFPS", f.maxFPS);
+
+    f.antiAliasing = j.value("antiAliasing", f.antiAliasing);
+
+    f.useDpiScale = j.value("useDpiScale", f.useDpiScale);
+    f.renderScale = j.value("renderScale", f.renderScale);
+
+    if (j.contains("defaultFont"))
+        f.defaultFont = j.at("defaultFont").get<DxFontSettings>();
+
+    f.monitorIndex = std::max(0, f.monitorIndex);
+
+    f.windowWidth = std::max(320, f.windowWidth);
+    f.windowHeight = std::max(240, f.windowHeight);
+
+    f.maxFPS = std::clamp(f.maxFPS, 30, 1000);
+    f.renderScale = std::clamp(f.renderScale, 0.05f, 5.0f);
+
+    if (f.fullscreen)
+    {
+        f.borderless = true;
+        f.useMonitorSize = true;
+    }
+
+    f.defaultFont.italic = false;
+}
 
 // Custom serialization for radarGlobals
 void to_json(nlohmann::json& j, const radarGlobals& r) {
@@ -167,6 +379,7 @@ void from_json(const nlohmann::json& j, radarGlobals& r) {
     r.getPlayerEquip = j.value("getPlayerEquip", r.getPlayerEquip);
     r.getPlayerStats = j.value("getPlayerStats", r.getPlayerStats);
 }
+
 
 // Custom serialization for espGlobals
 void to_json(nlohmann::json& j, const espGlobals& e) {
@@ -339,56 +552,90 @@ bool ConfigManager::LoadLootFilterConfig() {
     }
 }
 
-bool ConfigManager::LoadConfig() {
+bool ConfigManager::LoadConfig()
+{
     fs::path exeDir = fs::current_path();
     fs::path configDir = exeDir / "configs";
     fs::path configFile = configDir / filename_;
 
-    if (!fs::exists(configDir)) {
+    if (!fs::exists(configDir))
         return false;
-    }
 
     std::ifstream file(configFile);
-    if (!file.is_open()) {
+    if (!file.is_open())
         return false;
-    }
 
-    nlohmann::json j;
-    file >> j;
+    try
+    {
+        nlohmann::json j;
+        file >> j;
 
-    try {
         if (j.contains("app")) {
             app_ = j.at("app").get<globals>();
         }
+
+        if (j.contains("fuser")) {
+            fuser_ = j.at("fuser").get<DxWindowConfig>();
+
+            g_DxWindow.SetConfig(fuser_);
+
+            if (fuser_.autoStart)
+            {
+                g_DxWindow.Init(fuser_);
+                g_DxWindow.Start();
+            }
+        }
+
         if (j.contains("radarGlobals")) {
             radar_ = j.at("radarGlobals").get<radarGlobals>();
         }
+
         if (j.contains("espGlobals")) {
             esp_ = j.at("espGlobals").get<espGlobals>();
         }
+
         if (j.contains("aimGlobals")) {
             aim_ = j.at("aimGlobals").get<aimGlobals>();
         }
+
         if (j.contains("coloursGlobals")) {
             colours_ = j.at("coloursGlobals").get<coloursGlobals>();
         }
+
         if (j.contains("keyGlobals")) {
             keys_ = j.at("keyGlobals").get<keyGlobals>();
         }
+
         if (j.contains("lootGlobals")) {
             loot_ = j.at("lootGlobals").get<lootGlobals>();
         }
 
         return true;
     }
-    catch (const nlohmann::json::exception& e) {
+    catch (const nlohmann::json::exception& e)
+    {
         return false;
     }
 }
 
-bool ConfigManager::SaveConfig() {
+bool ConfigManager::SaveConfig()
+{
+    fs::path exeDir = fs::current_path();
+    fs::path configDir = exeDir / "configs";
+    fs::path configFile = configDir / filename_;
+
+    if (!fs::exists(configDir))
+    {
+        if (!fs::create_directory(configDir))
+            return false;
+    }
+
+    fuser_ = g_DxWindow.GetConfig();
+
     nlohmann::json j;
+
     j["app"] = app_;
+    j["fuser"] = fuser_;
     j["radarGlobals"] = radar_;
     j["espGlobals"] = esp_;
     j["aimGlobals"] = aim_;
@@ -396,20 +643,9 @@ bool ConfigManager::SaveConfig() {
     j["keyGlobals"] = keys_;
     j["lootGlobals"] = loot_;
 
-
-    fs::path exeDir = fs::current_path();
-    fs::path configDir = exeDir / "configs";
-    fs::path configFile = configDir / filename_;
-
-    if (!fs::exists(configDir)) {
-        fs::create_directory(configDir);
-        return false;
-    }
-
     std::ofstream file(configFile);
-    if (!file.is_open()) {
+    if (!file.is_open())
         return false;
-    }
 
     file << j.dump(4);
     return true;

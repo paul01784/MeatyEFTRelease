@@ -7,6 +7,7 @@
 #include "globals.h" 
 #include "../game/headers/utils.h"
 #include "../game/headers/loot.h"
+#include "DxRenderWindow.h"
 
 
 void to_json(nlohmann::json& j, const WindowsKey& k);
@@ -54,6 +55,7 @@ private:
     std::string filename_;
     std::string filename_lootFilter;
     globals app_;
+    DxWindowConfig fuser_;
     radarGlobals radar_;
     espGlobals esp_;
     aimGlobals aim_;

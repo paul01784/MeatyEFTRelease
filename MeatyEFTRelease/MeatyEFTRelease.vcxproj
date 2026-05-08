@@ -156,7 +156,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="app\debug.h" />
     <ClInclude Include="app\DogTagAPI.h" />
     <ClInclude Include="app\draw.h" />
-    <ClInclude Include="app\fuserapp.h" />
+    <ClInclude Include="app\DxRenderWindow.h" />
+    <ClInclude Include="app\fuserRender.h" />
     <ClInclude Include="app\globals.h" />
     <ClInclude Include="app\IconsForkAwesome.h" />
     <ClInclude Include="app\includes.h" />
@@ -523,8 +524,6 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="external\nlohmann\thirdparty\hedley\hedley.hpp" />
     <ClInclude Include="external\nlohmann\thirdparty\hedley\hedley_undef.hpp" />
     <ClInclude Include="fuser\colour.h" />
-    <ClInclude Include="fuser\fUser.h" />
-    <ClInclude Include="fuser\fUser_includes.h" />
     <ClInclude Include="game\headers\camera.h" />
     <ClInclude Include="game\headers\dogtag.h" />
     <ClInclude Include="game\headers\exfil.h" />
@@ -557,6 +556,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="config.cpp" />
     <ClCompile Include="debug.cpp" />
     <ClCompile Include="DogTagAPI.cpp" />
+    <ClCompile Include="DxRenderWindow.cpp" />
     <ClCompile Include="external\glm\detail\glm.cpp" />
     <ClCompile Include="external\glm\glm.cppm" />
     <ClCompile Include="external\imgui\backends\imgui_impl_dx9.cpp" />
@@ -567,8 +567,6 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="external\imgui\imgui_tables.cpp" />
     <ClCompile Include="external\imgui\imgui_widgets.cpp" />
     <ClCompile Include="external\imgui\misc\cpp\imgui_stdlib.cpp" />
-    <ClCompile Include="fuserapp.cpp" />
-    <ClCompile Include="fuser\fUser.cpp" />
     <ClCompile Include="game\camera.cpp" />
     <ClCompile Include="game\dogtag.cpp" />
     <ClCompile Include="game\exfil.cpp" />
