@@ -329,6 +329,7 @@ void Players::boneTask()
         // Read TransformAccessReadOnly
         for (auto& player : cache)
         {
+            if (!Utils::valid_pointer(player.instance)) continue;
             if (player.isBTR) continue;
             if (player.isDead) continue;
             if (player.hasExfiled) continue;
@@ -357,6 +358,8 @@ void Players::boneTask()
         // Same filtering
         for (auto& player : cache)
         {
+
+            if (!Utils::valid_pointer(player.instance)) continue;
             if (player.isBTR || player.invalidBones || player.isDead) continue;
 
             if (player.hasExfiled) continue;
@@ -393,6 +396,8 @@ void Players::boneTask()
         // Same filtering
         for (auto& player : cache)
         {
+
+            if (!Utils::valid_pointer(player.instance)) continue;
             if (player.isBTR || player.invalidBones || player.isDead) continue;
             if (player.hasExfiled) continue;
 
@@ -480,6 +485,7 @@ void Players::boneTask()
         // final bone positions
         for (auto& player : cache)
         {
+            if (!Utils::valid_pointer(player.instance)) continue;
             if (!player.isBTR && !player.invalidBones && !player.isDead && !player.hasExfiled)
                 player.UpdateBonePositions();
             //else
@@ -1188,6 +1194,7 @@ void Players::updateEntity()
         if (Utils::valid_pointer(cachePlayer.P_CorpseClass))
         {
             cachePlayer.isDead = true;
+			cachePlayer.instance = 0x0; //clear instance to avoid doing unnecessary reads on dead players
 
         }
 
@@ -1283,6 +1290,8 @@ void Players::checkGroupIDs()
 
         for (auto& playerA : cache)
         {
+
+            if (!Utils::valid_pointer(playerA.instance)) continue;
             if (!isValidGroupingTarget(playerA))
                 continue;
 
@@ -1291,6 +1300,8 @@ void Players::checkGroupIDs()
 
             for (auto& playerB : cache)
             {
+
+                if (!Utils::valid_pointer(playerB.instance)) continue;
                 if (playerB.hasExfiled || playerB.isDead)
                     continue;
 
@@ -1420,6 +1431,8 @@ void Players::playerEquipment()
         std::vector<PlayerCache>& cache = players.getCache();
         for (auto& player : cache)
         {
+
+            if (!Utils::valid_pointer(player.instance)) continue;
             if (player.isDead || player.hasExfiled)
                 continue;
 
@@ -1444,7 +1457,7 @@ void Players::playerEquipment()
 
             for (auto& slotPtr : slotsArray)
             {
-                uint64_t namePtr = mem.Read<uint64_t>(slotPtr + sdk::Slot::ID);
+                uint64_t namePtr = mem.Read<uint64_t>(slotPtr + sdk::Slot::ID); if (!Utils::valid_pointer(namePtr)) continue;
                 auto name = mem.readUnicodeString(namePtr + 0x14, mem.Read<int>(static_cast<SIZE_T>(namePtr) + 0x10));
 
                 if (skipNames.contains(name))
@@ -1463,6 +1476,7 @@ void Players::playerEquipment()
 
         for (auto& player : cache)
         {
+            if (!Utils::valid_pointer(player.instance)) continue;
             if (player.isDead || player.hasExfiled)
                 continue;
 
@@ -1515,12 +1529,19 @@ void Players::playerEquipment()
                             LOGS.logInfo("[PLAYER] Set PID to Player : ", player.profileId);
                             
 
-                            //call API try get data we might have
-                            auto result = g_DogTagAPI.getByProfile(player.profileId);
-                            if (result)
+                            //call API try get data we might have if we have api key
+                            if (!player.profileId.empty() && g_DogTagAPI.hasApiKey())
                             {
-                                player.accountId = result->accountId;
-                                player.name = result->nickname;
+                                auto result = g_DogTagAPI.getByProfile(player.profileId);
+
+                                if (result)
+                                {
+                                    if (!result->accountId.empty())
+                                        player.accountId = result->accountId;
+
+                                    if (!result->nickname.empty())
+                                        player.name = result->nickname;
+                                }
                             }
                         }
                         else
@@ -1739,6 +1760,7 @@ void Players::checkExfil()
 
         if (isExfiled) {
             cachedPlayer.hasExfiled = TRUE;
+			cachedPlayer.instance = 0x0; // Clear instance to avoid unnecessary reads
         }
         
 

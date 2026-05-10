@@ -5,6 +5,7 @@
 #include "app/market.h"
 #include "game/headers/maingame.h"
 #include "game/headers/tarkovdevquery.h"
+#include "app/DogTagAPI.h"
 
 int main() 
 {
@@ -27,6 +28,9 @@ int main()
 	loadjson();
 	buildItemList();
 	buildCatList();
+
+	//set api key for dogtag api if we have one
+	g_DogTagAPI.setApiKey(globals::dogTagAPIKey);
 
 	//build exfil data
 	TarkovDev tarkovDev;

@@ -3,6 +3,7 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <curl/curl.h>
+#include "app/debug.h"
 
 using json = nlohmann::json;
 
@@ -200,44 +201,95 @@ bool DogTagAPI::post(const std::string& profileId,
 
 std::optional<DogTagEntry> DogTagAPI::getByProfile(const std::string& profileId)
 {
-    auto res = httpGet(baseUrl + "/dogtag/profile/" + profileId);
+    try
+    {
+        if (apiKey.empty())
+        {
+            LOGS.logWarn("[DogTagAPI] getByProfile skipped, API key not set");
+            return std::nullopt;
+        }
 
-    if (!res)
+        if (profileId.empty())
+        {
+            LOGS.logWarn("[DogTagAPI] getByProfile skipped, profileId empty");
+            return std::nullopt;
+        }
+
+        auto res = httpGet(baseUrl + "/dogtag/profile/" + profileId);
+
+        if (!res)
+            return std::nullopt;
+
+        auto j = json::parse(*res, nullptr, false);
+        if (j.is_discarded())
+            return std::nullopt;
+
+        DogTagEntry e;
+        e.id = j.value("id", 0);
+        e.profileId = j.value("profileId", "");
+        e.accountId = j.value("accountId", "");
+        e.nickname = j.value("nickname", "");
+        e.createdAt = j.value("createdAt", 0LL);
+        e.updatedAt = j.value("updatedAt", 0LL);
+
+        return e;
+    }
+    catch (const std::exception& e)
+    {
+        LOGS.logError("[DogTagAPI] getByProfile exception: ", e.what());
         return std::nullopt;
-
-    auto j = json::parse(*res, nullptr, false);
-    if (j.is_discarded())
+    }
+    catch (...)
+    {
+        LOGS.logError("[DogTagAPI] getByProfile unknown exception");
         return std::nullopt;
-
-    DogTagEntry e;
-    e.id = j.value("id", 0);
-    e.profileId = j.value("profileId", "");
-    e.accountId = j.value("accountId", "");
-    e.nickname = j.value("nickname", "");
-    e.createdAt = j.value("createdAt", 0LL);
-    e.updatedAt = j.value("updatedAt", 0LL);
-
-    return e;
+    }
 }
 
 std::optional<DogTagEntry> DogTagAPI::getByAccount(const std::string& accountId)
 {
-    auto res = httpGet(baseUrl + "/dogtag/account/" + accountId);
+    try
+    {
+        if (apiKey.empty())
+        {
+            LOGS.logWarn("[DogTagAPI] getByAccount skipped, API key not set");
+            return std::nullopt;
+        }
 
-    if (!res)
-        return std::nullopt;
+        if (accountId.empty())
+        {
+            LOGS.logWarn("[DogTagAPI] getByAccount skipped, accountId empty");
+            return std::nullopt;
+        }
 
-    auto j = json::parse(*res, nullptr, false);
-    if (j.is_discarded())
-        return std::nullopt;
+        auto res = httpGet(baseUrl + "/dogtag/account/" + accountId);
 
-    DogTagEntry e;
-    e.id = j.value("id", 0);
-    e.profileId = j.value("profileId", "");
-    e.accountId = j.value("accountId", "");
-    e.nickname = j.value("nickname", "");
-    e.createdAt = j.value("createdAt", 0LL);
-    e.updatedAt = j.value("updatedAt", 0LL);
+        if (!res)
+            return std::nullopt;
+
+        auto j = json::parse(*res, nullptr, false);
+        if (j.is_discarded())
+            return std::nullopt;
+
+        DogTagEntry e;
+        e.id = j.value("id", 0);
+        e.profileId = j.value("profileId", "");
+        e.accountId = j.value("accountId", "");
+        e.nickname = j.value("nickname", "");
+        e.createdAt = j.value("createdAt", 0LL);
+        e.updatedAt = j.value("updatedAt", 0LL);
 
     return e;
+
+    }
+    catch (const std::exception& e)
+    {
+        LOGS.logError("[DogTagAPI] getByAccount exception: ", e.what());
+        return std::nullopt;
+    }
+    catch (...)
+    {
+        LOGS.logError("[DogTagAPI] getByAccount unknown exception");
+        return std::nullopt;
+    }
 }

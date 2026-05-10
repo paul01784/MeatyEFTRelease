@@ -18,7 +18,7 @@ UnityTransform::UnityTransform(uint64_t transformInternal, bool useCache)
     }
 
     const int index = mem.Read<int>(TransformInternal + UnityOffsets::TransformAccess_IndexOffset);
-    if (index > 128000)
+    if (index > 150000)
     {
         std::cout << "[UnityTransform] Index sanity check failed: " << index << "\n";
         _valid = false;
