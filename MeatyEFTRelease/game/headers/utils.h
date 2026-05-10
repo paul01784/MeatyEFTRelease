@@ -129,53 +129,6 @@ namespace Utils {
 
 		inline bool world_to_screen(glm::vec3 world, glm::vec2* screen)
 		{
-
-			glm::highp_mat4 cameraMatrix{};
-			if (mainGame.localIsScoped && camera.localmpCamera)
-				cameraMatrix = camera.g_viewMatrixOptic;
-			else
-				cameraMatrix = camera.g_viewMatrix;
-
-
-			const auto pos_vec = glm::vec3{ cameraMatrix[3][0], cameraMatrix[3][1], cameraMatrix[3][2] };
-
-			const auto z = glm::dot(pos_vec, world) + cameraMatrix[3][3];
-
-			if (z < 0.098f)
-				return false;
-
-			auto x = glm::dot(glm::vec3{ cameraMatrix[0][0], cameraMatrix[0][1], cameraMatrix[0][2] }, world) + cameraMatrix[0][3];
-			auto y = glm::dot(glm::vec3{ cameraMatrix[1][0], cameraMatrix[1][1], cameraMatrix[1][2] }, world) + cameraMatrix[1][3];
-
-			static const auto screen_center_x = espGlobals::gameRes.x * 0.5f;
-			static const auto screen_center_y = espGlobals::gameRes.y * 0.5f;
-
-			if (mainGame.localIsScoped && camera.localmpCamera)
-			{
-				float AngleRadHalf = (PI / 180) * camera.gameFOV * 0.5f;
-				float AngleCtg = cosf(AngleRadHalf) / sinf(AngleRadHalf);
-
-				x /= AngleCtg * camera.gameAspect * 0.5f;
-				y /= AngleCtg * 0.5f;
-
-			}
-
-
-			if (screen)
-			{
-				*screen =
-				{
-					screen_center_x * (1.f + x / z),
-					screen_center_y * (1.f - y / z)
-				};
-			}
-
-			return true;
-
-		}
-
-		inline bool world_to_screenQuests(glm::vec3 world, glm::vec2* screen)
-		{
 			glm::highp_mat4 cameraMatrix{};
 
 			if (mainGame.localIsScoped && camera.localmpCamera)
@@ -223,7 +176,7 @@ namespace Utils {
 				return false;
 
 			// Only return true if actually inside screen bounds.
-			constexpr float edgeBuffer = 1.0f;
+			constexpr float edgeBuffer = 1.5f;
 
 			if (ndcX < -edgeBuffer || ndcX > edgeBuffer ||
 				ndcY < -edgeBuffer || ndcY > edgeBuffer)

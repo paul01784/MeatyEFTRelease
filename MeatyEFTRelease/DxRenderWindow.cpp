@@ -10,7 +10,10 @@
 #include <dwmapi.h>
 #include <sstream>
 #include <mmsystem.h>
+#include <eh.h>
+#include <sstream>
 #include <iostream>
+#include "app/debug.h"
 
 
 #pragma comment(lib, "d3d11.lib")
@@ -28,6 +31,52 @@ DxRenderWindow g_DxWindow;
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
 
+class FuserSehException : public std::exception
+{
+public:
+    FuserSehException(unsigned int code, EXCEPTION_POINTERS* exceptionPointers)
+        : m_code(code)
+    {
+        void* address = nullptr;
+
+        if (exceptionPointers &&
+            exceptionPointers->ExceptionRecord)
+        {
+            address = exceptionPointers->ExceptionRecord->ExceptionAddress;
+        }
+
+        std::ostringstream ss;
+        ss << "SEH exception. Code: 0x"
+            << std::hex << m_code
+            << " Address: " << address;
+
+        m_message = ss.str();
+    }
+
+    const char* what() const noexcept override
+    {
+        return m_message.c_str();
+    }
+
+    unsigned int code() const
+    {
+        return m_code;
+    }
+
+private:
+    unsigned int m_code = 0;
+    std::string m_message;
+};
+
+static void FuserSehTranslator(unsigned int code, EXCEPTION_POINTERS* exceptionPointers)
+{
+    throw FuserSehException(code, exceptionPointers);
+}
+
+static void LogFuserCrash(const std::string& message)
+{
+    LOGS.logError("[FUSER][CRASH] " + message);
+}
 
 static constexpr const wchar_t* DX_RENDER_WINDOW_CLASS_NAME = L"DxRenderWindowClass";
 
@@ -768,6 +817,8 @@ void DxRenderWindow::RenderLoop()
 {
     m_renderThreadId.store(GetCurrentThreadId());
 
+    _set_se_translator(FuserSehTranslator);
+
     if (!CreateAppWindow())
     {
         m_running.store(false);
@@ -810,21 +861,95 @@ void DxRenderWindow::RenderLoop()
 
     m_windowReady.store(true);
 
+    int consecutiveRenderFailures = 0;
+
     while (!m_stopRequested.load())
     {
         auto frameStart = std::chrono::steady_clock::now();
 
-        ProcessMessages();
+        try
+        {
+            ProcessMessages();
 
-        if (m_stopRequested.load())
-            break;
+            if (m_stopRequested.load())
+                break;
 
-        const bool activeScene = fuserRender::Render();
-        const int forcedFps = activeScene ? 0 : 1;
+            const bool activeScene = fuserRender::Render();
+            const int forcedFps = activeScene ? 0 : 1;
 
-        RenderFrame();
+            RenderFrame();
 
-        FrameLimit(frameStart, forcedFps);
+            FrameLimit(frameStart, forcedFps);
+
+            consecutiveRenderFailures = 0;
+        }
+        catch (const FuserSehException& e)
+        {
+            consecutiveRenderFailures++;
+
+            LogFuserCrash(
+                std::string("Render thread SEH crash: ") +
+                e.what() +
+                " Stage: " +
+                fuserRender::GetCurrentStage()
+            );
+
+            ClearDrawLists();
+            m_frameLimiterPrimed = false;
+
+            if (consecutiveRenderFailures >= 10)
+            {
+                LogFuserCrash("Too many consecutive render crashes. Stopping fuser window.");
+                m_stopRequested.store(true);
+                break;
+            }
+
+            Sleep(50);
+        }
+        catch (const std::exception& e)
+        {
+            consecutiveRenderFailures++;
+
+            LogFuserCrash(
+                std::string("Render thread std exception: ") +
+                e.what() +
+                " Stage: " +
+                fuserRender::GetCurrentStage()
+            );
+
+            ClearDrawLists();
+            m_frameLimiterPrimed = false;
+
+            if (consecutiveRenderFailures >= 10)
+            {
+                LogFuserCrash("Too many consecutive render crashes. Stopping fuser window.");
+                m_stopRequested.store(true);
+                break;
+            }
+
+            Sleep(50);
+        }
+        catch (...)
+        {
+            consecutiveRenderFailures++;
+
+            LogFuserCrash(
+                std::string("Render thread unknown exception. Stage: ") +
+                fuserRender::GetCurrentStage()
+            );
+
+            ClearDrawLists();
+            m_frameLimiterPrimed = false;
+
+            if (consecutiveRenderFailures >= 10)
+            {
+                LogFuserCrash("Too many consecutive render crashes. Stopping fuser window.");
+                m_stopRequested.store(true);
+                break;
+            }
+
+            Sleep(50);
+        }
     }
 
     m_windowReady.store(false);

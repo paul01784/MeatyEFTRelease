@@ -8,6 +8,7 @@
 #include <string>
 #include <atomic>
 #include <sstream>
+#include <iostream>
 
 #include "game/headers/maingame.h"
 #include "game/headers/utils.h"
@@ -18,6 +19,77 @@
 
 namespace fuserRender
 {
+    //exception tracking
+
+    inline std::atomic<const char*> g_currentStage = "Idle";
+
+    static inline const char* GetCurrentStage()
+    {
+        const char* stage = g_currentStage.load(std::memory_order_relaxed);
+        return stage ? stage : "Unknown";
+    }
+
+    class RenderStageScope
+    {
+    public:
+        explicit RenderStageScope(const char* stage)
+        {
+            m_previousStage = g_currentStage.load(std::memory_order_relaxed);
+            g_currentStage.store(stage, std::memory_order_relaxed);
+        }
+
+        ~RenderStageScope()
+        {
+            g_currentStage.store(m_previousStage, std::memory_order_relaxed);
+        }
+
+    private:
+        const char* m_previousStage = "Idle";
+    };
+
+    static inline void LogStageError(const std::string& message)
+    {
+        std::cout << "[FUSER][RENDER] " << message << std::endl;
+
+        // Or use:
+        // LOGS.logError("[FUSER][RENDER] " + message);
+    }
+
+    template <typename Fn>
+    static inline bool SafeRenderStage(const char* stageName, Fn&& fn)
+    {
+        RenderStageScope scope(stageName);
+
+        try
+        {
+            fn();
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            LogStageError(
+                std::string("Stage failed: ") +
+                stageName +
+                " Exception: " +
+                e.what()
+            );
+
+            return false;
+        }
+        catch (...)
+        {
+            LogStageError(
+                std::string("Stage failed: ") +
+                stageName +
+                " Unknown exception"
+            );
+
+            return false;
+        }
+    }
+
+    // end exception tracking
+
     inline std::atomic_bool g_testSceneEnabled = false;
 
     static inline bool IsTestSceneEnabled()
@@ -478,7 +550,9 @@ namespace fuserRender
 
         const std::string currentMapId = TrimEFT(mainGame.selectedLocation);
 
-        for (const auto& loc : masterLocations)
+        std::vector<QuestLocation> locations = masterLocations;
+
+        for (const auto& loc : locations)
         {
             if (!(Utils::Text::containsIgnoreCase(loc.mapNameId, currentMapId) ||
                 Utils::Text::containsIgnoreCase(currentMapId, loc.mapNameId)))
@@ -615,6 +689,9 @@ namespace fuserRender
         const PlayerCache& player,
         std::vector<glm::vec2>& outBones)
     {
+        if (player.bonePositions.empty())
+            return false;
+
         outBones.clear();
         outBones.resize(player.bonePositions.size());
 
@@ -705,7 +782,8 @@ namespace fuserRender
                 // ----------------------------
                 // Head dot
                 // ----------------------------
-                if (espGlobals::drawHeadDot)
+                if (espGlobals::drawHeadDot &&
+                    HasBones(player, { boneListIndexes::Head }))
                 {
                     glm::vec2 headPos{};
 
@@ -725,7 +803,8 @@ namespace fuserRender
                 // ----------------------------
                 // Player box
                 // ----------------------------
-                if (espGlobals::drawBoxPlayers)
+                if (espGlobals::drawBoxPlayers &&
+                    HasBones(player, { boneListIndexes::Head }))
                 {
                     glm::vec2 screenHead{};
 
@@ -765,6 +844,23 @@ namespace fuserRender
                 // ----------------------------
                 if (espGlobals::drawSkeletons)
                 {
+                    if (!HasBones(player,
+                        {
+                            boneListIndexes::Head,
+                            boneListIndexes::Pelvis,
+                            boneListIndexes::LForearm,
+                            boneListIndexes::LPalm,
+                            boneListIndexes::RForearm,
+                            boneListIndexes::RPalm,
+                            boneListIndexes::LThigh,
+                            boneListIndexes::LFoot,
+                            boneListIndexes::RThigh,
+                            boneListIndexes::RFoot
+                        }))
+                    {
+                        continue;
+                    }
+
                     std::vector<glm::vec2> boneScreenPositions;
 
                     if (!GetPlayerBoneScreenPositions(player, boneScreenPositions))
@@ -840,17 +936,56 @@ namespace fuserRender
 
     static inline void RenderMainScene()
     {
-        RenderHUD();
+        SafeRenderStage("RenderHUD", []()
+            {
+                RenderHUD();
+            });
 
-        RenderCrosshair();
+        SafeRenderStage("RenderCrosshair", []()
+            {
+                RenderCrosshair();
+            });
 
-        RenderPlayers();
+        SafeRenderStage("RenderPlayers", []()
+            {
+                RenderPlayers();
+            });
 
-        RenderNades();
+        SafeRenderStage("RenderNades", []()
+            {
+                RenderNades();
+            });
 
-        RenderLoot();
+        SafeRenderStage("RenderLoot", []()
+            {
+                RenderLoot();
+            });
 
-        RenderTasks();
+        SafeRenderStage("RenderTasks", []()
+            {
+                RenderTasks();
+            });
+    }
+
+    static inline bool HasBones(
+        const PlayerCache& player,
+        std::initializer_list<int> indexes)
+    {
+        const size_t count = player.bonePositions.size();
+
+        if (count == 0)
+            return false;
+
+        for (int index : indexes)
+        {
+            if (index < 0)
+                return false;
+
+            if (static_cast<size_t>(index) >= count)
+                return false;
+        }
+
+        return true;
     }
 
     static inline bool HasActiveScene()
@@ -864,19 +999,27 @@ namespace fuserRender
 
         bool activeScene = false;
 
-        if (IsTestSceneEnabled())
-        {
-            RenderTestScene();
-            activeScene = true;
-        }
-        else if (appGlobals::runRadar)
-        {
-            RenderMainScene();
-            activeScene = true;
-        }
+        SafeRenderStage("RenderEntry", [&]()
+            {
+                if (IsTestSceneEnabled())
+                {
+                    SafeRenderStage("RenderTestScene", []()
+                        {
+                            RenderTestScene();
+                        });
 
-        // If nothing is active, this submits an empty list and clears old drawings.
+                    activeScene = true;
+                }
+                else if (appGlobals::runRadar)
+                {
+                    RenderMainScene();
+                    activeScene = true;
+                }
+            });
+
         g_DxWindow.SubmitDrawList();
+
+        g_currentStage.store("Idle", std::memory_order_relaxed);
 
         return activeScene;
     }
