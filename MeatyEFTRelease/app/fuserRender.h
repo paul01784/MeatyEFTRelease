@@ -711,6 +711,27 @@ namespace fuserRender
         return true;
     }
 
+    static inline bool HasBones(
+        const PlayerCache& player,
+        std::initializer_list<int> indexes)
+    {
+        const size_t count = player.bonePositions.size();
+
+        if (count == 0)
+            return false;
+
+        for (int index : indexes)
+        {
+            if (index < 0)
+                return false;
+
+            if (static_cast<size_t>(index) >= count)
+                return false;
+        }
+
+        return true;
+    }
+
     static inline void RenderPlayers()
     {
         try
@@ -965,27 +986,6 @@ namespace fuserRender
             {
                 RenderTasks();
             });
-    }
-
-    static inline bool HasBones(
-        const PlayerCache& player,
-        std::initializer_list<int> indexes)
-    {
-        const size_t count = player.bonePositions.size();
-
-        if (count == 0)
-            return false;
-
-        for (int index : indexes)
-        {
-            if (index < 0)
-                return false;
-
-            if (static_cast<size_t>(index) >= count)
-                return false;
-        }
-
-        return true;
     }
 
     static inline bool HasActiveScene()
