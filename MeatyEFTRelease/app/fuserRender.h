@@ -575,7 +575,7 @@ namespace fuserRender
             }
 
             glm::vec2 screenPos{};
-            if (!Utils::Camera::world_to_screenQuests(loc.pos, &screenPos))
+            if (!Utils::Camera::world_to_screen(loc.pos, &screenPos))
                 continue;
 
             std::string questText = loc.questName;
