@@ -5,374 +5,282 @@
 #include "Shellcode.h"
 #include "structs.h"
 
+#include <atomic>
+#include <optional>
+#include <type_traits>
+#include <limits>
+#include <thread>
+#include <mutex>
+
 class Memory
 {
 private:
-	struct LibModules
-	{
-		HMODULE VMM = nullptr;
-		HMODULE FTD3XX = nullptr;
-		HMODULE LEECHCORE = nullptr;
-	};
+    struct LibModules
+    {
+        HMODULE VMM = nullptr;
+        HMODULE FTD3XX = nullptr;
+        HMODULE LEECHCORE = nullptr;
+    };
 
-	static inline LibModules modules { };
+    static inline LibModules modules{};
 
-	struct CurrentProcessInformation
-	{
-		int PID = 0;
-		size_t base_address = 0;
-		size_t base_size = 0;
-		std::string process_name = "";
-	};
+    struct CurrentProcessInformation
+    {
+        DWORD PID = 0;
+        uintptr_t base_address = 0;
+        size_t base_size = 0;
+        std::string process_name{};
+    };
 
-	static inline CurrentProcessInformation current_process { };
+    static inline CurrentProcessInformation current_process{};
 
-	static inline BOOLEAN DMA_INITIALIZED = FALSE;
-	static inline BOOLEAN PROCESS_INITIALIZED = FALSE;
-	/**
-	*Dumps the systems Current physical memory pages
-	*To a file so we can use it in our DMA (:
-	*This file it created to %temp% folder
-	*@return true if successful, false if not.
-	*/
-	bool DumpMemoryMap(bool debug = false);
+    static inline std::atomic_bool DMA_INITIALIZED{ false };
+    static inline std::atomic_bool PROCESS_INITIALIZED{ false };
 
-	/**
-	* brief Removes basic information related to the FPGA device
-	* This is required before any DMA operations can be done.
-	* To ensure the optimal safety in game cheating.
-	* @return true if successful, false if not.
-	*/
-	bool SetFPGA();
+    bool DumpMemoryMap(bool debug = false);
+    bool SetFPGA();
+    void setCustomRefreshData();
 
-	void setCustomRefreshData();
+    std::shared_ptr<c_keys> key;
+    c_registry registry;
+    c_shellcode shellcode;
 
-	//shared pointer
-	std::shared_ptr<c_keys> key;
-	c_registry registry;
-	c_shellcode shellcode;
+    std::thread dmaThread;
+    std::atomic_bool initRunning{ false };
+    mutable std::mutex handleMutex;
 
-	/*this->registry_ptr = std::make_shared<c_registry>(*this);
-	this->key_ptr = std::make_shared<c_keys>(*this);*/
+private:
+    [[nodiscard]] static DWORD BuildReadFlags(bool useCache);
+    [[nodiscard]] static DWORD BuildScatterFlags(bool useCache);
 
 public:
-	/**
-	 * brief Constructor takes a wide string of the process.
-	 * Expects that all the libraries are in the root dir
-	 */
-	Memory();
-	~Memory();
+    Memory();
+    ~Memory();
 
-	/**
-	* @brief Gets the registry object
-	* @return registry class
-	*/
-	c_registry GetRegistry() { return registry; }
+    Memory(const Memory&) = delete;
+    Memory& operator=(const Memory&) = delete;
 
-	/**
-	* @brief Gets the key object
-	* @return key class
-	*/
-	c_keys* GetKeyboard() { return key.get(); }
+    c_registry& GetRegistry() { return registry; }
+    const c_registry& GetRegistry() const { return registry; }
 
-	/**
-	* @brief Gets the shellcode object
-	* @return shellcode class
-	*/
-	c_shellcode GetShellcode() { return shellcode; }
+    c_keys* GetKeyboard() { return key.get(); }
+    const c_keys* GetKeyboard() const { return key.get(); }
 
-	/**
-	* brief Initializes the DMA
-	* This is required before any DMA operations can be done.
-	* @param process_name the name of the process
-	* @param memMap if true, will dump the memory map to a file	& make the DMA use it.
-	* @return true if successful, false if not.
-	*/
-	bool Init(bool memMap = true, bool debug = false);
+    c_shellcode& GetShellcode() { return shellcode; }
+    const c_shellcode& GetShellcode() const { return shellcode; }
 
-	/*This part here is things related to the process information such as Base daddy, Size ect.*/
+    bool Init(bool memMap = true, bool debug = false);
+    void doDMAConnect();
 
-	/**
-	* brief Gets the process id of the process
-	* @param process_name the name of the process
-	* @return the process id of the process
-	*/
-	DWORD GetPidFromName(std::string process_name);
+    DWORD GetPidFromName(const std::string& process_name);
+    std::vector<int> GetPidListFromName(const std::string& process_name);
+    std::vector<std::string> GetModuleList(const std::string& process_name);
 
-	/**
-	* brief Gets all the processes id(s) of the process
-	* @param process_name the name of the process
-	* @returns all the processes id(s) of the process
-	*/
-	std::vector<int> GetPidListFromName(std::string process_name);
+    VMMDLL_PROCESS_INFORMATION GetProcessInformation();
+    PEB GetProcessPeb();
 
-	/**
-	* \brief Gets the module list of the process
-	* \param process_name the name of the process 
-	* \return all the module names of the process 
-	*/
-	std::vector<std::string> GetModuleList(std::string process_name);
+    uintptr_t GetBaseDaddy(const std::string& module_name);
+    size_t GetBaseSize(const std::string& module_name);
 
-	/**
-	* \brief Gets the process information
-	* \return the process information
-	*/
-	VMMDLL_PROCESS_INFORMATION GetProcessInformation();
+    uintptr_t GetExportTableAddress(std::string import, std::string process, std::string module);
+    uintptr_t GetImportTableAddress(std::string import, std::string process, std::string module);
 
-	/**
-	* \brief Gets the process peb
-	* \return the process peb 
-	*/
-	PEB GetProcessPeb();
+    bool FixCr3();
+    bool DumpMemory(uintptr_t address, std::string path);
 
-	/**
-	* brief Gets the base address of the process
-	* @param module_name the name of the module
-	* @return the base address of the process
-	*/
-	size_t GetBaseDaddy(std::string module_name);
+    uint64_t FindSignature(
+        const char* signature,
+        uint64_t range_start,
+        uint64_t range_end,
+        int PID = 0,
+        bool useCache = false
+    );
 
-	/**
-	* brief Gets the base size of the process
-	* @param module_name the name of the module
-	* @return the base size of the process
-	*/
-	size_t GetBaseSize(std::string module_name);
+    bool WriteBufferEnsure(
+        uintptr_t address,
+        const void* buffer,
+        size_t size,
+        bool useCache = false
+    ) const;
 
-	/**
-	* brief Gets the export table address of the process
-	* @param import the name of the export
-	* @param process the name of the process
-	* @param module the name of the module that you wanna find the export in
-	* @return the export table address of the export
-	*/
-	uintptr_t GetExportTableAddress(std::string import, std::string process, std::string module);
+    bool Write(uintptr_t address, const void* buffer, size_t size) const;
+    bool Write(uintptr_t address, const void* buffer, size_t size, int pid) const;
 
-	/**
-	* brief Gets the import table address of the process
-	* @param import the name of the import
-	* @param process the name of the process
-	* @param module the name of the module that you wanna find the import in
-	* @return the import table address of the import
-	*/
-	uintptr_t GetImportTableAddress(std::string import, std::string process, std::string module);
+    template <typename T>
+    bool WriteValue(uintptr_t address, const T& value) const
+    {
+        static_assert(std::is_trivially_copyable_v<T>, "WriteValue<T> requires trivially copyable type");
 
-	/**
-	 * \brief This fixes the CR3 fuckery that EAC does.
-	 * It fixes it by iterating over all DTB's that exist within your system and looks for specific ones
-	 * that nolonger have a PID assigned to them, aka their pid is 0
-	 * it then puts it in a vector to later try each possible DTB to find the DTB of the process.
-	 * NOTE: Using FixCR3 requires you to have symsrv.dll, dbghelp.dll and info.db
-	 */
-	bool FixCr3();
+        if (!address)
+            return false;
 
-	/**
-	 * \brief Dumps the process memory at address (requires to be a valid PE Header) to the path
-	 * \param address the address to the PE Header(BaseAddress)
-	 * \param path the path where you wanna save dump to
-	 */
-	bool DumpMemory(uintptr_t address, std::string path);
+        return Write(address, &value, sizeof(T));
+    }
 
-	/*This part is where all memory operations are done, such as read, write.*/
+    bool Read(uintptr_t address, void* buffer, size_t size, bool useCache = false) const;
+    bool Read(uintptr_t address, void* buffer, size_t size, int pid, bool useCache = false) const;
 
-	/**
-	 * \brief Scans the process for the signature.
-	 * \param signature the signature example "48 ? ? ?"
-	 * \param range_start Region to start scan from 
-	 * \param range_end Region up to where it should scan
-	 * \param PID (OPTIONAL) where to read to?
-	 * \return address of signature
-	 */
-	uint64_t FindSignature(const char* signature, uint64_t range_start, uint64_t range_end, int PID = 0);
+    template <typename T>
+    [[nodiscard]] bool TryRead(uint64_t address, T& out, bool useCache = false) const
+    {
+        static_assert(std::is_trivially_copyable_v<T>, "TryRead<T> requires trivially copyable type");
 
-	bool WriteBufferEnsure(uintptr_t address, const void* buffer, size_t size) const;
+        out = {};
 
-	/**
-	 * \brief Writes memory to the process 
-	 * \param address The address to write to
-	 * \param buffer The buffer to write
-	 * \param size The size of the buffer
-	 * \return 
-	 */
-	bool Write(uintptr_t address, void* buffer, size_t size) const;
-	bool Write(uintptr_t address, void* buffer, size_t size, int pid) const;
+        if (!address)
+            return false;
 
-	/**
-	 * \brief Writes memory to the process using a template
-	 * \param address to write to
-	 * \param value the value you'll write to the address
-	 */
-	template <typename T>
-	void Write(void* address, T value)
-	{
-		Write(address, &value, sizeof(T));
-	}
+        return Read(address, &out, sizeof(T), useCache);
+    }
 
-	template <typename T>
-	void Write(uintptr_t address, T value)
-	{
-		Write(address, &value, sizeof(T));
-	}
+    template <typename T>
+    [[nodiscard]] std::optional<T> ReadOpt(uint64_t address, bool useCache = false) const
+    {
+        T value{};
 
-	/**
-	* brief Reads memory from the process
-	* @param address The address to read from
-	* @param buffer The buffer to read to
-	* @param size The size of the buffer
-	* @return true if successful, false if not.
-	*/
-	bool Read(uintptr_t address, void* buffer, size_t size) const;
-	bool Read(uintptr_t address, void* buffer, size_t size, int pid) const;
+        if (!TryRead(address, value, useCache))
+            return std::nullopt;
 
+        return value;
+    }
 
-	std::string readUnityString(ULONG addr, SIZE_T cb);
+    template <typename T>
+    [[nodiscard]] T ReadOr(uint64_t address, T fallback, bool useCache = false) const
+    {
+        T value{};
 
-	/**
-	* brief Reads memory from the process using a template
-	* @param address The address to read from
-	* @return the value read from the process
-	*/
-	template <typename T>
-	T Read(void* address)
-	{
-		T buffer { };
-		memset(&buffer, 0, sizeof(T));
-		Read(reinterpret_cast<uint64_t>(address), reinterpret_cast<void*>(&buffer), sizeof(T));
+        if (!TryRead(address, value, useCache))
+            return fallback;
 
-		return buffer;
-	}
+        return value;
+    }
 
-	template<typename T>
-	bool Read(uint64_t address, T& out) {
-		return Read(address, &out, sizeof(T));
-	}
+    template <typename T>
+    [[nodiscard]] T Read(uint64_t address, bool useCache = false) const
+    {
+        static_assert(std::is_trivially_copyable_v<T>, "Read<T> requires trivially copyable type");
 
-	template <typename T>
-	T Read(uint64_t address)
-	{
-		/*T buffer{};
-		if (!Read(address, buffer)) {
-			throw std::runtime_error("Memory::Read<T> failed at address 0x" + std::to_string(address));
-		}
-		return buffer;*/
-		return Read<T>(reinterpret_cast<void*>(address));
-	}
+        T value;
+        std::memset(&value, 0, sizeof(T));
 
-	template <typename T>
-	std::vector<T> read_vec(uint64_t address, size_t size)
-	{
-		std::vector<T> buffer(size);
-		for (size_t i = 0; i < size; i++)
-		{
-			Read(address + i * sizeof(T), reinterpret_cast<void*>(&buffer[i]), sizeof(T));
-		}
-		return buffer;
-	}
+        Read(address, &value, sizeof(T), useCache);
 
-	template <typename T>
-	std::vector<T> read_vec_new(uint64_t address, size_t size)
-	{
-		std::vector<T> buffer(size);
-		if (size > 0)
-		{
-			Read(address, buffer.data(), size * sizeof(T)); // Bulk read
-		}
-		return buffer;
-	}
+        return value;
+    }
 
-	/**
-	* brief Reads memory from the process using a template and pid
-	* @param address The address to read from
-	* @param pid The process id of the process
-	* @return the value read from the process
-	*/
-	template <typename T>
-	T Read(void* address, int pid)
-	{
-		T buffer { };
-		memset(&buffer, 0, sizeof(T));
-		Read(reinterpret_cast<uint64_t>(address), reinterpret_cast<void*>(&buffer), sizeof(T), pid);
+    template <typename T>
+    [[nodiscard]] T Read(void* address, bool useCache = false) const
+    {
+        return Read<T>(reinterpret_cast<uint64_t>(address), useCache);
+    }
 
-		return buffer;
-	}
+    template <typename T>
+    [[nodiscard]] std::vector<T> ReadVector(uint64_t address, size_t count, bool useCache = false) const
+    {
+        static_assert(std::is_trivially_copyable_v<T>, "ReadVector<T> requires trivially copyable type");
 
-	template <typename T>
-	T Read(uint64_t address, int pid)
-	{
-		return Read<T>(reinterpret_cast<void*>(address), pid);
-	}
+        if (!address || count == 0)
+            return {};
 
-	/**
-	* brief Reads a chain of offsets from the address
-	* @param address The address to read from
-	* @param a vector of offset values to read through
-	* @return the value read from the chain
-	*/
-	uint64_t ReadChain(uint64_t base, const std::vector<uint64_t>& offsets)
-	{
-		uint64_t result = Read<uint64_t>(base + offsets.at(0));
-		for (int i = 1; i < offsets.size(); i++) result = Read<uint64_t>(result + offsets.at(i));
-		return result;
-	}
+        constexpr size_t MAX_VECTOR_COUNT = 1'000'000;
 
-	
-	std::string readUTF8String(ULONG64 ReadAddress, SIZE_T size);
-	std::string readString(uint64_t ReadAddress, size_t size);
-	std::wstring readWideString(uintptr_t address, SIZE_T size);
-	std::string readUnicodeString(uintptr_t address, SIZE_T size);
+        if (count > MAX_VECTOR_COUNT)
+            return {};
 
-	/**
-	 * \brief Create a scatter handle, this is used for scatter read/write requests
-	 * \return Scatter handle
-	 */
-	VMMDLL_SCATTER_HANDLE CreateScatterHandle() const;
-	VMMDLL_SCATTER_HANDLE CreateScatterHandle(int pid) const;
+        if (count > (std::numeric_limits<size_t>::max)() / sizeof(T))
+            return {};
 
-	/**
-	 * \brief Closes the scatter handle
-	 * \param handle
-	 */
-	void CloseScatterHandle(VMMDLL_SCATTER_HANDLE handle);
+        std::vector<T> buffer(count);
+        const size_t bytes = count * sizeof(T);
 
-	/**
-	 * \brief Adds a scatter read/write request to the handle
-	 * \param handle the handle
-	 * \param address the address to read/write to 
-	 * \param buffer the buffer to read/write to
-	 * \param size the size of buffer
-	 */
-	void AddScatterReadRequest(VMMDLL_SCATTER_HANDLE handle, uint64_t address, void* buffer, size_t size);
-	bool AddScatterWriteRequest(VMMDLL_SCATTER_HANDLE handle, uint64_t address, void* buffer, size_t size);
+        if (!Read(address, buffer.data(), bytes, useCache))
+            return {};
 
-	/**
-	 * \brief Executes all prepared scatter requests, note if you created a scatter handle with a pid
-	 * you'll need to specify the pid in the execute function. so we can clear the scatters from the handle.
-	 * \param handle 
-	 * \param pid 
-	 */
-	void ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid = 0);
-	bool ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid = 0);
+        return buffer;
+    }
 
-	auto IsValidPointer(uintptr_t pointer) -> bool;
+    template <typename T>
+    [[nodiscard]] std::vector<T> read_vec_new(uint64_t address, size_t count, bool useCache = false) const
+    {
+        return ReadVector<T>(address, count, useCache);
+    }
 
-	void doDMAConnect();
+    template <typename T>
+    [[nodiscard]] std::vector<T> read_vec(uint64_t address, size_t count, bool useCache = false) const
+    {
+        return ReadVector<T>(address, count, useCache);
+    }
 
-	ULONG64 GET_MonoModuleAddress(char* module_name);
+    [[nodiscard]] bool ReadChain(
+        uint64_t base,
+        const std::vector<uint64_t>& offsets,
+        uint64_t& out,
+        bool useCache = false
+    ) const;
 
-	int FindSignatureOffset(const std::vector<uint8_t>& array, const std::vector<uint8_t>& signature, const std::string& mask);
+    [[nodiscard]] uint64_t ReadChain(
+        uint64_t base,
+        const std::vector<uint64_t>& offsets,
+        bool useCache = false
+    ) const
+    {
+        uint64_t out = 0;
+        ReadChain(base, offsets, out, useCache);
+        return out;
+    }
 
-	bool quickRefresh();
+    std::string readUnityString(uintptr_t address, SIZE_T maxChars = 128, bool useCache = false);
+    std::string readUTF8String(uint64_t address, SIZE_T size, bool useCache = false);
+    std::string readString(uint64_t address, size_t size, bool useCache = false);
+    std::wstring readWideString(uintptr_t address, SIZE_T size, bool useCache = false);
+    std::string readUnicodeString(uintptr_t address, SIZE_T size, bool useCache = false);
+
+    VMMDLL_SCATTER_HANDLE CreateScatterHandle(bool useCache = false) const;
+    VMMDLL_SCATTER_HANDLE CreateScatterHandle(int pid, bool useCache = false) const;
+
+    void CloseScatterHandle(VMMDLL_SCATTER_HANDLE handle);
+
+    bool AddScatterReadRequest(
+        VMMDLL_SCATTER_HANDLE handle,
+        uint64_t address,
+        void* buffer,
+        size_t size
+    );
+
+    bool AddScatterWriteRequest(
+        VMMDLL_SCATTER_HANDLE handle,
+        uint64_t address,
+        const void* buffer,
+        size_t size
+    );
+
+    bool ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid = 0, bool useCache = false);
+    bool ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid = 0, bool useCache = false);
+
+    [[nodiscard]] static bool IsValidPointer(uintptr_t pointer)
+    {
+        return pointer > 0x10000 && pointer < 0x0000800000000000;
+    }
+
+    bool quickRefresh();
 
 
-	/*the FPGA handle*/
-	VMM_HANDLE vHandle;
+    ULONG64 GET_MonoModuleAddress(char* module_name);
 
-	uint64_t base;
-	uint64_t baseSize;
+    int FindSignatureOffset(
+        const std::vector<uint8_t>& array,
+        const std::vector<uint8_t>& signature,
+        const std::string& mask = ""
+    );
 
-	static int reads;
-	static int writes;
-	static int dataSize;
+    VMM_HANDLE vHandle = nullptr;
+
+    uint64_t base = 0;
+    uint64_t baseSize = 0;
+
+    static inline std::atomic<uint64_t> reads{ 0 };
+    static inline std::atomic<uint64_t> writes{ 0 };
+    static inline std::atomic<uint64_t> dataSize{ 0 };
 };
 
 inline Memory mem;
