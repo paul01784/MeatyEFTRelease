@@ -1065,7 +1065,7 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache) c
 			<< " read=" << readSize
 			<< " useCache=" << std::boolalpha << useCache;
 
-		MemoryLogError(oss.str());
+		//MemoryLogError(oss.str());
 		return false;
 	}
 
@@ -1125,7 +1125,7 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool us
 			<< " read=" << readSize
 			<< " useCache=" << std::boolalpha << useCache;
 
-		MemoryLogError(oss.str());
+		//MemoryLogError(oss.str());
 		return false;
 	}
 
@@ -1281,28 +1281,28 @@ bool Memory::ReadChain(
 
 		if (!IsValidPointer(readAddress))
 		{
-			MemoryLogError(
-				"ReadChain invalid read address " + Hex64(readAddress) +
-				" index=" + std::to_string(i)
-			);
+			//MemoryLogError(
+			//	"ReadChain invalid read address " + Hex64(readAddress) +
+			//	" index=" + std::to_string(i)
+			//);
 			return false;
 		}
 
 		if (!TryRead(readAddress, current, useCache))
 		{
-			MemoryLogError(
-				"ReadChain failed at " + Hex64(readAddress) +
-				" index=" + std::to_string(i)
-			);
+			//MemoryLogError(
+			//	"ReadChain failed at " + Hex64(readAddress) +
+			//	" index=" + std::to_string(i)
+			//);
 			return false;
 		}
 
 		if (i + 1 < offsets.size() && !IsValidPointer(current))
 		{
-			MemoryLogError(
-				"ReadChain invalid pointer result " + Hex64(current) +
-				" index=" + std::to_string(i)
-			);
+			//MemoryLogError(
+			//	"ReadChain invalid pointer result " + Hex64(current) +
+			//	" index=" + std::to_string(i)
+			//);
 			return false;
 		}
 	}

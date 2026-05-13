@@ -64,8 +64,8 @@ struct gameGlobals {
 };
 
 struct appGlobals {
-    static bool runRadar;
-    static bool runThreads;
+    static std::atomic_bool runRadar;
+    static std::atomic_bool runThreads;
 };
 
 struct memoryGlobals {

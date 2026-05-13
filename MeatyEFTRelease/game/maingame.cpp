@@ -63,8 +63,8 @@ std::array<uint64_t, 2> MainGame::tagged_objects;
 
 void MainGame::clearCache() {
 
-    appGlobals::runRadar = FALSE;
-    appGlobals::runThreads = FALSE;
+    appGlobals::runThreads.store(false, std::memory_order_release);
+    appGlobals::runRadar.store(false, std::memory_order_release);
 
     Sleep(500);
 
@@ -107,22 +107,35 @@ static unsigned short utf8_to_utf166(const char* val) {
 
 bool MainGame::checkIfRaidStarted()
 {
-    if (!Utils::valid_pointer(mainGame.localPlayerPtr) ||
-        !Utils::valid_pointer(mainGame.localPlayerHands))
+    if (!Utils::valid_pointer(mainGame.localPlayerPtr))
         return false;
 
-    // Read hands controller class name
-    const std::string className = ReadName(mainGame.localPlayerHands, 64);
-
-    const bool raidStarted =
-        !IsNullOrWhiteSpace(className) &&
-        className != "ClientEmptyHandsController";
-
-    if (!raidStarted)
+    if (!Utils::valid_pointer(mainGame.localPlayerHands))
         return false;
-    else
-        return true;
 
+    std::string className;
+
+    try
+    {
+        className = ReadName(mainGame.localPlayerHands, 64);
+    }
+    catch (...)
+    {
+        return false;
+    }
+
+    if (IsNullOrWhiteSpace(className))
+        return false;
+
+    //not in raid yet / not fully spawned.
+    if (className == "ClientEmptyHandsController")
+        return false;
+
+    //safer if the name ever includes namespace/prefix/suffix.
+    if (className.find("EmptyHandsController") != std::string::npos)
+        return false;
+
+    return true;
 }
 
 void MainGame::updateLocalPlayerPtr()
@@ -130,40 +143,151 @@ void MainGame::updateLocalPlayerPtr()
     mainGame.localPlayerPtr = mem.Read<uint64_t>(mainGame.localGameWorld + sdk::ClientLocalGameWorld::MainPlayer);
 }
 
-void MainGame::updatePlayerList()
+bool MainGame::updatePlayerList()
 {
+    // Do not leave old player list data active if this update fails.
+    mainGame.registeredPlayers = 0;
+    mainGame.registeredPlayersList = 0;
+    mainGame.registeredPlayersCount = 0;
 
-    updateLocalPlayerPtr();
-
-    mainGame.registeredPlayers =
-        mem.Read<uint64_t>(mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers);
-
-    if (!Utils::valid_pointer(mainGame.registeredPlayers))
-        return;
-
-    mainGame.registeredPlayersList =
-        mem.Read<uint64_t>(mainGame.registeredPlayers + 0x10);
-
-    if (!Utils::valid_pointer(mainGame.registeredPlayersList))
-        return;
-
-    mainGame.registeredPlayersCount =
-        mem.Read<int>(mainGame.registeredPlayers + 0x18);
-
-    if (mainGame.registeredPlayersCount <= 0)
-        return;
-
-    if (mainGame.registeredPlayersCount > std::size(mainGame.player_buffer))
-        mainGame.registeredPlayersCount = std::size(mainGame.player_buffer);
-
-    std::fill(std::begin(mainGame.player_buffer),
+    std::fill(
+        std::begin(mainGame.player_buffer),
         std::end(mainGame.player_buffer),
-        0);
+        0
+    );
 
-    mem.Read(
-        mainGame.registeredPlayersList + 0x20,
-        mainGame.player_buffer,
-        sizeof(uint64_t) * mainGame.registeredPlayersCount);
+    if (!mem.vHandle)
+        return false;
+
+    if (!Utils::valid_pointer(mainGame.localGameWorld))
+        return false;
+
+    try
+    {
+        updateLocalPlayerPtr();
+    }
+    catch (...)
+    {
+        LOGS.logError("[PLAYERS][LIST] updateLocalPlayerPtr failed");
+        return false;
+    }
+
+    auto TryReadValue = [&](uint64_t address, auto& out) -> bool
+        {
+            using T = std::decay_t<decltype(out)>;
+
+            out = {};
+
+            if (!Utils::valid_pointer(address))
+                return false;
+
+            try
+            {
+                return mem.Read(address, &out, sizeof(T));
+            }
+            catch (...)
+            {
+                return false;
+            }
+        };
+
+    auto TryReadBuffer = [&](uint64_t address, void* out, size_t size) -> bool
+        {
+            if (!Utils::valid_pointer(address))
+                return false;
+
+            if (!out || size == 0)
+                return false;
+
+            try
+            {
+                return mem.Read(address, out, size);
+            }
+            catch (...)
+            {
+                return false;
+            }
+        };
+
+    uint64_t registeredPlayers = 0;
+    uint64_t registeredPlayersList = 0;
+    int registeredPlayersCount = 0;
+
+    if (!TryReadValue(
+        mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers,
+        registeredPlayers))
+    {
+        return false;
+    }
+
+    if (!Utils::valid_pointer(registeredPlayers))
+        return false;
+
+    if (!TryReadValue(registeredPlayers + 0x10, registeredPlayersList))
+        return false;
+
+    if (!Utils::valid_pointer(registeredPlayersList))
+        return false;
+
+    if (!TryReadValue(registeredPlayers + 0x18, registeredPlayersCount))
+        return false;
+
+    if (registeredPlayersCount <= 0)
+        return false;
+
+    constexpr int MAX_REASONABLE_REGISTERED_PLAYERS = 512;
+
+    if (registeredPlayersCount > MAX_REASONABLE_REGISTERED_PLAYERS)
+    {
+        LOGS.logError("[PLAYERS][LIST] registeredPlayersCount too large, skipping update");
+        return false;
+    }
+
+    const int bufferCapacity =
+        static_cast<int>(std::size(mainGame.player_buffer));
+
+    const int readCount =
+        std::min(registeredPlayersCount, bufferCapacity);
+
+    if (readCount <= 0)
+        return false;
+
+    std::vector<uint64_t> tempBuffer;
+    tempBuffer.resize(static_cast<size_t>(readCount), 0);
+
+    const uint64_t playerArrayStart = registeredPlayersList + 0x20;
+
+    if (!TryReadBuffer(
+        playerArrayStart,
+        tempBuffer.data(),
+        sizeof(uint64_t) * static_cast<size_t>(readCount)))
+    {
+        return false;
+    }
+
+    //valid player pointers into the real buffer.
+    int validCount = 0;
+
+    for (int i = 0; i < readCount; ++i)
+    {
+        const uint64_t player = tempBuffer[static_cast<size_t>(i)];
+
+        if (!Utils::valid_pointer(player))
+            continue;
+
+        mainGame.player_buffer[validCount] = player;
+        validCount++;
+    }
+
+    if (validCount <= 0)
+        return false;
+
+    //commit final values after the whole read succeeded.
+    mainGame.registeredPlayers = registeredPlayers;
+    mainGame.registeredPlayersList = registeredPlayersList;
+    mainGame.registeredPlayersCount = validCount;
+
+    return true;
 }
 
 void MainGame::getPlayerListDetails()
@@ -426,7 +550,7 @@ void MainGame::mainThread() {
 
         bool once = false;
         TaskManager manager;
-        while (appGlobals::runRadar)
+        while (appGlobals::runRadar.load(std::memory_order_acquire))
         {
             if (!once)
             {
@@ -490,26 +614,140 @@ void MainGame::raidMonitorTask()
 {
     try
     {
-        // we need to read regplayer list count and if we have 0 players then we are out of raid and end threads! clean cache etc
-        int registeredPlayersCount = mem.Read<int>(mainGame.registeredPlayers + 0x18);
+        if (!mem.vHandle)
+            return;
 
-        if (registeredPlayersCount == 0 && Utils::valid_pointer(mainGame.registeredPlayersList)) {
-            //end radar and clear cache
-            appGlobals::runThreads = false;
-            Sleep(500);
-            appGlobals::runRadar = false;
-            Sleep(500);
-            
+        static int zeroCountTicks = 0;
+        static int invalidListTicks = 0;
+        static bool raidWasSeenActive = false;
+
+        auto TryReadValue = [&](uint64_t address, auto& out) -> bool
+            {
+                using T = std::decay_t<decltype(out)>;
+
+                out = {};
+
+                if (!Utils::valid_pointer(address))
+                    return false;
+
+                try
+                {
+                    return mem.Read(address, &out, sizeof(T));
+                }
+                catch (...)
+                {
+                    return false;
+                }
+            };
+
+        auto TryReadPtr = [&](uint64_t address, uint64_t& out) -> bool
+            {
+                out = 0;
+
+                if (!TryReadValue(address, out))
+                    return false;
+
+                return Utils::valid_pointer(out);
+            };
+
+        if (!Utils::valid_pointer(mainGame.localGameWorld))
+        {
+            if (raidWasSeenActive)
+            {
+                invalidListTicks++;
+
+                if (invalidListTicks >= 3)
+                {
+                    LOGS.logInfo("[RAID] localGameWorld invalid after raid was active. Requesting shutdown.");
+
+                    appGlobals::runThreads.store(false, std::memory_order_release);
+                    appGlobals::runRadar.store(false, std::memory_order_release);
+
+                    raidWasSeenActive = false;
+                    zeroCountTicks = 0;
+                    invalidListTicks = 0;
+                }
+            }
+
+            return;
         }
 
+        uint64_t registeredPlayers = 0;
+        uint64_t registeredPlayersList = 0;
+        int registeredPlayersCount = 0;
+
+        if (!TryReadPtr(
+            mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers,
+            registeredPlayers))
+        {
+            if (raidWasSeenActive)
+                invalidListTicks++;
+
+            return;
+        }
+
+        if (!TryReadPtr(registeredPlayers + 0x10, registeredPlayersList))
+        {
+            if (raidWasSeenActive)
+                invalidListTicks++;
+
+            return;
+        }
+
+        if (!TryReadValue(registeredPlayers + 0x18, registeredPlayersCount))
+        {
+            if (raidWasSeenActive)
+                invalidListTicks++;
+
+            return;
+        }
+
+        constexpr int MAX_REASONABLE_REGISTERED_PLAYERS = 512;
+
+        if (registeredPlayersCount < 0 || registeredPlayersCount > MAX_REASONABLE_REGISTERED_PLAYERS)
+        {
+            if (raidWasSeenActive)
+                invalidListTicks++;
+
+            return;
+        }
+
+        // Raid/player list is healthy again.
+        invalidListTicks = 0;
+
+        if (registeredPlayersCount > 0)
+        {
+            raidWasSeenActive = true;
+            zeroCountTicks = 0;
+            return;
+        }
+
+        // Count is genuinely zero.
+        if (raidWasSeenActive && registeredPlayersCount == 0)
+        {
+            zeroCountTicks++;
+
+            // Debounce it so one bad read/tick does not kill the raid.
+            if (zeroCountTicks >= 2)
+            {
+                LOGS.logInfo("[RAID] RegisteredPlayers count is 0. Requesting shutdown.");
+
+                appGlobals::runThreads.store(false, std::memory_order_release);
+                appGlobals::runRadar.store(false, std::memory_order_release);
+
+                raidWasSeenActive = false;
+                zeroCountTicks = 0;
+                invalidListTicks = 0;
+            }
+        }
     }
-    catch (const std::exception& e) {
+    catch (const std::exception& e)
+    {
         LOGS.logError("Exception caught in raidMonitorTask: " + std::string(e.what()) + ". Retrying...");
-
     }
-    catch (...) {
+    catch (...)
+    {
         LOGS.logError("Unknown exception caught in raidMonitorTask. Retrying...");
-
     }
 }
 

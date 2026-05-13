@@ -2,7 +2,7 @@
 #include "app/globals.h"
 
 //define globals
-std::string globals::appVersion = "1.0.3";
+std::string globals::appVersion = "1.0.4";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -52,8 +52,8 @@ bool gameGlobals::inHideout = false;
 
 
 // appGlobals struct
-bool appGlobals::runRadar = false;
-bool appGlobals::runThreads = false;
+std::atomic_bool appGlobals::runRadar = false;
+std::atomic_bool appGlobals::runThreads = false;
 
 // memoryGlobals struct
 bool memoryGlobals::dmaConnected = false;

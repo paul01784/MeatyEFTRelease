@@ -340,6 +340,8 @@ private:
 
 	void readDogTagComponent(PlayerCache& players, bool force = false);
 
+	std::optional<PlayerCache> buildEntity(const uint64_t instance, bool isLocal);
+
 	void addEntity(uint64_t instance, bool isLocal);
 	void tryFindBTR();
 	void updateEntity();

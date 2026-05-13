@@ -56,8 +56,8 @@ void DrawRadarSubText(int x, int y, ImVec4 color, const char* str)
 void drawPlayers()
 {
 
-    std::vector<PlayerCache>& cache = players.getCache();
-    for (auto& player : cache)
+    std::vector<PlayerCache> cache = players.getCache();
+    for (const auto& player : cache)
     {
         if (!Utils::valid_pointer(player.instance))
             continue;
@@ -367,20 +367,29 @@ void drawWidgetPlayers()
         return;
 
     const std::string windowNameMain = "Active Players";
-    static ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
+    static ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize;
 
-    std::vector<PlayerCache>& playerCache = players.getCache();
-    std::vector<PlayerGroups>& grouplist = players.getGroupCache();
+    std::vector<PlayerCache> playerSnapshot;
 
-    // Count visible rows first so window height can auto-size
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+        playerSnapshot = players.getCache();
+    }
+
+    // Count visible rows from snapshot
     int visibleRows = 0;
-    for (const auto& cache : playerCache)
+
+    for (const auto& cache : playerSnapshot)
     {
         if (cache.isAi && !cache.isBoss)
             continue;
+
         if (cache.isDead || cache.hasExfiled)
             continue;
-        if (cache.isLocal)
+
+        if (!Utils::valid_pointer(cache.instance))
             continue;
 
         visibleRows++;
@@ -399,7 +408,12 @@ void drawWidgetPlayers()
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetPlayers, flags))
     {
-        // 9 columns, not 8
+        // Persistent edit buffers per player instance
+        static std::unordered_map<uint64_t, std::array<char, 16>> groupEditBuffers;
+
+        // Edits to apply after rendering
+        std::vector<std::pair<uint64_t, std::string>> pendingGroupEdits;
+
         if (ImGui::BeginTable("##players", 10, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
         {
             ImGui::TableSetupColumn("Side", ImGuiTableColumnFlags_WidthFixed, 35.0f);
@@ -414,7 +428,7 @@ void drawWidgetPlayers()
             ImGui::TableSetupColumn("Distance", ImGuiTableColumnFlags_WidthFixed, 60.0f);
             ImGui::TableHeadersRow();
 
-            for (auto& cache : playerCache)
+            for (const auto& cache : playerSnapshot)
             {
                 if (cache.isAi && !cache.isBoss)
                     continue;
@@ -422,7 +436,7 @@ void drawWidgetPlayers()
                 if (cache.isDead || cache.hasExfiled)
                     continue;
 
-                if (cache.isLocal)
+                if (!Utils::valid_pointer(cache.instance))
                     continue;
 
                 ImGui::TableNextRow();
@@ -431,37 +445,97 @@ void drawWidgetPlayers()
                     cache.location.y == 0.f ||
                     cache.location.z == 0.f)
                 {
-                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(255, 0, 0, 255));
+                    ImGui::TableSetBgColor(
+                        ImGuiTableBgTarget_RowBg0,
+                        IM_COL32(255, 0, 0, 255)
+                    );
                 }
 
                 // Side
                 ImGui::TableSetColumnIndex(0);
+
                 if (!cache.side.empty())
                     ImGui::Text("%c", cache.side[0]);
                 else
                     ImGui::Text("?");
 
-                // Group
+                // Editable Group ID
                 ImGui::TableSetColumnIndex(1);
 
-                if (!cache.groupId.empty())
+                auto& groupBuffer = groupEditBuffers[cache.instance];
+
+                const std::string currentGroup = cache.groupId;
+
+                const std::string inputId =
+                    "##group_" + std::to_string(cache.instance);
+
+                const ImGuiID imguiInputId = ImGui::GetID(inputId.c_str());
+
+                const bool inputActive =
+                    ImGui::GetActiveID() == imguiInputId;
+
+                const std::string bufferText = groupBuffer.data();
+
+                // Keep the input box synced with the actual group unless editing.
+                if (!inputActive && bufferText != currentGroup)
                 {
-                    ImGui::Text("%s", cache.groupId.c_str());
+                    std::snprintf(
+                        groupBuffer.data(),
+                        groupBuffer.size(),
+                        "%s",
+                        currentGroup.c_str()
+                    );
                 }
-                else
+
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2.0f, 0.0f));
+                ImGui::SetNextItemWidth(-FLT_MIN);
+
+                const bool enterPressed = ImGui::InputText(
+                    inputId.c_str(),
+                    groupBuffer.data(),
+                    groupBuffer.size(),
+                    ImGuiInputTextFlags_EnterReturnsTrue |
+                    ImGuiInputTextFlags_AutoSelectAll
+                );
+
+                const bool finishedEdit = ImGui::IsItemDeactivatedAfterEdit();
+
+                ImGui::PopStyleVar();
+
+                if (enterPressed || finishedEdit)
                 {
-                    ImGui::Text("-");
+                    std::string newGroup = TrimEFT(groupBuffer.data());
+
+                    // Allow "-" to clear group
+                    if (newGroup == "-")
+                        newGroup.clear();
+
+                    if (newGroup != cache.groupId)
+                    {
+                        pendingGroupEdits.emplace_back(cache.instance, newGroup);
+                    }
+                }
+
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted("Edit group ID");
+                    ImGui::TextUnformatted("Blank or '-' clears group");
+                    ImGui::EndTooltip();
                 }
 
                 // Name
                 ImGui::TableSetColumnIndex(2);
-                ImGui::TextUnformatted(cache.name.c_str());
 
-                if (ImGui::IsItemHovered() && cache.profileId != "")
+                if (cache.isLocal)
+                    ImGui::TextUnformatted("LocalPlayer");
+                else
+                    ImGui::TextUnformatted(cache.name.c_str());
+
+                if (ImGui::IsItemHovered() && !cache.profileId.empty())
                 {
                     ImGui::BeginTooltip();
                     ImGui::Text("Memory ProfileID: %s", cache.profileId.c_str());
-
                     ImGui::EndTooltip();
                 }
 
@@ -471,21 +545,31 @@ void drawWidgetPlayers()
 
                 // LvL
                 ImGui::TableSetColumnIndex(4);
+
                 if (cache.isPlayer && !cache.isPlayerScav)
                     ImGui::Text("%d", cache.DT_lvl);
+                else
+                    ImGui::TextUnformatted("-");
 
                 // KD
                 ImGui::TableSetColumnIndex(5);
+
                 if (cache.isPlayer && !cache.isPlayerScav)
                     ImGui::Text("%d(%.2f)", cache.kd, cache.pkd);
+                else
+                    ImGui::TextUnformatted("-");
 
                 // Hours
                 ImGui::TableSetColumnIndex(6);
+
                 if (cache.isPlayer && !cache.isPlayerScav)
                     ImGui::Text("%d", cache.hours);
+                else
+                    ImGui::TextUnformatted("-");
 
                 // Value
                 ImGui::TableSetColumnIndex(7);
+
                 {
                     char valueText[16]{};
                     formatValue(cache.playerValue, valueText);
@@ -494,15 +578,23 @@ void drawWidgetPlayers()
 
                 // Container
                 ImGui::TableSetColumnIndex(8);
+
+                bool foundContainer = false;
+
                 for (const auto& slot : cache._slots)
                 {
                     std::string slotn = TrimEFT(slot.name);
+
                     if (slotn == "SecuredContainer")
                     {
                         ImGui::TextUnformatted(slot.equipName.c_str());
+                        foundContainer = true;
                         break;
                     }
                 }
+
+                if (!foundContainer)
+                    ImGui::TextUnformatted("-");
 
                 // Distance
                 ImGui::TableSetColumnIndex(9);
@@ -510,6 +602,51 @@ void drawWidgetPlayers()
             }
 
             ImGui::EndTable();
+        }
+
+        if (!pendingGroupEdits.empty())
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+
+            std::vector<PlayerCache>& liveCache = players.getCache();
+
+            for (const auto& [instance, newGroupId] : pendingGroupEdits)
+            {
+                auto it = std::find_if(
+                    liveCache.begin(),
+                    liveCache.end(),
+                    [&](const PlayerCache& player)
+                    {
+                        return player.instance == instance;
+                    });
+
+                if (it == liveCache.end())
+                    continue;
+
+                if (it->isDead || it->hasExfiled)
+                    continue;
+
+                it->groupId = newGroupId;
+
+                // If editing local player's group, sync mainGame.localGroupId.
+                if (it->isLocal || it->instance == mainGame.localPlayerPtr)
+                {
+                    if (newGroupId.empty() || newGroupId == "0")
+                        mainGame.localGroupId.clear();
+                    else
+                        mainGame.localGroupId = newGroupId;
+                }
+
+                std::ostringstream ss;
+                ss << "[PLAYERS][GROUP EDIT] "
+                    << it->name
+                    << " instance: 0x"
+                    << std::hex << it->instance
+                    << " groupId: "
+                    << (newGroupId.empty() ? "none" : newGroupId);
+
+                LOGS.logInfo(ss.str());
+            }
         }
     }
 

@@ -14,7 +14,7 @@ void TaskManager::run() {
     // Initialize the previous time
     previousTime = std::chrono::high_resolution_clock::now();
 
-    while (appGlobals::runThreads) {
+    while (appGlobals::runThreads.load(std::memory_order_acquire)) {
         try
         {
             // Calculate delta time

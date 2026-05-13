@@ -43,7 +43,7 @@ public:
 	void mainThread();
 	bool checkIfRaidStarted();
 	void updateLocalPlayerPtr();
-	void updatePlayerList();
+	bool updatePlayerList();
 	void getPlayerListDetails();
 	void getGameWorldDetails();
 

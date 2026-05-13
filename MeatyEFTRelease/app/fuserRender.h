@@ -1010,7 +1010,7 @@ namespace fuserRender
 
                     activeScene = true;
                 }
-                else if (appGlobals::runRadar)
+                else if (appGlobals::runRadar.load(std::memory_order_acquire))
                 {
                     RenderMainScene();
                     activeScene = true;

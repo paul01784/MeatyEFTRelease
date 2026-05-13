@@ -3014,7 +3014,7 @@ static void renderMainScreen()
         {
             Text = "Waiting for EFT Process";
         }
-        if (memoryGlobals::dmaConnected && memoryGlobals::processFound && !appGlobals::runRadar)
+        if (memoryGlobals::dmaConnected && memoryGlobals::processFound && !appGlobals::runRadar.load(std::memory_order_acquire))
         {
 
             if (gameGlobals::inHideout)
@@ -3026,7 +3026,7 @@ static void renderMainScreen()
 
 
         //display text if not in raid or runRadar is not set true
-        if (!appGlobals::runRadar)
+        if (!appGlobals::runRadar.load(std::memory_order_acquire))
         {
             ImVec2 centerScreen = viewport->GetWorkCenter();
 

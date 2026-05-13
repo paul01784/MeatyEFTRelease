@@ -310,8 +310,14 @@ void Players::boneTask()
         if (!mem.vHandle) return;
         if (!Utils::valid_pointer(mainGame.localPlayerPtr)) return;
 
-        std::lock_guard<std::mutex> lock(playerMutex);
-        auto& cache = players.getCache();
+        std::unique_lock<std::mutex> lock(playerMutex, std::try_to_lock);
+
+        if (!lock.owns_lock())
+        {
+            return;
+        }
+
+        std::vector<PlayerCache>& cache = players.getCache();
         if (cache.empty()) return;
 
         struct ScatterGuard {
@@ -631,61 +637,138 @@ glm::vec3 PlayerCache::GetTransformPosition(int boneIndex)
 
 void Players::playersTask()
 {
+    static int failedPlayerListFrames = 0;
+
     try
     {
-        if (!mem.vHandle) {
+        if (!mem.vHandle)
+            return;
+
+        const bool playerListUpdated = mainGame.updatePlayerList();
+
+        if (!playerListUpdated)
+        {
+            failedPlayerListFrames++;
+
+            if (failedPlayerListFrames > 60)
+            {
+                std::lock_guard<std::mutex> lock(playerMutex);
+
+                playerCache.clear();
+
+                mainGame.localPlayerPtr = 0;
+                mainGame.localPlayerHands = 0;
+                mainGame.localplayerProfile = 0;
+                mainGame.localGroupId.clear();
+                mainGame.localIsScoped = false;
+
+                groupIDSet = false;
+                failedPlayerListFrames = 0;
+
+                LOGS.logInfo("[PLAYERS] Cleared player cache after repeated player-list failures");
+            }
+
             return;
         }
-        std::lock_guard<std::mutex> lock(playerMutex);
 
-        mainGame.updatePlayerList();
+        failedPlayerListFrames = 0;
 
-        // Proccess registered raw player buffer fetched every run
+        // Copy current registered player list locally
+        std::vector<uint64_t> registeredPlayers;
+        registeredPlayers.reserve(mainGame.registeredPlayersCount);
+
         for (int i = 0; i < mainGame.registeredPlayersCount; i++)
         {
-            uint64_t currentPlayer = mainGame.player_buffer[i];
+            const uint64_t currentPlayer = mainGame.player_buffer[i];
 
-            if (!Utils::valid_pointer(currentPlayer))
-                continue;
+            if (Utils::valid_pointer(currentPlayer))
+                registeredPlayers.emplace_back(currentPlayer);
+        }
 
-            bool isLocal = false;
-            //local player
-            if (currentPlayer == mainGame.localPlayerPtr) {
-                isLocal = true;
-            }
+        if (registeredPlayers.empty())
+            return;
 
-            // Check playerCache for entry and add if not found
-            
-            std::vector<PlayerCache>& cache = players.getCache();
+        // Snapshot existing cache instances under short lock
+        std::unordered_set<uint64_t> existingInstances;
 
-            auto it = std::find_if(cache.begin(), cache.end(),
-                [currentPlayer](const PlayerCache& cachePlayer) {
-                    return cachePlayer.instance == currentPlayer;
-                });
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
 
-            if (it == cache.end()) { 
-                addEntity(currentPlayer, isLocal);
+            existingInstances.reserve(playerCache.size());
+
+            for (const auto& cachedPlayer : playerCache)
+            {
+                if (Utils::valid_pointer(cachedPlayer.instance))
+                    existingInstances.insert(cachedPlayer.instance);
             }
         }
 
-        // Try find BTR
-        tryFindBTR();
+        // Build new entities OUTSIDE the lock
+        // This prevents boneTask from being blocked by addEntity.
+        std::vector<PlayerCache> pendingNewEntities;
 
-        // Update all cachePlayer data
-        updateEntity();
+        for (const uint64_t currentPlayer : registeredPlayers)
+        {
+            if (existingInstances.find(currentPlayer) != existingInstances.end())
+                continue;
 
-        //check exfil players
-        checkExfil();
+            const bool isLocal = currentPlayer == mainGame.localPlayerPtr;
 
-        //check and assign groups based on distance between players that DONT have a group ID set ( Solo people will have GROUP 0, unset players will be blank!)
-        checkGroupIDs();
+            auto builtEntity = buildEntity(currentPlayer, isLocal);
 
-        
+            if (builtEntity.has_value())
+            {
+                pendingNewEntities.emplace_back(std::move(*builtEntity));
+            }
+        }
+
+        // Append new entities under short lock
+        // Recheck duplicates because cache may have changed.
+        if (!pendingNewEntities.empty())
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+
+            for (auto& entity : pendingNewEntities)
+            {
+                auto it = std::find_if(
+                    playerCache.begin(),
+                    playerCache.end(),
+                    [&](const PlayerCache& cachedPlayer)
+                    {
+                        return cachedPlayer.instance == entity.instance;
+                    });
+
+                if (it != playerCache.end())
+                    continue;
+
+                std::ostringstream ss;
+                ss << "[PLAYERS][INIT] Adding player : 0x"
+                    << std::hex << entity.instance
+                    << " className : " << entity.className
+                    << " name : " << entity.name;
+
+                LOGS.logInfo(ss.str());
+
+                playerCache.emplace_back(std::move(entity));
+            }
+        }
+
+        // Normal update pass
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+
+            tryFindBTR();
+            updateEntity();
+            checkExfil();
+            checkGroupIDs();
+        }
     }
-    catch (const std::exception& e) {
+    catch (const std::exception& e)
+    {
         LOGS.logError("Exception caught in playersTask: " + std::string(e.what()) + ". Retrying...");
     }
-    catch (...) {
+    catch (...)
+    {
         LOGS.logError("Unknown exception caught in playersTask. Retrying...");
     }
 }
@@ -738,26 +821,148 @@ AIRole GetAIRoleInfo(const std::string& voiceLine)
     return { voiceLine, PlayerType::AIBoss };
 }
 
-void Players::addEntity(const uint64_t instance, bool isLocal = false) {
+std::optional<PlayerCache> Players::buildEntity(const uint64_t instance, bool isLocal)
+{
+    if (!mem.vHandle)
+        return std::nullopt;
 
     if (!Utils::valid_pointer(instance))
-        return;
+        return std::nullopt;
 
-    PlayerCache newEntity;
+    // Safer memory helpers
+    auto TryReadValue = [&](uint64_t address, auto& out) -> bool
+        {
+            using T = std::decay_t<decltype(out)>;
 
-    newEntity.className = ReadName(instance, 64);
+            out = {};
 
-    if (newEntity.className == "")
-        return;
+            if (!Utils::valid_pointer(address))
+                return false;
 
+            try
+            {
+                return mem.Read(address, &out, sizeof(T));
+            }
+            catch (...)
+            {
+                return false;
+            }
+        };
 
-    //cache to set
+    auto TryReadPtr = [&](uint64_t address, uint64_t& out) -> bool
+        {
+            out = 0;
+
+            if (!TryReadValue(address, out))
+                return false;
+
+            return Utils::valid_pointer(out);
+        };
+
+    auto TryReadChain = [&](uint64_t base, std::initializer_list<uint64_t> offsets, uint64_t& out) -> bool
+        {
+            out = 0;
+
+            if (!Utils::valid_pointer(base))
+                return false;
+
+            uint64_t current = base;
+
+            for (uint64_t offset : offsets)
+            {
+                uint64_t next = 0;
+
+                if (!Utils::valid_pointer(current))
+                    return false;
+
+                if (!TryReadPtr(current + offset, next))
+                    return false;
+
+                current = next;
+            }
+
+            out = current;
+            return Utils::valid_pointer(out);
+        };
+
+    auto AddFailure = [](std::string& failed, const char* name)
+        {
+            if (!failed.empty())
+                failed += ", ";
+
+            failed += name;
+        };
+
+    auto ValidatePtr = [&](std::string& failed, uint64_t ptr, const char* name)
+        {
+            if (!Utils::valid_pointer(ptr))
+                AddFailure(failed, name);
+        };
+
+    auto ValidateAddr = [&](std::string& failed, uint64_t addr, const char* name)
+        {
+            if (!Utils::valid_pointer(addr))
+                AddFailure(failed, name);
+        };
+
+    auto ReadUnityStringSafe = [&](uint64_t stringPtr, int maxLen = 128) -> std::string
+        {
+            if (!Utils::valid_pointer(stringPtr))
+                return {};
+
+            int len = 0;
+
+            if (!TryReadValue(stringPtr + 0x10, len))
+                return {};
+
+            if (len <= 0 || len > maxLen)
+                return {};
+
+            try
+            {
+                return mem.readUnicodeString(stringPtr + 0x14, len);
+            }
+            catch (...)
+            {
+                return {};
+            }
+        };
+
+    auto LogInitFail = [&](const std::string& reason)
+        {
+            std::ostringstream ss;
+            ss << "[PLAYER][INIT] Failed 0x"
+                << std::hex << instance
+                << " | " << reason;
+
+            //LOGS.logError(ss.str());
+        };
+
+    // Start building entity
+    PlayerCache newEntity{};
+
+    try
+    {
+        newEntity.className = ReadName(instance, 64);
+    }
+    catch (...)
+    {
+        LogInitFail("ReadName threw exception");
+        return std::nullopt;
+    }
+
+    if (newEntity.className.empty())
+        return std::nullopt;
+
     newEntity.instance = instance;
 
-    // // offline class
-    if (newEntity.className == "LocalPlayer" || newEntity.className == "ClientPlayer")
+    const bool isOfflineClass =
+        newEntity.className == "LocalPlayer" ||
+        newEntity.className == "ClientPlayer";
+
+    // Offline / local style player
+    if (isOfflineClass)
     {
-        
         if (isLocal)
         {
             newEntity.isLocal = true;
@@ -768,175 +973,240 @@ void Players::addEntity(const uint64_t instance, bool isLocal = false) {
             newEntity.isAi = true;
             newEntity.name = "Ai";
         }
-        
-        newEntity.playerBoneMatrixPtr = mem.ReadChain(instance, { sdk::Player::_playerBody, 0x30, 0x30, 0x10 });
+
+        std::string failed;
+
+        if (!TryReadChain(instance, { sdk::Player::_playerBody, 0x30, 0x30, 0x10 }, newEntity.playerBoneMatrixPtr))
+            AddFailure(failed, "BoneMatrixPtr");
 
         newEntity.P_CorpseAddr = instance + sdk::Player::Corpse;
-        newEntity.P_Profile = mem.Read<uint64_t>(instance + sdk::Player::Profile);
-        newEntity.P_Info = mem.Read<uint64_t>(newEntity.P_Profile + sdk::Profile::Info);
-        newEntity.P_PWA = mem.Read<uint64_t>(instance + sdk::Player::ProceduralWeaponAnimation);
-        newEntity.P_Body = mem.Read<uint64_t>(instance + sdk::Player::_playerBody);
+
+        if (!TryReadPtr(instance + sdk::Player::Profile, newEntity.P_Profile))
+            AddFailure(failed, "Profile");
+
+        if (Utils::valid_pointer(newEntity.P_Profile))
+        {
+            if (!TryReadPtr(newEntity.P_Profile + sdk::Profile::Info, newEntity.P_Info))
+                AddFailure(failed, "ProfileInfo");
+        }
+
+        // Optional, but needed for local scoped state.
+        TryReadPtr(instance + sdk::Player::ProceduralWeaponAnimation, newEntity.P_PWA);
+
+        if (!TryReadPtr(instance + sdk::Player::_playerBody, newEntity.P_Body))
+            AddFailure(failed, "PlayerBody");
 
         newEntity.P_InventoryControllerAddr = instance + sdk::Player::_inventoryController;
         newEntity.P_HandsControllerAddr = instance + sdk::Player::_handsController;
 
-        //get entity side
-        newEntity.playerSide = mem.Read<EPlayerSide>(newEntity.P_Info + sdk::PlayerInfo::Side);
+        if (Utils::valid_pointer(newEntity.P_Info))
+        {
+            if (!TryReadValue(newEntity.P_Info + sdk::PlayerInfo::Side, newEntity.playerSide))
+                AddFailure(failed, "PlayerSide");
+        }
 
-        //movement and rotation
-        newEntity.P_MovementContext = mem.Read<uint64_t>(instance + sdk::Player::MovementContext);
-        newEntity.P_RotationAddress = newEntity.P_MovementContext + sdk::MovementContext::_rotation;
+        if (!TryReadPtr(instance + sdk::Player::MovementContext, newEntity.P_MovementContext))
+            AddFailure(failed, "MovementContext");
 
+        if (Utils::valid_pointer(newEntity.P_MovementContext))
+            newEntity.P_RotationAddress = newEntity.P_MovementContext + sdk::MovementContext::_rotation;
 
-        //if we are localplayer is it as a scav>????
+        ValidateAddr(failed, newEntity.P_CorpseAddr, "CorpseAddr");
+        ValidateAddr(failed, newEntity.P_InventoryControllerAddr, "InventoryControllerAddr");
+        ValidateAddr(failed, newEntity.P_HandsControllerAddr, "HandsControllerAddr");
+        ValidateAddr(failed, newEntity.P_RotationAddress, "RotationAddress");
+
+        if (!failed.empty())
+        {
+            LogInitFail(failed);
+            return std::nullopt;
+        }
+
         if (newEntity.isLocal)
         {
-            if ((static_cast<uint32_t>(newEntity.playerSide) &
-                static_cast<uint32_t>(EPlayerSide::Savage)) == 0)
+            const bool isSavage =
+                (static_cast<uint32_t>(newEntity.playerSide) &
+                    static_cast<uint32_t>(EPlayerSide::Savage)) != 0;
+
+            mainGame.localIsSavage = isSavage;
+
+            if (isSavage)
             {
-                mainGame.localIsSavage = false;
-                newEntity.isPlayer = true;
-                newEntity.isPlayerScav = false;
-            }
-            else
-            {
-                mainGame.localIsSavage = true;
                 newEntity.isPlayer = false;
                 newEntity.isPlayerScav = true;
             }
-
-            
-
-            //do quest data
-            mainGame.localplayerProfile = newEntity.P_Profile;
-            questManager.initQuestManager();
-        }
-        
-        
-
-    }
-    else {
-        // online
-        newEntity.playerBoneMatrixPtr = mem.ReadChain(instance, { sdk::ObservedPlayerView::PlayerBody, 0x30, 0x30, 0x10 });
-        newEntity.P_ObservedPlayerController = mem.Read<uint64_t>(instance + sdk::ObservedPlayerView::ObservedPlayerController);
-        newEntity.P_ObservedHealthController = mem.Read<uint64_t>(newEntity.P_ObservedPlayerController + sdk::ObservedPlayerController::HealthController);
-        newEntity.P_CorpseAddr = newEntity.P_ObservedHealthController + sdk::ObservedHealthController::PlayerCorpse;
-        newEntity.P_InventoryControllerAddr = newEntity.P_ObservedPlayerController + sdk::ObservedPlayerController::InventoryController;
-        newEntity.P_HandsControllerAddr = newEntity.P_ObservedPlayerController + sdk::ObservedPlayerController::HandsController;
-
-        //movement & rotation
-        newEntity.P_MovementContext = mem.ReadChain(newEntity.P_ObservedPlayerController, { sdk::ObservedPlayerController::MovementController, sdk::ObservedMovementController::ObservedPlayerStateContext });
-        newEntity.P_RotationAddress = newEntity.P_MovementContext + sdk::ObservedPlayerStateContext::Rotation;
-
-        // Build list of failures
-        std::string failed;
-        auto test = [&](uint64_t ptr, const char* name) {
-            if (!Utils::valid_pointer(ptr)) {
-                if (!failed.empty()) failed += ", ";
-                failed += name;
+            else
+            {
+                newEntity.isPlayer = true;
+                newEntity.isPlayerScav = false;
             }
-            };
 
-        test(newEntity.playerBoneMatrixPtr, "BoneMatrixPtr");
-        test(newEntity.P_ObservedPlayerController, "PlayerController");
-        test(newEntity.P_ObservedHealthController, "HealthController");
-        test(newEntity.P_CorpseAddr, "CorpseAddr");
-        test(newEntity.P_InventoryControllerAddr, "InventoryControllerAddr");
-        test(newEntity.P_HandsControllerAddr, "HandsControllerAddr");
-        test(newEntity.P_MovementContext, "MovementContext");
-        test(newEntity.P_RotationAddress, "RotationAddress");
+            mainGame.localplayerProfile = newEntity.P_Profile;
 
-        // If any invalid pointers log once and skip entity
+            try
+            {
+                questManager.initQuestManager();
+            }
+            catch (...)
+            {
+                LOGS.logError("[PLAYER][INIT] questManager.initQuestManager failed");
+            }
+        }
+    }
+
+    // Online observed player
+    else
+    {
+        std::string failed;
+
+        if (!TryReadChain(instance, { sdk::ObservedPlayerView::PlayerBody, 0x30, 0x30, 0x10 }, newEntity.playerBoneMatrixPtr))
+            AddFailure(failed, "BoneMatrixPtr");
+
+        if (!TryReadPtr(instance + sdk::ObservedPlayerView::ObservedPlayerController, newEntity.P_ObservedPlayerController))
+            AddFailure(failed, "ObservedPlayerController");
+
+        if (Utils::valid_pointer(newEntity.P_ObservedPlayerController))
+        {
+            if (!TryReadPtr(newEntity.P_ObservedPlayerController + sdk::ObservedPlayerController::HealthController, newEntity.P_ObservedHealthController))
+                AddFailure(failed, "HealthController");
+
+            newEntity.P_InventoryControllerAddr =
+                newEntity.P_ObservedPlayerController + sdk::ObservedPlayerController::InventoryController;
+
+            newEntity.P_HandsControllerAddr =
+                newEntity.P_ObservedPlayerController + sdk::ObservedPlayerController::HandsController;
+
+            if (!TryReadChain(
+                newEntity.P_ObservedPlayerController,
+                {
+                    sdk::ObservedPlayerController::MovementController,
+                    sdk::ObservedMovementController::ObservedPlayerStateContext
+                },
+                newEntity.P_MovementContext))
+            {
+                AddFailure(failed, "MovementContext");
+            }
+        }
+
+        if (Utils::valid_pointer(newEntity.P_ObservedHealthController))
+            newEntity.P_CorpseAddr = newEntity.P_ObservedHealthController + sdk::ObservedHealthController::PlayerCorpse;
+
+        if (Utils::valid_pointer(newEntity.P_MovementContext))
+            newEntity.P_RotationAddress = newEntity.P_MovementContext + sdk::ObservedPlayerStateContext::Rotation;
+
+        ValidatePtr(failed, newEntity.playerBoneMatrixPtr, "BoneMatrixPtr");
+        ValidatePtr(failed, newEntity.P_ObservedPlayerController, "ObservedPlayerController");
+        ValidatePtr(failed, newEntity.P_ObservedHealthController, "HealthController");
+
+        ValidateAddr(failed, newEntity.P_CorpseAddr, "CorpseAddr");
+        ValidateAddr(failed, newEntity.P_InventoryControllerAddr, "InventoryControllerAddr");
+        ValidateAddr(failed, newEntity.P_HandsControllerAddr, "HandsControllerAddr");
+        ValidatePtr(failed, newEntity.P_MovementContext, "MovementContext");
+        ValidateAddr(failed, newEntity.P_RotationAddress, "RotationAddress");
+
         if (!failed.empty())
         {
-            std::ostringstream ss;
-            ss << "[PLAYER] Init Failed 0x"
-                << std::hex << instance
-                << " | " << failed;
-
-            //LOGS.logError(ss.str());
-            return; 
+            LogInitFail(failed);
+            return std::nullopt;
         }
 
-        //AI / Human stuff
-        newEntity.isAi = mem.Read<bool>(instance + sdk::ObservedPlayerView::IsAI);
+        if (!TryReadValue(instance + sdk::ObservedPlayerView::IsAI, newEntity.isAi))
+        {
+            LogInitFail("IsAI read failed");
+            return std::nullopt;
+        }
+
         newEntity.isPlayer = !newEntity.isAi;
 
-        //profileid
-        //handled in player dogtag equipment 
+        if (!TryReadValue(instance + sdk::ObservedPlayerView::Side, newEntity.playerSide))
+        {
+            LogInitFail("Side read failed");
+            return std::nullopt;
+        }
 
-        //side
-        uint64_t sideAddrs = instance + sdk::ObservedPlayerView::Side;
-        newEntity.playerSide = mem.Read<EPlayerSide>(sideAddrs);
         newEntity.side = SideToString(newEntity.playerSide);
 
-        
-        
+        const bool isSavage =
+            (static_cast<uint32_t>(newEntity.playerSide) &
+                static_cast<uint32_t>(EPlayerSide::Savage)) != 0;
 
-        if ((static_cast<uint32_t>(newEntity.playerSide) &
-            static_cast<uint32_t>(EPlayerSide::Savage)) != 0)
+        if (isSavage)
         {
             if (newEntity.isAi)
             {
-                uint64_t voicePtr = mem.Read<uint64_t>(instance + sdk::ObservedPlayerView::Voice);
-                std::string voice = mem.readUnicodeString(voicePtr + 0x14, mem.Read<int>(static_cast<SIZE_T>(voicePtr) + 0x10));
-                AIRole role = GetAIRoleInfo(voice);
-                newEntity.name = role.Name;
-                if (role.Type == PlayerType::AIBoss)
-                    newEntity.isBoss = TRUE;
+                uint64_t voicePtr = 0;
+                TryReadPtr(instance + sdk::ObservedPlayerView::Voice, voicePtr);
 
-                newEntity.isPlayerScav = FALSE;
-                newEntity.isAi = TRUE;
-                newEntity.isPlayer = FALSE;
+                const std::string voice = ReadUnityStringSafe(voicePtr, 128);
+
+                AIRole role = GetAIRoleInfo(voice);
+
+                if (!role.Name.empty())
+                    newEntity.name = role.Name;
+                else
+                    newEntity.name = "Ai";
+
+                if (role.Type == PlayerType::AIBoss)
+                    newEntity.isBoss = true;
+
+                newEntity.isPlayerScav = false;
+                newEntity.isAi = true;
+                newEntity.isPlayer = false;
             }
             else
             {
                 newEntity.name = "PScav " + std::to_string(mainGame.pmcNumber);
                 mainGame.pmcNumber++;
 
-                newEntity.isPlayerScav = TRUE;
-                newEntity.isAi = FALSE;
-                newEntity.isPlayer = FALSE;
+                newEntity.isPlayerScav = true;
+                newEntity.isAi = false;
+
+                newEntity.isPlayer = true;
             }
         }
-        else if (newEntity.isPlayer)
+        else
         {
-            //player pmc
             newEntity.name = "PMC " + std::to_string(mainGame.pmcNumber);
             mainGame.pmcNumber++;
-            
-            //Try query tarkov dev for data
-            if (!newEntity.accountId.empty() && radarGlobals::getPlayerStats == TRUE)
-            {
-                auto profile = TarkovDevProfileClient::GetProfileForAccountId(newEntity.accountId);
-                if (profile)
-                {
-                    newEntity.profileStats = *profile;
-                    newEntity.hasProfileData = true;
 
-                    newEntity.name = profile->nickname;
-                    newEntity.DT_lvl = ConvertXpToLevel(profile->experience);
-                    newEntity.kd = CalculateKD(profile->Kills, profile->deathsPMC);
-                    newEntity.pkd = CalculateKD(profile->killedPMC, profile->deathsPMC);
-                }
-            }
-            newEntity.isPlayerScav = FALSE;
-            newEntity.isAi = FALSE;
-            newEntity.isPlayer = TRUE;
+            newEntity.isPlayerScav = false;
+            newEntity.isAi = false;
+            newEntity.isPlayer = true;
         }
-       
-
-
     }
 
-    //get bone ptrs
+    // Bone pointer setup
     if (!newEntity.isBTR)
-        newEntity = getBonePtrs(newEntity);
+    {
+        try
+        {
+            newEntity = getBonePtrs(newEntity);
+        }
+        catch (...)
+        {
+            LogInitFail("getBonePtrs threw exception");
+            return std::nullopt;
+        }
+    }
+
+    // Final sanity check.
+    if (!Utils::valid_pointer(newEntity.instance))
+        return std::nullopt;
+
+    return newEntity;
+}
+
+
+void Players::addEntity(const uint64_t instance, bool isLocal)
+{
+    
+    if (!mem.vHandle)
+        return;
+
+    if (!Utils::valid_pointer(instance))
+        return;
 
     
-    playerCache.emplace_back(newEntity);
-    LOGS.logInfo("[PLAYERS][INIT] Adding player : 0x", std::hex, newEntity.instance, " className : ", newEntity.className.c_str());
-
 }
 
 glm::vec3 GetBestPlayerBasePosition(const PlayerCache& cachePlayer)
@@ -1013,113 +1283,380 @@ glm::vec3 GetBestPlayerBasePosition(const PlayerCache& cachePlayer)
 
 void Players::tryFindBTR()
 {
-    const std::string selectedMap = TrimEFT(mainGame.selectedLocation);
+    
 
-    if (selectedMap != "TarkovStreets" && selectedMap != "Woods")
+    if (!mem.vHandle)
         return;
 
-    if (!Utils::valid_pointer(mainGame.localGameWorld)) return;
+    std::string selectedMap = TrimEFT(mainGame.selectedLocation);
 
-    uint64_t btrController = mem.Read<uint64_t>(mainGame.localGameWorld + sdk::ClientLocalGameWorld::btrController); if (!Utils::valid_pointer(btrController)) return;
-    uint64_t btrView = mem.Read<uint64_t>(btrController + sdk::BtrController::BtrView); if (!Utils::valid_pointer(btrView)) return;
-    uint64_t btrTurret = mem.Read<uint64_t>(btrView + sdk::BTRView::turret); if (!Utils::valid_pointer(btrTurret)) return;
-    uint64_t btrOper = mem.Read<uint64_t>(btrTurret + sdk::BTRTurretView::attachedBot); if (!Utils::valid_pointer(btrOper)) return;
+    std::transform(
+        selectedMap.begin(),
+        selectedMap.end(),
+        selectedMap.begin(),
+        [](unsigned char c)
+        {
+            return static_cast<char>(std::tolower(c));
+        });
+
+    if (selectedMap != "tarkovstreets" && selectedMap != "woods")
+        return;
+
+    if (!Utils::valid_pointer(mainGame.localGameWorld))
+        return;
+
+    // Safe read helpers
+    auto TryReadValue = [&](uint64_t address, auto& out) -> bool
+        {
+            using T = std::decay_t<decltype(out)>;
+
+            out = {};
+
+            if (!Utils::valid_pointer(address))
+                return false;
+
+            try
+            {
+                return mem.Read(address, &out, sizeof(T));
+            }
+            catch (...)
+            {
+                return false;
+            }
+        };
+
+    auto TryReadPtr = [&](uint64_t address, uint64_t& out) -> bool
+        {
+            out = 0;
+
+            if (!TryReadValue(address, out))
+                return false;
+
+            return Utils::valid_pointer(out);
+        };
+
+    // localGameWorld -> btrController -> btrView -> turret -> attachedBot
+    uint64_t btrController = 0;
+    uint64_t btrView = 0;
+    uint64_t btrTurret = 0;
+    uint64_t btrOper = 0;
+
+    if (!TryReadPtr(
+        mainGame.localGameWorld + sdk::ClientLocalGameWorld::btrController,
+        btrController))
+    {
+        return;
+    }
+
+    if (!TryReadPtr(
+        btrController + sdk::BtrController::BtrView,
+        btrView))
+    {
+        return;
+    }
+
+    if (!TryReadPtr(
+        btrView + sdk::BTRView::turret,
+        btrTurret))
+    {
+        return;
+    }
+
+    if (!TryReadPtr(
+        btrTurret + sdk::BTRTurretView::attachedBot,
+        btrOper))
+    {
+        return;
+    }
 
     std::vector<PlayerCache>& cache = players.getCache();
 
     if (cache.empty())
         return;
 
-    for (auto& playerList : cache)
+    // Find the AI/player cache entry matching attachedBot
+    for (auto& cachePlayer : cache)
     {
-        if (playerList.instance != btrOper)
+        if (!Utils::valid_pointer(cachePlayer.instance))
             continue;
 
-        if (playerList.isPlayer || playerList.isPlayerScav || playerList.isLocal)
+        if (cachePlayer.instance != btrOper)
             continue;
 
-        playerList.isBTR = true;
-        playerList.colour = coloursGlobals::aiBTR;
-        playerList.btrView = btrView;
-        playerList.name = "BTR";
+        
+        if (cachePlayer.isLocal || cachePlayer.isPlayer || cachePlayer.isPlayerScav)
+            return;
 
-        if (!mainGame.btrAllocated)
+        const bool wasAlreadyBTR = cachePlayer.isBTR;
+        const uint64_t oldBtrView = cachePlayer.btrView;
+
+        cachePlayer.isBTR = true;
+        cachePlayer.isAi = true;
+        cachePlayer.isBoss = false;
+        cachePlayer.isPlayer = false;
+        cachePlayer.isPlayerScav = false;
+
+        cachePlayer.colour = coloursGlobals::aiBTR;
+        cachePlayer.btrView = btrView;
+        cachePlayer.name = "BTR";
+
+        glm::vec3 btrPosition{};
+
+        if (TryReadValue(btrView + sdk::BTRView::previousPosition, btrPosition))
         {
-            mainGame.btrAllocated = true;
-            LOGS.logInfo("[BTR] BTR Allocated");
+            cachePlayer.location = btrPosition;
+            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
         }
 
-        break;
+        if (!mainGame.btrAllocated || !wasAlreadyBTR || oldBtrView != btrView)
+        {
+            mainGame.btrAllocated = true;
+
+            std::ostringstream ss;
+            ss << "[BTR] BTR Allocated | operator: 0x"
+                << std::hex << btrOper
+                << " view: 0x"
+                << btrView;
+
+            LOGS.logInfo(ss.str());
+        }
+
+        return;
     }
 }
 
 void Players::updateEntity()
 {
+    if (!mem.vHandle)
+        return;
 
     std::vector<PlayerCache>& cache = players.getCache();
 
-    //ScatterRead Handles
-    
+    if (cache.empty())
+        return;
+
+    // Safer memory helpers
+    auto TryReadValue = [&](uint64_t address, auto& out) -> bool
+        {
+            using T = std::decay_t<decltype(out)>;
+
+            out = {};
+
+            if (!Utils::valid_pointer(address))
+                return false;
+
+            try
+            {
+                return mem.Read(address, &out, sizeof(T));
+            }
+            catch (...)
+            {
+                return false;
+            }
+        };
+
+    auto AddSafeScatter = [&](auto handle, uint64_t address, void* out, size_t size) -> bool
+        {
+            if (!handle)
+                return false;
+
+            if (!Utils::valid_pointer(address))
+                return false;
+
+            if (!out || size == 0)
+                return false;
+
+            try
+            {
+                mem.AddScatterReadRequest(handle, address, out, size);
+                return true;
+            }
+            catch (...)
+            {
+                return false;
+            }
+        };
+
+    auto ExecuteAndClose = [&](auto& handle, const char* name)
+        {
+            if (!handle)
+                return;
+
+            try
+            {
+                mem.ExecuteReadScatter(handle);
+            }
+            catch (...)
+            {
+                LOGS.logError(std::string("[PLAYERS][UPDATE] Scatter execute failed: ") + name);
+            }
+
+            try
+            {
+                mem.CloseScatterHandle(handle);
+            }
+            catch (...)
+            {
+                LOGS.logError(std::string("[PLAYERS][UPDATE] Scatter close failed: ") + name);
+            }
+
+            handle = {};
+        };
+
+    auto ApplyPlayerColour = [&](PlayerCache& cachePlayer)
+        {
+            cachePlayer.colour = { 1, 1, 1, 1 };
+
+            if (cachePlayer.isDead)
+            {
+                cachePlayer.colour = coloursGlobals::playerCorpse;
+                return;
+            }
+
+            if (cachePlayer.isAi && !cachePlayer.isPlayerScav && !cachePlayer.isPlayer)
+            {
+                cachePlayer.colour = coloursGlobals::playerAI;
+            }
+
+            if (cachePlayer.isPlayerScav && !cachePlayer.isAi && cachePlayer.isPlayer)
+            {
+                cachePlayer.colour = coloursGlobals::playerScav;
+            }
+
+            if (cachePlayer.isBoss)
+            {
+                cachePlayer.colour = coloursGlobals::playerBoss;
+            }
+
+            if (cachePlayer.isPlayer && !cachePlayer.isPlayerScav && !cachePlayer.isAi)
+            {
+                cachePlayer.colour = coloursGlobals::playerPMC;
+            }
+
+            if (cachePlayer.isWatched)
+            {
+                cachePlayer.colour = coloursGlobals::playerWatched;
+            }
+
+            if (!mainGame.localGroupId.empty() &&
+                cachePlayer.groupId == mainGame.localGroupId)
+            {
+                cachePlayer.colour = coloursGlobals::playerFriendly;
+            }
+
+            if (cachePlayer.isLocal &&
+                Utils::valid_pointer(cachePlayer.instance) &&
+                mainGame.localPlayerPtr == cachePlayer.instance)
+            {
+                cachePlayer.colour = coloursGlobals::playerLocal;
+            }
+        };
+
+    // Create scatter handles
     auto handleRotation = mem.CreateScatterHandle();
     auto handleCorpse = mem.CreateScatterHandle();
     auto handleHealth = mem.CreateScatterHandle();
     auto handleHands = mem.CreateScatterHandle();
     auto handleIsAiming = mem.CreateScatterHandle();
 
+    //queue memory reads
     for (auto& cachePlayer : cache)
     {
-        if (!Utils::valid_pointer(cachePlayer.instance))
+        if (cachePlayer.isBTR)
+        {
+            if (Utils::valid_pointer(cachePlayer.btrView))
+            {
+                glm::vec3 btrPos{};
+
+                if (TryReadValue(cachePlayer.btrView + sdk::BTRView::previousPosition, btrPos))
+                {
+                    cachePlayer.location = btrPos;
+                }
+            }
+
             continue;
+        }
 
         if (cachePlayer.isDead || cachePlayer.hasExfiled)
             continue;
 
-        //BTR only
-        if (cachePlayer.isBTR)
-        {
-            // We just want to update BTR position and move on
-            cachePlayer.location = mem.Read<glm::vec3>(cachePlayer.btrView + sdk::BTRView::previousPosition);
+        if (!Utils::valid_pointer(cachePlayer.instance))
             continue;
-        }
+
+        cachePlayer.P_CorpseClass = 0;
 
         if (cachePlayer.isLocal)
         {
             mainGame.localGroupId = cachePlayer.groupId;
             mainGame.localPlayerHands = cachePlayer.P_HandsController;
             mainGame.localplayerProfile = cachePlayer.P_Profile;
+            mainGame.localPlayerPWA = cachePlayer.P_PWA;
         }
 
-        
+        const bool isOfflinePlayer =
+            cachePlayer.className == "LocalPlayer" ||
+            cachePlayer.className == "ClientPlayer";
 
-        //offline
-        if (cachePlayer.className == "LocalPlayer" || cachePlayer.className == "ClientPlayer")
+        AddSafeScatter(
+            handleRotation,
+            cachePlayer.P_RotationAddress,
+            &cachePlayer.rotationRAW,
+            sizeof(glm::vec2)
+        );
+
+        AddSafeScatter(
+            handleCorpse,
+            cachePlayer.P_CorpseAddr,
+            &cachePlayer.P_CorpseClass,
+            sizeof(uint64_t)
+        );
+
+        AddSafeScatter(
+            handleHands,
+            cachePlayer.P_HandsControllerAddr,
+            &cachePlayer.P_HandsController,
+            sizeof(uint64_t)
+        );
+
+        if (isOfflinePlayer)
         {
-            mem.AddScatterReadRequest(handleRotation, cachePlayer.P_RotationAddress, &cachePlayer.rotationRAW, sizeof(glm::vec2));
-            mem.AddScatterReadRequest(handleCorpse, cachePlayer.P_CorpseAddr, &cachePlayer.P_CorpseClass, sizeof(uint64_t));
-            mem.AddScatterReadRequest(handleHands, cachePlayer.P_HandsControllerAddr, &cachePlayer.P_HandsController, sizeof(uint64_t));
-            mem.AddScatterReadRequest(handleIsAiming, cachePlayer.P_PWA + sdk::ProceduralWeaponAnimation::_isAiming , &cachePlayer.isAiming, sizeof(bool));
+            cachePlayer.isAiming = false;
+
+            if (Utils::valid_pointer(cachePlayer.P_PWA))
+            {
+                AddSafeScatter(
+                    handleIsAiming,
+                    cachePlayer.P_PWA + sdk::ProceduralWeaponAnimation::_isAiming,
+                    &cachePlayer.isAiming,
+                    sizeof(bool)
+                );
+            }
         }
         else
         {
-            mem.AddScatterReadRequest(handleRotation, cachePlayer.P_RotationAddress, &cachePlayer.rotationRAW, sizeof(glm::vec2));
-            mem.AddScatterReadRequest(handleCorpse, cachePlayer.P_CorpseAddr, &cachePlayer.P_CorpseClass, sizeof(uint64_t));
-            mem.AddScatterReadRequest(handleHealth, cachePlayer.P_ObservedHealthController + sdk::ObservedHealthController::HealthStatus, &cachePlayer.healthETAG, sizeof(ETagStatus));
-            mem.AddScatterReadRequest(handleHands, cachePlayer.P_HandsControllerAddr, &cachePlayer.P_HandsController, sizeof(uint64_t));
+            if (Utils::valid_pointer(cachePlayer.P_ObservedHealthController))
+            {
+                AddSafeScatter(
+                    handleHealth,
+                    cachePlayer.P_ObservedHealthController + sdk::ObservedHealthController::HealthStatus,
+                    &cachePlayer.healthETAG,
+                    sizeof(ETagStatus)
+                );
+            }
         }
-
     }
 
-    //execute scatters > close
-    mem.ExecuteReadScatter(handleRotation); mem.CloseScatterHandle(handleRotation);
-    mem.ExecuteReadScatter(handleCorpse); mem.CloseScatterHandle(handleCorpse);
-    mem.ExecuteReadScatter(handleHealth); mem.CloseScatterHandle(handleHealth);
-    mem.ExecuteReadScatter(handleHands); mem.CloseScatterHandle(handleHands);
-    mem.ExecuteReadScatter(handleIsAiming); mem.CloseScatterHandle(handleIsAiming);
+    // Execute scatters
+    ExecuteAndClose(handleRotation, "Rotation");
+    ExecuteAndClose(handleCorpse, "Corpse");
+    ExecuteAndClose(handleHealth, "Health");
+    ExecuteAndClose(handleHands, "Hands");
+    ExecuteAndClose(handleIsAiming, "IsAiming");
 
-    //loop our list again and update raw values and other data
+    //process updated values
     for (auto& cachePlayer : cache)
     {
-        //BTR Only
+        // BTR only
         if (cachePlayer.isBTR)
         {
             cachePlayer.colour = coloursGlobals::aiBTR;
@@ -1127,24 +1664,74 @@ void Players::updateEntity()
             continue;
         }
 
-        //location checks
-        cachePlayer.location = GetBestPlayerBasePosition(cachePlayer);
+        // Already dead / exfiled
+        if (cachePlayer.isDead || cachePlayer.hasExfiled)
+        {
+            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+            ApplyPlayerColour(cachePlayer);
+            continue;
+        }
+
+        // Corpse check early
+        if (Utils::valid_pointer(cachePlayer.P_CorpseClass))
+        {
+            cachePlayer.isDead = true;
+            cachePlayer.instance = 0x0;
+
+            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+            ApplyPlayerColour(cachePlayer);
+            continue;
+        }
+
+        if (!Utils::valid_pointer(cachePlayer.instance))
+            continue;
+
+        // Position
+        try
+        {
+            cachePlayer.location = GetBestPlayerBasePosition(cachePlayer);
+        }
+        catch (...)
+        {
+            LOGS.logError("[PLAYERS][UPDATE] GetBestPlayerBasePosition failed");
+        }
+
         if (cachePlayer.isLocal)
             mainGame.localLocation = cachePlayer.location;
 
-        //always update distances regardless
         cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
 
-        if (cachePlayer.isDead || cachePlayer.hasExfiled)
-            continue;
-
         // Held item
-        cachePlayer.itemInHand = heldItemName(cachePlayer);
+        try
+        {
+            if (Utils::valid_pointer(cachePlayer.P_HandsController))
+            {
+                cachePlayer.itemInHand = heldItemName(cachePlayer);
+            }
+            else
+            {
+                cachePlayer.itemInHand.clear();
+            }
+        }
+        catch (...)
+        {
+            cachePlayer.itemInHand.clear();
+            LOGS.logError("[PLAYERS][UPDATE] heldItemName failed");
+        }
 
-        //correct rotation
-        cachePlayer.rotation = Utils::Player::Rotation::correctRotation2d(cachePlayer.rotationRAW);
+        // Rotation
+        try
+        {
+            cachePlayer.rotation =
+                Utils::Player::Rotation::correctRotation2d(cachePlayer.rotationRAW);
+        }
+        catch (...)
+        {
+            cachePlayer.rotation = {};
+            LOGS.logError("[PLAYERS][UPDATE] Rotation correction failed");
+        }
 
-        //update player info if possible and not done THIS IS ONLY LOCAL MEMORY CACHE NOT API!! TO AVOID FLOODING OUR API SERVER. API CALLS ONLY ON ADDING
+        // Dogtag cache / profile data
         if (cachePlayer.isPlayer && !cachePlayer.profileId.empty())
         {
             auto now = std::chrono::steady_clock::now();
@@ -1155,24 +1742,37 @@ void Players::updateEntity()
             {
                 cachePlayer.lastDogTagLookup = now;
 
-                auto result = g_dogTagCache.GetByProfileId(cachePlayer.profileId);
-                if (result.has_value())
+                try
                 {
-                    cachePlayer.name = result->nickname;
-                    cachePlayer.accountId = result->accountId;
-                    cachePlayer.foundDogTagCache = true;
+                    auto result = g_dogTagCache.GetByProfileId(cachePlayer.profileId);
+
+                    if (result.has_value())
+                    {
+                        if (!result->nickname.empty())
+                            cachePlayer.name = result->nickname;
+
+                        cachePlayer.accountId = result->accountId;
+                        cachePlayer.foundDogTagCache = true;
+                    }
+                }
+                catch (...)
+                {
+                    LOGS.logError("[PLAYERS][UPDATE] Dogtag cache lookup failed");
                 }
             }
 
             if (!cachePlayer.hasProfileData &&
                 !cachePlayer.accountId.empty() &&
-                radarGlobals::getPlayerStats == TRUE)
+                radarGlobals::getPlayerStats == TRUE &&
+                !cachePlayer.triedprofileonce)
             {
-                if (!cachePlayer.triedprofileonce)
-                {
-                    cachePlayer.triedprofileonce = true;
+                cachePlayer.triedprofileonce = true;
 
-                    auto profile = TarkovDevProfileClient::GetProfileForAccountId(cachePlayer.accountId);
+                try
+                {
+                    auto profile =
+                        TarkovDevProfileClient::GetProfileForAccountId(cachePlayer.accountId);
+
                     if (profile)
                     {
                         cachePlayer.profileStats = *profile;
@@ -1184,231 +1784,322 @@ void Players::updateEntity()
                         cachePlayer.hours = profile->hoursPlayed;
                     }
                 }
+                catch (...)
+                {
+                    LOGS.logError("[PLAYERS][UPDATE] Tarkov profile lookup failed");
+                }
             }
         }
-        
-        //colours
-        cachePlayer.colour = { 1,1,1,1 };
 
-        //corpse?
-        if (Utils::valid_pointer(cachePlayer.P_CorpseClass))
-        {
-            cachePlayer.isDead = true;
-			cachePlayer.instance = 0x0; //clear instance to avoid doing unnecessary reads on dead players
+        // Colours
+        ApplyPlayerColour(cachePlayer);
 
-        }
-
-        //set colours
-        if (cachePlayer.isAi && !cachePlayer.isPlayerScav && !cachePlayer.isPlayer)
+        // Local player final update
+        if (cachePlayer.isLocal &&
+            Utils::valid_pointer(cachePlayer.instance) &&
+            mainGame.localPlayerPtr == cachePlayer.instance)
         {
-            cachePlayer.colour = coloursGlobals::playerAI;
-
-        }
-        if (cachePlayer.isPlayerScav && !cachePlayer.isAi && cachePlayer.isPlayer)
-        {
-            cachePlayer.colour = coloursGlobals::playerScav;
-
-        }
-        if (cachePlayer.isBoss)
-        {
-            cachePlayer.colour = coloursGlobals::playerBoss;
-
-        }
-        if (cachePlayer.isPlayer && !cachePlayer.isPlayerScav && !cachePlayer.isAi)
-        {
-            cachePlayer.colour = coloursGlobals::playerPMC;
-
-        }
-        if (cachePlayer.isWatched)
-        {
-            cachePlayer.colour = coloursGlobals::playerWatched;
-        }
-        //friendly
-        if ((cachePlayer.groupId == mainGame.localGroupId) && mainGame.localGroupId != "")
-        {
-            cachePlayer.colour = coloursGlobals::playerFriendly;
-        }
-
-        if (cachePlayer.isDead || cachePlayer.hasExfiled)
-        {
-            if (cachePlayer.isDead)
-                cachePlayer.colour = coloursGlobals::playerCorpse;
-        }
-
-        if (cachePlayer.isLocal && mainGame.localPlayerPtr == cachePlayer.instance)
-        {
-            //update localplayer cache
-            mainGame.localLocation = GetBestPlayerBasePosition(cachePlayer);
+            mainGame.localLocation = cachePlayer.location;
             mainGame.localRotation = cachePlayer.rotation;
-            mainGame.localGroupId = cachePlayer.groupId;
-            cachePlayer.colour = coloursGlobals::playerLocal;
-
             mainGame.localGroupId = cachePlayer.groupId;
             mainGame.localPlayerHands = cachePlayer.P_HandsController;
             mainGame.localIsScoped = cachePlayer.isAiming;
             mainGame.localPlayerPWA = cachePlayer.P_PWA;
 
+            cachePlayer.colour = coloursGlobals::playerLocal;
         }
-        
     }
-
-    
-
 }
 
 void Players::checkGroupIDs()
 {
+
     if (groupIDSet)
         return;
 
+    if (!mem.vHandle)
+        return;
+
+    // Do not group until local has actually spawned in.
+    // localPlayerHands must not be ClientEmptyHandsController.
     if (!mainGame.checkIfRaidStarted())
         return;
 
     auto& cache = players.getCache();
-    int nextGroupId = 1;
-    bool changed = true;
-    bool assignedAnyGroup = false;
+
+    if (cache.empty())
+        return;
+
+    constexpr float GROUP_DISTANCE_METERS = 15.0f;
 
     auto hasValidBone = [&](const PlayerCache& player) -> bool
         {
             return isValidBoneVector(player.bonePositions[allPlayerBones::HumanBase]);
         };
 
-    auto isValidGroupingTarget = [&](const PlayerCache& player) -> bool
+    auto isValidGroupId = [](const std::string& groupId) -> bool
         {
-            return (player.isPlayer || player.isPlayerScav) && hasValidBone(player);
+            // Treat blank and 0 as unassigned.
+            return !groupId.empty() && groupId != "0";
         };
 
-    auto getNewGroupId = [&]() -> std::string
+    auto isValidGroupingTarget = [&](const PlayerCache& player) -> bool
+        {
+            if (player.isBTR)
+                return false;
+
+            if (player.isDead || player.hasExfiled)
+                return false;
+
+            if (!Utils::valid_pointer(player.instance))
+                return false;
+
+            if (!(player.isPlayer || player.isPlayerScav))
+                return false;
+
+            if (!hasValidBone(player))
+                return false;
+
+            return true;
+        };
+
+    // Build list of valid player indexes
+    std::vector<size_t> targets;
+    targets.reserve(cache.size());
+
+    int localTargetIndex = -1;
+
+    for (size_t i = 0; i < cache.size(); ++i)
+    {
+        PlayerCache& player = cache[i];
+
+        if (!isValidGroupingTarget(player))
+            continue;
+
+        const int targetIndex = static_cast<int>(targets.size());
+        targets.emplace_back(i);
+
+        if (player.isLocal && player.instance == mainGame.localPlayerPtr)
+            localTargetIndex = targetIndex;
+    }
+
+    // Need local to be fully valid before doing the one-time spawn grouping.
+    if (localTargetIndex < 0)
+        return;
+
+    // Need at least 2 valid players to create any group.
+    if (targets.size() < 2)
+        return;
+
+    // Unionfind setup
+    std::vector<int> parent(targets.size());
+
+    for (int i = 0; i < static_cast<int>(parent.size()); ++i)
+        parent[i] = i;
+
+    auto Find = [&](int x) -> int
+        {
+            while (parent[x] != x)
+            {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+
+            return x;
+        };
+
+    auto Union = [&](int a, int b)
+        {
+            int rootA = Find(a);
+            int rootB = Find(b);
+
+            if (rootA == rootB)
+                return;
+
+            const int localRoot = Find(localTargetIndex);
+
+            // If one side is locals component, keep local as the root.
+            if (rootA == localRoot)
+            {
+                parent[rootB] = rootA;
+            }
+            else if (rootB == localRoot)
+            {
+                parent[rootA] = rootB;
+            }
+            else
+            {
+                parent[rootB] = rootA;
+            }
+        };
+
+    // ---------------------------------------------------------
+    // Join players that are within group distance
+    // This groups local and non-local teams.
+    // It also handles chained grouping:
+    // A close to B, B close to C => A/B/C same group.
+    // ---------------------------------------------------------
+    bool foundAnyPair = false;
+
+    for (int a = 0; a < static_cast<int>(targets.size()); ++a)
+    {
+        PlayerCache& playerA = cache[targets[a]];
+
+        const glm::vec3 posA =
+            playerA.bonePositions[allPlayerBones::HumanBase];
+
+        for (int b = a + 1; b < static_cast<int>(targets.size()); ++b)
+        {
+            PlayerCache& playerB = cache[targets[b]];
+
+            if (playerA.instance == playerB.instance)
+                continue;
+
+            const glm::vec3 posB =
+                playerB.bonePositions[allPlayerBones::HumanBase];
+
+            const float dist = players.getDistance(posA, posB);
+
+            if (!std::isfinite(dist))
+                continue;
+
+            if (dist > GROUP_DISTANCE_METERS)
+                continue;
+
+            Union(a, b);
+            foundAnyPair = true;
+        }
+    }
+
+    if (!foundAnyPair)
+        return;
+
+    // Count how many players are in each connected component
+    std::unordered_map<int, int> componentCounts;
+
+    for (int i = 0; i < static_cast<int>(targets.size()); ++i)
+    {
+        const int root = Find(i);
+        componentCounts[root]++;
+    }
+
+    const int localRoot = Find(localTargetIndex);
+
+    // Build component -> group id map
+    std::unordered_map<int, std::string> componentGroupIds;
+
+    int nextGroupId = 1;
+
+    auto getNextGroupId = [&]() -> std::string
         {
             return std::to_string(nextGroupId++);
         };
 
-    while (changed)
+    PlayerCache& localPlayer = cache[targets[localTargetIndex]];
+
+    if (componentCounts[localRoot] >= 2)
     {
-        changed = false;
-
-        for (auto& playerA : cache)
+        if (!isValidGroupId(mainGame.localGroupId))
         {
+            if (isValidGroupId(localPlayer.groupId))
+                mainGame.localGroupId = localPlayer.groupId;
+            else
+                mainGame.localGroupId = getNextGroupId();
+        }
 
-            if (!Utils::valid_pointer(playerA.instance)) continue;
-            if (!isValidGroupingTarget(playerA))
-                continue;
+        componentGroupIds[localRoot] = mainGame.localGroupId;
+    }
 
-            if (playerA.hasExfiled || playerA.isDead)
-                continue;
+    // Preserve valid existing group IDs for non-local grouped components.
+    for (int i = 0; i < static_cast<int>(targets.size()); ++i)
+    {
+        const int root = Find(i);
 
-            for (auto& playerB : cache)
+        // Do not assign group ids to solo players.
+        if (componentCounts[root] < 2)
+            continue;
+
+        if (root == localRoot)
+            continue;
+
+        PlayerCache& player = cache[targets[i]];
+
+        if (isValidGroupId(player.groupId))
+        {
+            if (componentGroupIds.find(root) == componentGroupIds.end())
+                componentGroupIds[root] = player.groupId;
+        }
+    }
+
+    // Assign new group IDs to grouped components that do not have one.
+    for (int i = 0; i < static_cast<int>(targets.size()); ++i)
+    {
+        const int root = Find(i);
+
+        // Do not assign group ids to solo players.
+        if (componentCounts[root] < 2)
+            continue;
+
+        if (componentGroupIds.find(root) == componentGroupIds.end())
+            componentGroupIds[root] = getNextGroupId();
+    }
+
+    // Apply group IDs
+    bool assignedAnyGroup = false;
+
+    for (int i = 0; i < static_cast<int>(targets.size()); ++i)
+    {
+        const int root = Find(i);
+
+        // Do not assign fake group ids to solo players.
+        if (componentCounts[root] < 2)
+            continue;
+
+        PlayerCache& player = cache[targets[i]];
+
+        auto groupIt = componentGroupIds.find(root);
+        if (groupIt == componentGroupIds.end())
+            continue;
+
+        const std::string& newGroupId = groupIt->second;
+
+        if (player.groupId != newGroupId)
+        {
+            player.groupId = newGroupId;
+            assignedAnyGroup = true;
+        }
+    }
+
+    // Final sync for local player if local has a real group
+    if (componentCounts[localRoot] >= 2)
+    {
+        auto localGroupIt = componentGroupIds.find(localRoot);
+
+        if (localGroupIt != componentGroupIds.end())
+        {
+            mainGame.localGroupId = localGroupIt->second;
+
+            if (localPlayer.groupId != mainGame.localGroupId)
             {
-
-                if (!Utils::valid_pointer(playerB.instance)) continue;
-                if (playerB.hasExfiled || playerB.isDead)
-                    continue;
-
-                if (playerA.instance == playerB.instance)
-                    continue;
-
-                if (!isValidGroupingTarget(playerB))
-                    continue;
-
-                float dist = players.getDistance(
-                    playerA.bonePositions[allPlayerBones::HumanBase],
-                    playerB.bonePositions[allPlayerBones::HumanBase]);
-
-                if (dist > 15.0f)
-                    continue;
-
-                // If one of them is local, force both into the local group
-                if (playerA.isLocal || playerB.isLocal)
-                {
-                    if (mainGame.localGroupId.empty())
-                        mainGame.localGroupId = getNewGroupId();
-
-                    if (playerA.groupId != mainGame.localGroupId)
-                    {
-                        playerA.groupId = mainGame.localGroupId;
-                        changed = true;
-                        assignedAnyGroup = true;
-                    }
-
-                    if (playerB.groupId != mainGame.localGroupId)
-                    {
-                        playerB.groupId = mainGame.localGroupId;
-                        changed = true;
-                        assignedAnyGroup = true;
-                    }
-
-                    continue;
-                }
-
-                // Neither has a group yet
-                if (playerA.groupId.empty() && playerB.groupId.empty())
-                {
-                    std::string newGroupId = getNewGroupId();
-                    playerA.groupId = newGroupId;
-                    playerB.groupId = newGroupId;
-                    changed = true;
-                    assignedAnyGroup = true;
-                    continue;
-                }
-
-                // Copy A to B
-                if (!playerA.groupId.empty() && playerB.groupId.empty())
-                {
-                    playerB.groupId = playerA.groupId;
-                    changed = true;
-                    assignedAnyGroup = true;
-                    continue;
-                }
-
-                // Copy B to A
-                if (playerA.groupId.empty() && !playerB.groupId.empty())
-                {
-                    playerA.groupId = playerB.groupId;
-                    changed = true;
-                    assignedAnyGroup = true;
-                    continue;
-                }
-
-                // Merge two different existing groups
-                if (!playerA.groupId.empty() &&
-                    !playerB.groupId.empty() &&
-                    playerA.groupId != playerB.groupId)
-                {
-                    std::string fromGroup = playerB.groupId;
-                    std::string toGroup = playerA.groupId;
-
-                    // Prefer the local group if one side already belongs to it
-                    if (!mainGame.localGroupId.empty())
-                    {
-                        if (playerA.groupId == mainGame.localGroupId)
-                        {
-                            fromGroup = playerB.groupId;
-                            toGroup = playerA.groupId;
-                        }
-                        else if (playerB.groupId == mainGame.localGroupId)
-                        {
-                            fromGroup = playerA.groupId;
-                            toGroup = playerB.groupId;
-                        }
-                    }
-
-                    for (auto& player : cache)
-                    {
-                        if (player.groupId == fromGroup)
-                            player.groupId = toGroup;
-                    }
-
-                    changed = true;
-                    assignedAnyGroup = true;
-                    continue;
-                }
+                localPlayer.groupId = mainGame.localGroupId;
+                assignedAnyGroup = true;
             }
         }
     }
 
     if (assignedAnyGroup)
+    {
         groupIDSet = true;
+
+        std::ostringstream ss;
+        ss << "[PLAYERS][GROUP] Group IDs assigned. "
+            << "LocalGroupId: "
+            << (mainGame.localGroupId.empty() ? "none" : mainGame.localGroupId)
+            << " | validTargets: "
+            << targets.size();
+
+        LOGS.logInfo(ss.str());
+    }
 }
 
 static const std::unordered_set<std::string> skipNames =
@@ -1716,9 +2407,10 @@ std::string Players::heldItemName(PlayerCache& player)
 std::string Players::ReadNameFromHandsItem(uint64_t itemBase)
 {
 
-    uint64_t itemTemp = mem.Read<uint64_t>(itemBase + sdk::LootItem::Template);
-    if (!Utils::valid_pointer(itemTemp))
-        return "--ERR--";
+    uint64_t itemTemp = 0x0;
+
+    if (!mem.TryRead<uint64_t>(itemBase + sdk::LootItem::Template,itemTemp))
+		return "--ERR--";
 
     auto mongoId = mem.Read<MongoID>(itemTemp + sdk::ItemTemplate::_id);
     auto itemId = TrimEFT(mongoId.ReadString(mem, 64));
@@ -1738,33 +2430,86 @@ std::string Players::ReadNameFromHandsItem(uint64_t itemBase)
 
 void Players::checkExfil()
 {
+    // IMPORTANT:
+    // This function assumes playerMutex is already locked by playersTask().
+    // Do not lock playerMutex again in here.
+
+    if (!mem.vHandle)
+        return;
 
     std::vector<PlayerCache>& cache = players.getCache();
 
-    // Iterate over the cache
-    for (auto& cachedPlayer : cache) {
-        if (!Utils::valid_pointer(cachedPlayer.instance))
+    if (cache.empty())
+        return;
+
+    // If updatePlayerList failed or returned a bad count, do not mark everyone exfiled.
+    // Adjust this max if your registered player buffer supports more.
+    constexpr int MAX_REGISTERED_PLAYERS_SAFE = 512;
+
+    const int registeredCount = mainGame.registeredPlayersCount;
+
+    if (registeredCount <= 0 || registeredCount > MAX_REGISTERED_PLAYERS_SAFE)
+    {
+        LOGS.logError("[PLAYERS][EXFIL] Invalid registeredPlayersCount, skipping exfil check");
+        return;
+    }
+
+    // Build a fast lookup of currently registered player instances.
+    std::unordered_set<uint64_t> alivePlayers;
+    alivePlayers.reserve(static_cast<size_t>(registeredCount));
+
+    for (int i = 0; i < registeredCount; i++)
+    {
+        const uint64_t playerInstance = mainGame.player_buffer[i];
+
+        if (!Utils::valid_pointer(playerInstance))
             continue;
-        if (cachedPlayer.isDead || cachedPlayer.hasExfiled)
-            continue;
+
+        alivePlayers.insert(playerInstance);
+    }
+
+    // If the buffer had no valid player pointers, skip.
+    // This avoids falsely marking everyone exfiled during a bad read/frame.
+    if (alivePlayers.empty())
+    {
+        LOGS.logError("[PLAYERS][EXFIL] No valid registered players found, skipping exfil check");
+        return;
+    }
+
+    for (auto& cachedPlayer : cache)
+    {
         if (cachedPlayer.isBTR)
             continue;
 
-        bool isExfiled = true; // Assume player has exfiled unless proven otherwise
-        for (int i = 0; i < mainGame.registeredPlayersCount; i++) {
-            if (mainGame.player_buffer[i] == cachedPlayer.instance) {
-                isExfiled = false; // Player still in the game
-                break;
+        if (cachedPlayer.isDead || cachedPlayer.hasExfiled)
+            continue;
+
+        if (!Utils::valid_pointer(cachedPlayer.instance))
+            continue;
+
+        const bool stillRegistered =
+            alivePlayers.find(cachedPlayer.instance) != alivePlayers.end();
+
+        if (!stillRegistered)
+        {
+            cachedPlayer.hasExfiled = true;
+            cachedPlayer.instance = 0x0; // avoid unnecessary future reads
+
+            if (cachedPlayer.isLocal)
+            {
+                LOGS.logInfo("[PLAYERS][EXFIL] Local player no longer registered");
+            }
+            else
+            {
+                std::ostringstream ss;
+                ss << "[PLAYERS][EXFIL] Player exfiled/removed: "
+                    << cachedPlayer.name
+                    << " old instance: 0x"
+                    << std::hex << cachedPlayer.instance;
+
+                LOGS.logInfo(ss.str());
             }
         }
-
-        if (isExfiled) {
-            cachedPlayer.hasExfiled = TRUE;
-			cachedPlayer.instance = 0x0; // Clear instance to avoid unnecessary reads
-        }
-        
-
-
     }
 }
 
