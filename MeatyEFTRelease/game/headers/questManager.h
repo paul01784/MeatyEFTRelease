@@ -146,3 +146,36 @@ extern std::vector<QuestData> questDataActive;
 extern std::vector<std::string> masterItems;
 extern std::vector<QuestLocation> masterLocations;
 
+extern std::mutex g_questCacheMutex;
+
+extern std::vector<QuestData> questDataActive;
+extern std::vector<std::string> masterItems;
+extern std::vector<QuestLocation> masterLocations;
+
+inline void ClearPublishedQuestState()
+{
+    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+
+    questDataActive.clear();
+    masterItems.clear();
+    masterLocations.clear();
+}
+
+inline std::vector<QuestLocation> GetMasterLocationsSnapshot()
+{
+    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+    return masterLocations;
+}
+
+inline std::vector<std::string> GetMasterItemsSnapshot()
+{
+    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+    return masterItems;
+}
+
+inline std::vector<QuestData> GetQuestDataActiveSnapshot()
+{
+    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+    return questDataActive;
+}
+

@@ -12,6 +12,8 @@ std::vector<QuestData> questDataActive;
 std::vector<std::string> masterItems;
 std::vector<QuestLocation> masterLocations;
 
+std::mutex g_questCacheMutex;
+
 static bool IsObjectiveCompleted(
     const TarkovObjective& obj,
     const std::vector<std::string>& completedConditions)
@@ -234,154 +236,222 @@ static bool ContainsExact(const std::vector<std::string>& v, const std::string& 
 
 void QuestManager::initQuestManager()
 {
-    questDataActive.clear();
-    masterItems.clear();
-    masterLocations.clear();
+    ClearPublishedQuestState();
 
-    if (!Utils::valid_pointer(mainGame.localplayerProfile))
-        return;
+    std::vector<QuestData> newQuestDataActive;
+    std::vector<std::string> newMasterItems;
+    std::vector<QuestLocation> newMasterLocations;
 
-    const uint64_t questData = mem.Read<uint64_t>(mainGame.localplayerProfile + sdk::Profile::QuestsData);
-    if (!Utils::valid_pointer(questData))
-        return;
-
-    MonoList<uint64_t> questDataList(questData);
-
-    if (questDataList.count < 1)
-        return;
-
-    for (int i = 0; i < questDataList.count; ++i)
-    {
-        const uint64_t qDataEntry = questDataList[i];
-        if (!Utils::valid_pointer(qDataEntry))
-            continue;
-
-        // status
-        const int qStatus = mem.Read<int>(qDataEntry + sdk::QuestsData::Status);
-        if (qStatus != 2) // started
-            continue;
-
-        // quest ID (Mono string)
-        const uint64_t qIdStrPtr = mem.Read<uint64_t>(qDataEntry + sdk::QuestsData::Id);
-        if (!Utils::valid_pointer(qIdStrPtr))
-            continue;
-
-        int qIdLen = mem.Read<int>(qIdStrPtr + 0x10);
-        if (qIdLen <= 0)
-            continue;
-
-        if (qIdLen > 256)
-            qIdLen = 256;
-
-        std::string qID = mem.readUnicodeString(qIdStrPtr + 0x14, qIdLen);
-        qID = TrimEFT(std::move(qID));
-        if (qID.empty())
-            continue;
-
-        // Slow lookup in static task list
-        const TarkovDevTasks* task = nullptr;
-        for (const auto& t : tarkovDevTasksData)
-        {
-            if (t.qID == qID)
-            {
-                task = &t;
-                break;
-            }
-        }
-        if (!task)
-            continue;
-
-        // CompletedConditions -> vector<string>
-        std::vector<std::string> completedConditions;
-
-        const uint64_t completedPtr = mem.Read<uint64_t>(qDataEntry + sdk::QuestsData::CompletedConditions);
-        if (Utils::valid_pointer(completedPtr))
-        {
-            auto completedHS = UnityHashSet<MongoID>::Create(completedPtr, mem);
-            completedConditions.reserve((size_t)completedHS.size());
-
-            for (const auto& e : completedHS.entries)
-            {
-                if (e.hashCode < 0)
-                    continue;
-
-                std::string cond = e.value.ReadString(mem);
-                cond = TrimEFT(std::move(cond));
-
-                if (!cond.empty())
-                    completedConditions.emplace_back(std::move(cond));
-            }
-        }
-
-        // Build quest entry
-        QuestData q{};
-        q.questPtr = qDataEntry;
-        q.questId = qID;
-        q.questName = task->qName;
-        q.status = QuestStatus::Started;
-        q.completedConditions = std::move(completedConditions);
-
-        // Build ONLY the filtered objectives + accumulate master lists/locations
-        FilterConditions(*task, q, q.objectives, masterItems, masterLocations);
-
-        questDataActive.emplace_back(std::move(q));
-    }
-
-    std::cout << "\n[Quest Manager] Active quests: " << questDataActive.size() << "\n";
-    std::cout << "[Quest Manager] MasterItems: " << masterItems.size()
-        << " | MasterLocations: " << masterLocations.size() << "\n";
-}
-
-void QuestManager::updateAndPruneActiveQuests()
-{
     try
     {
-        if (questDataActive.empty())
-            return;
-
         if (!Utils::valid_pointer(mainGame.localplayerProfile))
             return;
 
-        std::vector<QuestData> updated;
-        updated.reserve(questDataActive.size());
+        const uint64_t questData = mem.Read<uint64_t>(
+            mainGame.localplayerProfile + sdk::Profile::QuestsData
+        );
 
-        std::vector<std::string> newMasterItems;
-        std::vector<QuestLocation> newMasterLocations;
+        if (!Utils::valid_pointer(questData))
+            return;
 
-        for (auto& q : questDataActive)
+        MonoList<uint64_t> questDataList(questData);
+
+        if (questDataList.count < 1 || questDataList.count > 512)
+            return;
+
+        for (int i = 0; i < questDataList.count; ++i)
         {
-            // Resolve fresh live quest ptr each update
-            const uint64_t liveQuestPtr = findLiveQuestPtrById(q.questId);
-            if (!Utils::valid_pointer(liveQuestPtr))
+            const uint64_t qDataEntry = questDataList[i];
+            if (!Utils::valid_pointer(qDataEntry))
                 continue;
 
-            const int qStatus = mem.Read<int>(liveQuestPtr + sdk::QuestsData::Status);
-            if (qStatus != 2)
+            const int qStatus = mem.Read<int>(
+                qDataEntry + sdk::QuestsData::Status
+            );
+
+            if (qStatus != 2) // started
                 continue;
 
-            // Rebuild completed conditions from the LIVE quest object
+            const uint64_t qIdStrPtr = mem.Read<uint64_t>(
+                qDataEntry + sdk::QuestsData::Id
+            );
+
+            if (!Utils::valid_pointer(qIdStrPtr))
+                continue;
+
+            int qIdLen = mem.Read<int>(qIdStrPtr + 0x10);
+
+            if (qIdLen <= 0 || qIdLen > 256)
+                continue;
+
+            std::string qID = mem.readUnicodeString(qIdStrPtr + 0x14, qIdLen);
+            qID = TrimEFT(std::move(qID));
+
+            if (qID.empty())
+                continue;
+
+            const TarkovDevTasks* task = nullptr;
+
+            for (const auto& t : tarkovDevTasksData)
+            {
+                if (t.qID == qID)
+                {
+                    task = &t;
+                    break;
+                }
+            }
+
+            if (!task)
+                continue;
+
             std::vector<std::string> completedConditions;
-            const uint64_t completedPtr =
-                mem.Read<uint64_t>(liveQuestPtr + sdk::QuestsData::CompletedConditions);
+
+            const uint64_t completedPtr = mem.Read<uint64_t>(
+                qDataEntry + sdk::QuestsData::CompletedConditions
+            );
 
             if (Utils::valid_pointer(completedPtr))
             {
                 auto completedHS = UnityHashSet<MongoID>::Create(completedPtr, mem);
-                completedConditions.reserve((size_t)completedHS.size());
+
+                const size_t reserveCount = std::min<size_t>(
+                    static_cast<size_t>(completedHS.size()),
+                    512
+                );
+
+                completedConditions.reserve(reserveCount);
 
                 for (const auto& e : completedHS.entries)
                 {
                     if (e.hashCode < 0)
                         continue;
 
-                    std::string cond = TrimEFT(e.value.ReadString(mem));
+                    std::string cond = e.value.ReadString(mem);
+                    cond = TrimEFT(std::move(cond));
+
                     if (!cond.empty())
                         completedConditions.emplace_back(std::move(cond));
                 }
             }
 
-            // Re-find authoritative task definition
+            QuestData q{};
+            q.questPtr = qDataEntry;
+            q.questId = qID;
+            q.questName = task->qName;
+            q.status = QuestStatus::Started;
+            q.completedConditions = std::move(completedConditions);
+
+            FilterConditions(
+                *task,
+                q,
+                q.objectives,
+                newMasterItems,
+                newMasterLocations
+            );
+
+            newQuestDataActive.emplace_back(std::move(q));
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_questCacheMutex);
+
+            questDataActive = std::move(newQuestDataActive);
+            masterItems = std::move(newMasterItems);
+            masterLocations = std::move(newMasterLocations);
+        }
+
+        std::cout << "\n[Quest Manager] Active quests: " << questDataActive.size() << "\n";
+        std::cout << "[Quest Manager] MasterItems: " << masterItems.size()
+            << " | MasterLocations: " << masterLocations.size() << "\n";
+    }
+    catch (const std::exception& e)
+    {
+        LOGS.logError("Exception caught in initQuestManager: " + std::string(e.what()));
+        ClearPublishedQuestState();
+    }
+    catch (...)
+    {
+        LOGS.logError("Unknown exception caught in initQuestManager");
+        ClearPublishedQuestState();
+    }
+}
+
+void QuestManager::updateAndPruneActiveQuests()
+{
+    try
+    {
+        std::vector<QuestData> activeSnapshot;
+
+        {
+            std::lock_guard<std::mutex> lock(g_questCacheMutex);
+
+            if (questDataActive.empty())
+                return;
+
+            activeSnapshot = questDataActive;
+        }
+
+        if (!Utils::valid_pointer(mainGame.localplayerProfile))
+        {
+            ClearPublishedQuestState();
+            return;
+        }
+
+        std::vector<QuestData> updated;
+        updated.reserve(activeSnapshot.size());
+
+        std::vector<std::string> newMasterItems;
+        std::vector<QuestLocation> newMasterLocations;
+
+        for (auto& q : activeSnapshot)
+        {
+            if (q.questId.empty())
+                continue;
+
+            const uint64_t liveQuestPtr = findLiveQuestPtrById(q.questId);
+
+            if (!Utils::valid_pointer(liveQuestPtr))
+                continue;
+
+            const int qStatus = mem.Read<int>(
+                liveQuestPtr + sdk::QuestsData::Status
+            );
+
+            if (qStatus != 2)
+                continue;
+
+            std::vector<std::string> completedConditions;
+
+            const uint64_t completedPtr = mem.Read<uint64_t>(
+                liveQuestPtr + sdk::QuestsData::CompletedConditions
+            );
+
+            if (Utils::valid_pointer(completedPtr))
+            {
+                auto completedHS = UnityHashSet<MongoID>::Create(completedPtr, mem);
+
+                const size_t reserveCount = std::min<size_t>(
+                    static_cast<size_t>(completedHS.size()),
+                    512
+                );
+
+                completedConditions.reserve(reserveCount);
+
+                for (const auto& e : completedHS.entries)
+                {
+                    if (e.hashCode < 0)
+                        continue;
+
+                    std::string cond = e.value.ReadString(mem);
+                    cond = TrimEFT(std::move(cond));
+
+                    if (!cond.empty())
+                        completedConditions.emplace_back(std::move(cond));
+                }
+            }
+
             const TarkovDevTasks* task = nullptr;
+
             for (const auto& t : tarkovDevTasksData)
             {
                 if (t.qID == q.questId)
@@ -400,9 +470,15 @@ void QuestManager::updateAndPruneActiveQuests()
             fresh.status = QuestStatus::Started;
 
             std::vector<ActiveObjective> rebuiltObjectives;
-            FilterConditions(*task, fresh, rebuiltObjectives, newMasterItems, newMasterLocations);
 
-            // If no remaining objectives, prune the quest from active cache
+            FilterConditions(
+                *task,
+                fresh,
+                rebuiltObjectives,
+                newMasterItems,
+                newMasterLocations
+            );
+
             if (rebuiltObjectives.empty())
                 continue;
 
@@ -410,18 +486,22 @@ void QuestManager::updateAndPruneActiveQuests()
             updated.emplace_back(std::move(fresh));
         }
 
-        questDataActive.swap(updated);
-        masterItems.swap(newMasterItems);
-        masterLocations.swap(newMasterLocations);
+        {
+            std::lock_guard<std::mutex> lock(g_questCacheMutex);
+
+            questDataActive = std::move(updated);
+            masterItems = std::move(newMasterItems);
+            masterLocations = std::move(newMasterLocations);
+        }
     }
     catch (const std::exception& e)
     {
-        LOGS.logError("Exception caught in taskUpdate: " + std::string(e.what()) + ". Retrying...");
+        LOGS.logError("Exception caught in updateAndPruneActiveQuests: " + std::string(e.what()) + ". Retrying...");
         return;
     }
     catch (...)
     {
-        LOGS.logError("Unknown exception caught in taskUpdate. Retrying...");
+        LOGS.logError("Unknown exception caught in updateAndPruneActiveQuests. Retrying...");
         return;
     }
 }

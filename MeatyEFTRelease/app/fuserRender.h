@@ -49,10 +49,7 @@ namespace fuserRender
 
     static inline void LogStageError(const std::string& message)
     {
-        std::cout << "[FUSER][RENDER] " << message << std::endl;
-
-        // Or use:
-        // LOGS.logError("[FUSER][RENDER] " + message);
+        LOGS.logError("[FUSER][RENDER] " + message);
     }
 
     template <typename Fn>
@@ -550,7 +547,7 @@ namespace fuserRender
 
         const std::string currentMapId = TrimEFT(mainGame.selectedLocation);
 
-        std::vector<QuestLocation> locations = masterLocations;
+        std::vector<QuestLocation> locations = GetMasterLocationsSnapshot();
 
         for (const auto& loc : locations)
         {
@@ -734,8 +731,7 @@ namespace fuserRender
 
     static inline void RenderPlayers()
     {
-        try
-        {
+        
             std::vector<PlayerCache> cache = players.getCache();
 
             if (cache.empty())
@@ -890,11 +886,7 @@ namespace fuserRender
                     DrawPlayerSkeleton(boneScreenPositions, playerColour);
                 }
             }
-        }
-        catch (...)
-        {
-            return;
-        }
+        
     }
 
     static inline void RenderLoot()

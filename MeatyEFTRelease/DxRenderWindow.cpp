@@ -118,19 +118,28 @@ bool DxRenderWindow::Start()
     if (m_running.load())
         return true;
 
+    if (m_renderThread.joinable())
+        m_renderThread.join();
+
     m_stopRequested.store(false);
+    m_windowReady.store(false);
     m_running.store(true);
 
-    m_renderThread = std::thread(&DxRenderWindow::RenderLoop, this);
+    try
+    {
+        m_renderThread = std::thread(&DxRenderWindow::RenderLoop, this);
+    }
+    catch (...)
+    {
+        m_running.store(false);
+        return false;
+    }
 
     return true;
 }
 
 void DxRenderWindow::Stop()
 {
-    if (!m_running.load())
-        return;
-
     m_stopRequested.store(true);
 
     HWND hwnd = m_hwnd.load();
@@ -146,10 +155,16 @@ void DxRenderWindow::Stop()
     }
 
     if (m_renderThread.joinable())
-        m_renderThread.join();
+    {
+        if (m_renderThread.get_id() != std::this_thread::get_id())
+        {
+            m_renderThread.join();
+        }
+    }
 
     m_running.store(false);
     m_windowReady.store(false);
+    m_renderThreadId.store(0);
 }
 
 void DxRenderWindow::Shutdown()
@@ -1022,6 +1037,23 @@ void DxRenderWindow::RenderFrame()
     {
         CleanupRenderTargets();
         CreateRenderTargets();
+        return;
+    }
+
+    if (FAILED(hr))
+    {
+        CleanupRenderTargets();
+        CreateRenderTargets();
+        return;
+    }
+
+    hr = m_swapChain->Present(cfg.useVSync ? 1 : 0, 0);
+
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+    {
+        CleanupDeviceResources();
+        CreateDeviceResources();
+        return;
     }
 
     m_swapChain->Present(cfg.useVSync ? 1 : 0, 0);
@@ -1573,27 +1605,31 @@ std::wstring DxRenderWindow::Utf8ToWide(const std::string& text)
 
     int needed = MultiByteToWideChar(
         CP_UTF8,
-        0,
-        text.c_str(),
-        -1,
+        MB_ERR_INVALID_CHARS,
+        text.data(),
+        static_cast<int>(text.size()),
         nullptr,
         0
     );
 
-    if (needed <= 1)
+    if (needed <= 0)
         return L"";
 
-    std::wstring result(static_cast<size_t>(needed - 1), L'\0');
+    std::wstring result(static_cast<size_t>(needed), L'\0');
 
-    MultiByteToWideChar(
+    int written = MultiByteToWideChar(
         CP_UTF8,
-        0,
-        text.c_str(),
-        -1,
+        MB_ERR_INVALID_CHARS,
+        text.data(),
+        static_cast<int>(text.size()),
         result.data(),
         needed
     );
 
+    if (written <= 0)
+        return L"";
+
+    result.resize(static_cast<size_t>(written));
     return result;
 }
 
