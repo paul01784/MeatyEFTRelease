@@ -49,8 +49,7 @@ std::string Debug::currentDateTimeFileString() {
 
     std::ostringstream oss;
 
-    // Windows-safe filename format. No ':' characters.
-    oss << std::put_time(&tm, "%d-%m-%Y %H:%M:%S");
+    oss << std::put_time(&tm, "%d-%m-%Y_%H-%M-%S");
 
     return oss.str();
 }
