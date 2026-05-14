@@ -79,7 +79,17 @@ private:
     std::condition_variable fileQueueCv;
     std::deque<std::string> fileQueue;
 
+    std::filesystem::path logsDirectory;
     std::filesystem::path errorLogPath;
+    std::string logFileStem;
+
+    static constexpr size_t MaxLogFileBytes = 5 * 1024 * 1024; // 5 MB per file
+    static constexpr size_t MaxLogFilesToKeep = 20;
+
+    std::filesystem::path makeLogPath(int part) const;
+    void cleanupOldLogFiles() noexcept;
+
+    static std::string currentDateTimeFileString();
 
 private:
     template<typename... Args>

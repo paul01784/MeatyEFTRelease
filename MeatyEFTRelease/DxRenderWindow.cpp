@@ -1,3 +1,4 @@
+#include "app/debug.h"
 #include "app/DxRenderWindow.h"
 #include "app/fuserRender.h"
 
@@ -13,7 +14,6 @@
 #include <eh.h>
 #include <sstream>
 #include <iostream>
-#include "app/debug.h"
 
 
 #pragma comment(lib, "d3d11.lib")

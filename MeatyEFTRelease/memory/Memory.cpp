@@ -1029,7 +1029,7 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache) c
 
 	if (!address)
 	{
-		MemoryLogError("Read failed: address is null");
+		//MemoryLogError("Read failed: address is null"); // spams log files allot
 		return false;
 	}
 
@@ -1088,7 +1088,7 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool us
 
 	if (!address)
 	{
-		MemoryLogError("Read(pid) failed: address is null");
+		//MemoryLogError("Read failed: address is null"); // spams log files allot
 		return false;
 	}
 
