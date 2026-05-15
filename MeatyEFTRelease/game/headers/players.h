@@ -315,6 +315,7 @@ public:
 	void softRestart();
 
 	std::vector<PlayerCache>& getCache();
+	std::vector<PlayerCache> getCacheSnapshot();
 	std::vector<PlayerGroups>& getGroupCache();
 
 	int getDistance(glm::vec3 point1, glm::vec3 point2);

@@ -732,7 +732,7 @@ namespace fuserRender
     static inline void RenderPlayers()
     {
         
-            std::vector<PlayerCache> cache = players.getCache();
+            std::vector<PlayerCache> cache = players.getCacheSnapshot();
 
             if (cache.empty())
                 return;

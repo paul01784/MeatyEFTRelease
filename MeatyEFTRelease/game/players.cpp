@@ -219,6 +219,12 @@ std::vector<PlayerCache>& Players::getCache() {
     return playerCache;
 }
 
+std::vector<PlayerCache> Players::getCacheSnapshot()
+{
+    std::lock_guard<std::mutex> lock(playerMutex);
+    return playerCache;
+}
+
 std::vector<PlayerGroups>& Players::getGroupCache() {
     return playerGroups;
 }
@@ -2115,145 +2121,321 @@ void Players::playerEquipment()
     if (!radarGlobals::getPlayerEquip)
         return;
 
+    using Clock = std::chrono::steady_clock;
+    using SlotVec = std::remove_reference_t<decltype(std::declval<PlayerCache&>()._slots)>;
+    using SlotEntry = typename SlotVec::value_type;
+    using PlayerValueT = std::remove_reference_t<decltype(std::declval<PlayerCache&>().playerValue)>;
+
+    struct InitJob
+    {
+        uint64_t instance = 0;
+        uint64_t inventoryControllerAddr = 0;
+    };
+
+    struct InitResult
+    {
+        uint64_t instance = 0;
+        SlotVec slots;
+        bool success = false;
+    };
+
+    struct ScanJob
+    {
+        uint64_t instance = 0;
+        bool isPlayer = false;
+        std::string profileId;
+        SlotVec slots;
+        Clock::time_point updateTime{};
+    };
+
+    struct ScanResult
+    {
+        uint64_t instance = 0;
+        SlotVec slots;
+        PlayerValueT playerValue{};
+        Clock::time_point updateTime{};
+
+        bool hasProfileUpdate = false;
+        std::string profileId;
+        std::string accountId;
+        std::string nickname;
+    };
+
+    auto findPlayerByInstance = [](std::vector<PlayerCache>& cache, uint64_t instance) -> PlayerCache*
+        {
+            for (auto& player : cache)
+            {
+                if (player.instance == instance)
+                    return &player;
+            }
+
+            return nullptr;
+        };
+
     try
     {
+        std::vector<InitJob> initJobs;
 
-        // init all players
-        std::vector<PlayerCache>& cache = players.getCache();
-        for (auto& player : cache)
+        // Build init jobs under lock
         {
+            std::lock_guard<std::mutex> lock(playerMutex);
 
-            if (!Utils::valid_pointer(player.instance)) continue;
-            if (player.isDead || player.hasExfiled)
+            std::vector<PlayerCache>& cache = players.getCache();
+
+            initJobs.reserve(cache.size());
+
+            for (const auto& player : cache)
+            {
+                if (!Utils::valid_pointer(player.instance))
+                    continue;
+
+                if (player.isDead || player.hasExfiled)
+                    continue;
+
+                if (player.equipInited)
+                    continue;
+
+                if (!Utils::valid_pointer(player.P_InventoryControllerAddr))
+                    continue;
+
+                initJobs.push_back({
+                    player.instance,
+                    player.P_InventoryControllerAddr
+                    });
+            }
+        }
+
+        //Do equipment slot init memory reads outside lock
+        std::vector<InitResult> initResults;
+        initResults.reserve(initJobs.size());
+
+        for (const auto& job : initJobs)
+        {
+            InitResult result{};
+            result.instance = job.instance;
+
+            if (!Utils::valid_pointer(job.inventoryControllerAddr))
                 continue;
 
-            if (player.equipInited)
+            uint64_t inventoryController = mem.Read<uint64_t>(job.inventoryControllerAddr);
+            if (!Utils::valid_pointer(inventoryController))
                 continue;
 
-            if (!Utils::valid_pointer(player.P_InventoryControllerAddr))
+            uint64_t inventory = mem.Read<uint64_t>(inventoryController + sdk::InventoryController::Inventory);
+            if (!Utils::valid_pointer(inventory))
                 continue;
 
-            uint64_t inventoryController = mem.Read<uint64_t>(player.P_InventoryControllerAddr); if (!Utils::valid_pointer(inventoryController)) continue;
-            uint64_t inventory = mem.Read<uint64_t>(inventoryController + sdk::InventoryController::Inventory); if (!Utils::valid_pointer(inventory)) continue;
-            uint64_t equipment = mem.Read<uint64_t>(inventory + sdk::Inventory::Equipment); if (!Utils::valid_pointer(equipment)) continue;
-            uint64_t slotsPtr = mem.Read<uint64_t>(equipment + sdk::InventoryEquipment::_cachedSlots); if (!Utils::valid_pointer(slotsPtr)) continue;
+            uint64_t equipment = mem.Read<uint64_t>(inventory + sdk::Inventory::Equipment);
+            if (!Utils::valid_pointer(equipment))
+                continue;
 
-            
+            uint64_t slotsPtr = mem.Read<uint64_t>(equipment + sdk::InventoryEquipment::_cachedSlots);
+            if (!Utils::valid_pointer(slotsPtr))
+                continue;
+
             auto slotsArray = UnityArray<uint64_t>(slotsPtr);
 
-            if (slotsArray.count < 1)
+            if (slotsArray.count < 1 || slotsArray.count > 128)
                 continue;
-
-            player._slots.clear();
 
             for (auto& slotPtr : slotsArray)
             {
-                uint64_t namePtr = mem.Read<uint64_t>(slotPtr + sdk::Slot::ID); if (!Utils::valid_pointer(namePtr)) continue;
-                auto name = mem.readUnicodeString(namePtr + 0x14, mem.Read<int>(static_cast<SIZE_T>(namePtr) + 0x10));
+                if (!Utils::valid_pointer(slotPtr))
+                    continue;
+
+                uint64_t namePtr = mem.Read<uint64_t>(slotPtr + sdk::Slot::ID);
+                if (!Utils::valid_pointer(namePtr))
+                    continue;
+
+                int nameLen = mem.Read<int>(namePtr + 0x10);
+
+                if (nameLen <= 0 || nameLen > 128)
+                    continue;
+
+                std::string name = mem.readUnicodeString(namePtr + 0x14, nameLen);
+
+                if (name.empty())
+                    continue;
 
                 if (skipNames.contains(name))
                     continue;
 
-                //add slot to the vector for later scanning
-                player._slots.push_back({ name, slotPtr });
+                result.slots.push_back({ name, slotPtr });
             }
 
-            if (!player._slots.empty())
-                player.equipInited = true;
-
+            if (!result.slots.empty())
+            {
+                result.success = true;
+                initResults.push_back(std::move(result));
+            }
         }
 
-        // update slots in players equipment scanned slots
+        //Apply init results under lock
+		{ // LOCKED SCOPE
+            std::lock_guard<std::mutex> lock(playerMutex);
 
-        for (auto& player : cache)
+            std::vector<PlayerCache>& cache = players.getCache();
+
+            for (auto& result : initResults)
+            {
+                PlayerCache* player = findPlayerByInstance(cache, result.instance);
+
+                if (!player)
+                    continue;
+
+                if (!Utils::valid_pointer(player->instance))
+                    continue;
+
+                if (player->isDead || player->hasExfiled)
+                    continue;
+
+                if (player->equipInited)
+                    continue;
+
+                if (!result.success || result.slots.empty())
+                    continue;
+
+                player->_slots = std::move(result.slots);
+                player->equipInited = true;
+            }
+        }
+
+        std::vector<ScanJob> scanJobs;
+
+        //Build 
+		{ // LOCKED SCOPE
+            std::lock_guard<std::mutex> lock(playerMutex);
+
+            std::vector<PlayerCache>& cache = players.getCache();
+
+            scanJobs.reserve(cache.size());
+
+            const auto now = Clock::now();
+
+            for (const auto& player : cache)
+            {
+                if (!Utils::valid_pointer(player.instance))
+                    continue;
+
+                if (player.isDead || player.hasExfiled)
+                    continue;
+
+                if (!player.equipInited)
+                    continue;
+
+                if (player._slots.empty())
+                    continue;
+
+                if (now - player.lastEquipmentUpdate < player.equipmentUpdateInterval)
+                    continue;
+
+                ScanJob job{};
+                job.instance = player.instance;
+                job.isPlayer = player.isPlayer;
+                job.profileId = player.profileId;
+                job.slots = player._slots;
+                job.updateTime = now;
+
+                scanJobs.push_back(std::move(job));
+            }
+		} // UNLOCKED SCOPE
+
+        //Scan equipment outside lock
+        std::vector<ScanResult> scanResults;
+        scanResults.reserve(scanJobs.size());
+
+        for (auto& job : scanJobs)
         {
-            if (!Utils::valid_pointer(player.instance)) continue;
-            if (player.isDead || player.hasExfiled)
-                continue;
+            ScanResult result{};
+            result.instance = job.instance;
+            result.updateTime = job.updateTime;
+            result.slots = std::move(job.slots);
+            result.playerValue = 0;
 
-            auto now = std::chrono::steady_clock::now();
-            if (now - player.lastEquipmentUpdate < player.equipmentUpdateInterval)
-                continue;
-            player.lastEquipmentUpdate = now;
-
-
-            for (auto& slot : player._slots)
+            for (auto& slot : result.slots)
             {
                 slot.wanted = false;
                 slot.price = 0;
                 slot.equipName.clear();
 
-                if (player.isPlayer && slot.name == "Scabbard")
+                if (job.isPlayer && slot.name == "Scabbard")
+                    continue;
+
+                if (!Utils::valid_pointer(slot.addr))
                     continue;
 
                 uint64_t containedItem = mem.Read<uint64_t>(slot.addr + sdk::Slot::ContainedItem);
                 if (!Utils::valid_pointer(containedItem))
                     continue;
 
-                //check if we have dogtag and proccess profileid if not set
-                if (player.isPlayer && player.profileId.empty())
+                // Dogtag profile ID check
+                if (job.isPlayer && job.profileId.empty() && !result.hasProfileUpdate)
                 {
-                    std::string className = "";
-                    className = ReadName(containedItem);
+                    std::string className = ReadName(containedItem);
 
                     if (className == "BarterOther")
                     {
                         uint64_t dogtag = mem.Read<uint64_t>(containedItem + sdk::BarterOtherOffsets::Dogtag);
+
                         if (!Utils::valid_pointer(dogtag))
                         {
                             LOGS.logError("[DOGTAG] pointer to dogtag in equipment scan failed!");
-                            continue;
-                        }
-
-                        uint64_t profileIdPtr = dogtag + sdk::DogtagComponent::ProfileId;
-                        if (!Utils::valid_pointer(profileIdPtr))
-                        {
-                            LOGS.logError("[DOGTAG] pointer to dogtag string failed!");
-                            continue;
-                        }
-
-                        std::string readString = ReadString(profileIdPtr);
-
-                        if (!readString.empty())
-                        {
-                            player.profileId = readString;
-                            LOGS.logInfo("[PLAYER] Set PID to Player : ", player.profileId);
-                            
-
-                            //call API try get data we might have if we have api key
-                            if (!player.profileId.empty() && g_DogTagAPI.hasApiKey())
-                            {
-                                auto result = g_DogTagAPI.getByProfile(player.profileId);
-
-                                if (result)
-                                {
-                                    if (!result->accountId.empty())
-                                        player.accountId = result->accountId;
-
-                                    if (!result->nickname.empty())
-                                        player.name = result->nickname;
-                                }
-                            }
                         }
                         else
                         {
-                            LOGS.logInfo("[PLAYER] DogTag profileid is empty");
-                        }
+                            uint64_t profileIdPtr = dogtag + sdk::DogtagComponent::ProfileId;
 
+                            if (!Utils::valid_pointer(profileIdPtr))
+                            {
+                                LOGS.logError("[DOGTAG] pointer to dogtag string failed!");
+                            }
+                            else
+                            {
+                                std::string readString = ReadString(profileIdPtr);
+
+                                if (!readString.empty())
+                                {
+                                    result.hasProfileUpdate = true;
+                                    result.profileId = readString;
+
+                                    LOGS.logInfo("[PLAYER] Set PID to Player : ", result.profileId);
+
+                                    if (g_DogTagAPI.hasApiKey())
+                                    {
+                                        auto apiResult = g_DogTagAPI.getByProfile(result.profileId);
+
+                                        if (apiResult)
+                                        {
+                                            if (!apiResult->accountId.empty())
+                                                result.accountId = apiResult->accountId;
+
+                                            if (!apiResult->nickname.empty())
+                                                result.nickname = apiResult->nickname;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    LOGS.logInfo("[PLAYER] DogTag profileid is empty");
+                                }
+                            }
+                        }
                     }
                 }
 
+                // Item template / ID
                 uint64_t inventorytemplate = mem.Read<uint64_t>(containedItem + sdk::LootItem::Template);
                 if (!Utils::valid_pointer(inventorytemplate))
                     continue;
 
                 auto mongoId = mem.Read<MongoID>(inventorytemplate + sdk::ItemTemplate::_id);
-                auto id = TrimEFT(mongoId.ReadString(mem));
+                std::string id = TrimEFT(mongoId.ReadString(mem));
+
                 if (id.empty())
                     continue;
 
-                // price/name lookup
-                for (auto& ml : marketList)
+                // Market price/name lookup
+                for (const auto& ml : marketList)
                 {
                     if (ml.bsgid != id)
                         continue;
@@ -2263,8 +2445,8 @@ void Players::playerEquipment()
                     break;
                 }
 
-                // loot filters
-                for (auto& filter : lootFilters)
+                // Loot filters
+                for (const auto& filter : lootFilters)
                 {
                     if (!filter.active)
                         continue;
@@ -2285,10 +2467,10 @@ void Players::playerEquipment()
                         break;
                 }
 
-                // quest loot
+                // Quest loot
                 if (!slot.wanted)
                 {
-                    for (auto& quest : masterItems)
+                    for (const auto& quest : masterItems)
                     {
                         if (quest == id)
                         {
@@ -2298,10 +2480,10 @@ void Players::playerEquipment()
                     }
                 }
 
-                // wishlist
+                // Wishlist
                 if (!slot.wanted)
                 {
-                    for (auto& wishlist : wishListData)
+                    for (const auto& wishlist : wishListData)
                     {
                         if (wishlist.bsgId == id)
                         {
@@ -2311,7 +2493,7 @@ void Players::playerEquipment()
                     }
                 }
 
-                //value loot
+                // Value loot
                 if (!slot.wanted)
                 {
                     if (slot.price > lootGlobals::valueLootFrom && lootGlobals::enableValueLoot)
@@ -2319,23 +2501,58 @@ void Players::playerEquipment()
                         slot.wanted = true;
                     }
                 }
-
-
             }
 
-            //reset value first
-            player.playerValue = 0;
-            //update player value
-            for (const auto& slot : player._slots)
+            // Calculate player value outside lock
+            for (const auto& slot : result.slots)
             {
                 std::string slotn = TrimEFT(slot.name);
 
                 if (slotn == "SecuredContainer" || slotn == "Dogtag" || slotn == "Scabbard")
                     continue;
+
                 if (slot.price <= 0)
                     continue;
 
-                player.playerValue += slot.price;
+                result.playerValue += static_cast<PlayerValueT>(slot.price);
+            }
+
+            scanResults.push_back(std::move(result));
+        }
+
+        // 6) Apply scan results under lock
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+
+            std::vector<PlayerCache>& cache = players.getCache();
+
+            for (auto& result : scanResults)
+            {
+                PlayerCache* player = findPlayerByInstance(cache, result.instance);
+
+                if (!player)
+                    continue;
+
+                if (!Utils::valid_pointer(player->instance))
+                    continue;
+
+                if (player->isDead || player->hasExfiled)
+                    continue;
+
+                player->_slots = std::move(result.slots);
+                player->playerValue = result.playerValue;
+                player->lastEquipmentUpdate = result.updateTime;
+
+                if (result.hasProfileUpdate && player->profileId.empty())
+                {
+                    player->profileId = result.profileId;
+
+                    if (!result.accountId.empty())
+                        player->accountId = result.accountId;
+
+                    if (!result.nickname.empty())
+                        player->name = result.nickname;
+                }
             }
         }
     }
@@ -2344,8 +2561,6 @@ void Players::playerEquipment()
         LOGS.logError("[PLAYER][EQUIP] Exception..");
     }
 }
-
-
 
 std::string Players::heldItemName(PlayerCache& player)
 {

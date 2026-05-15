@@ -56,7 +56,7 @@ void DrawRadarSubText(int x, int y, ImVec4 color, const char* str)
 void drawPlayers()
 {
 
-    std::vector<PlayerCache> cache = players.getCache();
+    std::vector<PlayerCache> cache = players.getCacheSnapshot();
     for (const auto& player : cache)
     {
         if (!Utils::valid_pointer(player.instance))
@@ -371,12 +371,7 @@ void drawWidgetPlayers()
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoResize;
 
-    std::vector<PlayerCache> playerSnapshot;
-
-    {
-        std::lock_guard<std::mutex> lock(playerMutex);
-        playerSnapshot = players.getCache();
-    }
+    std::vector<PlayerCache> playerSnapshot = players.getCacheSnapshot();
 
     // Count visible rows from snapshot
     int visibleRows = 0;
@@ -825,7 +820,7 @@ void drawWidgetExfils()
 
 void drawGrenades()
 {
-    std::vector<GrenadeList>& cacheGrenades = explosiveManager.getGrenades();
+    std::vector<GrenadeList> cacheGrenades = explosiveManager.getGrenades();
 
     if (cacheGrenades.size() == 0)
         return;

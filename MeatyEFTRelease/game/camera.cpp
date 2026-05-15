@@ -222,24 +222,37 @@ public:
         {
             const int selectedScope = SelectedScope();
 
-            // Mirror the C# “SelectedScope is < 0 or > 10” safety constraint
             if (selectedScope < 0 || selectedScope > 10)
                 return -1.0f;
 
             const SightInterface si = GetSightInterface();
 
-            // Zooms array (C# "using var zoomArray = SightInterface.Zooms;")
             auto zoomArray = si.Zooms();
+
             if (selectedScope >= zoomArray.count)
                 return -1.0f;
 
-            // Selected scope mode per scope index
-            const auto selectedScopeModes = UnityArray<int>(pScopeSelectedModes());
-            const int selectedScopeMode =
-                (selectedScope < selectedScopeModes.count) ? selectedScopeModes[selectedScope] : 0;
+            int selectedScopeMode = 0;
+
+            const std::uint64_t selectedModesPtr = pScopeSelectedModes();
+
+            if (Utils::valid_pointer(selectedModesPtr))
+            {
+                const auto selectedScopeModes = UnityArray<int>(selectedModesPtr);
+
+                if (selectedScope < selectedScopeModes.count)
+                    selectedScopeMode = selectedScopeModes[selectedScope];
+            }
 
             const std::uint64_t zoomsForScopeAddr = zoomArray[selectedScope];
-            const std::uint64_t zoomAddr = zoomsForScopeAddr + UnityArray<float>::ArrBaseOffset + (static_cast<std::uint64_t>(static_cast<std::uint32_t>(selectedScopeMode)) * 0x4ULL);
+
+            if (!Utils::valid_pointer(zoomsForScopeAddr))
+                return -1.0f;
+
+            const std::uint64_t zoomAddr =
+                zoomsForScopeAddr +
+                UnityArray<float>::ArrBaseOffset +
+                (static_cast<std::uint64_t>(static_cast<std::uint32_t>(selectedScopeMode)) * sizeof(float));
 
             const float zoomLevel = mem.Read<float>(zoomAddr, false);
 
@@ -292,9 +305,9 @@ bool Camera::checkIfOpticMatrix()
         const float scopeZoom = sightComponent.ScopeZoomValue();
        
 
-        if (scopeZoom != 0.0f)
+        if (scopeZoom != 0.f)
         {
-            return scopeZoom > 0.0f;
+            return scopeZoom > 1.f;
         }
 
         const float zoomLevel = sightComponent.GetZoomLevel();
@@ -314,51 +327,108 @@ void Camera::cameraTask()
 {
     try
     {
-
         if (!camera.initedCamera)
         {
             getCameraPtrs();
             getMatrixPtrs();
             camera.initedCamera = true;
         }
-        
-        if (!Utils::valid_pointer(this->fpsCamera) || !Utils::valid_pointer(this->opticCamera))
+
+        if (!Utils::valid_pointer(this->fpsCamera) || !Utils::valid_pointer(this->fpsMatrixAddr))
         {
             getCameraPtrs();
             getMatrixPtrs();
+
+            if (!Utils::valid_pointer(this->fpsCamera) || !Utils::valid_pointer(this->fpsMatrixAddr))
+                return;
         }
+
+        const bool isADS = mainGame.localIsScoped;       
+        const bool isScoped = mainGame.localIsScoped; 
+
+        const bool canUseOptic =
+            isADS &&
+            isScoped &&
+            Utils::valid_pointer(this->opticCamera) &&
+            Utils::valid_pointer(this->opticMatrixAddr);
+
+        glm::highp_mat4 fpsRaw{};
+        glm::highp_mat4 opticRaw{};
+
+        bool queuedOptic = false;
 
         auto handle = mem.CreateScatterHandle();
 
-        mem.AddScatterReadRequest(handle, this->fpsCamera + UnityOffsets::Camera_FOVOffset, &this->gameFOV, sizeof(float));
-        mem.AddScatterReadRequest(handle, this->fpsCamera + UnityOffsets::Camera_AspectRatioOffset, &this->gameAspect, sizeof(float));
-        mem.AddScatterReadRequest(handle, this->opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset, &this->g_viewMatrixOpticRAW, sizeof(glm::highp_mat4));
-        mem.AddScatterReadRequest(handle, this->fpsMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset, &this->g_viewMatrixRAW, sizeof(glm::highp_mat4));
+        //Fov etc from fpscamera
+        mem.AddScatterReadRequest(
+            handle,
+            this->fpsCamera + UnityOffsets::Camera_FOVOffset,
+            &this->gameFOV,
+            sizeof(float)
+        );
+
+        mem.AddScatterReadRequest(
+            handle,
+            this->fpsCamera + UnityOffsets::Camera_AspectRatioOffset,
+            &this->gameAspect,
+            sizeof(float)
+        );
+
+        //fps matrix fallback.
+        mem.AddScatterReadRequest(
+            handle,
+            this->fpsMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
+            &fpsRaw,
+            sizeof(glm::highp_mat4)
+        );
+
+        //
+        if (canUseOptic)
+        {
+            mem.AddScatterReadRequest(
+                handle,
+                this->opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
+                &opticRaw,
+                sizeof(glm::highp_mat4)
+            );
+
+            queuedOptic = true;
+        }
 
         mem.ExecuteReadScatter(handle);
         mem.CloseScatterHandle(handle);
 
-        //transpose matrix
-        this->g_viewMatrix = glm::transpose(this->g_viewMatrixRAW);
-        this->g_viewMatrixOptic = glm::transpose(this->g_viewMatrixOpticRAW);
+        this->g_viewMatrixRAW = fpsRaw;
+        this->g_viewMatrix = glm::transpose(fpsRaw);
 
-        if (mainGame.localIsScoped)
+        camera.localmpCamera = false;
+
+        if (queuedOptic)
         {
-            //check if we need optic matrix
+            this->g_viewMatrixOpticRAW = opticRaw;
+            this->g_viewMatrixOptic = glm::transpose(opticRaw);
+
             if (checkIfOpticMatrix())
+            {
                 camera.localmpCamera = true;
+            }
             else
+            {
                 camera.localmpCamera = false;
+            }
         }
         else
+        {
             camera.localmpCamera = false;
-
+        }
     }
-    catch (const std::exception& e) {
+    catch (const std::exception& e)
+    {
         LOGS.logError("Exception caught in cameraUpdater: " + std::string(e.what()) + ". Retrying...");
         return;
     }
-    catch (...) {
+    catch (...)
+    {
         LOGS.logError("Unknown exception caught in cameraUpdater. Retrying...");
         return;
     }
