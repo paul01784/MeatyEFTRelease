@@ -145,17 +145,7 @@ void MainGame::updateLocalPlayerPtr()
 
 bool MainGame::updatePlayerList()
 {
-    // Do not leave old player list data active if this update fails.
-    mainGame.registeredPlayers = 0;
-    mainGame.registeredPlayersList = 0;
-    mainGame.registeredPlayersCount = 0;
-
-    std::fill(
-        std::begin(mainGame.player_buffer),
-        std::end(mainGame.player_buffer),
-        0
-    );
-
+    
     if (!mem.vHandle)
         return false;
 

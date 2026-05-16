@@ -87,7 +87,7 @@ void Camera::getCameraPtrs()
 
     if (debug) std::cout << "=== Camera Scan ===" << std::endl;
 
-    for (uint64_t i = 0; i < array.curCount; i++)
+    for (uint64_t i = static_cast<uint64_t>(array.curCount); i-- > 0;)
     {
         uint64_t cameraEntity = mem.Read<uint64_t>(array.cameras + i * sizeof(uint64_t));
         if (!cameraEntity)
@@ -327,54 +327,123 @@ void Camera::cameraTask()
 {
     try
     {
-        if (!camera.initedCamera)
+        auto matrixLooksValid = [](const glm::highp_mat4& m) -> bool
+            {
+                int nonZeroCount = 0;
+                float maxAbs = 0.0f;
+
+                for (int c = 0; c < 4; ++c)
+                {
+                    for (int r = 0; r < 4; ++r)
+                    {
+                        const float v = m[c][r];
+
+                        if (!std::isfinite(v))
+                            return false;
+
+                        const float av = std::fabs(v);
+
+                        if (av > 100000.0f)
+                            return false;
+
+                        if (av > 0.00001f)
+                        {
+                            nonZeroCount++;
+
+                            if (av > maxAbs)
+                                maxAbs = av;
+                        }
+                    }
+                }
+
+                if (nonZeroCount < 6)
+                    return false;
+
+                if (maxAbs < 0.0001f)
+                    return false;
+
+                return true;
+            };
+
+        auto refreshCameraPtrs = [&]()
+            {
+                getCameraPtrs();
+                getMatrixPtrs();
+            };
+
+        
+        static int opticBadFrames = 0;
+
+        if (!this->initedCamera)
         {
-            getCameraPtrs();
-            getMatrixPtrs();
-            camera.initedCamera = true;
+            refreshCameraPtrs();
+            this->initedCamera = true;
         }
 
-        if (!Utils::valid_pointer(this->fpsCamera) || !Utils::valid_pointer(this->fpsMatrixAddr))
-        {
-            getCameraPtrs();
-            getMatrixPtrs();
+        const bool isScoped = mainGame.localIsScoped;
 
-            if (!Utils::valid_pointer(this->fpsCamera) || !Utils::valid_pointer(this->fpsMatrixAddr))
-                return;
-        }
+        bool fpsOk =
+            Utils::valid_pointer(this->fpsCamera) &&
+            Utils::valid_pointer(this->fpsMatrixAddr);
 
-        const bool isADS = mainGame.localIsScoped;       
-        const bool isScoped = mainGame.localIsScoped; 
-
-        const bool canUseOptic =
-            isADS &&
-            isScoped &&
+        bool opticOk =
             Utils::valid_pointer(this->opticCamera) &&
             Utils::valid_pointer(this->opticMatrixAddr);
 
+        
+        if (!fpsOk || (isScoped && !opticOk))
+        {
+            refreshCameraPtrs();
+
+            fpsOk =
+                Utils::valid_pointer(this->fpsCamera) &&
+                Utils::valid_pointer(this->fpsMatrixAddr);
+
+            opticOk =
+                Utils::valid_pointer(this->opticCamera) &&
+                Utils::valid_pointer(this->opticMatrixAddr);
+
+            if (!fpsOk)
+            {
+                this->localmpCamera = false;
+                return;
+            }
+        }
+
+        const bool canQueueOptic = isScoped && opticOk;
+
         glm::highp_mat4 fpsRaw{};
         glm::highp_mat4 opticRaw{};
+
+        float newFov = this->gameFOV;
+        float newAspect = this->gameAspect;
 
         bool queuedOptic = false;
 
         auto handle = mem.CreateScatterHandle();
 
-        //Fov etc from fpscamera
+        if (!handle)
+        {
+            this->localmpCamera = false;
+            return;
+        }
+
+        // FOV / aspect 
         mem.AddScatterReadRequest(
             handle,
             this->fpsCamera + UnityOffsets::Camera_FOVOffset,
-            &this->gameFOV,
+            &newFov,
             sizeof(float)
         );
 
         mem.AddScatterReadRequest(
             handle,
             this->fpsCamera + UnityOffsets::Camera_AspectRatioOffset,
-            &this->gameAspect,
+            &newAspect,
             sizeof(float)
         );
 
-        //fps matrix fallback.
+        // FPS matrix
         mem.AddScatterReadRequest(
             handle,
             this->fpsMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
@@ -382,8 +451,8 @@ void Camera::cameraTask()
             sizeof(glm::highp_mat4)
         );
 
-        //
-        if (canUseOptic)
+        
+        if (canQueueOptic)
         {
             mem.AddScatterReadRequest(
                 handle,
@@ -398,38 +467,91 @@ void Camera::cameraTask()
         mem.ExecuteReadScatter(handle);
         mem.CloseScatterHandle(handle);
 
+        
+        if (!matrixLooksValid(fpsRaw))
+        {
+            this->localmpCamera = false;
+
+            LOGS.logWarn(
+                "Camera FPS matrix read failed/invalid. "
+                "fpsCamera=" + std::to_string(this->fpsCamera) +
+                " fpsMatrixAddr=" + std::to_string(this->fpsMatrixAddr)
+            );
+
+            return;
+        }
+
+        if (std::isfinite(newFov) && newFov > 1.0f && newFov < 180.0f)
+            this->gameFOV = newFov;
+
+        if (std::isfinite(newAspect) && newAspect > 0.1f && newAspect < 10.0f)
+            this->gameAspect = newAspect;
+
+        
         this->g_viewMatrixRAW = fpsRaw;
         this->g_viewMatrix = glm::transpose(fpsRaw);
 
-        camera.localmpCamera = false;
+        bool useOpticCamera = false;
+        bool opticNeedsRefresh = false;
 
-        if (queuedOptic)
+        if (isScoped)
         {
-            this->g_viewMatrixOpticRAW = opticRaw;
-            this->g_viewMatrixOptic = glm::transpose(opticRaw);
-
-            if (checkIfOpticMatrix())
+            if (!queuedOptic)
             {
-                camera.localmpCamera = true;
+                opticNeedsRefresh = true;
+            }
+            else if (!matrixLooksValid(opticRaw))
+            {
+                opticNeedsRefresh = true;
             }
             else
             {
-                camera.localmpCamera = false;
+                this->g_viewMatrixOpticRAW = opticRaw;
+                this->g_viewMatrixOptic = glm::transpose(opticRaw);
+
+                if (checkIfOpticMatrix())
+                {
+                    useOpticCamera = true;
+                    opticBadFrames = 0;
+                }
+                else
+                {
+                    opticNeedsRefresh = true;
+                }
             }
         }
         else
         {
-            camera.localmpCamera = false;
+            opticBadFrames = 0;
+        }
+
+        this->localmpCamera = useOpticCamera;
+
+        if (isScoped && opticNeedsRefresh)
+        {
+            opticBadFrames++;
+
+            if (opticBadFrames >= 2000)
+            {
+                refreshCameraPtrs();
+                opticBadFrames = 0;
+
+                LOGS.logWarn(
+                    "Optic camera matrix invalid while scoped. Refreshed camera pointers. "
+                    "opticCamera=" + std::to_string(this->opticCamera) +
+                    " opticMatrixAddr=" + std::to_string(this->opticMatrixAddr)
+                );
+            }
         }
     }
     catch (const std::exception& e)
     {
-        LOGS.logError("Exception caught in cameraUpdater: " + std::string(e.what()) + ". Retrying...");
+        LOGS.logError("Exception caught in cameraTask: " + std::string(e.what()));
         return;
     }
     catch (...)
     {
-        LOGS.logError("Unknown exception caught in cameraUpdater. Retrying...");
+        LOGS.logError("Unknown exception caught in cameraTask.");
         return;
     }
 }

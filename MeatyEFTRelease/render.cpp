@@ -2702,12 +2702,12 @@ static void renderDebugWindow()
                         }
                     }
 
-
+                    ImGui::SetScrollHereY(1.0f);
                 }
                 ImGui::EndTable();
                 ImGui::EndTabItem();
             }
-/*            if (ImGui::BeginTabItem("Memory"))
+           if (ImGui::BeginTabItem("Memory"))
             {
                 if (ImGui::BeginTabBar("##Tabsmemory", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
@@ -2726,35 +2726,27 @@ static void renderDebugWindow()
                         ImGui::Text("player_buffer entries: %d", playerBufferCount);
 
                         ImGui::Text("selectedLocation: %s", mainGame.selectedLocation.c_str());
-                        ImGui::Text("onlineRaid: %s", mainGame.onlineRaid ? "true" : "false");
-
-                        ImGui::Text("localPlayerPtr: %llu", mainGame.localPlayerPtr);
-
 
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem("local"))
                     {
+                        
+                        ImGui::Text("localPlayerPtr: %llu", mainGame.localPlayerPtr);
+                        ImGui::Text("localPlayerHands: %llu", mainGame.localPlayerHands);
+                        ImGui::Text("localPlayerPWA: %llu", mainGame.localPlayerPWA);
+                        ImGui::Text("localplayerProfile: %llu", mainGame.localplayerProfile);
 
-                        ImGui::Text("rootLocationBase: %llu", localPlayer.rootLocationBase);
-                        ImGui::Text("rootLocationBase2: %llu", localPlayer.rootLocationBase2);
-                        ImGui::Text("movementContext: %llu", localPlayer.movementContext);
-                        ImGui::Text("proceduralWeaponAnimation: %llu", localPlayer.proceduralWeaponAnimation);
-                        ImGui::Text("fireportPositionPtr: %llu", localPlayer.fireportPositionPtr);
+                        ImGui::Text("worldLocation: (%.2f, %.2f, %.2f)", mainGame.localLocation.x, mainGame.localLocation.y, mainGame.localLocation.z);
+                        ImGui::Text("rotation: (%.2f, %.2f)", mainGame.localRotation.x, mainGame.localRotation.y);
 
-                        ImGui::Text("worldLocation: (%.2f, %.2f, %.2f)", localPlayer.worldLocation.x, localPlayer.worldLocation.y, localPlayer.worldLocation.z);
-                        ImGui::Text("worldLocationBackup: (%.2f, %.2f, %.2f)", localPlayer.worldLocationBackup.x, localPlayer.worldLocationBackup.y, localPlayer.worldLocationBackup.z);
-                        ImGui::Text("mapLocation: (%.2f, %.2f)", localPlayer.mapLocation.x, localPlayer.mapLocation.y);
-                        ImGui::Text("rotation: (%.2f, %.2f)", localPlayer.rotation.x, localPlayer.rotation.y);
-
-                        ImGui::Text("groupid: %s", localPlayer.groupid.c_str());
-                        if (localPlayer.isScoped) ImGui::Text("isScoped: TRUE"); else ImGui::Text("isScoped: FALSE");
+                        ImGui::Text("groupid: %s", mainGame.localGroupId.c_str());
+                        if (mainGame.localIsScoped) ImGui::Text("isScoped: TRUE"); else ImGui::Text("isScoped: FALSE");
 
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem("player"))
                     {
-                        //std::shared_lock<std::shared_mutex> lock(players.getMutex());
                         const std::vector<PlayerCache>& cache = players.getCache();
                         ImGui::Text("Player Cache Count: %zu", cache.size());
                         
@@ -2783,21 +2775,7 @@ static void renderDebugWindow()
                     }
                     if (ImGui::BeginTabItem("aim"))
                     {
-                        if (aim.aimActive) ImGui::Text("aimActive: TRUE"); else ImGui::Text("aimActive: FALSE");
-                        ImGui::NewLine();
-                        ImGui::Text("localMatrices: %llu", aim.localMatrices);
-                        ImGui::Text("localIndex: %llu", aim.localIndex);
-                        ImGui::Text("movementContext: %llu", aim.movementContext);
-                        ImGui::NewLine();
-                        ImGui::Text("firePortPosition: (%.2f, %.2f, %.2f)", aim.firePortPosition.x, aim.firePortPosition.y, aim.firePortPosition.z);
-                        ImGui::Text("velocityTarget: (%.2f, %.2f, %.2f)", aim.velocityTarget.x, aim.velocityTarget.y, aim.velocityTarget.z);
-                        ImGui::Text("targetPosition: (%.2f, %.2f, %.2f)", aim.targetPosition.x, aim.targetPosition.y, aim.targetPosition.z);
-                        ImGui::NewLine();
-                        ImGui::Text("ammo_speed: %.f", aim.ammo_speed);
-                        ImGui::Text("ammo_size: %.f", aim.ammo_size);
-                        ImGui::Text("ammo_mass: %.f", aim.ammo_mass);
-
-
+                        
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem("features"))
@@ -2825,7 +2803,6 @@ static void renderDebugWindow()
                 }
                 ImGui::EndTabItem();
             }
-            */
 
             ImGui::EndTabBar();
         }

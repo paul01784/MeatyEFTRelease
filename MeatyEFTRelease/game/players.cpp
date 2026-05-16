@@ -996,7 +996,6 @@ std::optional<PlayerCache> Players::buildEntity(const uint64_t instance, bool is
                 AddFailure(failed, "ProfileInfo");
         }
 
-        // Optional, but needed for local scoped state.
         TryReadPtr(instance + sdk::Player::ProceduralWeaponAnimation, newEntity.P_PWA);
 
         if (!TryReadPtr(instance + sdk::Player::_playerBody, newEntity.P_Body))
