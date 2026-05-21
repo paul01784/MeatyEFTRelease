@@ -539,6 +539,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="game\headers\unitysdk.h" />
     <ClInclude Include="game\headers\utils.h" />
     <ClInclude Include="game\headers\wishlist.h" />
+    <ClInclude Include="game\modules\HandsManager.h" />
     <ClInclude Include="game\unity\gameObjectManager.h" />
     <ClInclude Include="libs\leechcore.h" />
     <ClInclude Include="libs\skStr.h" />

@@ -3,7 +3,7 @@
 // List of all items in game
 struct gameItemList {
 	std::string bsgid;
-	std::string bsgCategory;
+	std::vector<std::string> bsgCategory;
 	std::string name;
 	std::string shortName;
 	long traderPrice;

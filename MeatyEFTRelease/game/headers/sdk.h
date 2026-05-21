@@ -112,6 +112,11 @@ namespace sdk
 		constexpr uint64_t Velocity = 0x30; // UnityEngine.Vector3 <Velocity> Velocity
 	}
 
+	namespace ItemHandsController
+	{
+		constexpr uint64_t Item = 0x70; // EFT.InventoryLogic.Item
+	}
+
 	namespace InventoryController
 	{
 		constexpr uint64_t Inventory = 0x100; // EFT.InventoryLogic.Inventory
@@ -132,6 +137,19 @@ namespace sdk
 		constexpr uint64_t ContainedItem = 0x48; // EFT.InventoryLogic.Item
 		constexpr uint64_t ID = 0x58; // String
 		constexpr uint64_t Required = 0x18; // Boolean
+	}
+
+	namespace LootItemWeapon
+	{
+		constexpr uint64_t FireMode = 0xA0;
+		constexpr uint64_t Chambers = 0xB0;
+		constexpr uint64_t magSlotCache = 0xC8;
+	}
+
+	namespace StackSlot
+	{
+		constexpr uint64_t items = 0x18;
+		constexpr uint64_t MaxCount = 0x10;
 	}
 
 	namespace BarterOtherOffsets

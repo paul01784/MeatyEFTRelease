@@ -3,8 +3,13 @@
 #include <glm/glm.hpp>
 #include "tarkovdevquery.h"
 
+
+
 #include <mutex>
 #include <shared_mutex>
+#include "../modules/HandsManager.h"
+
+
 
 struct PlayerGroups {
 	int id;
@@ -190,6 +195,8 @@ struct PlayerCache {
 	std::string itemInHand;
 	uint64_t _lastObservedHands;
 
+	HandsInfo observedHandsInfo;
+
 
 	std::chrono::steady_clock::time_point lastEquipmentUpdate{};
 	std::chrono::milliseconds equipmentUpdateInterval{};
@@ -343,7 +350,6 @@ private:
 
 	std::optional<PlayerCache> buildEntity(const uint64_t instance, bool isLocal);
 
-	void addEntity(uint64_t instance, bool isLocal);
 	void tryFindBTR();
 	void updateEntity();
 	void checkGroupIDs();

@@ -415,6 +415,7 @@
     <ClInclude Include="app\DxRenderWindow.h" />
     <ClInclude Include="app\fuserRender.h" />
     <ClInclude Include="fuser\colour.h" />
+    <ClInclude Include="game\modules\HandsManager.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="debug.cpp" />

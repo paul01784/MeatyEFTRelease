@@ -27,7 +27,7 @@ int main()
 	//build market data
 	loadjson();
 	buildItemList();
-	buildCatList();
+	//buildCatList();
 
 	//set api key for dogtag api if we have one
 	g_DogTagAPI.setApiKey(globals::dogTagAPIKey);

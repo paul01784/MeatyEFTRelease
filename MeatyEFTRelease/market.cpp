@@ -71,7 +71,7 @@ std::string loadjson()
 	std::ostringstream oss;
 
 	const std::string url =
-		"https://api.tarkov.dev/graphql?query=%7BitemsByType%28type%3A+any%29+%7Bid+name+shortName+basePrice+avg24hPrice+category%7BnormalizedName%7D%7D%7D";
+		"https://api.tarkov.dev/graphql?query=%7BitemsByType%28type%3A+any%29+%7Bid+name+shortName+basePrice+avg24hPrice+categories%7Bname%7D%7D%7D";
 
 	
 	// TRY LOAD CACHE FIRST
@@ -245,7 +245,19 @@ void buildItemList() {
 		{
 			item.marketPrice = ec["avg24hPrice"];
 		}
-		item.bsgCategory = ec["category"]["normalizedName"];
+		
+		item.bsgCategory.clear();
+
+		if (ec.contains("categories") && ec["categories"].is_array())
+		{
+			for (const auto& cat : ec["categories"])
+			{
+				if (cat.contains("name") && cat["name"].is_string())
+				{
+					item.bsgCategory.push_back(cat["name"].get<std::string>());
+				}
+			}
+		}
 
 		marketList.emplace_back(item);
 	}

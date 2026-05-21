@@ -340,7 +340,7 @@ void DrawRadarPlayerMarkers(int x, int y, float zoomLevel, PlayerCache player)
 	float nameSizeHalf = ImGui::CalcTextSize(name.c_str()).x / 2;
 
 	//item in hand
-	std::string itemInHand = player.itemInHand;
+	std::string itemInHand = player.observedHandsInfo.itemName + " (" + std::string(player.observedHandsInfo.ammoName) + ")";
 	float itemSizeHalf = ImGui::CalcTextSize(itemInHand.c_str()).x / 2;
 
 	va_list va_alist;

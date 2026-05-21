@@ -732,7 +732,7 @@ namespace fuserRender
     static inline void RenderPlayers()
     {
         
-            std::vector<PlayerCache> cache = players.getCacheSnapshot();
+            std::vector<PlayerCache> cache = players.getCache();
 
             if (cache.empty())
                 return;
@@ -787,7 +787,7 @@ namespace fuserRender
                     continue;
 
                 g_DxWindow.DrawText(
-                    player.itemInHand,
+                    player.observedHandsInfo.itemName + " (" + std::string(player.observedHandsInfo.ammoName) + ")",
                     screenPos.x,
                     screenPos.y + 20.0f,
                     13.0f,

@@ -1201,19 +1201,6 @@ std::optional<PlayerCache> Players::buildEntity(const uint64_t instance, bool is
     return newEntity;
 }
 
-
-void Players::addEntity(const uint64_t instance, bool isLocal)
-{
-    
-    if (!mem.vHandle)
-        return;
-
-    if (!Utils::valid_pointer(instance))
-        return;
-
-    
-}
-
 glm::vec3 GetBestPlayerBasePosition(const PlayerCache& cachePlayer)
 {
     const glm::vec3 zero(0.0f);
@@ -1709,9 +1696,12 @@ void Players::updateEntity()
         // Held item
         try
         {
+            
+
             if (Utils::valid_pointer(cachePlayer.P_HandsController))
             {
-                cachePlayer.itemInHand = heldItemName(cachePlayer);
+               // cachePlayer.itemInHand = heldItemName(cachePlayer);
+                cachePlayer.observedHandsInfo.update(cachePlayer);
             }
             else
             {
@@ -2640,6 +2630,413 @@ std::string Players::ReadNameFromHandsItem(uint64_t itemBase)
         return ml.shortName;
     }
 
+}
+
+static inline bool TryReadAmmoTemplateFromRound(uint64_t roundPtr, uint64_t& ammoTemplate)
+{
+    ammoTemplate = 0;
+
+    if (!Utils::valid_pointer(roundPtr))
+        return false;
+
+    if (!mem.TryRead<uint64_t>(roundPtr + sdk::LootItem::Template, ammoTemplate))
+        return false;
+
+    return Utils::valid_pointer(ammoTemplate);
+}
+
+static inline bool CountLoadedChamberArray(
+    uint64_t chambersPtr,
+    uint64_t& firstRound,
+    int& currentAmmoCount,
+    int& maxAmmoCount
+)
+{
+    if (!Utils::valid_pointer(chambersPtr))
+        return false;
+
+    UnityArray<Chamber> chambers(chambersPtr);
+
+    if (chambers.count <= 0)
+        return false;
+
+    maxAmmoCount += chambers.count;
+
+    for (int i = 0; i < chambers.count; ++i)
+    {
+        Chamber chamber = chambers[i];
+
+        if (!chamber.HasBullet(true))
+            continue;
+
+        ++currentAmmoCount;
+
+        // Keep first valid round for ammo type
+        if (!Utils::valid_pointer(firstRound))
+        {
+            const uint64_t chamberPtr = static_cast<uint64_t>(chamber);
+
+            if (!Utils::valid_pointer(chamberPtr))
+                continue;
+
+            uint64_t containedItem = 0;
+
+            if (mem.TryRead<uint64_t>(
+                chamberPtr + sdk::Slot::ContainedItem,
+                containedItem) &&
+                Utils::valid_pointer(containedItem))
+            {
+                firstRound = containedItem;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+static inline bool TryGetAmmoTemplateFromWeapon(
+    uint64_t itemBase,
+    uint64_t& ammoTemplate,
+    int& chamberCount,
+    int& magazineCount
+)
+{
+    ammoTemplate = 0;
+
+    int currentAmmoCount = 0;
+    int maxAmmoCount = 0;
+
+    uint64_t firstRound = 0;
+
+    // ----------------------------------------------------
+    // 1. Weapon chamber path
+    // Count chamber ammo, but DO NOT return here.
+    // Normal guns still need the magazine counted after this.
+    // ----------------------------------------------------
+    uint64_t chambersPtr = 0;
+
+    if (mem.TryRead<uint64_t>(itemBase + sdk::LootItemWeapon::Chambers, chambersPtr) &&
+        Utils::valid_pointer(chambersPtr))
+    {
+        CountLoadedChamberArray(
+            chambersPtr,
+            firstRound,
+            currentAmmoCount,
+            maxAmmoCount
+        );
+    }
+
+    // ----------------------------------------------------
+    // 2. Magazine path
+    // ----------------------------------------------------
+    uint64_t magSlot = 0;
+    uint64_t magItemPtr = 0;
+
+    if (!mem.TryRead<uint64_t>(itemBase + sdk::LootItemWeapon::magSlotCache, magSlot) ||
+        !Utils::valid_pointer(magSlot))
+    {
+        return false;
+    }
+
+    if (!mem.TryRead<uint64_t>(magSlot + sdk::Slot::ContainedItem, magItemPtr) ||
+        !Utils::valid_pointer(magItemPtr))
+    {
+        return false;
+    }
+
+    // ----------------------------------------------------
+    // 3. Magazine chambers path
+    // Revolvers, etc.
+    // ----------------------------------------------------
+    uint64_t magChambersPtr = 0;
+
+    if (mem.TryRead<uint64_t>(magItemPtr + sdk::LootItemMod::Slots, magChambersPtr) &&
+        Utils::valid_pointer(magChambersPtr))
+    {
+        UnityArray<Chamber> magChambers(magChambersPtr);
+
+        if (magChambers.count > 0)
+        {
+            CountLoadedChamberArray(
+                magChambersPtr,
+                firstRound,
+                currentAmmoCount,
+                maxAmmoCount
+            );
+
+            chamberCount = currentAmmoCount;
+            magazineCount = maxAmmoCount;
+
+            return TryReadAmmoTemplateFromRound(firstRound, ammoTemplate);
+        }
+    }
+
+    // ----------------------------------------------------
+    // 4. Regular magazine stack path
+    // ----------------------------------------------------
+    uint64_t cartridges = 0;
+    uint64_t magStackPtr = 0;
+
+    if (!mem.TryRead<uint64_t>(magItemPtr + 0xA8, cartridges) ||
+        !Utils::valid_pointer(cartridges))
+    {
+        return false;
+    }
+
+    if (!mem.TryRead<uint64_t>(cartridges + sdk::StackSlot::items, magStackPtr) ||
+        !Utils::valid_pointer(magStackPtr))
+    {
+        return false;
+    }
+
+    int magMaxCount = 0;
+
+    if (!mem.TryRead<int>(cartridges + sdk::StackSlot::MaxCount, magMaxCount))
+        magMaxCount = 0;
+
+    if (magMaxCount < 0)
+        magMaxCount = 0;
+
+    maxAmmoCount += magMaxCount;
+
+    UnityList<uint64_t> magStack(magStackPtr);
+
+    if (magStack.count() > 0)
+    {
+        for (const auto& stack : magStack)
+        {
+            if (!Utils::valid_pointer(stack))
+                continue;
+
+            int stackNumber = 0;
+
+            if (!mem.TryRead<int>(stack + 0x24, stackNumber))
+                continue;
+
+            if (stackNumber < 0)
+                continue;
+
+            currentAmmoCount += stackNumber;
+
+            // If no chamber round was found, use the first mag round for ammo type
+            if (!Utils::valid_pointer(firstRound))
+                firstRound = stack;
+        }
+    }
+
+    chamberCount = currentAmmoCount;
+    magazineCount = maxAmmoCount;
+
+    return TryReadAmmoTemplateFromRound(firstRound, ammoTemplate);
+}
+
+inline bool HandsInfo::update(const PlayerCache& playerCache)
+{
+    if (playerCache.isDead || playerCache.hasExfiled)
+    {
+        reset();
+        cachedItem = 0;
+        cachedIsWeapon = false;
+        return false;
+    }
+
+    if (!Utils::valid_pointer(playerCache.P_HandsController))
+    {
+        reset();
+        cachedItem = 0;
+        cachedIsWeapon = false;
+        return false;
+    }
+
+    uint64_t itemBase = 0;
+
+    if (playerCache.isLocal ||
+        playerCache.className.find("LocalPlayer") != std::string::npos ||
+        playerCache.className.find("ClientPlayer") != std::string::npos)
+    {
+        itemBase = mem.Read<uint64_t>(
+            playerCache.P_HandsController + sdk::ItemHandsController::Item
+        );
+    }
+    else
+    {
+        itemBase = mem.Read<uint64_t>(
+            playerCache.P_HandsController + sdk::ObservedPlayerHands::Item
+        );
+    }
+
+    if (!Utils::valid_pointer(itemBase))
+    {
+        reset();
+        cachedItem = 0;
+        cachedIsWeapon = false;
+        return false;
+    }
+
+    bool isWeapon = cachedIsWeapon;
+
+    // Only refresh item identity when the held item pointer changes
+    bool itemChanged = (itemBase != cachedItem);
+
+    if (itemChanged)
+    {
+        itemName.clear();
+        ammoName.clear();
+
+        chamberCount = 0;
+        magazineCount = 0;
+
+        cachedIsWeapon = false;
+        isWeapon = false;
+
+        uint64_t itemTemp = 0;
+
+        if (!mem.TryRead<uint64_t>(itemBase + sdk::LootItem::Template, itemTemp) ||
+            !Utils::valid_pointer(itemTemp))
+        {
+            itemName = "Unknown";
+            cachedItem = itemBase;
+            return true;
+        }
+
+        MongoID mongoId{};
+
+        if (!mem.TryRead<MongoID>(itemTemp + sdk::ItemTemplate::_id, mongoId))
+        {
+            itemName = "Unknown";
+            cachedItem = itemBase;
+            return true;
+        }
+
+        std::string itemId = TrimEFT(mongoId.ReadString(mem, 64));
+
+        std::string itemMarketName;
+
+        if (!itemId.empty())
+        {
+            for (const auto& ml : marketList)
+            {
+                if (ml.bsgid != itemId)
+                    continue;
+
+                itemMarketName = ml.shortName;
+
+                //Check if we have a weapon category
+                const bool hasWeaponCategory =
+                    std::find(ml.bsgCategory.begin(), ml.bsgCategory.end(), "Weapon") != ml.bsgCategory.end();
+
+                if (hasWeaponCategory)
+                {
+                    isWeapon = true;
+                    cachedIsWeapon = true;
+                }
+
+                break;
+            }
+        }
+
+        if (!itemMarketName.empty())
+        {
+            itemName = itemMarketName;
+        }
+        else
+        {
+            uint64_t itemNamePointer = 0;
+
+            if (mem.TryRead<uint64_t>(itemTemp + sdk::ItemTemplate::ShortName, itemNamePointer) &&
+                Utils::valid_pointer(itemNamePointer))
+            {
+                std::string shortNameMem = TrimEFT(
+                    mem.readUnityString(itemNamePointer, 32)
+                );
+
+                if (!shortNameMem.empty())
+                    itemName = shortNameMem;
+                else
+                    itemName = "Unknown";
+            }
+            else
+            {
+                itemName = "Unknown";
+            }
+
+            if (itemName.find("nsv_utes") != std::string::npos)
+            {
+                itemName = "NSV Utyos";
+            }
+            else if (itemName.find("ags30_30") != std::string::npos)
+            {
+                itemName = "AGS-30";
+                ammoName = "VOG-30";
+            }
+            else if (itemName.find("izhmash_rpk16") != std::string::npos)
+            {
+                itemName = "RPK-16";
+            }
+        }
+
+        cachedItem = itemBase;
+    }
+
+    // Use cached weapon state after item identity refresh
+    isWeapon = cachedIsWeapon;
+
+    if (isWeapon && (playerCache.isLocal || itemChanged))
+    {
+        uint64_t ammoTemplate = 0;
+
+        int newChamberCount = chamberCount;
+        int newMagazineCount = magazineCount;
+
+        const bool gotAmmoTemplate = TryGetAmmoTemplateFromWeapon(
+            itemBase,
+            ammoTemplate,
+            newChamberCount,
+            newMagazineCount
+        );
+
+        
+        if (newMagazineCount > 0 || newChamberCount > 0)
+        {
+            chamberCount = newChamberCount;
+            magazineCount = newMagazineCount;
+        }
+
+        
+        if (gotAmmoTemplate || Utils::valid_pointer(ammoTemplate))
+        { 
+
+            MongoID ammoMongoId{};
+
+            if (mem.TryRead<MongoID>(ammoTemplate + sdk::ItemTemplate::_id, ammoMongoId))
+            {
+                std::string ammoId = TrimEFT(ammoMongoId.ReadString(mem, 64));
+
+                if (ammoId.empty())
+                    return true;
+
+                for (const auto& ml : marketList)
+                {
+                    if (ml.bsgid != ammoId)
+                        continue;
+
+                    ammoName = ml.shortName;
+                    break;
+                }
+            }
+        }
+    }
+
+
+    if (!isWeapon)
+    {
+        chamberCount = 0;
+        magazineCount = 0;
+        ammoName = "";
+    }
+
+    return true;
 }
 
 void Players::checkExfil()

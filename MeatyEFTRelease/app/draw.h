@@ -412,15 +412,15 @@ void drawWidgetPlayers()
         if (ImGui::BeginTable("##players", 10, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
         {
             ImGui::TableSetupColumn("Side", ImGuiTableColumnFlags_WidthFixed, 35.0f);
-            ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 50.0f);
-            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 85.0f);
+            ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthFixed, 175.0f);
             ImGui::TableSetupColumn("LvL", ImGuiTableColumnFlags_WidthFixed, 35.0f);
             ImGui::TableSetupColumn("KD(PKD)", ImGuiTableColumnFlags_WidthFixed, 45.0f);
             ImGui::TableSetupColumn("Hours", ImGuiTableColumnFlags_WidthFixed, 50.0f);
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-            ImGui::TableSetupColumn("Container", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-            ImGui::TableSetupColumn("Distance", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("Container", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Distance", ImGuiTableColumnFlags_WidthFixed, 50.0f);
             ImGui::TableHeadersRow();
 
             for (const auto& cache : playerSnapshot)
@@ -536,7 +536,7 @@ void drawWidgetPlayers()
 
                 // Item
                 ImGui::TableSetColumnIndex(3);
-                ImGui::TextUnformatted(cache.itemInHand.c_str());
+                ImGui::TextUnformatted((cache.observedHandsInfo.itemName + " (" + std::string(cache.observedHandsInfo.ammoName) + ") " + std::to_string(cache.observedHandsInfo.chamberCount) + " / " + std::to_string(cache.observedHandsInfo.magazineCount)).c_str());
 
                 // LvL
                 ImGui::TableSetColumnIndex(4);
