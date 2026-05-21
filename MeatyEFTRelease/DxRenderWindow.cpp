@@ -5,16 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <thread>
 #include <cmath>
-#include <cfloat>
 #include <dwmapi.h>
-#include <sstream>
-#include <mmsystem.h>
 #include <eh.h>
+#include <mmsystem.h>
 #include <sstream>
-#include <iostream>
-
+#include <utility>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -27,62 +23,76 @@ using Microsoft::WRL::ComPtr;
 
 DxRenderWindow g_DxWindow;
 
-#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
-#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
-#endif
-
-class FuserSehException : public std::exception
+namespace
 {
-public:
-    FuserSehException(unsigned int code, EXCEPTION_POINTERS* exceptionPointers)
-        : m_code(code)
-    {
-        void* address = nullptr;
+    constexpr const wchar_t* DX_RENDER_WINDOW_CLASS_NAME = L"DxRenderWindowClass";
+    constexpr std::size_t MAX_TEXT_FORMAT_CACHE = 128;
+    constexpr std::size_t MAX_RETAINED_DRAW_COMMAND_CAPACITY = 32768;
 
-        if (exceptionPointers &&
-            exceptionPointers->ExceptionRecord)
+    class FuserSehException : public std::exception
+    {
+    public:
+        FuserSehException(unsigned int code, EXCEPTION_POINTERS* exceptionPointers)
+            : m_code(code)
         {
-            address = exceptionPointers->ExceptionRecord->ExceptionAddress;
+            void* address = nullptr;
+
+            if (exceptionPointers && exceptionPointers->ExceptionRecord)
+                address = exceptionPointers->ExceptionRecord->ExceptionAddress;
+
+            std::ostringstream ss;
+            ss << "SEH exception. Code: 0x" << std::hex << m_code << " Address: " << address;
+            m_message = ss.str();
         }
 
-        std::ostringstream ss;
-        ss << "SEH exception. Code: 0x"
-            << std::hex << m_code
-            << " Address: " << address;
+        const char* what() const noexcept override
+        {
+            return m_message.c_str();
+        }
 
-        m_message = ss.str();
-    }
+    private:
+        unsigned int m_code = 0;
+        std::string m_message;
+    };
 
-    const char* what() const noexcept override
+    void FuserSehTranslator(unsigned int code, EXCEPTION_POINTERS* exceptionPointers)
     {
-        return m_message.c_str();
+        throw FuserSehException(code, exceptionPointers);
     }
 
-    unsigned int code() const
+    void LogFuserCrash(const std::string& message)
     {
-        return m_code;
+        LOGS.logError("[FUSER][CRASH] " + message);
     }
 
-private:
-    unsigned int m_code = 0;
-    std::string m_message;
-};
+    void LogFuserRenderer(const std::string& message)
+    {
+        LOGS.logError("[FUSER][DX11] " + message);
+    }
 
-static void FuserSehTranslator(unsigned int code, EXCEPTION_POINTERS* exceptionPointers)
-{
-    throw FuserSehException(code, exceptionPointers);
+    class ScopedTimerResolution
+    {
+    public:
+        ScopedTimerResolution()
+        {
+            m_active = (timeBeginPeriod(1) == TIMERR_NOERROR);
+        }
+
+        ~ScopedTimerResolution()
+        {
+            if (m_active)
+                timeEndPeriod(1);
+        }
+
+        ScopedTimerResolution(const ScopedTimerResolution&) = delete;
+        ScopedTimerResolution& operator=(const ScopedTimerResolution&) = delete;
+
+    private:
+        bool m_active = false;
+    };
 }
 
-static void LogFuserCrash(const std::string& message)
-{
-    LOGS.logError("[FUSER][CRASH] " + message);
-}
-
-static constexpr const wchar_t* DX_RENDER_WINDOW_CLASS_NAME = L"DxRenderWindowClass";
-
-DxRenderWindow::DxRenderWindow()
-{
-}
+DxRenderWindow::DxRenderWindow() = default;
 
 DxRenderWindow::~DxRenderWindow()
 {
@@ -99,31 +109,28 @@ bool DxRenderWindow::Init(const DxWindowConfig& config)
     }
 
     RefreshMonitorList();
-
-    m_initialized.store(true);
+    m_initialized.store(true, std::memory_order_release);
 
     if (config.autoStart)
-    {
         return Start();
-    }
 
     return true;
 }
 
 bool DxRenderWindow::Start()
 {
-    if (!m_initialized.load())
+    if (!m_initialized.load(std::memory_order_acquire))
         return false;
 
-    if (m_running.load())
+    if (m_running.load(std::memory_order_acquire))
         return true;
 
     if (m_renderThread.joinable())
         m_renderThread.join();
 
-    m_stopRequested.store(false);
-    m_windowReady.store(false);
-    m_running.store(true);
+    m_stopRequested.store(false, std::memory_order_release);
+    m_windowReady.store(false, std::memory_order_release);
+    m_running.store(true, std::memory_order_release);
 
     try
     {
@@ -131,7 +138,8 @@ bool DxRenderWindow::Start()
     }
     catch (...)
     {
-        m_running.store(false);
+        m_running.store(false, std::memory_order_release);
+        m_windowReady.store(false, std::memory_order_release);
         return false;
     }
 
@@ -140,31 +148,26 @@ bool DxRenderWindow::Start()
 
 void DxRenderWindow::Stop()
 {
-    m_stopRequested.store(true);
+    m_stopRequested.store(true, std::memory_order_release);
 
-    HWND hwnd = m_hwnd.load();
+    HWND hwnd = m_hwnd.load(std::memory_order_acquire);
     if (hwnd)
     {
         PostMessageW(hwnd, WM_CLOSE, 0, 0);
     }
     else
     {
-        DWORD threadId = m_renderThreadId.load();
+        DWORD threadId = m_renderThreadId.load(std::memory_order_acquire);
         if (threadId != 0)
             PostThreadMessageW(threadId, WM_QUIT, 0, 0);
     }
 
-    if (m_renderThread.joinable())
-    {
-        if (m_renderThread.get_id() != std::this_thread::get_id())
-        {
-            m_renderThread.join();
-        }
-    }
+    if (m_renderThread.joinable() && m_renderThread.get_id() != std::this_thread::get_id())
+        m_renderThread.join();
 
-    m_running.store(false);
-    m_windowReady.store(false);
-    m_renderThreadId.store(0);
+    m_running.store(false, std::memory_order_release);
+    m_windowReady.store(false, std::memory_order_release);
+    m_renderThreadId.store(0, std::memory_order_release);
 }
 
 void DxRenderWindow::Shutdown()
@@ -173,45 +176,44 @@ void DxRenderWindow::Shutdown()
 
     {
         std::lock_guard<std::mutex> lock(m_drawMutex);
-        m_pendingDrawList.clear();
-        m_submittedDrawList.clear();
+        ReleaseDrawStorageUnlocked();
     }
 
     m_renderDrawList.clear();
-    m_drawVersion.store(0);
+    m_renderDrawList.shrink_to_fit();
+    m_drawVersion.store(0, std::memory_order_release);
     m_renderDrawVersion = 0;
-
-    m_initialized.store(false);
+    m_initialized.store(false, std::memory_order_release);
 }
 
 bool DxRenderWindow::IsInitialized() const
 {
-    return m_initialized.load();
+    return m_initialized.load(std::memory_order_acquire);
 }
 
 bool DxRenderWindow::IsRunning() const
 {
-    return m_running.load();
+    return m_running.load(std::memory_order_acquire);
 }
 
 bool DxRenderWindow::IsWindowReady() const
 {
-    return m_windowReady.load();
+    return m_windowReady.load(std::memory_order_acquire);
 }
 
 HWND DxRenderWindow::GetHWND() const
 {
-    return m_hwnd.load();
+    return m_hwnd.load(std::memory_order_acquire);
 }
 
 int DxRenderWindow::GetWindowWidth() const
 {
-    return m_windowWidth.load();
+    return m_windowWidth.load(std::memory_order_acquire);
 }
 
 int DxRenderWindow::GetWindowHeight() const
 {
-    return m_windowHeight.load();
+    return m_windowHeight.load(std::memory_order_acquire);
 }
 
 DxWindowConfig DxRenderWindow::GetConfig() const
@@ -227,10 +229,10 @@ void DxRenderWindow::SetConfig(const DxWindowConfig& config)
 
 bool DxRenderWindow::RefreshMonitorList()
 {
-    std::vector<DxMonitorInfo> temp;
-    EnumDisplayMonitors(nullptr, nullptr, DxRenderWindow::MonitorEnumProc, reinterpret_cast<LPARAM>(&temp));
+    std::vector<DxMonitorInfo> monitors;
+    EnumDisplayMonitors(nullptr, nullptr, DxRenderWindow::MonitorEnumProc, reinterpret_cast<LPARAM>(&monitors));
 
-    if (temp.empty())
+    if (monitors.empty())
     {
         DxMonitorInfo fallback{};
         fallback.index = 0;
@@ -242,12 +244,12 @@ bool DxRenderWindow::RefreshMonitorList()
         fallback.height = GetSystemMetrics(SM_CYSCREEN);
         fallback.refreshRate = 60;
         fallback.primary = true;
-        temp.push_back(fallback);
+        monitors.push_back(std::move(fallback));
     }
 
     {
         std::lock_guard<std::mutex> lock(m_monitorMutex);
-        m_monitors = std::move(temp);
+        m_monitors = std::move(monitors);
     }
 
     return true;
@@ -264,11 +266,10 @@ DxMonitorInfo DxRenderWindow::GetCurrentMonitor() const
     DxWindowConfig cfg = GetConfigSnapshot();
 
     std::lock_guard<std::mutex> lock(m_monitorMutex);
-
     if (m_monitors.empty())
         return DxMonitorInfo{};
 
-    int index = std::clamp(cfg.monitorIndex, 0, static_cast<int>(m_monitors.size()) - 1);
+    const int index = std::clamp(cfg.monitorIndex, 0, static_cast<int>(m_monitors.size()) - 1);
     return m_monitors[index];
 }
 
@@ -276,7 +277,6 @@ bool DxRenderWindow::SetMonitor(int monitorIndex)
 {
     {
         std::lock_guard<std::mutex> lock(m_monitorMutex);
-
         if (monitorIndex < 0 || monitorIndex >= static_cast<int>(m_monitors.size()))
             return false;
     }
@@ -304,9 +304,14 @@ void DxRenderWindow::SubmitDrawList()
 {
     std::lock_guard<std::mutex> lock(m_drawMutex);
 
+    if (m_submittedDrawList.capacity() > MAX_RETAINED_DRAW_COMMAND_CAPACITY &&
+        m_pendingDrawList.size() < MAX_RETAINED_DRAW_COMMAND_CAPACITY / 2)
+    {
+        std::vector<DrawCommand>().swap(m_submittedDrawList);
+    }
+
     m_submittedDrawList.swap(m_pendingDrawList);
     m_pendingDrawList.clear();
-
     m_drawVersion.fetch_add(1, std::memory_order_release);
 }
 
@@ -314,20 +319,15 @@ void DxRenderWindow::ClearDrawLists()
 {
     {
         std::lock_guard<std::mutex> lock(m_drawMutex);
-        m_pendingDrawList.clear();
-        m_submittedDrawList.clear();
+        ReleaseDrawStorageUnlocked();
     }
 
+    m_renderDrawList.clear();
+    m_renderDrawList.shrink_to_fit();
     m_drawVersion.fetch_add(1, std::memory_order_release);
 }
 
-void DxRenderWindow::DrawLine(
-    float x1,
-    float y1,
-    float x2,
-    float y2,
-    const glm::vec4& colour,
-    float thickness)
+void DxRenderWindow::DrawLine(float x1, float y1, float x2, float y2, const glm::vec4& colour, float thickness)
 {
     DrawCommand cmd{};
     cmd.type = DrawCommandType::Line;
@@ -337,17 +337,10 @@ void DxRenderWindow::DrawLine(
     cmd.y2 = y2;
     cmd.colour = colour;
     cmd.thickness = thickness;
-
     PushDrawCommand(std::move(cmd));
 }
 
-void DxRenderWindow::DrawRect(
-    float x,
-    float y,
-    float w,
-    float h,
-    const glm::vec4& colour,
-    float thickness)
+void DxRenderWindow::DrawRect(float x, float y, float w, float h, const glm::vec4& colour, float thickness)
 {
     DrawCommand cmd{};
     cmd.type = DrawCommandType::Rect;
@@ -357,16 +350,10 @@ void DxRenderWindow::DrawRect(
     cmd.h = h;
     cmd.colour = colour;
     cmd.thickness = thickness;
-
     PushDrawCommand(std::move(cmd));
 }
 
-void DxRenderWindow::DrawFilledRect(
-    float x,
-    float y,
-    float w,
-    float h,
-    const glm::vec4& colour)
+void DxRenderWindow::DrawFilledRect(float x, float y, float w, float h, const glm::vec4& colour)
 {
     DrawCommand cmd{};
     cmd.type = DrawCommandType::FilledRect;
@@ -375,7 +362,6 @@ void DxRenderWindow::DrawFilledRect(
     cmd.w = w;
     cmd.h = h;
     cmd.colour = colour;
-
     PushDrawCommand(std::move(cmd));
 }
 
@@ -399,16 +385,10 @@ void DxRenderWindow::DrawBox(
     cmd.fillColour = fillColour;
     cmd.thickness = outlineThickness;
     cmd.filled = filled;
-
     PushDrawCommand(std::move(cmd));
 }
 
-void DxRenderWindow::DrawCircle(
-    float x,
-    float y,
-    float radius,
-    const glm::vec4& colour,
-    float thickness)
+void DxRenderWindow::DrawCircle(float x, float y, float radius, const glm::vec4& colour, float thickness)
 {
     DrawCommand cmd{};
     cmd.type = DrawCommandType::Circle;
@@ -417,15 +397,10 @@ void DxRenderWindow::DrawCircle(
     cmd.radius = radius;
     cmd.colour = colour;
     cmd.thickness = thickness;
-
     PushDrawCommand(std::move(cmd));
 }
 
-void DxRenderWindow::DrawFilledCircle(
-    float x,
-    float y,
-    float radius,
-    const glm::vec4& colour)
+void DxRenderWindow::DrawFilledCircle(float x, float y, float radius, const glm::vec4& colour)
 {
     DrawCommand cmd{};
     cmd.type = DrawCommandType::FilledCircle;
@@ -433,7 +408,6 @@ void DxRenderWindow::DrawFilledCircle(
     cmd.y = y;
     cmd.radius = radius;
     cmd.colour = colour;
-
     PushDrawCommand(std::move(cmd));
 }
 
@@ -446,17 +420,7 @@ void DxRenderWindow::DrawText(
     bool outlined,
     const glm::vec4& outlineColour)
 {
-    DrawText(
-        text,
-        x,
-        y,
-        0.0f,
-        colour,
-        centered,
-        outlined,
-        outlineColour,
-        L""
-    );
+    DrawText(text, x, y, 0.0f, colour, centered, outlined, outlineColour, L"");
 }
 
 void DxRenderWindow::DrawText(
@@ -470,6 +434,9 @@ void DxRenderWindow::DrawText(
     const glm::vec4& outlineColour,
     const std::wstring& fontName)
 {
+    if (text.empty())
+        return;
+
     DrawCommand cmd{};
     cmd.type = DrawCommandType::Text;
     cmd.text = text;
@@ -481,7 +448,6 @@ void DxRenderWindow::DrawText(
     cmd.outlineColour = outlineColour;
     cmd.centered = centered;
     cmd.outlined = outlined;
-
     PushDrawCommand(std::move(cmd));
 }
 
@@ -501,23 +467,18 @@ void DxRenderWindow::DrawMarkerWithText(
 {
     DrawCommand cmd{};
     cmd.type = DrawCommandType::MarkerWithText;
-
     cmd.x = x;
     cmd.y = y;
-
     cmd.markerSize = markerSize;
     cmd.text = text;
     cmd.fontSize = textSize;
     cmd.textOffsetY = textOffsetY;
-
     cmd.outlineColour = markerOutlineColour;
     cmd.fillColour = markerFillColour;
     cmd.textColour = textColour;
-
     cmd.thickness = outlineThickness;
     cmd.outlined = outlinedText;
     cmd.colour = textOutlineColour;
-
     PushDrawCommand(std::move(cmd));
 }
 
@@ -525,10 +486,10 @@ bool DxRenderWindow::CreateAppWindow()
 {
     RefreshMonitorList();
 
-    DxWindowConfig cfg = GetConfigSnapshot();
-    DxMonitorInfo monitor = GetCurrentMonitor();
+    const DxWindowConfig cfg = GetConfigSnapshot();
+    const DxMonitorInfo monitor = GetCurrentMonitor();
 
-    m_selectedRefreshRate.store(std::max(1, monitor.refreshRate));
+    m_selectedRefreshRate.store(std::max(1, monitor.refreshRate), std::memory_order_release);
 
     int width = cfg.windowWidth;
     int height = cfg.windowHeight;
@@ -562,23 +523,16 @@ bool DxRenderWindow::CreateAppWindow()
     wc.hbrBackground = nullptr;
     wc.lpszClassName = DX_RENDER_WINDOW_CLASS_NAME;
 
-    ATOM atom = RegisterClassExW(&wc);
+    const ATOM atom = RegisterClassExW(&wc);
     if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         return false;
 
     const bool borderless = cfg.fullscreen || cfg.borderless;
-
-    DWORD style = borderless ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    const DWORD style = borderless ? WS_POPUP : WS_OVERLAPPEDWINDOW;
 
     DWORD exStyle = 0;
-
-    if (cfg.topMost)
-        exStyle |= WS_EX_TOPMOST;
-
-    if (cfg.showInTaskbar)
-        exStyle |= WS_EX_APPWINDOW;
-    else
-        exStyle |= WS_EX_TOOLWINDOW;
+    exStyle |= cfg.topMost ? WS_EX_TOPMOST : 0;
+    exStyle |= cfg.showInTaskbar ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW;
 
     if (cfg.transparentBackground)
         exStyle |= WS_EX_LAYERED;
@@ -590,9 +544,7 @@ bool DxRenderWindow::CreateAppWindow()
     windowRect.bottom = y + height;
 
     if (!borderless)
-    {
         AdjustWindowRectEx(&windowRect, style, FALSE, exStyle);
-    }
 
     HWND hwnd = CreateWindowExW(
         exStyle,
@@ -612,9 +564,10 @@ bool DxRenderWindow::CreateAppWindow()
     if (!hwnd)
         return false;
 
-    m_hwnd.store(hwnd);
-    m_windowWidth.store(width);
-    m_windowHeight.store(height);
+    m_hwnd.store(hwnd, std::memory_order_release);
+    m_windowWidth.store(width, std::memory_order_release);
+    m_windowHeight.store(height, std::memory_order_release);
+    m_dpiScale.store(GetDpiScaleForWindow(hwnd), std::memory_order_release);
 
     if (cfg.transparentBackground)
     {
@@ -631,8 +584,6 @@ bool DxRenderWindow::CreateAppWindow()
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
 
-    m_dpiScale.store(GetDpiScaleForWindow(hwnd));
-
     return true;
 }
 
@@ -640,7 +591,7 @@ bool DxRenderWindow::CreateDeviceResources()
 {
     UINT createFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
-    D3D_FEATURE_LEVEL featureLevels[] =
+    const D3D_FEATURE_LEVEL featureLevels[] =
     {
         D3D_FEATURE_LEVEL_11_1,
         D3D_FEATURE_LEVEL_11_0,
@@ -680,16 +631,16 @@ bool DxRenderWindow::CreateDeviceResources()
     if (FAILED(hr))
         return false;
 
-    HWND hwnd = m_hwnd.load();
+    HWND hwnd = m_hwnd.load(std::memory_order_acquire);
     if (!hwnd)
         return false;
 
     DXGI_SWAP_CHAIN_DESC swapDesc{};
     swapDesc.BufferCount = 2;
-    swapDesc.BufferDesc.Width = static_cast<UINT>(m_windowWidth.load());
-    swapDesc.BufferDesc.Height = static_cast<UINT>(m_windowHeight.load());
+    swapDesc.BufferDesc.Width = static_cast<UINT>(std::max(1, m_windowWidth.load(std::memory_order_acquire)));
+    swapDesc.BufferDesc.Height = static_cast<UINT>(std::max(1, m_windowHeight.load(std::memory_order_acquire)));
     swapDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    swapDesc.BufferDesc.RefreshRate.Numerator = static_cast<UINT>(m_selectedRefreshRate.load());
+    swapDesc.BufferDesc.RefreshRate.Numerator = static_cast<UINT>(std::max(1, m_selectedRefreshRate.load(std::memory_order_acquire)));
     swapDesc.BufferDesc.RefreshRate.Denominator = 1;
     swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     swapDesc.OutputWindow = hwnd;
@@ -698,22 +649,13 @@ bool DxRenderWindow::CreateDeviceResources()
     swapDesc.Windowed = TRUE;
     swapDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
-    hr = m_dxgiFactory->CreateSwapChain(
-        m_d3dDevice.Get(),
-        &swapDesc,
-        m_swapChain.GetAddressOf()
-    );
-
+    hr = m_dxgiFactory->CreateSwapChain(m_d3dDevice.Get(), &swapDesc, m_swapChain.GetAddressOf());
     if (FAILED(hr))
         return false;
 
     m_dxgiFactory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
-    hr = D2D1CreateFactory(
-        D2D1_FACTORY_TYPE_SINGLE_THREADED,
-        m_d2dFactory.GetAddressOf()
-    );
-
+    hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, m_d2dFactory.GetAddressOf());
     if (FAILED(hr))
         return false;
 
@@ -734,17 +676,14 @@ bool DxRenderWindow::CreateRenderTargets()
     if (!m_swapChain || !m_d3dDevice || !m_d2dFactory)
         return false;
 
+    CleanupRenderTargets();
+
     ComPtr<ID3D11Texture2D> backBuffer;
     HRESULT hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
     if (FAILED(hr))
         return false;
 
-    hr = m_d3dDevice->CreateRenderTargetView(
-        backBuffer.Get(),
-        nullptr,
-        m_renderTargetView.GetAddressOf()
-    );
-
+    hr = m_d3dDevice->CreateRenderTargetView(backBuffer.Get(), nullptr, m_renderTargetView.GetAddressOf());
     if (FAILED(hr))
         return false;
 
@@ -753,34 +692,30 @@ bool DxRenderWindow::CreateRenderTargets()
     if (FAILED(hr))
         return false;
 
-    DxWindowConfig cfg = GetConfigSnapshot();
+    const DxWindowConfig cfg = GetConfigSnapshot();
+    const float dpi = 96.0f * std::max(0.05f, m_dpiScale.load(std::memory_order_acquire));
 
-    const float dpi = 96.0f * m_dpiScale.load();
-
-    D2D1_ALPHA_MODE alphaMode = cfg.transparentBackground
+    const D2D1_ALPHA_MODE alphaMode = cfg.transparentBackground
         ? D2D1_ALPHA_MODE_PREMULTIPLIED
         : D2D1_ALPHA_MODE_IGNORE;
 
-    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+    const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
         D2D1_RENDER_TARGET_TYPE_DEFAULT,
         D2D1::PixelFormat(DXGI_FORMAT_UNKNOWN, alphaMode),
         dpi,
         dpi
     );
 
-    hr = m_d2dFactory->CreateDxgiSurfaceRenderTarget(
-        dxgiSurface.Get(),
-        &props,
-        m_d2dRenderTarget.GetAddressOf()
-    );
-
+    hr = m_d2dFactory->CreateDxgiSurfaceRenderTarget(dxgiSurface.Get(), &props, m_d2dRenderTarget.GetAddressOf());
     if (FAILED(hr))
         return false;
 
     if (cfg.antiAliasing)
     {
         m_d2dRenderTarget->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-        m_d2dRenderTarget->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+        m_d2dRenderTarget->SetTextAntialiasMode(
+            cfg.transparentBackground ? D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE : D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE
+        );
     }
     else
     {
@@ -796,8 +731,23 @@ bool DxRenderWindow::CreateRenderTargets()
     return SUCCEEDED(hr);
 }
 
+bool DxRenderWindow::RecreateRenderTargets()
+{
+    CleanupRenderTargets();
+    return CreateRenderTargets();
+}
+
+bool DxRenderWindow::RecreateDeviceResources()
+{
+    CleanupDeviceResources();
+    return CreateDeviceResources();
+}
+
 void DxRenderWindow::CleanupRenderTargets()
 {
+    if (m_d3dContext)
+        m_d3dContext->OMSetRenderTargets(0, nullptr, nullptr);
+
     m_solidBrush.Reset();
     m_d2dRenderTarget.Reset();
     m_renderTargetView.Reset();
@@ -805,6 +755,13 @@ void DxRenderWindow::CleanupRenderTargets()
 
 void DxRenderWindow::CleanupDeviceResources()
 {
+    if (m_d3dContext)
+    {
+        m_d3dContext->OMSetRenderTargets(0, nullptr, nullptr);
+        m_d3dContext->ClearState();
+        m_d3dContext->Flush();
+    }
+
     CleanupRenderTargets();
 
     m_textFormatCache.clear();
@@ -813,175 +770,119 @@ void DxRenderWindow::CleanupDeviceResources()
     m_dxgiFactory.Reset();
     m_d3dContext.Reset();
     m_d3dDevice.Reset();
-
     m_dwriteFactory.Reset();
     m_d2dFactory.Reset();
 }
 
 void DxRenderWindow::DestroyAppWindow()
 {
-    HWND hwnd = m_hwnd.exchange(nullptr);
-
-    if (hwnd)
-    {
+    HWND hwnd = m_hwnd.exchange(nullptr, std::memory_order_acq_rel);
+    if (hwnd && IsWindow(hwnd))
         DestroyWindow(hwnd);
-    }
 }
 
 void DxRenderWindow::RenderLoop()
 {
-    m_renderThreadId.store(GetCurrentThreadId());
-
-    _set_se_translator(FuserSehTranslator);
-
-    if (!CreateAppWindow())
-    {
-        m_running.store(false);
-        m_windowReady.store(false);
-        return;
-    }
-
-    if (!CreateDeviceResources())
-    {
-        CleanupDeviceResources();
-        DestroyAppWindow();
-
-        m_running.store(false);
-        m_windowReady.store(false);
-        return;
-    }
-
-    timeBeginPeriod(1);
-
-    m_frameWaitTimer = CreateWaitableTimerExW(
-        nullptr,
-        nullptr,
-        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-        TIMER_ALL_ACCESS
-    );
-
-    if (!m_frameWaitTimer)
-    {
-        m_frameWaitTimer = CreateWaitableTimerW(
-            nullptr,
-            FALSE,
-            nullptr
-        );
-    }
-
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-
+    m_renderThreadId.store(GetCurrentThreadId(), std::memory_order_release);
     m_frameLimiterPrimed = false;
     m_lastFrameLimitFPS = 0;
 
-    m_windowReady.store(true);
+    ScopedTimerResolution timerResolution;
+    _se_translator_function previousTranslator = _set_se_translator(FuserSehTranslator);
 
-    int consecutiveRenderFailures = 0;
+    auto cleanupAndExit = [&]()
+        {
+            m_windowReady.store(false, std::memory_order_release);
+            CleanupDeviceResources();
+            DestroyAppWindow();
+            m_running.store(false, std::memory_order_release);
+            m_renderThreadId.store(0, std::memory_order_release);
+            _set_se_translator(previousTranslator);
+        };
 
-    while (!m_stopRequested.load())
+    try
     {
-        auto frameStart = std::chrono::steady_clock::now();
-
-        try
+        if (!CreateAppWindow())
         {
-            ProcessMessages();
-
-            if (m_stopRequested.load())
-                break;
-
-            const bool activeScene = fuserRender::Render();
-            const int forcedFps = activeScene ? 0 : 1;
-
-            RenderFrame();
-
-            FrameLimit(frameStart, forcedFps);
-
-            consecutiveRenderFailures = 0;
+            LogFuserRenderer("CreateAppWindow failed.");
+            cleanupAndExit();
+            return;
         }
-        catch (const FuserSehException& e)
+
+        if (!CreateDeviceResources())
         {
-            consecutiveRenderFailures++;
+            LogFuserRenderer("CreateDeviceResources failed.");
+            cleanupAndExit();
+            return;
+        }
 
-            LogFuserCrash(
-                std::string("Render thread SEH crash: ") +
-                e.what() +
-                " Stage: " +
-                fuserRender::GetCurrentStage()
-            );
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+        m_windowReady.store(true, std::memory_order_release);
 
-            ClearDrawLists();
-            m_frameLimiterPrimed = false;
+        int consecutiveFailures = 0;
 
-            if (consecutiveRenderFailures >= 10)
+        while (!m_stopRequested.load(std::memory_order_acquire))
+        {
+            const auto frameStart = std::chrono::steady_clock::now();
+            bool activeScene = false;
+
+            try
             {
-                LogFuserCrash("Too many consecutive render crashes. Stopping fuser window.");
-                m_stopRequested.store(true);
+                ProcessMessages();
+                if (m_stopRequested.load(std::memory_order_acquire))
+                    break;
+
+                activeScene = BuildFrameDrawList();
+
+                if (!RenderFrame())
+                {
+                    ++consecutiveFailures;
+                    if (consecutiveFailures >= 10)
+                    {
+                        LogFuserCrash("Too many consecutive render failures. Stopping DX window.");
+                        m_stopRequested.store(true, std::memory_order_release);
+                    }
+                }
+                else
+                {
+                    consecutiveFailures = 0;
+                }
+            }
+            catch (const FuserSehException& e)
+            {
+                ++consecutiveFailures;
+                LogFuserCrash(std::string("Render thread SEH crash: ") + e.what() + " Stage: " + fuserRender::GetCurrentStage());
+                ClearDrawLists();
+            }
+            catch (const std::exception& e)
+            {
+                ++consecutiveFailures;
+                LogFuserCrash(std::string("Render thread std exception: ") + e.what() + " Stage: " + fuserRender::GetCurrentStage());
+                ClearDrawLists();
+            }
+            catch (...)
+            {
+                ++consecutiveFailures;
+                LogFuserCrash(std::string("Render thread unknown exception. Stage: ") + fuserRender::GetCurrentStage());
+                ClearDrawLists();
+            }
+
+            if (consecutiveFailures >= 10)
+            {
+                LogFuserCrash("Too many consecutive render crashes. Stopping DX window.");
+                m_stopRequested.store(true, std::memory_order_release);
                 break;
             }
 
-            Sleep(50);
-        }
-        catch (const std::exception& e)
-        {
-            consecutiveRenderFailures++;
-
-            LogFuserCrash(
-                std::string("Render thread std exception: ") +
-                e.what() +
-                " Stage: " +
-                fuserRender::GetCurrentStage()
-            );
-
-            ClearDrawLists();
-            m_frameLimiterPrimed = false;
-
-            if (consecutiveRenderFailures >= 10)
-            {
-                LogFuserCrash("Too many consecutive render crashes. Stopping fuser window.");
-                m_stopRequested.store(true);
-                break;
-            }
-
-            Sleep(50);
-        }
-        catch (...)
-        {
-            consecutiveRenderFailures++;
-
-            LogFuserCrash(
-                std::string("Render thread unknown exception. Stage: ") +
-                fuserRender::GetCurrentStage()
-            );
-
-            ClearDrawLists();
-            m_frameLimiterPrimed = false;
-
-            if (consecutiveRenderFailures >= 10)
-            {
-                LogFuserCrash("Too many consecutive render crashes. Stopping fuser window.");
-                m_stopRequested.store(true);
-                break;
-            }
-
-            Sleep(50);
+            LimitFrame(frameStart, activeScene);
         }
     }
-
-    m_windowReady.store(false);
-
-    if (m_frameWaitTimer)
+    catch (...)
     {
-        CloseHandle(m_frameWaitTimer);
-        m_frameWaitTimer = nullptr;
+        LogFuserCrash("Fatal exception escaped RenderLoop cleanup boundary.");
     }
 
-    timeEndPeriod(1);
-
-    CleanupDeviceResources();
-    DestroyAppWindow();
-
-    m_running.store(false);
-    m_renderThreadId.store(0);
+    cleanupAndExit();
 }
 
 void DxRenderWindow::ProcessMessages()
@@ -992,7 +893,7 @@ void DxRenderWindow::ProcessMessages()
     {
         if (msg.message == WM_QUIT)
         {
-            m_stopRequested.store(true);
+            m_stopRequested.store(true, std::memory_order_release);
             return;
         }
 
@@ -1001,26 +902,31 @@ void DxRenderWindow::ProcessMessages()
     }
 }
 
-void DxRenderWindow::RenderFrame()
+bool DxRenderWindow::BuildFrameDrawList()
+{
+    return fuserRender::Render();
+}
+
+bool DxRenderWindow::RenderFrame()
 {
     if (!m_swapChain || !m_d2dRenderTarget || !m_d3dContext || !m_renderTargetView)
-        return;
+        return false;
 
-    DxWindowConfig cfg = GetConfigSnapshot();
-    float scale = GetFinalScale(cfg);
+    const DxWindowConfig cfg = GetConfigSnapshot();
+    const float scale = GetFinalScale(cfg);
 
     UpdateRenderDrawList();
 
-    glm::vec4 clearColour = cfg.transparentBackground
+    const glm::vec4 clearColour = cfg.transparentBackground
         ? glm::vec4(0.0f, 0.0f, 0.0f, 0.0f)
         : cfg.backgroundColour;
 
-    float clear[4]
+    const float clear[4] =
     {
-        clearColour.r,
-        clearColour.g,
-        clearColour.b,
-        clearColour.a
+        std::clamp(clearColour.r, 0.0f, 1.0f),
+        std::clamp(clearColour.g, 0.0f, 1.0f),
+        std::clamp(clearColour.b, 0.0f, 1.0f),
+        std::clamp(clearColour.a, 0.0f, 1.0f)
     };
 
     m_d3dContext->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), nullptr);
@@ -1032,53 +938,49 @@ void DxRenderWindow::RenderFrame()
     RenderDrawCommands(m_renderDrawList, cfg, scale);
 
     HRESULT hr = m_d2dRenderTarget->EndDraw();
-
     if (hr == D2DERR_RECREATE_TARGET)
-    {
-        CleanupRenderTargets();
-        CreateRenderTargets();
-        return;
-    }
+        return RecreateRenderTargets();
 
     if (FAILED(hr))
     {
-        CleanupRenderTargets();
-        CreateRenderTargets();
-        return;
+        LogFuserRenderer("Direct2D EndDraw failed. Recreating render targets.");
+        return RecreateRenderTargets();
     }
 
     hr = m_swapChain->Present(cfg.useVSync ? 1 : 0, 0);
 
+    if (hr == DXGI_STATUS_OCCLUDED)
+        return true;
+
     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
     {
-        CleanupDeviceResources();
-        CreateDeviceResources();
-        return;
+        LogFuserRenderer("DXGI device removed/reset. Recreating device resources.");
+        return RecreateDeviceResources();
     }
 
-    m_swapChain->Present(cfg.useVSync ? 1 : 0, 0);
+    if (FAILED(hr))
+    {
+        LogFuserRenderer("SwapChain Present failed.");
+        return false;
+    }
+
+    return true;
 }
 
-void DxRenderWindow::FrameLimit(
-    std::chrono::steady_clock::time_point frameStart,
-    int forcedTargetFPS)
+void DxRenderWindow::LimitFrame(std::chrono::steady_clock::time_point frameStart, bool activeScene)
 {
-    (void)frameStart;
+    const DxWindowConfig cfg = GetConfigSnapshot();
 
-    DxWindowConfig cfg = GetConfigSnapshot();
-
-    const bool usingForcedLimit = forcedTargetFPS > 0;
-
-    if (cfg.useVSync && !usingForcedLimit)
+    if (activeScene && cfg.useVSync)
     {
         m_frameLimiterPrimed = false;
         m_lastFrameLimitFPS = 0;
         return;
     }
 
-    const int targetFPS = usingForcedLimit
-        ? forcedTargetFPS
-        : GetTargetFPS(cfg);
+    const int targetFPS = activeScene
+        ? GetTargetFPS(cfg)
+        : std::max(1, cfg.idleFPS);
 
     if (targetFPS <= 0)
     {
@@ -1089,81 +991,50 @@ void DxRenderWindow::FrameLimit(
 
     using namespace std::chrono;
 
-    const auto frameDuration =
-        duration_cast<steady_clock::duration>(
-            duration<double>(1.0 / static_cast<double>(targetFPS))
-        );
+    const auto frameDuration = duration_cast<steady_clock::duration>(duration<double>(1.0 / static_cast<double>(targetFPS)));
 
-    const auto now = steady_clock::now();
-
-    // Reset pacing when starting limiter or FPS target changes.
     if (!m_frameLimiterPrimed || m_lastFrameLimitFPS != targetFPS)
     {
-        m_nextFrameTime = now + frameDuration;
+        m_nextFrameTime = frameStart + frameDuration;
         m_frameLimiterPrimed = true;
         m_lastFrameLimitFPS = targetFPS;
-        return;
+    }
+    else
+    {
+        m_nextFrameTime += frameDuration;
     }
 
-    // If we fell badly behind, resync instead of trying to catch up.
+    const auto now = steady_clock::now();
     if (now > m_nextFrameTime + frameDuration)
-    {
         m_nextFrameTime = now + frameDuration;
-        return;
-    }
 
-    const auto targetTime = m_nextFrameTime;
+    SleepUntil(m_nextFrameTime);
+}
 
-    while (true)
+void DxRenderWindow::SleepUntil(std::chrono::steady_clock::time_point targetTime)
+{
+    using namespace std::chrono;
+
+    while (!m_stopRequested.load(std::memory_order_acquire))
     {
-        const auto current = steady_clock::now();
+        const auto now = steady_clock::now();
+        if (now >= targetTime)
+            return;
 
-        if (current >= targetTime)
-            break;
+        const auto remaining = duration_cast<milliseconds>(targetTime - now);
+        const DWORD waitMs = static_cast<DWORD>(std::clamp<long long>(remaining.count(), 1, 50));
 
-        const auto remaining = targetTime - current;
+        const DWORD result = MsgWaitForMultipleObjectsEx(
+            0,
+            nullptr,
+            waitMs,
+            QS_ALLINPUT,
+            MWMO_INPUTAVAILABLE
+        );
 
-        if (remaining > milliseconds(2))
-        {
-            const auto waitFor = remaining - milliseconds(1);
-
-            if (m_frameWaitTimer)
-            {
-                const auto wait100ns =
-                    duration_cast<duration<long long, std::ratio<1, 10000000>>>(waitFor).count();
-
-                LARGE_INTEGER dueTime{};
-                dueTime.QuadPart = -wait100ns;
-
-                if (SetWaitableTimer(m_frameWaitTimer, &dueTime, 0, nullptr, nullptr, FALSE))
-                {
-                    WaitForSingleObject(m_frameWaitTimer, INFINITE);
-                }
-                else
-                {
-                    Sleep(1);
-                }
-            }
-            else
-            {
-                Sleep(1);
-            }
-        }
-        else if (remaining > microseconds(1000))
-        {
-            std::this_thread::yield();
-        }
-        else
-        {
-            while (steady_clock::now() < targetTime)
-            {
-            }
-
-            break;
-        }
+        if (result == WAIT_OBJECT_0)
+            ProcessMessages();
     }
-
-    m_nextFrameTime += frameDuration;
 }
 
 void DxRenderWindow::OnResize(UINT width, UINT height)
@@ -1171,28 +1042,24 @@ void DxRenderWindow::OnResize(UINT width, UINT height)
     if (width == 0 || height == 0)
         return;
 
-    m_windowWidth.store(static_cast<int>(width));
-    m_windowHeight.store(static_cast<int>(height));
+    m_windowWidth.store(static_cast<int>(width), std::memory_order_release);
+    m_windowHeight.store(static_cast<int>(height), std::memory_order_release);
 
     if (!m_swapChain || !m_d3dContext)
         return;
 
-    m_d3dContext->OMSetRenderTargets(0, nullptr, nullptr);
-
     CleanupRenderTargets();
 
-    HRESULT hr = m_swapChain->ResizeBuffers(
-        0,
-        width,
-        height,
-        DXGI_FORMAT_UNKNOWN,
-        0
-    );
-
-    if (SUCCEEDED(hr))
+    HRESULT hr = m_swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+    if (FAILED(hr))
     {
-        CreateRenderTargets();
+        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+            RecreateDeviceResources();
+
+        return;
     }
+
+    CreateRenderTargets();
 }
 
 void DxRenderWindow::PushDrawCommand(DrawCommand&& command)
@@ -1203,8 +1070,7 @@ void DxRenderWindow::PushDrawCommand(DrawCommand&& command)
 
 void DxRenderWindow::UpdateRenderDrawList()
 {
-    std::uint64_t version = m_drawVersion.load(std::memory_order_acquire);
-
+    const std::uint64_t version = m_drawVersion.load(std::memory_order_acquire);
     if (version == m_renderDrawVersion)
         return;
 
@@ -1216,10 +1082,13 @@ void DxRenderWindow::UpdateRenderDrawList()
     m_renderDrawVersion = version;
 }
 
-void DxRenderWindow::RenderDrawCommands(
-    const std::vector<DrawCommand>& commands,
-    const DxWindowConfig& cfg,
-    float scale)
+void DxRenderWindow::ReleaseDrawStorageUnlocked()
+{
+    std::vector<DrawCommand>().swap(m_pendingDrawList);
+    std::vector<DrawCommand>().swap(m_submittedDrawList);
+}
+
+void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands, const DxWindowConfig& cfg, float scale)
 {
     if (!m_d2dRenderTarget || !m_solidBrush)
         return;
@@ -1231,34 +1100,16 @@ void DxRenderWindow::RenderDrawCommands(
         case DrawCommandType::Line:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-
-            float thickness = std::max(0.1f, cmd.thickness * scale);
-
-            m_d2dRenderTarget->DrawLine(
-                D2D1::Point2F(cmd.x, cmd.y),
-                D2D1::Point2F(cmd.x2, cmd.y2),
-                m_solidBrush.Get(),
-                thickness
-            );
-
+            const float thickness = std::max(0.1f, cmd.thickness * scale);
+            m_d2dRenderTarget->DrawLine(D2D1::Point2F(cmd.x, cmd.y), D2D1::Point2F(cmd.x2, cmd.y2), m_solidBrush.Get(), thickness);
             break;
         }
 
         case DrawCommandType::Rect:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-
-            float w = cmd.w * scale;
-            float h = cmd.h * scale;
-            float thickness = std::max(0.1f, cmd.thickness * scale);
-
-            D2D1_RECT_F rect = D2D1::RectF(
-                cmd.x,
-                cmd.y,
-                cmd.x + w,
-                cmd.y + h
-            );
-
+            const float thickness = std::max(0.1f, cmd.thickness * scale);
+            const D2D1_RECT_F rect = D2D1::RectF(cmd.x, cmd.y, cmd.x + (cmd.w * scale), cmd.y + (cmd.h * scale));
             m_d2dRenderTarget->DrawRectangle(rect, m_solidBrush.Get(), thickness);
             break;
         }
@@ -1266,33 +1117,15 @@ void DxRenderWindow::RenderDrawCommands(
         case DrawCommandType::FilledRect:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-
-            float w = cmd.w * scale;
-            float h = cmd.h * scale;
-
-            D2D1_RECT_F rect = D2D1::RectF(
-                cmd.x,
-                cmd.y,
-                cmd.x + w,
-                cmd.y + h
-            );
-
+            const D2D1_RECT_F rect = D2D1::RectF(cmd.x, cmd.y, cmd.x + (cmd.w * scale), cmd.y + (cmd.h * scale));
             m_d2dRenderTarget->FillRectangle(rect, m_solidBrush.Get());
             break;
         }
 
         case DrawCommandType::Box:
         {
-            float w = cmd.w * scale;
-            float h = cmd.h * scale;
-            float thickness = std::max(0.1f, cmd.thickness * scale);
-
-            D2D1_RECT_F rect = D2D1::RectF(
-                cmd.x,
-                cmd.y,
-                cmd.x + w,
-                cmd.y + h
-            );
+            const D2D1_RECT_F rect = D2D1::RectF(cmd.x, cmd.y, cmd.x + (cmd.w * scale), cmd.y + (cmd.h * scale));
+            const float thickness = std::max(0.1f, cmd.thickness * scale);
 
             if (cmd.filled && cmd.fillColour.a > 0.0f)
             {
@@ -1302,23 +1135,15 @@ void DxRenderWindow::RenderDrawCommands(
 
             m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
             m_d2dRenderTarget->DrawRectangle(rect, m_solidBrush.Get(), thickness);
-
             break;
         }
 
         case DrawCommandType::Circle:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-
-            float radius = cmd.radius * scale;
-            float thickness = std::max(0.1f, cmd.thickness * scale);
-
-            D2D1_ELLIPSE ellipse = D2D1::Ellipse(
-                D2D1::Point2F(cmd.x, cmd.y),
-                radius,
-                radius
-            );
-
+            const float radius = std::max(0.1f, cmd.radius * scale);
+            const float thickness = std::max(0.1f, cmd.thickness * scale);
+            const D2D1_ELLIPSE ellipse = D2D1::Ellipse(D2D1::Point2F(cmd.x, cmd.y), radius, radius);
             m_d2dRenderTarget->DrawEllipse(ellipse, m_solidBrush.Get(), thickness);
             break;
         }
@@ -1326,71 +1151,41 @@ void DxRenderWindow::RenderDrawCommands(
         case DrawCommandType::FilledCircle:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-
-            float radius = cmd.radius * scale;
-
-            D2D1_ELLIPSE ellipse = D2D1::Ellipse(
-                D2D1::Point2F(cmd.x, cmd.y),
-                radius,
-                radius
-            );
-
+            const float radius = std::max(0.1f, cmd.radius * scale);
+            const D2D1_ELLIPSE ellipse = D2D1::Ellipse(D2D1::Point2F(cmd.x, cmd.y), radius, radius);
             m_d2dRenderTarget->FillEllipse(ellipse, m_solidBrush.Get());
             break;
         }
 
         case DrawCommandType::Text:
-        {
             RenderTextCommand(cmd, cfg, scale);
             break;
-        }
 
         case DrawCommandType::MarkerWithText:
-        {
             RenderMarkerWithTextCommand(cmd, cfg, scale);
             break;
-        }
         }
     }
 }
 
-void DxRenderWindow::RenderTextCommand(
-    const DrawCommand& cmd,
-    const DxWindowConfig& cfg,
-    float scale)
+void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale)
 {
-    if (!m_d2dRenderTarget || !m_solidBrush || !m_dwriteFactory)
+    if (!m_d2dRenderTarget || !m_solidBrush || !m_dwriteFactory || cmd.text.empty())
         return;
 
-    if (cmd.text.empty())
-        return;
-
-    std::wstring wideText = Utf8ToWide(cmd.text);
+    const std::wstring wideText = Utf8ToWide(cmd.text);
     if (wideText.empty())
         return;
 
-    std::wstring fontName = cmd.fontName.empty()
-        ? cfg.defaultFont.name
-        : cmd.fontName;
+    const std::wstring fontName = cmd.fontName.empty() ? cfg.defaultFont.name : cmd.fontName;
+    const float baseSize = cmd.fontSize > 0.0f ? cmd.fontSize : cfg.defaultFont.size;
+    const float finalSize = std::max(1.0f, baseSize * scale);
 
-    float baseSize = cmd.fontSize > 0.0f
-        ? cmd.fontSize
-        : cfg.defaultFont.size;
-
-    float finalSize = std::max(1.0f, baseSize * scale);
-
-    IDWriteTextFormat* format = GetTextFormat(
-        fontName,
-        finalSize,
-        cfg.defaultFont.bold,
-        cfg.defaultFont.italic
-    );
-
+    IDWriteTextFormat* format = GetTextFormat(fontName, finalSize, cfg.defaultFont.bold, cfg.defaultFont.italic);
     if (!format)
         return;
 
     ComPtr<IDWriteTextLayout> layout;
-
     HRESULT hr = m_dwriteFactory->CreateTextLayout(
         wideText.c_str(),
         static_cast<UINT32>(wideText.size()),
@@ -1410,29 +1205,22 @@ void DxRenderWindow::RenderTextCommand(
     float drawY = cmd.y;
 
     if (cmd.centered)
-    {
         drawX -= metrics.widthIncludingTrailingWhitespace * 0.5f;
-    }
-
-    const float outlineOffset = std::max(1.0f, 1.0f * scale);
 
     if (cmd.outlined)
     {
-        m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
-
-        const std::array<D2D1_POINT_2F, 8> offsets =
+        const float outlineOffset = std::max(1.0f, scale);
+        const std::array<D2D1_POINT_2F, 4> offsets =
         {
             D2D1::Point2F(-outlineOffset, 0.0f),
             D2D1::Point2F(outlineOffset, 0.0f),
             D2D1::Point2F(0.0f, -outlineOffset),
-            D2D1::Point2F(0.0f, outlineOffset),
-            D2D1::Point2F(-outlineOffset, -outlineOffset),
-            D2D1::Point2F(outlineOffset, -outlineOffset),
-            D2D1::Point2F(-outlineOffset, outlineOffset),
-            D2D1::Point2F(outlineOffset, outlineOffset)
+            D2D1::Point2F(0.0f, outlineOffset)
         };
 
-        for (const auto& offset : offsets)
+        m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+
+        for (const D2D1_POINT_2F& offset : offsets)
         {
             m_d2dRenderTarget->DrawTextLayout(
                 D2D1::Point2F(drawX + offset.x, drawY + offset.y),
@@ -1444,33 +1232,19 @@ void DxRenderWindow::RenderTextCommand(
     }
 
     m_solidBrush->SetColor(ToD2DColour(cmd.textColour));
-
-    m_d2dRenderTarget->DrawTextLayout(
-        D2D1::Point2F(drawX, drawY),
-        layout.Get(),
-        m_solidBrush.Get(),
-        D2D1_DRAW_TEXT_OPTIONS_NO_SNAP
-    );
+    m_d2dRenderTarget->DrawTextLayout(D2D1::Point2F(drawX, drawY), layout.Get(), m_solidBrush.Get(), D2D1_DRAW_TEXT_OPTIONS_NO_SNAP);
 }
 
-void DxRenderWindow::RenderMarkerWithTextCommand(
-    const DrawCommand& cmd,
-    const DxWindowConfig& cfg,
-    float scale)
+void DxRenderWindow::RenderMarkerWithTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale)
 {
     if (!m_d2dRenderTarget || !m_solidBrush)
         return;
 
-    float markerSize = std::max(1.0f, cmd.markerSize * scale);
-    float half = markerSize * 0.5f;
-    float thickness = std::max(0.1f, cmd.thickness * scale);
+    const float markerSize = std::max(1.0f, cmd.markerSize * scale);
+    const float half = markerSize * 0.5f;
+    const float thickness = std::max(0.1f, cmd.thickness * scale);
 
-    D2D1_RECT_F markerRect = D2D1::RectF(
-        cmd.x - half,
-        cmd.y - half,
-        cmd.x + half,
-        cmd.y + half
-    );
+    const D2D1_RECT_F markerRect = D2D1::RectF(cmd.x - half, cmd.y - half, cmd.x + half, cmd.y + half);
 
     if (cmd.fillColour.a > 0.0f)
     {
@@ -1514,7 +1288,7 @@ float DxRenderWindow::GetDpiScaleForWindow(HWND hwnd) const
     if (!hdc)
         return 1.0f;
 
-    int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+    const int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
     ReleaseDC(hwnd, hdc);
 
     if (dpiX <= 0)
@@ -1528,7 +1302,7 @@ float DxRenderWindow::GetFinalScale(const DxWindowConfig& cfg) const
     float scale = std::max(0.05f, cfg.renderScale);
 
     if (cfg.useDpiScale)
-        scale *= std::max(0.05f, m_dpiScale.load());
+        scale *= std::max(0.05f, m_dpiScale.load(std::memory_order_acquire));
 
     return scale;
 }
@@ -1536,44 +1310,33 @@ float DxRenderWindow::GetFinalScale(const DxWindowConfig& cfg) const
 int DxRenderWindow::GetTargetFPS(const DxWindowConfig& cfg) const
 {
     if (cfg.useMonitorRefreshRate)
-        return std::max(1, m_selectedRefreshRate.load());
+        return std::max(1, m_selectedRefreshRate.load(std::memory_order_acquire));
 
     return std::max(1, cfg.maxFPS);
 }
 
-IDWriteTextFormat* DxRenderWindow::GetTextFormat(
-    const std::wstring& fontName,
-    float size,
-    bool bold,
-    bool italic)
+IDWriteTextFormat* DxRenderWindow::GetTextFormat(const std::wstring& fontName, float size, bool bold, bool italic)
 {
     if (!m_dwriteFactory)
         return nullptr;
 
-    int sizeKey = static_cast<int>(std::round(size * 10.0f));
+    if (m_textFormatCache.size() > MAX_TEXT_FORMAT_CACHE)
+        m_textFormatCache.clear();
+
+    const int sizeKey = static_cast<int>(std::round(size * 10.0f));
 
     std::wstringstream ss;
-    ss << fontName << L"|"
-        << sizeKey << L"|"
-        << (bold ? L"b" : L"n") << L"|"
-        << (italic ? L"i" : L"r");
-
-    std::wstring key = ss.str();
+    ss << fontName << L"|" << sizeKey << L"|" << (bold ? L"b" : L"n") << L"|" << (italic ? L"i" : L"r");
+    const std::wstring key = ss.str();
 
     auto it = m_textFormatCache.find(key);
     if (it != m_textFormatCache.end())
         return it->second.Get();
 
-    DWRITE_FONT_WEIGHT weight = bold
-        ? DWRITE_FONT_WEIGHT_BOLD
-        : DWRITE_FONT_WEIGHT_NORMAL;
-
-    DWRITE_FONT_STYLE style = italic
-        ? DWRITE_FONT_STYLE_ITALIC
-        : DWRITE_FONT_STYLE_NORMAL;
+    const DWRITE_FONT_WEIGHT weight = bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL;
+    const DWRITE_FONT_STYLE style = italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL;
 
     ComPtr<IDWriteTextFormat> format;
-
     HRESULT hr = m_dwriteFactory->CreateTextFormat(
         fontName.c_str(),
         nullptr,
@@ -1594,7 +1357,6 @@ IDWriteTextFormat* DxRenderWindow::GetTextFormat(
 
     IDWriteTextFormat* raw = format.Get();
     m_textFormatCache.emplace(key, std::move(format));
-
     return raw;
 }
 
@@ -1603,33 +1365,16 @@ std::wstring DxRenderWindow::Utf8ToWide(const std::string& text)
     if (text.empty())
         return L"";
 
-    int needed = MultiByteToWideChar(
-        CP_UTF8,
-        MB_ERR_INVALID_CHARS,
-        text.data(),
-        static_cast<int>(text.size()),
-        nullptr,
-        0
-    );
-
+    int needed = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
     if (needed <= 0)
         return L"";
 
-    std::wstring result(static_cast<size_t>(needed), L'\0');
-
-    int written = MultiByteToWideChar(
-        CP_UTF8,
-        MB_ERR_INVALID_CHARS,
-        text.data(),
-        static_cast<int>(text.size()),
-        result.data(),
-        needed
-    );
-
+    std::wstring result(static_cast<std::size_t>(needed), L'\0');
+    int written = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), needed);
     if (written <= 0)
         return L"";
 
-    result.resize(static_cast<size_t>(written));
+    result.resize(static_cast<std::size_t>(written));
     return result;
 }
 
@@ -1651,14 +1396,11 @@ LRESULT CALLBACK DxRenderWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     {
         CREATESTRUCTW* createStruct = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = reinterpret_cast<DxRenderWindow*>(createStruct->lpCreateParams);
-
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
     }
     else
     {
-        self = reinterpret_cast<DxRenderWindow*>(
-            GetWindowLongPtrW(hwnd, GWLP_USERDATA)
-            );
+        self = reinterpret_cast<DxRenderWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     }
 
     if (self)
@@ -1666,40 +1408,34 @@ LRESULT CALLBACK DxRenderWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         switch (msg)
         {
         case WM_SIZE:
-        {
             if (wParam != SIZE_MINIMIZED)
-            {
-                UINT width = LOWORD(lParam);
-                UINT height = HIWORD(lParam);
-                self->OnResize(width, height);
-            }
-
+                self->OnResize(LOWORD(lParam), HIWORD(lParam));
             return 0;
-        }
+
+        case WM_DPICHANGED:
+            self->m_dpiScale.store(self->GetDpiScaleForWindow(hwnd), std::memory_order_release);
+            return 0;
 
         case WM_CLOSE:
-        {
-            self->m_stopRequested.store(true);
+            self->m_stopRequested.store(true, std::memory_order_release);
             DestroyWindow(hwnd);
             return 0;
-        }
 
         case WM_DESTROY:
-        {
+            self->m_hwnd.compare_exchange_strong(hwnd, nullptr, std::memory_order_acq_rel);
             PostQuitMessage(0);
             return 0;
-        }
+
+        case WM_NCDESTROY:
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            break;
         }
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-BOOL CALLBACK DxRenderWindow::MonitorEnumProc(
-    HMONITOR hMonitor,
-    HDC,
-    LPRECT,
-    LPARAM dwData)
+BOOL CALLBACK DxRenderWindow::MonitorEnumProc(HMONITOR hMonitor, HDC, LPRECT, LPARAM dwData)
 {
     auto* monitors = reinterpret_cast<std::vector<DxMonitorInfo>*>(dwData);
     if (!monitors)
@@ -1714,7 +1450,6 @@ BOOL CALLBACK DxRenderWindow::MonitorEnumProc(
     DxMonitorInfo info{};
     info.index = static_cast<int>(monitors->size());
     info.deviceName = monitorInfo.szDevice;
-
     info.x = monitorInfo.rcMonitor.left;
     info.y = monitorInfo.rcMonitor.top;
     info.width = monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left;
@@ -1734,14 +1469,11 @@ BOOL CALLBACK DxRenderWindow::MonitorEnumProc(
     displayDevice.cb = sizeof(DISPLAY_DEVICEW);
 
     if (EnumDisplayDevicesW(monitorInfo.szDevice, 0, &displayDevice, 0))
-    {
         info.name = displayDevice.DeviceString;
-    }
 
     if (info.name.empty())
         info.name = monitorInfo.szDevice;
 
     monitors->push_back(std::move(info));
-
     return TRUE;
 }
