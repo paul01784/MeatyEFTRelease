@@ -729,6 +729,64 @@ namespace fuserRender
         return true;
     }
 
+    static inline void RenderAmmoHud()
+    {
+        std::vector<PlayerCache> cache = players.getCache();
+
+        if (cache.empty())
+            return;
+
+        for (const auto& player : cache)
+        {
+            if (!player.isLocal)
+                continue;
+
+            const HandsInfo& handInfo = player.observedHandsInfo;
+
+            std::string ammoName = CleanText(handInfo.ammoName);
+
+            if (ammoName.empty())
+                ammoName = "?";
+
+            const int chamberCount = std::max(0, handInfo.chamberCount);
+            const int magazineCount = std::max(0, handInfo.magazineCount);
+
+            std::string ammoText =
+                ammoName +
+                " (" +
+                std::to_string(chamberCount) +
+                "/" +
+                std::to_string(magazineCount) +
+                ")";
+
+            const float screenW = ScreenWidth();
+            const float screenH = ScreenHeight();
+
+            const float fontSize = 30.0f;
+            const float marginX = 30.0f;
+            const float marginY = 60.0f;
+
+            const float approxTextWidth =
+                static_cast<float>(ammoText.length()) * (fontSize * 0.55f);
+
+            const float x = screenW - approxTextWidth - marginX;
+            const float y = screenH - marginY;
+
+            g_DxWindow.DrawText(
+                ammoText,
+                x,
+                y,
+                fontSize,
+                glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),
+                false,                              
+                true,                               
+                glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)  
+            );
+
+            return;
+        }
+    }
+
     static inline void RenderPlayers()
     {
         
@@ -952,6 +1010,11 @@ namespace fuserRender
         SafeRenderStage("RenderHUD", []()
             {
                 RenderHUD();
+            });
+
+        SafeRenderStage("RenderAmmoHud", []()
+            {
+                RenderAmmoHud();
             });
 
         SafeRenderStage("RenderCrosshair", []()
