@@ -787,7 +787,7 @@ namespace fuserRender
                     continue;
 
                 g_DxWindow.DrawText(
-                    player.observedHandsInfo.itemName + " (" + std::string(player.observedHandsInfo.ammoName) + ")",
+                    player.observedHandsInfo.itemName + " (" + std::string(player.observedHandsInfo.ammoName) + "/" + std::to_string(player.observedHandsInfo.magazineCount) + ")",
                     screenPos.x,
                     screenPos.y + 20.0f,
                     13.0f,

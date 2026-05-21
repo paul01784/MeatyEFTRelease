@@ -536,7 +536,7 @@ void drawWidgetPlayers()
 
                 // Item
                 ImGui::TableSetColumnIndex(3);
-                ImGui::TextUnformatted((cache.observedHandsInfo.itemName + " (" + std::string(cache.observedHandsInfo.ammoName) + ") " + std::to_string(cache.observedHandsInfo.chamberCount) + " / " + std::to_string(cache.observedHandsInfo.magazineCount)).c_str());
+                ImGui::TextUnformatted((cache.observedHandsInfo.itemName + " (" + std::string(cache.observedHandsInfo.ammoName) + "/"+ std::to_string(cache.observedHandsInfo.magazineCount) + ")").c_str());
 
                 // LvL
                 ImGui::TableSetColumnIndex(4);
