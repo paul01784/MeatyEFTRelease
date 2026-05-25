@@ -600,6 +600,7 @@
     <None Include="external\glm\gtx\vector_query.inl" />
     <None Include="external\glm\gtx\wrap.inl" />
     <None Include="libs\info.db" />
+    <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
     <Library Include="libs\leechcore.lib" />

@@ -5,18 +5,18 @@ namespace sdk
 {
 	namespace GameWorld
 	{
-		constexpr uint64_t Location = 0xD0;
+		constexpr uint64_t Location = 0xE8;
 		
 	}
 
 	namespace ClientLocalGameWorld
 	{
-		constexpr uint64_t LootList = 0x198;
-		constexpr uint64_t RegisteredPlayers = 0x1B8;
-		constexpr uint64_t MainPlayer = 0x210;
-		constexpr uint64_t Grenades = 0x288;
-		constexpr uint64_t ExfiltrationController = 0x58;
-		constexpr uint64_t SynchronizableObjectLogicProcessor = 0x248; // object
+		constexpr uint64_t LootList = 0x1B0;
+		constexpr uint64_t RegisteredPlayers = 0x1D0;
+		constexpr uint64_t MainPlayer = 0x230;
+		constexpr uint64_t Grenades = 0x2B0;
+		constexpr uint64_t ExfiltrationController = 0x68;
+		constexpr uint64_t SynchronizableObjectLogicProcessor = 0x270; // object
 		constexpr uint64_t btrController = 0x28;
 	}
 
@@ -31,7 +31,7 @@ namespace sdk
 	{
 		constexpr uint64_t Status = 0x58; // EExfiltrationStatus
 		constexpr uint64_t Settings = 0x98; // ExitTriggerSettings
-		constexpr uint64_t EligibleEntryPoints = 0xC0; // String[] — PMC spawn entry points
+		constexpr uint64_t EligibleEntryPoints = 0xF8; // String[] — PMC spawn entry points
 	}
 
 	namespace ExitSettings
@@ -75,14 +75,14 @@ namespace sdk
 	{
 		constexpr uint64_t MovementContext = 0x60; // EFT.MovementContext
 		constexpr uint64_t _playerBody = 0x190; // EFT.PlayerBody
-		constexpr uint64_t Physical = 0x920; // -.\uE399 <Physical> Physical
-		constexpr uint64_t Corpse = 0x680; // EFT.Interactive.Corpse
-		constexpr uint64_t Location = 0x878; // String
-		constexpr uint64_t Profile = 0x908; // EFT.Profile
-		constexpr uint64_t ProceduralWeaponAnimation = 0x338; // EFT.Animations.ProceduralWeaponAnimation
-		constexpr uint64_t _inventoryController = 0x980; // EFT.PlayerInventoryController update
-		constexpr uint64_t _handsController = 0x988; // EFT.PlayerHands update
-		constexpr uint64_t _playerLookRaycastTransform = 0xA18; // UnityEngine.Transform
+		constexpr uint64_t Physical = 0x9C8; // -.\uE399 <Physical> Physical
+		constexpr uint64_t Corpse = 0x718; // EFT.Interactive.Corpse
+		constexpr uint64_t Location = 0x918; // String
+		constexpr uint64_t Profile = 0x9B0; // EFT.Profile
+		constexpr uint64_t ProceduralWeaponAnimation = 0x3B0; // EFT.Animations.ProceduralWeaponAnimation
+		constexpr uint64_t _inventoryController = 0xA28; // EFT.PlayerInventoryController update
+		constexpr uint64_t _handsController = 0xA30; // EFT.PlayerHands update
+		constexpr uint64_t _playerLookRaycastTransform = 0xAC0; // UnityEngine.Transform
 	}
 
 	namespace ObservedPlayerView
