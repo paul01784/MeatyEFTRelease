@@ -23,7 +23,8 @@ static const std::vector<std::string> MapNames =
     "tarkovstreets",
     "Sandbox",
     "Sandbox_high",
-    "Sandbox_start"
+    "Sandbox_start",
+    "Icebreaker"
 };
 
 // Case-insensitive comparison

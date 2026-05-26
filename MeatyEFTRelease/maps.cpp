@@ -55,6 +55,9 @@ int woods_0f_mapSizeH = 0;
 int gz_0f_mapSizeW = 0;
 int gz_0f_mapSizeH = 0;
 
+int ib_0f_mapSizeW = 0;
+int ib_0f_mapSizeH = 0;
+
 // map settings
 
 // Customs
@@ -192,6 +195,17 @@ float gz_configX = 1322.f;
 float gz_configY = 3424.f;
 float gz_configScale = 10.41f;
 
+// Icebreaker
+
+PDIRECT3DTEXTURE9 ib_texture0 = NULL;
+float ib_texture0_MinHeight = -100.f;
+
+int ib_orgW = 6500;
+int ib_orgH = 4885;
+
+float ib_configX = 4230.f;
+float ib_configY = 3014.f;
+float ib_configScale = 3.73f;
 
 bool loadMaps(std::string mapToLoad)
 {
@@ -366,6 +380,19 @@ bool loadMaps(std::string mapToLoad)
         bool gz_ground = LoadTextureFromFile(file_pathgz0CStr, &gz_texture0, &gz_0f_mapSizeW, &gz_0f_mapSizeH);
         IM_ASSERT(gz_ground);
     }
+
+    if (mapToLoad == "Icebreaker")
+    {
+        //Icebreaker
+        //ground floor
+        std::filesystem::path file_pathib0 = cwd / "Maps" / "Icebreaker.png";
+        std::string file_pathib0Str = file_pathib0.string();
+        const char* file_pathib0CStr = file_pathib0Str.c_str();
+
+        bool woods_ground = LoadTextureFromFile(file_pathib0CStr, &ib_texture0, &ib_0f_mapSizeW, &ib_0f_mapSizeH);
+        IM_ASSERT(woods_ground);
+    }
+
     return true;
 }
 
