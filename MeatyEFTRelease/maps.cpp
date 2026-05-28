@@ -55,8 +55,28 @@ int woods_0f_mapSizeH = 0;
 int gz_0f_mapSizeW = 0;
 int gz_0f_mapSizeH = 0;
 
-int ib_0f_mapSizeW = 0;
-int ib_0f_mapSizeH = 0;
+int ib_1f_mapSizeW = 0;
+int ib_1f_mapSizeH = 0;
+int ib_2f_mapSizeW = 0;
+int ib_2f_mapSizeH = 0;
+int ib_3f_mapSizeW = 0;
+int ib_3f_mapSizeH = 0;
+int ib_4f_mapSizeW = 0;
+int ib_4f_mapSizeH = 0;
+int ib_5f_mapSizeW = 0;
+int ib_5f_mapSizeH = 0;
+int ib_6f_mapSizeW = 0;
+int ib_6f_mapSizeH = 0;
+int ib_7f_mapSizeW = 0;
+int ib_7f_mapSizeH = 0;
+int ib_8f_mapSizeW = 0;
+int ib_8f_mapSizeH = 0;
+int ib_9f_mapSizeW = 0;
+int ib_9f_mapSizeH = 0;
+int ib_10f_mapSizeW = 0;
+int ib_10f_mapSizeH = 0;
+int ib_11f_mapSizeW = 0;
+int ib_11f_mapSizeH = 0;
 
 // map settings
 
@@ -198,14 +218,47 @@ float gz_configScale = 10.41f;
 // Icebreaker
 
 PDIRECT3DTEXTURE9 ib_texture0 = NULL;
-float ib_texture0_MinHeight = -100.f;
+float ib_texture0_MinHeight = -1.f;
 
-int ib_orgW = 6500;
-int ib_orgH = 4885;
+PDIRECT3DTEXTURE9 ib_texture1 = NULL;
+float ib_texture1_MinHeight = -3.f;
 
-float ib_configX = 4230.f;
-float ib_configY = 3014.f;
-float ib_configScale = 3.73f;
+PDIRECT3DTEXTURE9 ib_texture2 = NULL;
+float ib_texture2_MinHeight = -6.f;
+
+PDIRECT3DTEXTURE9 ib_texture3 = NULL;
+float ib_texture3_MinHeight = -9.f;
+
+PDIRECT3DTEXTURE9 ib_texture4 = NULL;
+float ib_texture4_MinHeight = -12.f;
+
+PDIRECT3DTEXTURE9 ib_texture5 = NULL;
+float ib_texture5_MinHeight = -15.f;
+
+PDIRECT3DTEXTURE9 ib_texture6 = NULL;
+float ib_texture6_MinHeight = -18.f;
+
+PDIRECT3DTEXTURE9 ib_texture7 = NULL;
+float ib_texture7_MinHeight = -21.f;
+
+PDIRECT3DTEXTURE9 ib_texture8 = NULL;
+float ib_texture8_MinHeight = -24.f;
+
+PDIRECT3DTEXTURE9 ib_texture9 = NULL;
+float ib_texture9_MinHeight = -27.f;
+
+PDIRECT3DTEXTURE9 ib_texture10 = NULL;
+float ib_texture10_MinHeight = -30.f;
+
+PDIRECT3DTEXTURE9 ib_texture11 = NULL;
+float ib_texture11_MinHeight = -33.f;
+
+int ib_orgW = 6392;
+int ib_orgH = 1280;
+
+float ib_configX = 1068.f;
+float ib_configY = 1245.f;
+float ib_configScale = 1.93f;
 
 bool loadMaps(std::string mapToLoad)
 {
@@ -383,14 +436,160 @@ bool loadMaps(std::string mapToLoad)
 
     if (mapToLoad == "Icebreaker")
     {
-        //Icebreaker
-        //ground floor
-        std::filesystem::path file_pathib0 = cwd / "Maps" / "Icebreaker.png";
+        // Icebreaker
+
+// Ground floor / 1F
+        std::filesystem::path file_pathib0 = cwd / "Maps" / "ib_01.png";
         std::string file_pathib0Str = file_pathib0.string();
         const char* file_pathib0CStr = file_pathib0Str.c_str();
 
-        bool woods_ground = LoadTextureFromFile(file_pathib0CStr, &ib_texture0, &ib_0f_mapSizeW, &ib_0f_mapSizeH);
-        IM_ASSERT(woods_ground);
+        bool ib_ground = LoadTextureFromFile(
+            file_pathib0CStr,
+            &ib_texture0,
+            &ib_1f_mapSizeW,
+            &ib_1f_mapSizeH
+        );
+        IM_ASSERT(ib_ground);
+
+
+        // 2F
+        std::filesystem::path file_pathib1 = cwd / "Maps" / "ib_02.png";
+        std::string file_pathib1Str = file_pathib1.string();
+        const char* file_pathib1CStr = file_pathib1Str.c_str();
+
+        bool ib_2f = LoadTextureFromFile(
+            file_pathib1CStr,
+            &ib_texture1,
+            &ib_2f_mapSizeW,
+            &ib_2f_mapSizeH
+        );
+        IM_ASSERT(ib_2f);
+
+
+        // 3F
+        std::filesystem::path file_pathib2 = cwd / "Maps" / "ib_03.png";
+        std::string file_pathib2Str = file_pathib2.string();
+        const char* file_pathib2CStr = file_pathib2Str.c_str();
+
+        bool ib_3f = LoadTextureFromFile(
+            file_pathib2CStr,
+            &ib_texture2,
+            &ib_3f_mapSizeW,
+            &ib_3f_mapSizeH
+        );
+        IM_ASSERT(ib_3f);
+
+
+        // 4F
+        std::filesystem::path file_pathib3 = cwd / "Maps" / "ib_04.png";
+        std::string file_pathib3Str = file_pathib3.string();
+        const char* file_pathib3CStr = file_pathib3Str.c_str();
+
+        bool ib_4f = LoadTextureFromFile(
+            file_pathib3CStr,
+            &ib_texture3,
+            &ib_4f_mapSizeW,
+            &ib_4f_mapSizeH
+        );
+        IM_ASSERT(ib_4f);
+
+
+        // 5F
+        std::filesystem::path file_pathib4 = cwd / "Maps" / "ib_05.png";
+        std::string file_pathib4Str = file_pathib4.string();
+        const char* file_pathib4CStr = file_pathib4Str.c_str();
+
+        bool ib_5f = LoadTextureFromFile(
+            file_pathib4CStr,
+            &ib_texture4,
+            &ib_5f_mapSizeW,
+            &ib_5f_mapSizeH
+        );
+        IM_ASSERT(ib_5f);
+
+
+        // 6F
+        std::filesystem::path file_pathib5 = cwd / "Maps" / "ib_06.png";
+        std::string file_pathib5Str = file_pathib5.string();
+        const char* file_pathib5CStr = file_pathib5Str.c_str();
+
+        bool ib_6f = LoadTextureFromFile(
+            file_pathib5CStr,
+            &ib_texture5,
+            &ib_6f_mapSizeW,
+            &ib_6f_mapSizeH
+        );
+        IM_ASSERT(ib_6f);
+
+
+        // 7F
+        std::filesystem::path file_pathib6 = cwd / "Maps" / "ib_07.png";
+        std::string file_pathib6Str = file_pathib6.string();
+        const char* file_pathib6CStr = file_pathib6Str.c_str();
+
+        bool ib_7f = LoadTextureFromFile(
+            file_pathib6CStr,
+            &ib_texture6,
+            &ib_7f_mapSizeW,
+            &ib_7f_mapSizeH
+        );
+        IM_ASSERT(ib_7f);
+
+
+        // 8F
+        std::filesystem::path file_pathib7 = cwd / "Maps" / "ib_08.png";
+        std::string file_pathib7Str = file_pathib7.string();
+        const char* file_pathib7CStr = file_pathib7Str.c_str();
+
+        bool ib_8f = LoadTextureFromFile(
+            file_pathib7CStr,
+            &ib_texture7,
+            &ib_8f_mapSizeW,
+            &ib_8f_mapSizeH
+        );
+        IM_ASSERT(ib_8f);
+
+
+        // 9F
+        std::filesystem::path file_pathib8 = cwd / "Maps" / "ib_09.png";
+        std::string file_pathib8Str = file_pathib8.string();
+        const char* file_pathib8CStr = file_pathib8Str.c_str();
+
+        bool ib_9f = LoadTextureFromFile(
+            file_pathib8CStr,
+            &ib_texture8,
+            &ib_9f_mapSizeW,
+            &ib_9f_mapSizeH
+        );
+        IM_ASSERT(ib_9f);
+
+
+        // 10F
+        std::filesystem::path file_pathib9 = cwd / "Maps" / "ib_10.png";
+        std::string file_pathib9Str = file_pathib9.string();
+        const char* file_pathib9CStr = file_pathib9Str.c_str();
+
+        bool ib_10f = LoadTextureFromFile(
+            file_pathib9CStr,
+            &ib_texture9,
+            &ib_10f_mapSizeW,
+            &ib_10f_mapSizeH
+        );
+        IM_ASSERT(ib_10f);
+
+
+        // 11F
+        std::filesystem::path file_pathib10 = cwd / "Maps" / "ib_11.png";
+        std::string file_pathib10Str = file_pathib10.string();
+        const char* file_pathib10CStr = file_pathib10Str.c_str();
+
+        bool ib_11f = LoadTextureFromFile(
+            file_pathib10CStr,
+            &ib_texture10,
+            &ib_11f_mapSizeW,
+            &ib_11f_mapSizeH
+        );
+        IM_ASSERT(ib_11f);
     }
 
     return true;

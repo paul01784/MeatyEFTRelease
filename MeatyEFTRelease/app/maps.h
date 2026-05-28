@@ -83,6 +83,29 @@ extern int woods_0f_mapSizeH;
 extern int gz_0f_mapSizeW;
 extern int gz_0f_mapSizeH;
 
+extern int ib_1f_mapSizeW;
+extern int ib_1f_mapSizeH;
+extern int ib_2f_mapSizeW;
+extern int ib_2f_mapSizeH;
+extern int ib_3f_mapSizeW;
+extern int ib_3f_mapSizeH;
+extern int ib_4f_mapSizeW;
+extern int ib_4f_mapSizeH;
+extern int ib_5f_mapSizeW;
+extern int ib_5f_mapSizeH;
+extern int ib_6f_mapSizeW;
+extern int ib_6f_mapSizeH;
+extern int ib_7f_mapSizeW;
+extern int ib_7f_mapSizeH;
+extern int ib_8f_mapSizeW;
+extern int ib_8f_mapSizeH;
+extern int ib_9f_mapSizeW;
+extern int ib_9f_mapSizeH;
+extern int ib_10f_mapSizeW;
+extern int ib_10f_mapSizeH;
+extern int ib_11f_mapSizeW;
+extern int ib_11f_mapSizeH;
+
 // map settings
 
 // Customs
@@ -220,3 +243,36 @@ extern int gz_orgH;
 extern float gz_configX;
 extern float gz_configY;
 extern float gz_configScale;
+
+// Icebreaker
+
+extern PDIRECT3DTEXTURE9 ib_texture0;
+extern float ib_texture0_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture1;
+extern float ib_texture1_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture2;
+extern float ib_texture2_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture3;
+extern float ib_texture3_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture4;
+extern float ib_texture4_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture5;
+extern float ib_texture5_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture6;
+extern float ib_texture6_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture7;
+extern float ib_texture7_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture8;
+extern float ib_texture8_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture9;
+extern float ib_texture9_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture10;
+extern float ib_texture10_MinHeight;
+extern PDIRECT3DTEXTURE9 ib_texture11;
+extern float ib_texture11_MinHeight;
+extern int ib_orgW;
+extern int ib_orgH;
+
+extern float ib_configX;
+extern float ib_configY;
+extern float ib_configScale;

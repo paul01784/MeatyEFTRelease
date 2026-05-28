@@ -398,6 +398,18 @@ static void renderMapDetails()
         texture = gz_texture0;
 
     }
+    else if (strcmp(mainGame.selectedLocation.c_str(), "Icebreaker") == 0) // Icebreaker
+    {
+        currentMap::configX = ib_configX;
+        currentMap::configY = ib_configY;
+        currentMap::configScale = ib_configScale;
+
+        map_orgW = ib_orgW;
+        map_orgH = ib_orgH;
+
+        texture = ib_texture0;
+
+        }
     else // only for testing uncomment
     {
         currentMap::configX = customs_configX;
@@ -2803,6 +2815,89 @@ static void renderDebugWindow()
                 }
                 ImGui::EndTabItem();
             }
+           if (ImGui::BeginTabItem("Map Settings"))
+           {
+               if (!mainGame.selectedLocation.empty())
+               {
+                   ImGui::TextUnformatted("The below information is for debug / map position corrections, they don't stick!");
+                   ImGui::Separator();
+
+                   ImGui::TextUnformatted("Local Player World Position");
+
+                   ImGui::Text(
+                       "x: %.2f  y: %.2f  z: %.2f",
+                       mainGame.localLocation.x,
+                       mainGame.localLocation.y,
+                       mainGame.localLocation.z
+                   );
+
+                   ImGui::Separator();
+
+                   ImGui::Text("Selected map: %s", mainGame.selectedLocation.c_str());
+
+                   ImGui::Spacing();
+
+                   ImGui::TextUnformatted("Map Position Correction");
+                   ImGui::SameLine();
+
+                   ImGui::TextDisabled("(?)");
+                   if (ImGui::IsItemHovered())
+                   {
+                       ImGui::BeginTooltip();
+                       ImGui::TextUnformatted("Step controls:");
+                       ImGui::BulletText("Click +/- to change by 0.1");
+                       ImGui::BulletText("Hold Ctrl and click +/- to change by 1.0");
+                       ImGui::EndTooltip();
+                   }
+
+                   ImGui::PushItemWidth(120.0f);
+
+                   ImGui::InputFloat(
+                       "Config X",
+                       &currentMap::configX,
+                       0.1f,
+                       1.0f,
+                       "%.2f"
+                   );
+
+                   ImGui::InputFloat(
+                       "Config Y",
+                       &currentMap::configY,
+                       0.1f,
+                       1.0f,
+                       "%.2f"
+                   );
+
+                   ImGui::InputFloat(
+                       "Config Scale",
+                       &currentMap::configScale,
+                       0.1f,
+                       1.0f,
+                       "%.2f"
+                   );
+
+                   //prevent scale going to 0 or negative
+                   if (currentMap::configScale < 0.1f)
+                       currentMap::configScale = 0.1f;
+
+                   ImGui::PopItemWidth();
+
+                   ImGui::Separator();
+
+                   ImGui::Text(
+                       "Current config: X %.2f | Y %.2f | Scale %.2f",
+                       currentMap::configX,
+                       currentMap::configY,
+                       currentMap::configScale
+                   );
+               }
+               else
+               {
+                   ImGui::TextUnformatted("NOTE : Only visible when in raid");
+               }
+
+               ImGui::EndTabItem();
+           }
 
             ImGui::EndTabBar();
         }
