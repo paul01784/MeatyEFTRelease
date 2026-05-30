@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <dwmapi.h>
@@ -28,6 +29,52 @@ namespace
     constexpr const wchar_t* DX_RENDER_WINDOW_CLASS_NAME = L"DxRenderWindowClass";
     constexpr std::size_t MAX_TEXT_FORMAT_CACHE = 128;
     constexpr std::size_t MAX_RETAINED_DRAW_COMMAND_CAPACITY = 32768;
+
+    constexpr float MAX_DRAW_COORD = 250000.0f;
+    constexpr float MAX_DRAW_SIZE = 100000.0f;
+    constexpr float MAX_DRAW_THICKNESS = 500.0f;
+    constexpr float MAX_FONT_SIZE = 256.0f;
+    constexpr std::size_t MAX_DRAW_TEXT_BYTES = 2048;
+
+    std::atomic_uint64_t g_droppedDrawCommands{ 0 };
+
+    bool IsSafeCoord(float value) noexcept
+    {
+        return std::isfinite(value) && std::fabs(value) <= MAX_DRAW_COORD;
+    }
+
+    bool IsSafePositiveSize(float value) noexcept
+    {
+        return std::isfinite(value) && value > 0.0f && value <= MAX_DRAW_SIZE;
+    }
+
+    bool IsSafeThickness(float value) noexcept
+    {
+        return std::isfinite(value) && value > 0.0f && value <= MAX_DRAW_THICKNESS;
+    }
+
+    bool IsSafeFontSize(float value) noexcept
+    {
+        return value == 0.0f || (std::isfinite(value) && value > 0.0f && value <= MAX_FONT_SIZE);
+    }
+
+    bool IsSafeScale(float value) noexcept
+    {
+        return std::isfinite(value) && value > 0.0f && value <= 100.0f;
+    }
+
+    float Clamp01Safe(float value, float fallback = 0.0f) noexcept
+    {
+        if (!std::isfinite(value))
+            return fallback;
+
+        return std::clamp(value, 0.0f, 1.0f);
+    }
+
+    bool IsSafeText(const std::string& text) noexcept
+    {
+        return !text.empty() && text.size() <= MAX_DRAW_TEXT_BYTES;
+    }
 
     class FuserSehException : public std::exception
     {
@@ -90,6 +137,61 @@ namespace
     private:
         bool m_active = false;
     };
+}
+
+bool DxRenderWindow::IsDrawCommandSafe(const DxRenderWindow::DrawCommand& cmd) noexcept
+{
+    switch (cmd.type)
+    {
+    case DrawCommandType::Line:
+        return IsSafeCoord(cmd.x) &&
+            IsSafeCoord(cmd.y) &&
+            IsSafeCoord(cmd.x2) &&
+            IsSafeCoord(cmd.y2) &&
+            IsSafeThickness(cmd.thickness);
+
+    case DrawCommandType::Rect:
+    case DrawCommandType::FilledRect:
+        return IsSafeCoord(cmd.x) &&
+            IsSafeCoord(cmd.y) &&
+            IsSafePositiveSize(cmd.w) &&
+            IsSafePositiveSize(cmd.h);
+
+    case DrawCommandType::Box:
+        return IsSafeCoord(cmd.x) &&
+            IsSafeCoord(cmd.y) &&
+            IsSafePositiveSize(cmd.w) &&
+            IsSafePositiveSize(cmd.h) &&
+            IsSafeThickness(cmd.thickness);
+
+    case DrawCommandType::Circle:
+        return IsSafeCoord(cmd.x) &&
+            IsSafeCoord(cmd.y) &&
+            IsSafePositiveSize(cmd.radius) &&
+            IsSafeThickness(cmd.thickness);
+
+    case DrawCommandType::FilledCircle:
+        return IsSafeCoord(cmd.x) &&
+            IsSafeCoord(cmd.y) &&
+            IsSafePositiveSize(cmd.radius);
+
+    case DrawCommandType::Text:
+        return IsSafeCoord(cmd.x) &&
+            IsSafeCoord(cmd.y) &&
+            IsSafeText(cmd.text) &&
+            IsSafeFontSize(cmd.fontSize);
+
+    case DrawCommandType::MarkerWithText:
+        return IsSafeCoord(cmd.x) &&
+            IsSafeCoord(cmd.y) &&
+            IsSafePositiveSize(cmd.markerSize) &&
+            IsSafeFontSize(cmd.fontSize) &&
+            IsSafeThickness(cmd.thickness) &&
+            (cmd.text.empty() || IsSafeText(cmd.text));
+
+    default:
+        return false;
+    }
 }
 
 DxRenderWindow::DxRenderWindow() = default;
@@ -1064,6 +1166,18 @@ void DxRenderWindow::OnResize(UINT width, UINT height)
 
 void DxRenderWindow::PushDrawCommand(DrawCommand&& command)
 {
+    if (!IsDrawCommandSafe(command))
+    {
+        const std::uint64_t dropped = g_droppedDrawCommands.fetch_add(1, std::memory_order_relaxed) + 1;
+
+        if (dropped <= 20 || (dropped % 1000) == 0)
+        {
+            LOGS.logWarn("[FUSER][DX11] Dropped unsafe draw command. Total dropped: " + std::to_string(dropped));
+        }
+
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(m_drawMutex);
     m_pendingDrawList.emplace_back(std::move(command));
 }
@@ -1093,22 +1207,33 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
     if (!m_d2dRenderTarget || !m_solidBrush)
         return;
 
+    if (!IsSafeScale(scale))
+        scale = 1.0f;
+
     for (const DrawCommand& cmd : commands)
     {
+        if (!IsDrawCommandSafe(cmd))
+            continue;
+
         switch (cmd.type)
         {
         case DrawCommandType::Line:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-            const float thickness = std::max(0.1f, cmd.thickness * scale);
-            m_d2dRenderTarget->DrawLine(D2D1::Point2F(cmd.x, cmd.y), D2D1::Point2F(cmd.x2, cmd.y2), m_solidBrush.Get(), thickness);
+            const float thickness = std::max(0.1f, std::min(cmd.thickness * scale, MAX_DRAW_THICKNESS));
+            m_d2dRenderTarget->DrawLine(
+                D2D1::Point2F(cmd.x, cmd.y),
+                D2D1::Point2F(cmd.x2, cmd.y2),
+                m_solidBrush.Get(),
+                thickness
+            );
             break;
         }
 
         case DrawCommandType::Rect:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-            const float thickness = std::max(0.1f, cmd.thickness * scale);
+            const float thickness = std::max(0.1f, std::min(cmd.thickness * scale, MAX_DRAW_THICKNESS));
             const D2D1_RECT_F rect = D2D1::RectF(cmd.x, cmd.y, cmd.x + (cmd.w * scale), cmd.y + (cmd.h * scale));
             m_d2dRenderTarget->DrawRectangle(rect, m_solidBrush.Get(), thickness);
             break;
@@ -1125,9 +1250,9 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
         case DrawCommandType::Box:
         {
             const D2D1_RECT_F rect = D2D1::RectF(cmd.x, cmd.y, cmd.x + (cmd.w * scale), cmd.y + (cmd.h * scale));
-            const float thickness = std::max(0.1f, cmd.thickness * scale);
+            const float thickness = std::max(0.1f, std::min(cmd.thickness * scale, MAX_DRAW_THICKNESS));
 
-            if (cmd.filled && cmd.fillColour.a > 0.0f)
+            if (cmd.filled && Clamp01Safe(cmd.fillColour.a, 0.0f) > 0.0f)
             {
                 m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
                 m_d2dRenderTarget->FillRectangle(rect, m_solidBrush.Get());
@@ -1141,8 +1266,8 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
         case DrawCommandType::Circle:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-            const float radius = std::max(0.1f, cmd.radius * scale);
-            const float thickness = std::max(0.1f, cmd.thickness * scale);
+            const float radius = std::max(0.1f, std::min(cmd.radius * scale, MAX_DRAW_SIZE));
+            const float thickness = std::max(0.1f, std::min(cmd.thickness * scale, MAX_DRAW_THICKNESS));
             const D2D1_ELLIPSE ellipse = D2D1::Ellipse(D2D1::Point2F(cmd.x, cmd.y), radius, radius);
             m_d2dRenderTarget->DrawEllipse(ellipse, m_solidBrush.Get(), thickness);
             break;
@@ -1151,7 +1276,7 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
         case DrawCommandType::FilledCircle:
         {
             m_solidBrush->SetColor(ToD2DColour(cmd.colour));
-            const float radius = std::max(0.1f, cmd.radius * scale);
+            const float radius = std::max(0.1f, std::min(cmd.radius * scale, MAX_DRAW_SIZE));
             const D2D1_ELLIPSE ellipse = D2D1::Ellipse(D2D1::Point2F(cmd.x, cmd.y), radius, radius);
             m_d2dRenderTarget->FillEllipse(ellipse, m_solidBrush.Get());
             break;
@@ -1170,16 +1295,26 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
 
 void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale)
 {
+    if (!IsDrawCommandSafe(cmd))
+        return;
+
     if (!m_d2dRenderTarget || !m_solidBrush || !m_dwriteFactory || cmd.text.empty())
         return;
+
+    if (!IsSafeScale(scale))
+        scale = 1.0f;
 
     const std::wstring wideText = Utf8ToWide(cmd.text);
     if (wideText.empty())
         return;
 
-    const std::wstring fontName = cmd.fontName.empty() ? cfg.defaultFont.name : cmd.fontName;
+    std::wstring fontName = cmd.fontName.empty() ? cfg.defaultFont.name : cmd.fontName;
+    if (fontName.empty())
+        fontName = L"Segoe UI";
+
     const float baseSize = cmd.fontSize > 0.0f ? cmd.fontSize : cfg.defaultFont.size;
-    const float finalSize = std::max(1.0f, baseSize * scale);
+    const float scaledSize = baseSize * scale;
+    const float finalSize = std::clamp(std::isfinite(scaledSize) ? scaledSize : 12.0f, 1.0f, MAX_FONT_SIZE);
 
     IDWriteTextFormat* format = GetTextFormat(fontName, finalSize, cfg.defaultFont.bold, cfg.defaultFont.italic);
     if (!format)
@@ -1199,13 +1334,18 @@ void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowCon
         return;
 
     DWRITE_TEXT_METRICS metrics{};
-    layout->GetMetrics(&metrics);
+    hr = layout->GetMetrics(&metrics);
+    if (FAILED(hr))
+        return;
 
     float drawX = cmd.x;
     float drawY = cmd.y;
 
-    if (cmd.centered)
+    if (cmd.centered && std::isfinite(metrics.widthIncludingTrailingWhitespace))
         drawX -= metrics.widthIncludingTrailingWhitespace * 0.5f;
+
+    if (!IsSafeCoord(drawX) || !IsSafeCoord(drawY))
+        return;
 
     if (cmd.outlined)
     {
@@ -1237,16 +1377,22 @@ void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowCon
 
 void DxRenderWindow::RenderMarkerWithTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale)
 {
+    if (!IsDrawCommandSafe(cmd))
+        return;
+
     if (!m_d2dRenderTarget || !m_solidBrush)
         return;
 
-    const float markerSize = std::max(1.0f, cmd.markerSize * scale);
+    if (!IsSafeScale(scale))
+        scale = 1.0f;
+
+    const float markerSize = std::max(1.0f, std::min(cmd.markerSize * scale, MAX_DRAW_SIZE));
     const float half = markerSize * 0.5f;
-    const float thickness = std::max(0.1f, cmd.thickness * scale);
+    const float thickness = std::max(0.1f, std::min(cmd.thickness * scale, MAX_DRAW_THICKNESS));
 
     const D2D1_RECT_F markerRect = D2D1::RectF(cmd.x - half, cmd.y - half, cmd.x + half, cmd.y + half);
 
-    if (cmd.fillColour.a > 0.0f)
+    if (Clamp01Safe(cmd.fillColour.a, 0.0f) > 0.0f)
     {
         m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
         m_d2dRenderTarget->FillRectangle(markerRect, m_solidBrush.Get());
@@ -1299,12 +1445,17 @@ float DxRenderWindow::GetDpiScaleForWindow(HWND hwnd) const
 
 float DxRenderWindow::GetFinalScale(const DxWindowConfig& cfg) const
 {
-    float scale = std::max(0.05f, cfg.renderScale);
+    float scale = std::isfinite(cfg.renderScale) ? cfg.renderScale : 1.0f;
+    scale = std::clamp(scale, 0.05f, 100.0f);
 
     if (cfg.useDpiScale)
-        scale *= std::max(0.05f, m_dpiScale.load(std::memory_order_acquire));
+    {
+        float dpiScale = m_dpiScale.load(std::memory_order_acquire);
+        dpiScale = std::isfinite(dpiScale) ? dpiScale : 1.0f;
+        scale *= std::clamp(dpiScale, 0.05f, 8.0f);
+    }
 
-    return scale;
+    return std::clamp(scale, 0.05f, 100.0f);
 }
 
 int DxRenderWindow::GetTargetFPS(const DxWindowConfig& cfg) const
@@ -1381,10 +1532,10 @@ std::wstring DxRenderWindow::Utf8ToWide(const std::string& text)
 D2D1_COLOR_F DxRenderWindow::ToD2DColour(const glm::vec4& colour)
 {
     return D2D1::ColorF(
-        std::clamp(colour.r, 0.0f, 1.0f),
-        std::clamp(colour.g, 0.0f, 1.0f),
-        std::clamp(colour.b, 0.0f, 1.0f),
-        std::clamp(colour.a, 0.0f, 1.0f)
+        Clamp01Safe(colour.r, 0.0f),
+        Clamp01Safe(colour.g, 0.0f),
+        Clamp01Safe(colour.b, 0.0f),
+        Clamp01Safe(colour.a, 1.0f)
     );
 }
 

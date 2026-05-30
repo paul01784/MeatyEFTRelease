@@ -221,6 +221,8 @@ private:
         float textOffsetY = 0.0f;
     };
 
+    static bool IsDrawCommandSafe(const DrawCommand& cmd) noexcept;
+
 private:
     bool CreateAppWindow();
     bool CreateDeviceResources();
