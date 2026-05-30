@@ -252,177 +252,273 @@ bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, i
 
 static void renderMapDetails()
 {
-    static float map_orgW = 0;
-    static float map_orgH = 0;
+    float map_orgW = 0.0f;
+    float map_orgH = 0.0f;
     PDIRECT3DTEXTURE9 texture = NULL;
 
-    //current height in gameWorld! Localplayer
-    float height = mainGame.localLocation.y;
+    const float height = mainGame.localLocation.y;
 
-    //filter by current map
-    if (strcmp(mainGame.selectedLocation.c_str(), "bigmap") == 0) // Customs
+    if (mainGame.selectedLocation.empty())
+        return;
+
+    if (mainGame.selectedLocation == "bigmap") // Customs
     {
-        currentMap::configX = customs_configX;
-        currentMap::configY = customs_configY;
-        currentMap::configScale = customs_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = customs_configX;
+            currentMap::configY = customs_configY;
+            currentMap::configScale = customs_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = customs_orgW;
         map_orgH = customs_orgH;
         texture = customs_texture;
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "factory4_day") == 0 || strcmp(mainGame.selectedLocation.c_str(), "factory4_night") == 0) // factory
+    else if (mainGame.selectedLocation == "factory4_day" || mainGame.selectedLocation == "factory4_night") // Factory
     {
-        currentMap::configX = factory_configX;
-        currentMap::configY = factory_configY;
-        currentMap::configScale = factory_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = factory_configX;
+            currentMap::configY = factory_configY;
+            currentMap::configScale = factory_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = factory_orgW;
         map_orgH = factory_orgH;
 
-        //texture based on height
-        if (height < factory_texture0_MinHeight) 
+        if (height < factory_texture0_MinHeight)
             texture = factory_textureBase;
         else
             texture = factory_texture0;
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "Interchange") == 0) // interchange
+    else if (mainGame.selectedLocation == "Interchange")
     {
-        currentMap::configX = interchange_configX;
-        currentMap::configY = interchange_configY;
-        currentMap::configScale = interchange_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = interchange_configX;
+            currentMap::configY = interchange_configY;
+            currentMap::configScale = interchange_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = interchange_orgW;
         map_orgH = interchange_orgH;
 
-        //texture based on height
         if (height < interchange_texture1_MinHeight)
             texture = interchange_texture0;
-        else if (height < interchange_texture2_MinHeight && height > interchange_texture1_MinHeight)
+        else if (height < interchange_texture2_MinHeight)
             texture = interchange_texture1;
-        else if (height > interchange_texture2_MinHeight)
+        else
             texture = interchange_texture2;
-
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "laboratory") == 0) // labs
+    else if (mainGame.selectedLocation == "laboratory")
     {
-        currentMap::configX = labs_configX;
-        currentMap::configY = labs_configY;
-        currentMap::configScale = labs_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = labs_configX;
+            currentMap::configY = labs_configY;
+            currentMap::configScale = labs_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = labs_orgW;
         map_orgH = labs_orgH;
 
-        //texture based on height
         if (height < labs_texture1_MinHeight)
             texture = labs_texture0;
-        else if (height < labs_texture2_MinHeight && height > labs_texture1_MinHeight)
+        else if (height < labs_texture2_MinHeight)
             texture = labs_texture1;
-        else if (height > labs_texture2_MinHeight)
+        else
             texture = labs_texture2;
-
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "Lighthouse") == 0) // lighthouse
+    else if (mainGame.selectedLocation == "Lighthouse")
     {
-        currentMap::configX = lighthouse_configX;
-        currentMap::configY = lighthouse_configY;
-        currentMap::configScale = lighthouse_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = lighthouse_configX;
+            currentMap::configY = lighthouse_configY;
+            currentMap::configScale = lighthouse_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = lighthouse_orgW;
         map_orgH = lighthouse_orgH;
-
         texture = lighthouse_texture;
-
-
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "RezervBase") == 0) // Reserve
+    else if (mainGame.selectedLocation == "RezervBase")
     {
-        currentMap::configX = reserve_configX;
-        currentMap::configY = reserve_configY;
-        currentMap::configScale = reserve_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = reserve_configX;
+            currentMap::configY = reserve_configY;
+            currentMap::configScale = reserve_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = reserve_orgW;
         map_orgH = reserve_orgH;
 
-        //texture based on height
         if (height < reserve_texture0_MinHeight)
             texture = reserve_texture_base;
         else
             texture = reserve_texture0;
-
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "Shoreline") == 0) // Shoreline
+    else if (mainGame.selectedLocation == "Shoreline")
     {
-        currentMap::configX = shoreline_configX;
-        currentMap::configY = shoreline_configY;
-        currentMap::configScale = shoreline_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = shoreline_configX;
+            currentMap::configY = shoreline_configY;
+            currentMap::configScale = shoreline_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = shoreline_orgW;
         map_orgH = shoreline_orgH;
-
         texture = shoreline_texture0;
-
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "TarkovStreets") == 0) // Streets
+    else if (mainGame.selectedLocation == "TarkovStreets")
     {
-        currentMap::configX = streets_configX;
-        currentMap::configY = streets_configY;
-        currentMap::configScale = streets_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = streets_configX;
+            currentMap::configY = streets_configY;
+            currentMap::configScale = streets_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = streets_orgW;
         map_orgH = streets_orgH;
-
         texture = streets_texture0;
-
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "Woods") == 0) // Woods
+    else if (mainGame.selectedLocation == "Woods")
     {
-        currentMap::configX = woods_configX;
-        currentMap::configY = woods_configY;
-        currentMap::configScale = woods_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = woods_configX;
+            currentMap::configY = woods_configY;
+            currentMap::configScale = woods_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = woods_orgW;
         map_orgH = woods_orgH;
-
         texture = woods_texture0;
-
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "Sandbox_high") == 0 || strcmp(mainGame.selectedLocation.c_str(), "Sandbox") == 0) // GroundZero
+    else if (mainGame.selectedLocation == "Sandbox_high" || mainGame.selectedLocation == "Sandbox")
     {
-        currentMap::configX = gz_configX;
-        currentMap::configY = gz_configY;
-        currentMap::configScale = gz_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = gz_configX;
+            currentMap::configY = gz_configY;
+            currentMap::configScale = gz_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = gz_orgW;
         map_orgH = gz_orgH;
-
         texture = gz_texture0;
-
     }
-    else if (strcmp(mainGame.selectedLocation.c_str(), "Icebreaker") == 0) // Icebreaker
+    else if (mainGame.selectedLocation == "Icebreaker")
     {
-        currentMap::configX = ib_configX;
-        currentMap::configY = ib_configY;
-        currentMap::configScale = ib_configScale;
-
-        map_orgW = ib_orgW;
-        map_orgH = ib_orgH;
-
-        texture = ib_texture0;
-
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = ib_configX;
+            currentMap::configY = ib_configY;
+            currentMap::configScale = ib_configScale;
+            setCurrentMapSpecs = true;
         }
-    else // only for testing uncomment
+
+        // Icebreaker floor selection by height.
+        // Highest floor first, then work downward.
+        if (height >= ib_texture0_MinHeight)
+        {
+            texture = ib_texture0;
+            map_orgW = static_cast<float>(ib_1f_mapSizeW);
+            map_orgH = static_cast<float>(ib_1f_mapSizeH);
+        }
+        else if (height >= ib_texture1_MinHeight)
+        {
+            texture = ib_texture1;
+            map_orgW = static_cast<float>(ib_2f_mapSizeW);
+            map_orgH = static_cast<float>(ib_2f_mapSizeH);
+        }
+        else if (height >= ib_texture2_MinHeight)
+        {
+            texture = ib_texture2;
+            map_orgW = static_cast<float>(ib_3f_mapSizeW);
+            map_orgH = static_cast<float>(ib_3f_mapSizeH);
+        }
+        else if (height >= ib_texture3_MinHeight)
+        {
+            texture = ib_texture3;
+            map_orgW = static_cast<float>(ib_4f_mapSizeW);
+            map_orgH = static_cast<float>(ib_4f_mapSizeH);
+        }
+        else if (height >= ib_texture4_MinHeight)
+        {
+            texture = ib_texture4;
+            map_orgW = static_cast<float>(ib_5f_mapSizeW);
+            map_orgH = static_cast<float>(ib_5f_mapSizeH);
+        }
+        else if (height >= ib_texture5_MinHeight)
+        {
+            texture = ib_texture5;
+            map_orgW = static_cast<float>(ib_6f_mapSizeW);
+            map_orgH = static_cast<float>(ib_6f_mapSizeH);
+        }
+        else if (height >= ib_texture6_MinHeight)
+        {
+            texture = ib_texture6;
+            map_orgW = static_cast<float>(ib_7f_mapSizeW);
+            map_orgH = static_cast<float>(ib_7f_mapSizeH);
+        }
+        else if (height >= ib_texture7_MinHeight)
+        {
+            texture = ib_texture7;
+            map_orgW = static_cast<float>(ib_8f_mapSizeW);
+            map_orgH = static_cast<float>(ib_8f_mapSizeH);
+        }
+        else if (height >= ib_texture8_MinHeight)
+        {
+            texture = ib_texture8;
+            map_orgW = static_cast<float>(ib_9f_mapSizeW);
+            map_orgH = static_cast<float>(ib_9f_mapSizeH);
+        }
+        else if (height >= ib_texture9_MinHeight)
+        {
+            texture = ib_texture9;
+            map_orgW = static_cast<float>(ib_10f_mapSizeW);
+            map_orgH = static_cast<float>(ib_10f_mapSizeH);
+        }
+        else
+        {
+            texture = ib_texture10;
+            map_orgW = static_cast<float>(ib_11f_mapSizeW);
+            map_orgH = static_cast<float>(ib_11f_mapSizeH);
+        }
+    }
+    else
     {
-        currentMap::configX = customs_configX;
-        currentMap::configY = customs_configY;
-        currentMap::configScale = customs_configScale;
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = customs_configX;
+            currentMap::configY = customs_configY;
+            currentMap::configScale = customs_configScale;
+            setCurrentMapSpecs = true;
+        }
 
         map_orgW = customs_orgW;
         map_orgH = customs_orgH;
         texture = NULL;
     }
 
+    if (!texture || map_orgW <= 0.0f || map_orgH <= 0.0f)
+        return;
 
-    mapControl.Update(ImVec2((float)map_orgW, (float)map_orgH));
+    mapControl.Update(ImVec2(map_orgW, map_orgH));
     mapControl.RenderImage(texture, mapGlobals::focusPoint, mapGlobals::followLocal);
 }
 
@@ -3059,6 +3155,9 @@ static void renderMenuIcons()
 
 }
 
+//set this false to reset map configs to allow changes on menu
+static bool setCurrentMapSpecs = false;
+
 //This is where we render certain screens depending on conditions and selections/inputs
 static void renderMainScreen()
 {
@@ -3104,6 +3203,8 @@ static void renderMainScreen()
 
             DrawRadarMainText(centerScreen.x, centerScreen.y, { 1,0,0,1 }, Text);
             DrawRadarSubText(centerScreen.x, centerScreen.y + 45, { 1,0,0,1 }, globals::radarSubText.c_str());
+
+            setCurrentMapSpecs = false;
 
         }
         else
