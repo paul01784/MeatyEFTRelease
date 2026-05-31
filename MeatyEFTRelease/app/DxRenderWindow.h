@@ -141,17 +141,16 @@ public:
     void DrawCircle(float x, float y, float radius, const glm::vec4& colour, float thickness = 1.0f);
     void DrawFilledCircle(float x, float y, float radius, const glm::vec4& colour);
 
-    void DrawText(
+    void DrawString(
         const std::string& text,
         float x,
         float y,
         const glm::vec4& colour,
         bool centered = false,
         bool outlined = false,
-        const glm::vec4& outlineColour = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)
-    );
+        const glm::vec4& outlineColour = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
 
-    void DrawText(
+    void DrawString(
         const std::string& text,
         float x,
         float y,
@@ -160,8 +159,7 @@ public:
         bool centered = false,
         bool outlined = false,
         const glm::vec4& outlineColour = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
-        const std::wstring& fontName = L""
-    );
+        const std::wstring& fontName = L"");
 
     void DrawMarkerWithText(
         float x,

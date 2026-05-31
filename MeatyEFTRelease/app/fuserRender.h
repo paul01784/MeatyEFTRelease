@@ -170,7 +170,7 @@ namespace fuserRender
             true
         );
 
-        g_DxWindow.DrawText(
+        g_DxWindow.DrawString(
             "Moving Box",
             x + (boxW * 0.5f),
             y + boxH + 8.0f,
@@ -221,7 +221,7 @@ namespace fuserRender
             2.0f
         );
 
-        g_DxWindow.DrawText(
+        g_DxWindow.DrawString(
             "Orbit",
             x,
             y + 28.0f,
@@ -368,7 +368,7 @@ namespace fuserRender
         const glm::vec4 subColour = glm::vec4(0.65f, 0.85f, 1.0f, 1.0f);
         const glm::vec4 fpsColour = glm::vec4(0.25f, 1.0f, 0.35f, 1.0f);
 
-        g_DxWindow.DrawText(
+        g_DxWindow.DrawString(
             "Fuser Render Test",
             20.0f,
             20.0f,
@@ -378,7 +378,7 @@ namespace fuserRender
             true
         );
 
-        g_DxWindow.DrawText(
+        g_DxWindow.DrawString(
             "DX window draw queue is active",
             20.0f,
             48.0f,
@@ -388,7 +388,7 @@ namespace fuserRender
             true
         );
 
-        g_DxWindow.DrawText(
+        g_DxWindow.DrawString(
             "Time: " + std::to_string(static_cast<int>(time)) + "s",
             20.0f,
             70.0f,
@@ -402,7 +402,7 @@ namespace fuserRender
         fpsStream.precision(0);
         fpsStream << std::fixed << fps;
 
-        g_DxWindow.DrawText(
+        g_DxWindow.DrawString(
             "FPS: " + fpsStream.str(),
             20.0f,
             90.0f,
@@ -493,7 +493,7 @@ namespace fuserRender
 
         const float fps = GetFrameFPS();
 
-        g_DxWindow.DrawText(
+        g_DxWindow.DrawString(
             "MeatyEFT",
             screenW - 100.0f,
             20.0f,
@@ -506,7 +506,7 @@ namespace fuserRender
         std::string fpsText = "FPS: " + std::to_string(static_cast<int>(fps));
 
 
-        g_DxWindow.DrawText(
+        g_DxWindow.DrawString(
             fpsText,
             screenW - 100.0f,
             40.0f,
@@ -589,7 +589,7 @@ namespace fuserRender
                 coloursGlobals::questMarker
             );
 
-            g_DxWindow.DrawText(
+            g_DxWindow.DrawString(
                 questText,
                 screenPos.x + 6.0f,
                 screenPos.y - 3.0f,
@@ -623,7 +623,7 @@ namespace fuserRender
             if (!Utils::Camera::world_to_screen(nade.worldLocation, &screenPos))
                 continue;
 
-            g_DxWindow.DrawText(
+            g_DxWindow.DrawString(
                 "NADE",
                 screenPos.x,
                 screenPos.y + 3.0f,
@@ -639,7 +639,7 @@ namespace fuserRender
 
         if (closeGrenade)
         {
-            g_DxWindow.DrawText(
+            g_DxWindow.DrawString(
                 "!!WARNING GRENADE NEAR YOU!!",
                 screenW * 0.5f,
                 screenH - 60.0f,
@@ -772,7 +772,7 @@ namespace fuserRender
             const float x = screenW - approxTextWidth - marginX;
             const float y = screenH - marginY;
 
-            g_DxWindow.DrawText(
+            g_DxWindow.DrawString(
                 ammoText,
                 x,
                 y,
@@ -800,14 +800,9 @@ namespace fuserRender
                 if (!Utils::valid_pointer(player.instance) ||
                     player.isZombie ||
                     player.isLocal ||
-                    player.hasExfiled)
+                    player.hasExfiled ||
+                    player.isDead)
                 {
-                    continue;
-                }
-
-                if (player.isDead)
-                {
-                    // Corpse rendering can be re-enabled later if needed.
                     continue;
                 }
 
@@ -831,7 +826,7 @@ namespace fuserRender
                     std::to_string(player.distance) +
                     "m]";
 
-                g_DxWindow.DrawText(
+                g_DxWindow.DrawString(
                     info,
                     screenPos.x,
                     screenPos.y + 5.0f,
@@ -844,15 +839,21 @@ namespace fuserRender
                 if (player.isBTR)
                     continue;
 
-                g_DxWindow.DrawText(
-                    player.observedHandsInfo.itemName + " (" + std::string(player.observedHandsInfo.ammoName) + "/" + std::to_string(player.observedHandsInfo.magazineCount) + ")",
-                    screenPos.x,
-                    screenPos.y + 20.0f,
-                    13.0f,
-                    playerColour,
-                    true,
-                    true
-                );
+                const std::string itemName = CleanText(player.observedHandsInfo.itemName);
+                const std::string ammoName = CleanText(player.observedHandsInfo.ammoName);
+
+                if (!itemName.empty() || !ammoName.empty())
+                {
+                    g_DxWindow.DrawString(
+                        itemName + " (" + ammoName + "/" + std::to_string(player.observedHandsInfo.magazineCount) + ")",
+                        screenPos.x,
+                        screenPos.y + 20.0f,
+                        13.0f,
+                        playerColour,
+                        true,
+                        true
+                    );
+                }
 
                 // ----------------------------
                 // Head dot
@@ -993,7 +994,7 @@ namespace fuserRender
                 lootColour
             );
 
-            g_DxWindow.DrawText(
+            g_DxWindow.DrawString(
                 lootText,
                 screenPos.x + 6.0f,
                 screenPos.y - 3.0f,

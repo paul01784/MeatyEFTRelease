@@ -513,7 +513,7 @@ void DxRenderWindow::DrawFilledCircle(float x, float y, float radius, const glm:
     PushDrawCommand(std::move(cmd));
 }
 
-void DxRenderWindow::DrawText(
+void DxRenderWindow::DrawString(
     const std::string& text,
     float x,
     float y,
@@ -522,10 +522,10 @@ void DxRenderWindow::DrawText(
     bool outlined,
     const glm::vec4& outlineColour)
 {
-    DrawText(text, x, y, 0.0f, colour, centered, outlined, outlineColour, L"");
+    DrawString(text, x, y, 0.0f, colour, centered, outlined, outlineColour, L"");
 }
 
-void DxRenderWindow::DrawText(
+void DxRenderWindow::DrawString(
     const std::string& text,
     float x,
     float y,
@@ -550,6 +550,7 @@ void DxRenderWindow::DrawText(
     cmd.outlineColour = outlineColour;
     cmd.centered = centered;
     cmd.outlined = outlined;
+
     PushDrawCommand(std::move(cmd));
 }
 
