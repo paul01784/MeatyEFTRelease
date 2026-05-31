@@ -17,6 +17,13 @@ Im pretty certain the maps in this project came from Marazm, so credit to this g
 
 ---
 
+# Releases
+
+Releases are added here every month, latest builds can be found on the discord or build your own. Theses are added for convenience and you should really review code changes and build your own.
+Join the discord to find out whats new or suggest additions or submit bugs. You can also use the github issue section if you wish
+
+---
+
 # Building
 
 I've tried to make this work easy. You should be able to download, open is visual studio, select release then build. If you have issues you can ask in the Discord or Google it
