@@ -516,7 +516,8 @@ void Camera::cameraTask()
                 }
                 else
                 {
-                    opticNeedsRefresh = true;
+                    // trying to remove this set to see if fixes scopes with opticcameras also has attachment that uses 1x reflex from causing camera issues
+                    //opticNeedsRefresh = true;
                 }
             }
         }
