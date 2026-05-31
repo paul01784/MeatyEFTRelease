@@ -252,6 +252,9 @@ bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, i
 
 static void renderMapDetails()
 {
+    //set this false to reset map configs to allow changes on menu
+    
+
     float map_orgW = 0.0f;
     float map_orgH = 0.0f;
     PDIRECT3DTEXTURE9 texture = NULL;
@@ -3155,8 +3158,7 @@ static void renderMenuIcons()
 
 }
 
-//set this false to reset map configs to allow changes on menu
-static bool setCurrentMapSpecs = false;
+
 
 //This is where we render certain screens depending on conditions and selections/inputs
 static void renderMainScreen()

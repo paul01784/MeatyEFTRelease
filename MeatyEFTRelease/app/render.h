@@ -79,3 +79,4 @@ enum class BoneList
 const char* WindowsKeyToString(WindowsKey key);
 
 
+static bool setCurrentMapSpecs = false;
