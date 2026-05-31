@@ -109,6 +109,7 @@ struct espGlobals {
     static bool skeletonsOnlyClosest;
     static bool drawCrosshair;
     static bool drawHeadDot;
+    static float headDotSize;
     static bool runEsp;
 };
 

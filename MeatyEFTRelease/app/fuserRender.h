@@ -870,7 +870,7 @@ namespace fuserRender
                         g_DxWindow.DrawFilledCircle(
                             headPos.x,
                             headPos.y,
-                            1.5f,
+                            espGlobals::headDotSize,
                             playerColour
                         );
                     }

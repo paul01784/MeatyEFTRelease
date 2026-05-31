@@ -401,6 +401,7 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"drawSkeletons", e.drawSkeletons},
         {"skeletonsOnlyClosest", e.skeletonsOnlyClosest},
         {"drawCrosshair", e.drawCrosshair},
+        {"headDotSize", e.headDotSize},
         {"drawHeadDot", e.drawHeadDot}
     };
 }
@@ -424,6 +425,7 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
     e.skeletonsOnlyClosest = j.value("skeletonsOnlyClosest", e.skeletonsOnlyClosest);
     e.drawCrosshair = j.value("drawCrosshair", e.drawCrosshair);
     e.drawHeadDot = j.value("drawHeadDot", e.drawHeadDot);
+    e.headDotSize = j.value("headDotSize", e.headDotSize);
 }
 
 // Custom serialization for aimGlobals

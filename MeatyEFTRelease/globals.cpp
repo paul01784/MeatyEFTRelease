@@ -93,6 +93,7 @@ bool espGlobals::drawSkeletons = false;
 bool espGlobals::skeletonsOnlyClosest = false;
 bool espGlobals::drawCrosshair = false;
 bool espGlobals::drawHeadDot = false;
+float espGlobals::headDotSize = 1.5f;
 bool espGlobals::runEsp = false;
 
 bool aimGlobals::aimEnabled = false;
