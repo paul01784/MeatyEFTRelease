@@ -108,14 +108,11 @@ std::optional<std::string> DogTagAPI::httpGet(const std::string& url)
     return response;
 }
 
-std::optional<std::string> DogTagAPI::httpPostJson(const std::string& url, const std::string& payload)
+std::optional<std::string> DogTagAPI::httpPostJson(
+    const std::string& url,
+    const std::string& payload
+)
 {
-    if (apiKey.empty())
-    {
-        std::cout << "[DogTagAPI] Missing API key\n";
-        return std::nullopt;
-    }
-
     CURL* curl = curl_easy_init();
     if (!curl)
         return std::nullopt;
@@ -123,14 +120,15 @@ std::optional<std::string> DogTagAPI::httpPostJson(const std::string& url, const
     std::string response;
 
     struct curl_slist* headers = nullptr;
-    std::string auth = "Authorization: Bearer " + apiKey;
-
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, auth.c_str());
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload.size()));
+
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
@@ -146,11 +144,10 @@ std::optional<std::string> DogTagAPI::httpPostJson(const std::string& url, const
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
-    secureClear(auth);
-
     if (res != CURLE_OK)
     {
-        std::cout << "[DogTagAPI] CURL POST error: " << curl_easy_strerror(res) << "\n";
+        std::cout << "[DogTagAPI] CURL POST error: "
+            << curl_easy_strerror(res) << "\n";
         return std::nullopt;
     }
 
