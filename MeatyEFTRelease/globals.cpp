@@ -2,7 +2,7 @@
 #include "app/globals.h"
 
 //define globals
-std::string globals::appVersion = "1.0.11";
+std::string globals::appVersion = "1.0.12";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
