@@ -304,16 +304,12 @@ bool Camera::checkIfOpticMatrix()
 
         const float scopeZoom = sightComponent.ScopeZoomValue();
        
+        return scopeZoom > 1.f;
 
-        if (scopeZoom != 0.f)
-        {
-            return scopeZoom > 1.f;
-        }
+        //const float zoomLevel = sightComponent.GetZoomLevel();
 
-        const float zoomLevel = sightComponent.GetZoomLevel();
-
-        const bool result = zoomLevel > 1.0f;
-        return result;
+        //const bool result = zoomLevel > 1.0f;
+        //return result;
     }
     catch (...)
     {
