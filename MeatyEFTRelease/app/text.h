@@ -634,7 +634,7 @@ void drawGroupLine(glm::vec3 position, PlayerCache player)
 	//filter out no groups here
 	if (groupid > "")
 	{
-		std::vector<PlayerCache>& playerCache = players.getCache();
+		std::vector<PlayerCache> playerCache = players.getCacheSnapshot();
 		//loop player list to find other players with same group and draw line to them from current player
 		for (auto& cache : playerCache)
 		{

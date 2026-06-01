@@ -316,12 +316,7 @@ void Players::boneTask()
         if (!mem.vHandle) return;
         if (!Utils::valid_pointer(mainGame.localPlayerPtr)) return;
 
-        std::unique_lock<std::mutex> lock(playerMutex, std::try_to_lock);
-
-        if (!lock.owns_lock())
-        {
-            return;
-        }
+        std::lock_guard<std::mutex> lock(playerMutex);
 
         std::vector<PlayerCache>& cache = players.getCache();
         if (cache.empty()) return;
@@ -1700,7 +1695,6 @@ void Players::updateEntity()
 
             if (Utils::valid_pointer(cachePlayer.P_HandsController))
             {
-               // cachePlayer.itemInHand = heldItemName(cachePlayer);
                 cachePlayer.observedHandsInfo.update(cachePlayer);
             }
             else
@@ -2119,6 +2113,11 @@ void Players::playerEquipment()
     {
         uint64_t instance = 0;
         uint64_t inventoryControllerAddr = 0;
+
+        uint64_t inventoryController = 0;
+        uint64_t inventory = 0;
+        uint64_t equipment = 0;
+        uint64_t slotsPtr = 0;
     };
 
     struct InitResult
@@ -2135,6 +2134,16 @@ void Players::playerEquipment()
         std::string profileId;
         SlotVec slots;
         Clock::time_point updateTime{};
+    };
+
+    struct SlotRead
+    {
+        size_t jobIndex = 0;
+        size_t slotIndex = 0;
+
+        uint64_t containedItem = 0;
+        uint64_t itemTemplate = 0;
+        MongoID mongoId{};
     };
 
     struct ScanResult
@@ -2161,11 +2170,28 @@ void Players::playerEquipment()
             return nullptr;
         };
 
+    auto executeScatter = [](auto&& queueReads)
+        {
+            auto handle = mem.CreateScatterHandle();
+
+            if (!handle)
+                return false;
+
+            queueReads(handle);
+
+            const bool ok = mem.ExecuteReadScatter(handle);
+            mem.CloseScatterHandle(handle);
+
+            return ok;
+        };
+
     try
     {
+        // ------------------------------------------------------------
+        // 1) Build init jobs under one short lock
+        // ------------------------------------------------------------
         std::vector<InitJob> initJobs;
 
-        // Build init jobs under lock
         {
             std::lock_guard<std::mutex> lock(playerMutex);
 
@@ -2187,14 +2213,99 @@ void Players::playerEquipment()
                 if (!Utils::valid_pointer(player.P_InventoryControllerAddr))
                     continue;
 
-                initJobs.push_back({
-                    player.instance,
-                    player.P_InventoryControllerAddr
-                    });
+                InitJob job{};
+                job.instance = player.instance;
+                job.inventoryControllerAddr = player.P_InventoryControllerAddr;
+
+                initJobs.push_back(job);
             }
         }
 
-        //Do equipment slot init memory reads outside lock
+        // ------------------------------------------------------------
+        // 2) Scatter inventoryController
+        // ------------------------------------------------------------
+        if (!initJobs.empty())
+        {
+            executeScatter([&](auto handle)
+                {
+                    for (auto& job : initJobs)
+                    {
+                        if (!Utils::valid_pointer(job.inventoryControllerAddr))
+                            continue;
+
+                        mem.AddScatterReadRequest(
+                            handle,
+                            job.inventoryControllerAddr,
+                            &job.inventoryController,
+                            sizeof(job.inventoryController)
+                        );
+                    }
+                });
+
+            // --------------------------------------------------------
+            // 3) Scatter inventory
+            // --------------------------------------------------------
+            executeScatter([&](auto handle)
+                {
+                    for (auto& job : initJobs)
+                    {
+                        if (!Utils::valid_pointer(job.inventoryController))
+                            continue;
+
+                        mem.AddScatterReadRequest(
+                            handle,
+                            job.inventoryController + sdk::InventoryController::Inventory,
+                            &job.inventory,
+                            sizeof(job.inventory)
+                        );
+                    }
+                });
+
+            // --------------------------------------------------------
+            // 4) Scatter equipment
+            // --------------------------------------------------------
+            executeScatter([&](auto handle)
+                {
+                    for (auto& job : initJobs)
+                    {
+                        if (!Utils::valid_pointer(job.inventory))
+                            continue;
+
+                        mem.AddScatterReadRequest(
+                            handle,
+                            job.inventory + sdk::Inventory::Equipment,
+                            &job.equipment,
+                            sizeof(job.equipment)
+                        );
+                    }
+                });
+
+            // --------------------------------------------------------
+            // 5) Scatter slots array pointer
+            // --------------------------------------------------------
+            executeScatter([&](auto handle)
+                {
+                    for (auto& job : initJobs)
+                    {
+                        if (!Utils::valid_pointer(job.equipment))
+                            continue;
+
+                        mem.AddScatterReadRequest(
+                            handle,
+                            job.equipment + sdk::InventoryEquipment::_cachedSlots,
+                            &job.slotsPtr,
+                            sizeof(job.slotsPtr)
+                        );
+                    }
+                });
+        }
+
+        // ------------------------------------------------------------
+        // 6) Build slot init results
+        //    This still uses normal string reads because slot name strings
+        //    are variable-length. You can scatter this too later, but this
+        //    keeps it much simpler and safer.
+        // ------------------------------------------------------------
         std::vector<InitResult> initResults;
         initResults.reserve(initJobs.size());
 
@@ -2203,26 +2314,10 @@ void Players::playerEquipment()
             InitResult result{};
             result.instance = job.instance;
 
-            if (!Utils::valid_pointer(job.inventoryControllerAddr))
+            if (!Utils::valid_pointer(job.slotsPtr))
                 continue;
 
-            uint64_t inventoryController = mem.Read<uint64_t>(job.inventoryControllerAddr);
-            if (!Utils::valid_pointer(inventoryController))
-                continue;
-
-            uint64_t inventory = mem.Read<uint64_t>(inventoryController + sdk::InventoryController::Inventory);
-            if (!Utils::valid_pointer(inventory))
-                continue;
-
-            uint64_t equipment = mem.Read<uint64_t>(inventory + sdk::Inventory::Equipment);
-            if (!Utils::valid_pointer(equipment))
-                continue;
-
-            uint64_t slotsPtr = mem.Read<uint64_t>(equipment + sdk::InventoryEquipment::_cachedSlots);
-            if (!Utils::valid_pointer(slotsPtr))
-                continue;
-
-            auto slotsArray = UnityArray<uint64_t>(slotsPtr);
+            UnityArray<uint64_t> slotsArray(job.slotsPtr);
 
             if (slotsArray.count < 1 || slotsArray.count > 128)
                 continue;
@@ -2233,6 +2328,7 @@ void Players::playerEquipment()
                     continue;
 
                 uint64_t namePtr = mem.Read<uint64_t>(slotPtr + sdk::Slot::ID);
+
                 if (!Utils::valid_pointer(namePtr))
                     continue;
 
@@ -2259,8 +2355,10 @@ void Players::playerEquipment()
             }
         }
 
-        //Apply init results under lock
-		{ // LOCKED SCOPE
+        // ------------------------------------------------------------
+        // 7) Apply init results under one short lock
+        // ------------------------------------------------------------
+        {
             std::lock_guard<std::mutex> lock(playerMutex);
 
             std::vector<PlayerCache>& cache = players.getCache();
@@ -2289,10 +2387,12 @@ void Players::playerEquipment()
             }
         }
 
+        // ------------------------------------------------------------
+        // 8) Build scan jobs under one short lock
+        // ------------------------------------------------------------
         std::vector<ScanJob> scanJobs;
 
-        //Build 
-		{ // LOCKED SCOPE
+        {
             std::lock_guard<std::mutex> lock(playerMutex);
 
             std::vector<PlayerCache>& cache = players.getCache();
@@ -2327,9 +2427,101 @@ void Players::playerEquipment()
 
                 scanJobs.push_back(std::move(job));
             }
-		} // UNLOCKED SCOPE
+        }
 
-        //Scan equipment outside lock
+        if (scanJobs.empty())
+            return;
+
+        // ------------------------------------------------------------
+        // 9) Flatten slots for scatter reading
+        // ------------------------------------------------------------
+        std::vector<SlotRead> slotReads;
+
+        for (size_t jobIndex = 0; jobIndex < scanJobs.size(); ++jobIndex)
+        {
+            auto& job = scanJobs[jobIndex];
+
+            for (size_t slotIndex = 0; slotIndex < job.slots.size(); ++slotIndex)
+            {
+                const auto& slot = job.slots[slotIndex];
+
+                if (job.isPlayer && slot.name == "Scabbard")
+                    continue;
+
+                if (!Utils::valid_pointer(slot.addr))
+                    continue;
+
+                SlotRead sr{};
+                sr.jobIndex = jobIndex;
+                sr.slotIndex = slotIndex;
+
+                slotReads.push_back(sr);
+            }
+        }
+
+        // ------------------------------------------------------------
+        // 10) Scatter ContainedItem for every slot
+        // ------------------------------------------------------------
+        executeScatter([&](auto handle)
+            {
+                for (auto& sr : slotReads)
+                {
+                    const auto& job = scanJobs[sr.jobIndex];
+                    const auto& slot = job.slots[sr.slotIndex];
+
+                    if (!Utils::valid_pointer(slot.addr))
+                        continue;
+
+                    mem.AddScatterReadRequest(
+                        handle,
+                        slot.addr + sdk::Slot::ContainedItem,
+                        &sr.containedItem,
+                        sizeof(sr.containedItem)
+                    );
+                }
+            });
+
+        // ------------------------------------------------------------
+        // 11) Scatter Template pointer for every contained item
+        // ------------------------------------------------------------
+        executeScatter([&](auto handle)
+            {
+                for (auto& sr : slotReads)
+                {
+                    if (!Utils::valid_pointer(sr.containedItem))
+                        continue;
+
+                    mem.AddScatterReadRequest(
+                        handle,
+                        sr.containedItem + sdk::LootItem::Template,
+                        &sr.itemTemplate,
+                        sizeof(sr.itemTemplate)
+                    );
+                }
+            });
+
+        // ------------------------------------------------------------
+        // 12) Scatter MongoID for every item template
+        // ------------------------------------------------------------
+        executeScatter([&](auto handle)
+            {
+                for (auto& sr : slotReads)
+                {
+                    if (!Utils::valid_pointer(sr.itemTemplate))
+                        continue;
+
+                    mem.AddScatterReadRequest(
+                        handle,
+                        sr.itemTemplate + sdk::ItemTemplate::_id,
+                        &sr.mongoId,
+                        sizeof(sr.mongoId)
+                    );
+                }
+            });
+
+        // ------------------------------------------------------------
+        // 13) Process results outside lock
+        // ------------------------------------------------------------
         std::vector<ScanResult> scanResults;
         scanResults.reserve(scanJobs.size());
 
@@ -2341,163 +2533,190 @@ void Players::playerEquipment()
             result.slots = std::move(job.slots);
             result.playerValue = 0;
 
-            for (auto& slot : result.slots)
+            scanResults.push_back(std::move(result));
+        }
+
+        for (auto& sr : slotReads)
+        {
+            if (sr.jobIndex >= scanJobs.size())
+                continue;
+
+            if (sr.jobIndex >= scanResults.size())
+                continue;
+
+            ScanJob& job = scanJobs[sr.jobIndex];
+            ScanResult& result = scanResults[sr.jobIndex];
+
+            if (sr.slotIndex >= result.slots.size())
+                continue;
+
+            SlotEntry& slot = result.slots[sr.slotIndex];
+
+            slot.wanted = false;
+            slot.price = 0;
+            slot.equipName.clear();
+
+            if (!Utils::valid_pointer(sr.containedItem))
+                continue;
+
+            // --------------------------------------------------------
+            // Dogtag profile ID check
+            // Kept mostly non-scatter because ReadName / ReadString are
+            // string-heavy and conditional.
+            // --------------------------------------------------------
+            if (job.isPlayer && job.profileId.empty() && !result.hasProfileUpdate)
             {
-                slot.wanted = false;
-                slot.price = 0;
-                slot.equipName.clear();
+                std::string className = ReadName(sr.containedItem);
 
-                if (job.isPlayer && slot.name == "Scabbard")
-                    continue;
-
-                if (!Utils::valid_pointer(slot.addr))
-                    continue;
-
-                uint64_t containedItem = mem.Read<uint64_t>(slot.addr + sdk::Slot::ContainedItem);
-                if (!Utils::valid_pointer(containedItem))
-                    continue;
-
-                // Dogtag profile ID check
-                if (job.isPlayer && job.profileId.empty() && !result.hasProfileUpdate)
+                if (className == "BarterOther")
                 {
-                    std::string className = ReadName(containedItem);
+                    uint64_t dogtag = mem.Read<uint64_t>(
+                        sr.containedItem + sdk::BarterOtherOffsets::Dogtag
+                    );
 
-                    if (className == "BarterOther")
+                    if (!Utils::valid_pointer(dogtag))
                     {
-                        uint64_t dogtag = mem.Read<uint64_t>(containedItem + sdk::BarterOtherOffsets::Dogtag);
+                        LOGS.logError("[DOGTAG] pointer to dogtag in equipment scan failed!");
+                    }
+                    else
+                    {
+                        uint64_t profileIdPtr = dogtag + sdk::DogtagComponent::ProfileId;
 
-                        if (!Utils::valid_pointer(dogtag))
+                        if (!Utils::valid_pointer(profileIdPtr))
                         {
-                            LOGS.logError("[DOGTAG] pointer to dogtag in equipment scan failed!");
+                            LOGS.logError("[DOGTAG] pointer to dogtag string failed!");
                         }
                         else
                         {
-                            uint64_t profileIdPtr = dogtag + sdk::DogtagComponent::ProfileId;
+                            std::string readString = ReadString(profileIdPtr);
 
-                            if (!Utils::valid_pointer(profileIdPtr))
+                            if (!readString.empty())
                             {
-                                LOGS.logError("[DOGTAG] pointer to dogtag string failed!");
+                                result.hasProfileUpdate = true;
+                                result.profileId = readString;
+
+                                LOGS.logInfo("[PLAYER] Set PID to Player : ", result.profileId);
+
+                                if (g_DogTagAPI.hasApiKey())
+                                {
+                                    auto apiResult = g_DogTagAPI.getByProfile(result.profileId);
+
+                                    if (apiResult)
+                                    {
+                                        if (!apiResult->accountId.empty())
+                                            result.accountId = apiResult->accountId;
+
+                                        if (!apiResult->nickname.empty())
+                                            result.nickname = apiResult->nickname;
+                                    }
+                                }
                             }
                             else
                             {
-                                std::string readString = ReadString(profileIdPtr);
-
-                                if (!readString.empty())
-                                {
-                                    result.hasProfileUpdate = true;
-                                    result.profileId = readString;
-
-                                    LOGS.logInfo("[PLAYER] Set PID to Player : ", result.profileId);
-
-                                    if (g_DogTagAPI.hasApiKey())
-                                    {
-                                        auto apiResult = g_DogTagAPI.getByProfile(result.profileId);
-
-                                        if (apiResult)
-                                        {
-                                            if (!apiResult->accountId.empty())
-                                                result.accountId = apiResult->accountId;
-
-                                            if (!apiResult->nickname.empty())
-                                                result.nickname = apiResult->nickname;
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    LOGS.logInfo("[PLAYER] DogTag profileid is empty");
-                                }
+                                LOGS.logInfo("[PLAYER] DogTag profileid is empty");
                             }
                         }
-                    }
-                }
-
-                // Item template / ID
-                uint64_t inventorytemplate = mem.Read<uint64_t>(containedItem + sdk::LootItem::Template);
-                if (!Utils::valid_pointer(inventorytemplate))
-                    continue;
-
-                auto mongoId = mem.Read<MongoID>(inventorytemplate + sdk::ItemTemplate::_id);
-                std::string id = TrimEFT(mongoId.ReadString(mem));
-
-                if (id.empty())
-                    continue;
-
-                // Market price/name lookup
-                for (const auto& ml : marketList)
-                {
-                    if (ml.bsgid != id)
-                        continue;
-
-                    slot.equipName = ml.shortName;
-                    slot.price = (ml.marketPrice == 0) ? ml.traderPrice : ml.marketPrice;
-                    break;
-                }
-
-                // Loot filters
-                for (const auto& filter : lootFilters)
-                {
-                    if (!filter.active)
-                        continue;
-
-                    bool found = false;
-
-                    for (size_t i = 0; i < filter.lootItems.size(); ++i)
-                    {
-                        if (id == filter.lootItems[i].bsgid)
-                        {
-                            slot.wanted = true;
-                            found = true;
-                            break;
-                        }
-                    }
-
-                    if (found)
-                        break;
-                }
-
-                // Quest loot
-                if (!slot.wanted)
-                {
-                    for (const auto& quest : masterItems)
-                    {
-                        if (quest == id)
-                        {
-                            slot.wanted = true;
-                            break;
-                        }
-                    }
-                }
-
-                // Wishlist
-                if (!slot.wanted)
-                {
-                    for (const auto& wishlist : wishListData)
-                    {
-                        if (wishlist.bsgId == id)
-                        {
-                            slot.wanted = true;
-                            break;
-                        }
-                    }
-                }
-
-                // Value loot
-                if (!slot.wanted)
-                {
-                    if (slot.price > lootGlobals::valueLootFrom && lootGlobals::enableValueLoot)
-                    {
-                        slot.wanted = true;
                     }
                 }
             }
 
-            // Calculate player value outside lock
+            if (!Utils::valid_pointer(sr.itemTemplate))
+                continue;
+
+            std::string id = TrimEFT(sr.mongoId.ReadString(mem));
+
+            if (id.empty())
+                continue;
+
+            // --------------------------------------------------------
+            // Market lookup
+            // --------------------------------------------------------
+            for (const auto& ml : marketList)
+            {
+                if (ml.bsgid != id)
+                    continue;
+
+                slot.equipName = ml.shortName;
+                slot.price = (ml.marketPrice == 0) ? ml.traderPrice : ml.marketPrice;
+                break;
+            }
+
+            // --------------------------------------------------------
+            // Loot filters
+            // --------------------------------------------------------
+            for (const auto& filter : lootFilters)
+            {
+                if (!filter.active)
+                    continue;
+
+                bool found = false;
+
+                for (size_t i = 0; i < filter.lootItems.size(); ++i)
+                {
+                    if (id == filter.lootItems[i].bsgid)
+                    {
+                        slot.wanted = true;
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (found)
+                    break;
+            }
+
+            // --------------------------------------------------------
+            // Quest loot
+            // --------------------------------------------------------
+            if (!slot.wanted)
+            {
+                for (const auto& quest : masterItems)
+                {
+                    if (quest == id)
+                    {
+                        slot.wanted = true;
+                        break;
+                    }
+                }
+            }
+
+            // --------------------------------------------------------
+            // Wishlist
+            // --------------------------------------------------------
+            if (!slot.wanted)
+            {
+                for (const auto& wishlist : wishListData)
+                {
+                    if (wishlist.bsgId == id)
+                    {
+                        slot.wanted = true;
+                        break;
+                    }
+                }
+            }
+
+            // --------------------------------------------------------
+            // Value loot
+            // --------------------------------------------------------
+            if (!slot.wanted)
+            {
+                if (slot.price > lootGlobals::valueLootFrom && lootGlobals::enableValueLoot)
+                    slot.wanted = true;
+            }
+        }
+
+        // ------------------------------------------------------------
+        // 14) Calculate player values outside lock
+        // ------------------------------------------------------------
+        for (auto& result : scanResults)
+        {
+            result.playerValue = 0;
+
             for (const auto& slot : result.slots)
             {
-                std::string slotn = TrimEFT(slot.name);
+                std::string slotName = TrimEFT(slot.name);
 
-                if (slotn == "SecuredContainer" || slotn == "Dogtag" || slotn == "Scabbard")
+                if (slotName == "SecuredContainer" || slotName == "Dogtag" || slotName == "Scabbard")
                     continue;
 
                 if (slot.price <= 0)
@@ -2505,11 +2724,11 @@ void Players::playerEquipment()
 
                 result.playerValue += static_cast<PlayerValueT>(slot.price);
             }
-
-            scanResults.push_back(std::move(result));
         }
 
-        // 6) Apply scan results under lock
+        // ------------------------------------------------------------
+        // 15) Apply scan results under one short lock
+        // ------------------------------------------------------------
         {
             std::lock_guard<std::mutex> lock(playerMutex);
 
@@ -2545,9 +2764,13 @@ void Players::playerEquipment()
             }
         }
     }
+    catch (const std::exception& e)
+    {
+        LOGS.logError("[PLAYER][EQUIP] Exception: ", e.what());
+    }
     catch (...)
     {
-        LOGS.logError("[PLAYER][EQUIP] Exception..");
+        LOGS.logError("[PLAYER][EQUIP] Unknown exception.");
     }
 }
 

@@ -405,7 +405,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootList, bool up
         newCorpseEquip.reserve(slotsRead.count);
 
         bool isPMC = false;
-        std::vector<PlayerCache>& cache = players.getCache();
+        std::vector<PlayerCache> cache = players.getCacheSnapshot();
         for (auto& player : cache)
         {
             if (interactive == player.P_CorpseClass)

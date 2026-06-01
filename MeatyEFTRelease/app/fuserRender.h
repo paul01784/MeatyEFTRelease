@@ -16,6 +16,7 @@
 #include "game/headers/loot.h"
 #include "game/headers/explosives.h"
 #include "game/headers/questManager.h"
+#include "../game/headers/players.h"
 
 namespace fuserRender
 {
@@ -731,7 +732,7 @@ namespace fuserRender
 
     static inline void RenderAmmoHud()
     {
-        std::vector<PlayerCache> cache = players.getCache();
+        std::vector<PlayerCache> cache = players.getCacheSnapshot();
 
         if (cache.empty())
             return;
@@ -790,7 +791,7 @@ namespace fuserRender
     static inline void RenderPlayers()
     {
         
-            std::vector<PlayerCache> cache = players.getCache();
+            std::vector<PlayerCache> cache = players.getCacheSnapshot();
 
             if (cache.empty())
                 return;

@@ -2858,7 +2858,7 @@ static void renderDebugWindow()
                     }
                     if (ImGui::BeginTabItem("player"))
                     {
-                        const std::vector<PlayerCache>& cache = players.getCache();
+                        const std::vector<PlayerCache>& cache = players.getCacheSnapshot();
                         ImGui::Text("Player Cache Count: %zu", cache.size());
                         
 
