@@ -367,7 +367,11 @@ void Camera::cameraTask()
                 getMatrixPtrs();
             };
 
-        
+        // We dont want cameras finding till we are in raid and have hands
+        if (!mainGame.checkIfRaidStarted())
+            return;
+
+
         static int opticBadFrames = 0;
 
         if (!this->initedCamera)

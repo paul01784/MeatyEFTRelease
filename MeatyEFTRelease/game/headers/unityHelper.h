@@ -334,7 +334,7 @@ static std::string ReadName(uint64_t objectClass, int length = 128, bool useCach
 {
     try
     {
-        uint64_t namePtr = mem.ReadChain(objectClass, { 0x0, 0x10 });
+        uint64_t namePtr = mem.ReadChain(objectClass, { 0x0, 0x10 }, useCache);
         return mem.readUTF8String(namePtr, length);
     }
     catch (const std::exception& ex) {
