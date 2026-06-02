@@ -14,6 +14,36 @@ struct CameraArray
 class Camera
 {
 public:
+
+    struct ScopeDebugState
+    {
+        bool localScoped = false;
+        bool hasSight = false;
+        bool wantsOpticMatrix = false;
+        bool usingOpticMatrix = false;
+
+        uint64_t opticsPtr = 0;
+        uint64_t opticEntry = 0;
+        uint64_t sightComponent = 0;
+        uint64_t sightInterface = 0;
+        uint64_t zoomsPtr = 0;
+        uint64_t selectedModesPtr = 0;
+
+        int opticCount = 0;
+        int selectedOpticIndex = -1;
+        int selectedScope = -1;
+        int selectedMode = -1;
+        int zoomArrayCount = 0;
+        int selectedModesCount = 0;
+
+        float scopeZoomValue = -1.0f; // direct field fallback
+        float zoomLevel = -1.0f;      // selected zoom from Zooms array
+        float selectedZoom = -1.0f;   // final zoom used by camera logic
+    };
+
+    const ScopeDebugState& getScopeDebug() const;
+
+
     void getCameraPtrs();
     void getMatrixPtrs();
     void cameraTask();
@@ -46,6 +76,9 @@ public:
     static float closestPlayerDist;
 
 private:
+
+    ScopeDebugState m_scopeDebug{};
+
     struct FrameData
     {
         glm::highp_mat4 fpsRaw{};

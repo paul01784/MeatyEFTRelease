@@ -2977,6 +2977,55 @@ static void renderDebugWindow()
                         ImGui::Spacing();
                         ImGui::Separator();
 
+                        const auto& scopeDebug = camera.getScopeDebug();
+
+                        ImGui::Text("Scope / Sight Debug");
+
+                        DebugTextBool("Local Scoped", scopeDebug.localScoped);
+                        DebugTextBool("Has Sight", scopeDebug.hasSight);
+                        DebugTextBool("Wants Optic Matrix", scopeDebug.wantsOpticMatrix);
+                        DebugTextBool("Using Optic Matrix", scopeDebug.usingOpticMatrix);
+
+                        ImGui::Spacing();
+
+                        DebugTextPtr("opticsPtr", scopeDebug.opticsPtr);
+                        DebugTextPtr("opticEntry", scopeDebug.opticEntry);
+                        DebugTextPtr("sightComponent", scopeDebug.sightComponent);
+                        DebugTextPtr("sightInterface", scopeDebug.sightInterface);
+                        DebugTextPtr("zoomsPtr", scopeDebug.zoomsPtr);
+                        DebugTextPtr("selectedModesPtr", scopeDebug.selectedModesPtr);
+
+                        ImGui::Spacing();
+
+                        ImGui::Text("opticCount: %d", scopeDebug.opticCount);
+                        ImGui::Text("selectedOpticIndex: %d", scopeDebug.selectedOpticIndex);
+                        ImGui::Text("selectedScope: %d", scopeDebug.selectedScope);
+                        ImGui::Text("selectedMode: %d", scopeDebug.selectedMode);
+                        ImGui::Text("zoomArrayCount: %d", scopeDebug.zoomArrayCount);
+                        ImGui::Text("selectedModesCount: %d", scopeDebug.selectedModesCount);
+
+                        ImGui::Spacing();
+
+                        ImGui::Text("scopeZoomValue fallback: %.3f", scopeDebug.scopeZoomValue);
+                        ImGui::Text("zoomLevel selected: %.3f", scopeDebug.zoomLevel);
+                        ImGui::Text("selectedZoom used: %.3f", scopeDebug.selectedZoom);
+
+                        DebugTextBool(
+                            "Selected Zoom Valid",
+                            std::isfinite(scopeDebug.selectedZoom) &&
+                            scopeDebug.selectedZoom >= 0.0f &&
+                            scopeDebug.selectedZoom < 100.0f
+                        );
+
+                        DebugTextBool(
+                            "Zoom Greater Than 1x",
+                            std::isfinite(scopeDebug.selectedZoom) &&
+                            scopeDebug.selectedZoom > 1.01f
+                        );
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+
                         ImGui::Text("Pointers");
                         DebugTextPtr("fpsCamera", camera.fpsCamera);
                         DebugTextPtr("opticCamera", camera.opticCamera);

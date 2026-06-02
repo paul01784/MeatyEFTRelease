@@ -322,6 +322,11 @@ bool Camera::checkIfOpticMatrix()
     return shouldUseOpticMatrix(scope);
 }
 
+const Camera::ScopeDebugState& Camera::getScopeDebug() const
+{
+    return m_scopeDebug;
+}
+
 void Camera::cameraTask()
 {
     try
@@ -333,6 +338,9 @@ void Camera::cameraTask()
         }
 
         const bool localScoped = mainGame.localIsScoped;
+
+        m_scopeDebug = {};
+        m_scopeDebug.localScoped = localScoped;
 
         ScopeState scope{};
 
@@ -363,11 +371,14 @@ void Camera::cameraTask()
             opticActive = applyOpticFrame(frame, scope);
 
         localmpCamera = opticActive;
+        m_scopeDebug.usingOpticMatrix = opticActive;
 
         if (wantOptic)
             handleOpticBadFrame(!opticActive);
         else
             resetOpticBadFrames();
+
+
     }
     catch (const std::exception& e)
     {
@@ -532,21 +543,27 @@ Camera::ScopeState Camera::readScopeState()
 
     try
     {
+        m_scopeDebug.localScoped = mainGame.localIsScoped;
+
         if (!Utils::valid_pointer(mainGame.localPlayerPWA))
             return state;
 
         const uint64_t opticsPtr =
             mem.Read<uint64_t>(mainGame.localPlayerPWA + sdk::ProceduralWeaponAnimation::_optics);
 
+        m_scopeDebug.opticsPtr = opticsPtr;
+
         if (!Utils::valid_pointer(opticsPtr))
             return state;
 
         MonoList<uint64_t> optics(opticsPtr);
 
+        m_scopeDebug.opticCount = optics.count;
+
         if (optics.count <= 0 || optics.count > kMaxOpticCount)
             return state;
 
-        const int opticCount = std::min<int>(optics.count, kMaxOpticCount);
+        const int opticCount = (std::min)(optics.count, kMaxOpticCount);
 
         for (int i = 0; i < opticCount; ++i)
         {
@@ -572,10 +589,7 @@ Camera::ScopeState Camera::readScopeState()
             state.selectedScope = sight.selectedScope();
             state.selectedMode = sight.selectedScopeMode(state.selectedScope);
 
-            // Prefer GetZoomLevel because it respects selected scope/mode better.
             state.zoomLevel = sight.getZoomLevel();
-
-            // Fallback only.
             state.scopeZoomValue = sight.scopeZoomValue();
 
             if (validZoom(state.zoomLevel))
@@ -586,6 +600,53 @@ Camera::ScopeState Camera::readScopeState()
                 state.selectedZoom = -1.0f;
 
             state.wantsOpticMatrix = zoomNeedsOptic(state.selectedZoom);
+
+            const uint64_t sightInterfacePtr = sight.sightInterfacePtr();
+            const uint64_t selectedModesPtr = sight.selectedModesPtr();
+
+            uint64_t zoomsPtr = 0;
+            int zoomArrayCount = 0;
+            int selectedModesCount = 0;
+
+            if (Utils::valid_pointer(sightInterfacePtr))
+            {
+                zoomsPtr = mem.Read<uint64_t>(
+                    sightInterfacePtr + sdk::SightInterface::Zooms
+                );
+
+                if (Utils::valid_pointer(zoomsPtr))
+                {
+                    UnityArray<uint64_t> zooms(zoomsPtr);
+                    zoomArrayCount = zooms.count;
+                }
+            }
+
+            if (Utils::valid_pointer(selectedModesPtr))
+            {
+                UnityArray<int> selectedModes(selectedModesPtr);
+                selectedModesCount = selectedModes.count;
+            }
+
+            m_scopeDebug.hasSight = true;
+            m_scopeDebug.wantsOpticMatrix = state.wantsOpticMatrix;
+
+            m_scopeDebug.opticEntry = optic;
+            m_scopeDebug.selectedOpticIndex = i;
+
+            m_scopeDebug.sightComponent = sightComponentPtr;
+            m_scopeDebug.sightInterface = sightInterfacePtr;
+            m_scopeDebug.zoomsPtr = zoomsPtr;
+            m_scopeDebug.selectedModesPtr = selectedModesPtr;
+
+            m_scopeDebug.selectedScope = state.selectedScope;
+            m_scopeDebug.selectedMode = state.selectedMode;
+
+            m_scopeDebug.zoomArrayCount = zoomArrayCount;
+            m_scopeDebug.selectedModesCount = selectedModesCount;
+
+            m_scopeDebug.scopeZoomValue = state.scopeZoomValue;
+            m_scopeDebug.zoomLevel = state.zoomLevel;
+            m_scopeDebug.selectedZoom = state.selectedZoom;
 
             if (state.sightComponent != 0 && state.sightComponent != m_lastSightComponent)
             {
