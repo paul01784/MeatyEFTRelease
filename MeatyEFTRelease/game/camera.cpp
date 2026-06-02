@@ -5,574 +5,697 @@
 #include "headers/utils.h"
 #include "headers/unityHelper.h"
 
-#include <cstdint>
-#include <cmath>
-#include <limits>
 #include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <limits>
+#include <string>
 
 Camera camera;
 
-uint64_t Camera::fpsCamera = NULL;
-uint64_t Camera::opticCamera = NULL;
-uint64_t Camera::fpsMatrixAddr = NULL;
-uint64_t Camera::opticMatrixAddr = NULL;
-float Camera::gameFOV = 0.f;
-float Camera::gameAspect = 0.f;
+bool Camera::initedCamera = false;
+
+uint64_t Camera::fpsCamera = 0;
+uint64_t Camera::fpsMatrixAddr = 0;
+
+uint64_t Camera::opticCamera = 0;
+uint64_t Camera::opticMatrixAddr = 0;
+
+float Camera::gameFOV = 0.0f;
+float Camera::gameAspect = 0.0f;
 
 bool Camera::localmpCamera = false;
-uint64_t Camera::cameraEntity = NULL;
 
-uint64_t Camera::opticCameraMatrix;
+uint64_t Camera::cameraEntity = 0;
+uint64_t Camera::opticCameraMatrix = 0;
+
 glm::highp_mat4 Camera::g_viewMatrix{};
 glm::highp_mat4 Camera::g_viewMatrixOptic{};
 glm::highp_mat4 Camera::g_viewMatrixRAW{};
 glm::highp_mat4 Camera::g_viewMatrixOpticRAW{};
 
+uint64_t Camera::closestPlayer = 0;
+float Camera::closestPlayerDist = 0.0f;
+
+// ------------------------------------------------------------
+// SightComponentView
+// ------------------------------------------------------------
+
+Camera::SightComponentView::SightComponentView(uint64_t base)
+    : m_base(base)
+{
+}
+
+bool Camera::SightComponentView::valid() const
+{
+    return Utils::valid_pointer(m_base);
+}
+
+uint64_t Camera::SightComponentView::base() const
+{
+    return m_base;
+}
+
+uint64_t Camera::SightComponentView::sightInterfacePtr() const
+{
+    if (!valid())
+        return 0;
+
+    return mem.Read<uint64_t>(m_base + sdk::SightComponent::_template);
+}
+
+uint64_t Camera::SightComponentView::selectedModesPtr() const
+{
+    if (!valid())
+        return 0;
+
+    return mem.Read<uint64_t>(m_base + sdk::SightComponent::ScopeSelectedModes);
+}
+
+int Camera::SightComponentView::selectedScope() const
+{
+    if (!valid())
+        return -1;
+
+    return mem.Read<int>(m_base + sdk::SightComponent::SelectedScope);
+}
+
+int Camera::SightComponentView::selectedScopeMode(int selectedScope) const
+{
+    if (selectedScope < 0 || selectedScope >= kMaxScopeCount)
+        return 0;
+
+    const uint64_t modesPtr = selectedModesPtr();
+
+    if (!Utils::valid_pointer(modesPtr))
+        return 0;
+
+    UnityArray<int> selectedModes(modesPtr);
+
+    if (selectedModes.count <= 0 || selectedModes.count > kMaxScopeCount)
+        return 0;
+
+    if (selectedScope >= selectedModes.count)
+        return 0;
+
+    const int selectedMode = selectedModes[selectedScope];
+
+    if (selectedMode < 0 || selectedMode >= kMaxScopeCount)
+        return 0;
+
+    return selectedMode;
+}
+
+float Camera::SightComponentView::scopeZoomValue() const
+{
+    if (!valid())
+        return -1.0f;
+
+    return mem.Read<float>(m_base + sdk::SightComponent::ScopeZoomValue);
+}
+
+float Camera::SightComponentView::getZoomLevel() const
+{
+    try
+    {
+        const int scope = selectedScope();
+
+        if (scope < 0 || scope >= kMaxScopeCount)
+            return -1.0f;
+
+        const uint64_t sightInterface = sightInterfacePtr();
+
+        if (!Utils::valid_pointer(sightInterface))
+            return -1.0f;
+
+        const uint64_t zoomsPtr =
+            mem.Read<uint64_t>(sightInterface + sdk::SightInterface::Zooms);
+
+        if (!Utils::valid_pointer(zoomsPtr))
+            return -1.0f;
+
+        UnityArray<uint64_t> zooms(zoomsPtr);
+
+        if (zooms.count <= 0 || zooms.count > kMaxScopeCount)
+            return -1.0f;
+
+        if (scope >= zooms.count)
+            return -1.0f;
+
+        const int mode = selectedScopeMode(scope);
+
+        const uint64_t zoomsForScope = zooms[scope];
+
+        if (!Utils::valid_pointer(zoomsForScope))
+            return -1.0f;
+
+        const uint64_t zoomAddr =
+            zoomsForScope +
+            UnityArray<float>::ArrBaseOffset +
+            (static_cast<uint64_t>(mode) * sizeof(float));
+
+        const float zoom = mem.Read<float>(zoomAddr, false);
+
+        if (Camera::validZoom(zoom))
+            return zoom;
+
+        return -1.0f;
+    }
+    catch (...)
+    {
+        return -1.0f;
+    }
+}
+
+// ------------------------------------------------------------
+// Public API
+// ------------------------------------------------------------
 
 void Camera::clearCache()
 {
-    camera.fpsCamera = NULL;
-    camera.opticCamera = NULL;
-    camera.fpsMatrixAddr = NULL;
-    camera.opticMatrixAddr = NULL;
-    camera.gameFOV = 0.f;
-    camera.gameAspect = 0.f;
+    fpsCamera = 0;
+    opticCamera = 0;
 
-    camera.localmpCamera = false;
-    camera.cameraEntity = NULL;
+    fpsMatrixAddr = 0;
+    opticMatrixAddr = 0;
 
-    camera.opticCameraMatrix = NULL;
-    camera.g_viewMatrix = {};
-    camera.g_viewMatrixOptic = {};
-    camera.g_viewMatrixRAW = {};
-    camera.g_viewMatrixOpticRAW = {};
+    gameFOV = 0.0f;
+    gameAspect = 0.0f;
 
-    camera.initedCamera = false;
+    localmpCamera = false;
+    cameraEntity = 0;
+    opticCameraMatrix = 0;
+
+    g_viewMatrix = {};
+    g_viewMatrixOptic = {};
+    g_viewMatrixRAW = {};
+    g_viewMatrixOpticRAW = {};
+
+    closestPlayer = 0;
+    closestPlayerDist = 0.0f;
+
+    initedCamera = false;
+
+    m_opticBadFrames = 0;
+    m_lastSightComponent = 0;
 
     LOGS.logInfo("[CAMERA][CACHE] Data cleared");
 }
 
 void Camera::getCameraPtrs()
 {
-    camera.fpsCamera = 0;
-    camera.opticCamera = 0;
+    fpsCamera = 0;
+    opticCamera = 0;
 
-    bool debug = false;
+    constexpr bool debug = false;
 
-    uint64_t cameraArrayPtr = mem.Read<uint64_t>(mem.base + UnityOffsets::AllCamera);
-    if (!cameraArrayPtr)
+    const uint64_t cameraArrayPtr = mem.Read<uint64_t>(mem.base + UnityOffsets::AllCamera);
+
+    if (!Utils::valid_pointer(cameraArrayPtr))
     {
-        if (debug) std::cout << "[Camera] Invalid cameraArrayPtr" << std::endl;
+        if (debug)
+            std::cout << "[Camera] Invalid cameraArrayPtr" << std::endl;
+
         return;
     }
 
-    CameraArray array = mem.Read<CameraArray>(cameraArrayPtr);
+    const CameraArray array = mem.Read<CameraArray>(cameraArrayPtr);
+
+    if (!Utils::valid_pointer(array.cameras))
+    {
+        if (debug)
+            std::cout << "[Camera] Invalid array.cameras" << std::endl;
+
+        return;
+    }
+
+    if (array.curCount <= 0 || array.curCount > kMaxCameraCount)
+    {
+        if (debug)
+            std::cout << "[Camera] Invalid curCount: " << array.curCount << std::endl;
+
+        return;
+    }
 
     if (debug)
     {
         std::cout << "\n=== CameraArray Info ===" << std::endl;
         std::cout << "BasePtr:     0x" << std::hex << cameraArrayPtr << std::dec << std::endl;
         std::cout << "Cameras ptr: 0x" << std::hex << array.cameras << std::dec << std::endl;
-        std::cout << "minCount:    " << array.minCount << std::endl;
         std::cout << "curCount:    " << array.curCount << std::endl;
         std::cout << "maxCount:    " << array.maxCount << std::endl;
         std::cout << "========================" << std::endl;
     }
 
-    if (array.curCount <= 0)
-    {
-        if (debug) std::cout << "[Camera] Invalid curCount: " << array.curCount << std::endl;
-        return;
-    }
-
-    if (debug) std::cout << "=== Camera Scan ===" << std::endl;
-
     for (uint64_t i = static_cast<uint64_t>(array.curCount); i-- > 0;)
     {
-        uint64_t cameraEntity = mem.Read<uint64_t>(array.cameras + i * sizeof(uint64_t));
-        if (!cameraEntity)
+        const uint64_t cam = mem.Read<uint64_t>(array.cameras + (i * sizeof(uint64_t)));
+
+        if (!Utils::valid_pointer(cam))
             continue;
 
-        uint64_t go = mem.Read<uint64_t>(cameraEntity + UnityOffsets::GameObject_ComponentsOffset);
-        if (!go)
+        const uint64_t go =
+            mem.Read<uint64_t>(cam + UnityOffsets::GameObject_ComponentsOffset);
+
+        if (!Utils::valid_pointer(go))
             continue;
 
-        uint64_t namePtr = mem.Read<uint64_t>(go + UnityOffsets::GameObject_NameOffset);
-        if (!namePtr)
+        const uint64_t namePtr =
+            mem.Read<uint64_t>(go + UnityOffsets::GameObject_NameOffset);
+
+        if (!Utils::valid_pointer(namePtr))
             continue;
 
-        std::string name = mem.readString(namePtr + 0x0, sizeof(name));
+        // Do not use sizeof(std::string) here.
+        const std::string name = mem.readString(namePtr, 64);
+
         if (name.empty())
             continue;
 
         if (debug)
         {
             std::cout << "[" << i << "] "
-                << "cameraEntity: 0x" << std::hex << cameraEntity << std::dec
+                << "cameraEntity: 0x" << std::hex << cam << std::dec
                 << "  Name: \"" << name << "\""
                 << std::endl;
         }
 
-        if (!camera.fpsCamera && name == "FPS Camera")
+        if (!fpsCamera && name == "FPS Camera")
         {
-            camera.fpsCamera = cameraEntity;
-            if (debug) std::cout << " -> FPS Camera FOUND!" << std::endl;
+            fpsCamera = cam;
+            cameraEntity = cam;
+
+            if (debug)
+                std::cout << " -> FPS Camera FOUND!" << std::endl;
         }
 
-        if (!camera.opticCamera && name == "BaseOpticCamera(Clone)")
+        if (!opticCamera && name == "BaseOpticCamera(Clone)")
         {
-            camera.opticCamera = cameraEntity;
-            if (debug) std::cout << " -> Optic Camera FOUND!" << std::endl;
+            opticCamera = cam;
+
+            if (debug)
+                std::cout << " -> Optic Camera FOUND!" << std::endl;
         }
+
+        if (fpsCamera && opticCamera)
+            break;
     }
 
-    if (Utils::valid_pointer(camera.fpsCamera) && Utils::valid_pointer(camera.opticCamera))
+    if (debug)
     {
         std::cout << "\n=== Camera Scan Results ===" << std::endl;
-
-        std::cout << "FPS Camera     : ";
-        if (camera.fpsCamera)
-            std::cout << "0x" << std::hex << camera.fpsCamera << std::dec;
-        else
-            std::cout << "NOT FOUND";
-        std::cout << std::endl;
-
-        std::cout << "Optic Camera   : ";
-        if (camera.opticCamera)
-            std::cout << "0x" << std::hex << camera.opticCamera << std::dec;
-        else
-            std::cout << "NOT FOUND";
-        std::cout << std::endl;
-
+        std::cout << "FPS Camera   : 0x" << std::hex << fpsCamera << std::dec << std::endl;
+        std::cout << "Optic Camera : 0x" << std::hex << opticCamera << std::dec << std::endl;
         std::cout << "==========================\n" << std::endl;
-    }
-}
-
-class SightInterface
-{
-public:
-    explicit SightInterface(std::uint64_t baseAddr = 0) : m_base(baseAddr) {}
-
-    std::uint64_t Base() const { return m_base; }
-    explicit operator bool() const { return m_base != 0; }
-
-    std::uint64_t pZooms() const
-    {
-        return mem.Read<std::uint64_t>(m_base + sdk::SightInterface::Zooms);
-    }
-
-    // Equivalent to: MonoArray<ulong>.Create(pZooms, true)
-    UnityArray<std::uint64_t> Zooms() const
-    {
-        return UnityArray<std::uint64_t>(static_cast<std::uintptr_t>(pZooms()));
-    }
-
-private:
-    std::uint64_t m_base = 0;
-};
-
-class SightComponent
-{
-public:
-    explicit SightComponent(std::uint64_t baseAddr = 0) : m_base(baseAddr) {}
-
-    std::uint64_t Base() const { return m_base; }
-    explicit operator bool() const { return m_base != 0; }
-
-    // Field accessors (mirror the C# fields)
-    std::uint64_t pSightInterface() const
-    {
-        return mem.Read<std::uint64_t>(m_base + sdk::SightComponent::_template);
-    }
-
-    std::uint64_t pScopeSelectedModes() const
-    {
-        return mem.Read<std::uint64_t>(m_base + sdk::SightComponent::ScopeSelectedModes);
-    }
-
-    int SelectedScope() const
-    {
-        return mem.Read<int>(m_base + sdk::SightComponent::SelectedScope);
-    }
-
-    float ScopeZoomValue() const
-    {
-        return mem.Read<float>(m_base + sdk::SightComponent::ScopeZoomValue);
-    }
-
-    SightInterface GetSightInterface() const
-    {
-        return mem.Read<SightInterface>(pSightInterface());
-    }
-
-    static inline bool IsNormalOrZero(float v)
-    {
-        if (!std::isfinite(v))
-            return false;
-
-        if (v == 0.0f)
-            return true;
-
-        return std::fabs(v) >= (std::numeric_limits<float>::min)();
-    }
-
-    float GetZoomLevel() const
-    {
-        try
-        {
-            const int selectedScope = SelectedScope();
-
-            if (selectedScope < 0 || selectedScope > 10)
-                return -1.0f;
-
-            const SightInterface si = GetSightInterface();
-
-            auto zoomArray = si.Zooms();
-
-            if (selectedScope >= zoomArray.count)
-                return -1.0f;
-
-            int selectedScopeMode = 0;
-
-            const std::uint64_t selectedModesPtr = pScopeSelectedModes();
-
-            if (Utils::valid_pointer(selectedModesPtr))
-            {
-                const auto selectedScopeModes = UnityArray<int>(selectedModesPtr);
-
-                if (selectedScope < selectedScopeModes.count)
-                    selectedScopeMode = selectedScopeModes[selectedScope];
-            }
-
-            const std::uint64_t zoomsForScopeAddr = zoomArray[selectedScope];
-
-            if (!Utils::valid_pointer(zoomsForScopeAddr))
-                return -1.0f;
-
-            const std::uint64_t zoomAddr =
-                zoomsForScopeAddr +
-                UnityArray<float>::ArrBaseOffset +
-                (static_cast<std::uint64_t>(static_cast<std::uint32_t>(selectedScopeMode)) * sizeof(float));
-
-            const float zoomLevel = mem.Read<float>(zoomAddr, false);
-
-            if (IsNormalOrZero(zoomLevel) && zoomLevel >= 0.0f && zoomLevel < 100.0f)
-                return zoomLevel;
-
-            return -1.0f;
-        }
-        catch (...)
-        {
-            LOGS.logError("[SIGHT] ERROR in GetZoomLevel");
-            return -1.0f;
-        }
-    }
-
-private:
-    std::uint64_t m_base = 0;
-};
-
-bool Camera::checkIfOpticMatrix()
-{
-
-    try
-    {
-        const uint64_t opticsPtr =
-            mem.Read<uint64_t>(mainGame.localPlayerPWA + sdk::ProceduralWeaponAnimation::_optics);
-
-
-        MonoList<std::uint64_t> optics(opticsPtr);
-
-
-        if (optics.count <= 0)
-        {
-            return false;
-        }
-
-        const uint64_t optic0 = optics[0];
-
-        const uint64_t pSightComponent =
-            mem.Read<uint64_t>(optic0 + sdk::SightNBone::Mod);
-
-
-        if (!Utils::valid_pointer(pSightComponent))
-        {
-            return false;
-        }
-
-        SightComponent sightComponent(pSightComponent);
-
-        const float scopeZoom = sightComponent.ScopeZoomValue();
-       
-        return scopeZoom > 1.f;
-
-        //const float zoomLevel = sightComponent.GetZoomLevel();
-
-        //const bool result = zoomLevel > 1.0f;
-        //return result;
-    }
-    catch (...)
-    {
-        return false;
-    }
-}
-
-
-bool Camera::initedCamera = false;
-void Camera::cameraTask()
-{
-    try
-    {
-        auto matrixLooksValid = [](const glm::highp_mat4& m) -> bool
-            {
-                int nonZeroCount = 0;
-                float maxAbs = 0.0f;
-
-                for (int c = 0; c < 4; ++c)
-                {
-                    for (int r = 0; r < 4; ++r)
-                    {
-                        const float v = m[c][r];
-
-                        if (!std::isfinite(v))
-                            return false;
-
-                        const float av = std::fabs(v);
-
-                        if (av > 100000.0f)
-                            return false;
-
-                        if (av > 0.00001f)
-                        {
-                            nonZeroCount++;
-
-                            if (av > maxAbs)
-                                maxAbs = av;
-                        }
-                    }
-                }
-
-                if (nonZeroCount < 6)
-                    return false;
-
-                if (maxAbs < 0.0001f)
-                    return false;
-
-                return true;
-            };
-
-        auto refreshCameraPtrs = [&]()
-            {
-                getCameraPtrs();
-                getMatrixPtrs();
-            };
-
-        // We dont want cameras finding till we are in raid and have hands
-        if (!mainGame.checkIfRaidStarted())
-            return;
-
-
-        static int opticBadFrames = 0;
-
-        if (!this->initedCamera)
-        {
-            refreshCameraPtrs();
-            this->initedCamera = true;
-        }
-
-        const bool isScoped = mainGame.localIsScoped;
-
-        bool fpsOk =
-            Utils::valid_pointer(this->fpsCamera) &&
-            Utils::valid_pointer(this->fpsMatrixAddr);
-
-        bool opticOk =
-            Utils::valid_pointer(this->opticCamera) &&
-            Utils::valid_pointer(this->opticMatrixAddr);
-
-        
-        if (!fpsOk || (isScoped && !opticOk))
-        {
-            refreshCameraPtrs();
-
-            fpsOk =
-                Utils::valid_pointer(this->fpsCamera) &&
-                Utils::valid_pointer(this->fpsMatrixAddr);
-
-            opticOk =
-                Utils::valid_pointer(this->opticCamera) &&
-                Utils::valid_pointer(this->opticMatrixAddr);
-
-            if (!fpsOk)
-            {
-                this->localmpCamera = false;
-                return;
-            }
-        }
-
-        const bool canQueueOptic = isScoped && opticOk;
-
-        glm::highp_mat4 fpsRaw{};
-        glm::highp_mat4 opticRaw{};
-
-        float newFov = this->gameFOV;
-        float newAspect = this->gameAspect;
-
-        bool queuedOptic = false;
-
-        auto handle = mem.CreateScatterHandle();
-
-        if (!handle)
-        {
-            this->localmpCamera = false;
-            return;
-        }
-
-        // FOV / aspect 
-        mem.AddScatterReadRequest(
-            handle,
-            this->fpsCamera + UnityOffsets::Camera_FOVOffset,
-            &newFov,
-            sizeof(float)
-        );
-
-        mem.AddScatterReadRequest(
-            handle,
-            this->fpsCamera + UnityOffsets::Camera_AspectRatioOffset,
-            &newAspect,
-            sizeof(float)
-        );
-
-        // FPS matrix
-        mem.AddScatterReadRequest(
-            handle,
-            this->fpsMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
-            &fpsRaw,
-            sizeof(glm::highp_mat4)
-        );
-
-        
-        if (canQueueOptic)
-        {
-            mem.AddScatterReadRequest(
-                handle,
-                this->opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
-                &opticRaw,
-                sizeof(glm::highp_mat4)
-            );
-
-            queuedOptic = true;
-        }
-
-        mem.ExecuteReadScatter(handle);
-        mem.CloseScatterHandle(handle);
-
-        
-        if (!matrixLooksValid(fpsRaw))
-        {
-            this->localmpCamera = false;
-
-            LOGS.logWarn(
-                "Camera FPS matrix read failed/invalid. "
-                "fpsCamera=" + std::to_string(this->fpsCamera) +
-                " fpsMatrixAddr=" + std::to_string(this->fpsMatrixAddr)
-            );
-
-            return;
-        }
-
-        if (std::isfinite(newFov) && newFov > 1.0f && newFov < 180.0f)
-            this->gameFOV = newFov;
-
-        if (std::isfinite(newAspect) && newAspect > 0.1f && newAspect < 10.0f)
-            this->gameAspect = newAspect;
-
-        
-        this->g_viewMatrixRAW = fpsRaw;
-        this->g_viewMatrix = glm::transpose(fpsRaw);
-
-        bool useOpticCamera = false;
-        bool opticNeedsRefresh = false;
-
-        if (isScoped)
-        {
-            if (!queuedOptic)
-            {
-                opticNeedsRefresh = true;
-            }
-            else if (!matrixLooksValid(opticRaw))
-            {
-                opticNeedsRefresh = true;
-            }
-            else
-            {
-                this->g_viewMatrixOpticRAW = opticRaw;
-                this->g_viewMatrixOptic = glm::transpose(opticRaw);
-
-                if (checkIfOpticMatrix())
-                {
-                    useOpticCamera = true;
-                    opticBadFrames = 0;
-                }
-                else
-                {
-                    // trying to remove this set to see if fixes scopes with opticcameras also has attachment that uses 1x reflex from causing camera issues
-                    //opticNeedsRefresh = true;
-                }
-            }
-        }
-        else
-        {
-            opticBadFrames = 0;
-        }
-
-        this->localmpCamera = useOpticCamera;
-
-        if (isScoped && opticNeedsRefresh)
-        {
-            opticBadFrames++;
-
-            if (opticBadFrames >= 2000)
-            {
-                refreshCameraPtrs();
-                opticBadFrames = 0;
-
-                LOGS.logWarn(
-                    "Optic camera matrix invalid while scoped. Refreshed camera pointers. "
-                    "opticCamera=" + std::to_string(this->opticCamera) +
-                    " opticMatrixAddr=" + std::to_string(this->opticMatrixAddr)
-                );
-            }
-        }
-    }
-    catch (const std::exception& e)
-    {
-        LOGS.logError("Exception caught in cameraTask: " + std::string(e.what()));
-        return;
-    }
-    catch (...)
-    {
-        LOGS.logError("Unknown exception caught in cameraTask.");
-        return;
     }
 }
 
 void Camera::getMatrixPtrs()
 {
+    fpsMatrixAddr = resolveMatrixAddress(fpsCamera);
+    opticMatrixAddr = resolveMatrixAddress(opticCamera);
+}
 
-    if (Utils::valid_pointer(camera.fpsCamera))
+bool Camera::checkIfOpticMatrix()
+{
+    const ScopeState scope = readScopeState();
+    return shouldUseOpticMatrix(scope);
+}
+
+void Camera::cameraTask()
+{
+    try
     {
-        //Get Matrix ptr
-        uint64_t gameObject = mem.Read<uint64_t>(fpsCamera + 0x58);
-        uint64_t ptr1 = mem.Read<uint64_t>(gameObject + 0x58);
-        fpsMatrixAddr = mem.Read<uint64_t>(ptr1 + 0x18);
+        if (!mainGame.checkIfRaidStarted())
+        {
+            localmpCamera = false;
+            return;
+        }
+
+        const bool localScoped = mainGame.localIsScoped;
+
+        ScopeState scope{};
+
+        if (localScoped)
+            scope = readScopeState();
+
+        const bool wantOptic = localScoped && shouldUseOpticMatrix(scope);
+
+        if (!ensureCameraPointers(wantOptic))
+        {
+            localmpCamera = false;
+            return;
+        }
+
+        FrameData frame{};
+
+        if (!readFrameData(wantOptic, frame))
+        {
+            localmpCamera = false;
+            return;
+        }
+
+        applyFpsFrame(frame);
+
+        bool opticActive = false;
+
+        if (wantOptic)
+            opticActive = applyOpticFrame(frame, scope);
+
+        localmpCamera = opticActive;
+
+        if (wantOptic)
+            handleOpticBadFrame(!opticActive);
+        else
+            resetOpticBadFrames();
+    }
+    catch (const std::exception& e)
+    {
+        localmpCamera = false;
+        LOGS.logError("Exception caught in cameraTask: " + std::string(e.what()));
+    }
+    catch (...)
+    {
+        localmpCamera = false;
+        LOGS.logError("Unknown exception caught in cameraTask.");
+    }
+}
+
+// ------------------------------------------------------------
+// Private flow helpers
+// ------------------------------------------------------------
+
+void Camera::refreshCameraPointers()
+{
+    getCameraPtrs();
+    getMatrixPtrs();
+}
+
+bool Camera::ensureCameraPointers(bool preferOptic)
+{
+    if (!initedCamera)
+    {
+        refreshCameraPointers();
+        initedCamera = true;
     }
 
-    if (Utils::valid_pointer(camera.opticCamera))
+    const auto fpsOk = []()
+        {
+            return Utils::valid_pointer(fpsCamera) &&
+                Utils::valid_pointer(fpsMatrixAddr);
+        };
+
+    const auto opticOk = []()
+        {
+            return Utils::valid_pointer(opticCamera) &&
+                Utils::valid_pointer(opticMatrixAddr);
+        };
+
+    if (!fpsOk() || (preferOptic && !opticOk()))
+        refreshCameraPointers();
+
+    return fpsOk();
+}
+
+uint64_t Camera::resolveMatrixAddress(uint64_t cameraPtr) const
+{
+    if (!Utils::valid_pointer(cameraPtr))
+        return 0;
+
+    const uint64_t gameObject = mem.Read<uint64_t>(cameraPtr + 0x58);
+
+    if (!Utils::valid_pointer(gameObject))
+        return 0;
+
+    const uint64_t ptr1 = mem.Read<uint64_t>(gameObject + 0x58);
+
+    if (!Utils::valid_pointer(ptr1))
+        return 0;
+
+    const uint64_t matrixAddr = mem.Read<uint64_t>(ptr1 + 0x18);
+
+    if (!Utils::valid_pointer(matrixAddr))
+        return 0;
+
+    return matrixAddr;
+}
+
+bool Camera::readFrameData(bool wantOptic, FrameData& out)
+{
+    out = {};
+
+    out.fov = gameFOV;
+    out.aspect = gameAspect;
+
+    out.queuedOptic =
+        wantOptic &&
+        Utils::valid_pointer(opticCamera) &&
+        Utils::valid_pointer(opticMatrixAddr);
+
+    auto handle = mem.CreateScatterHandle();
+
+    if (!handle)
+        return false;
+
+    mem.AddScatterReadRequest(
+        handle,
+        fpsCamera + UnityOffsets::Camera_FOVOffset,
+        &out.fov,
+        sizeof(float)
+    );
+
+    mem.AddScatterReadRequest(
+        handle,
+        fpsCamera + UnityOffsets::Camera_AspectRatioOffset,
+        &out.aspect,
+        sizeof(float)
+    );
+
+    mem.AddScatterReadRequest(
+        handle,
+        fpsMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
+        &out.fpsRaw,
+        sizeof(glm::highp_mat4)
+    );
+
+    if (out.queuedOptic)
     {
-        //Get Matrix ptr
-        uint64_t gameObject = mem.Read<uint64_t>(camera.opticCamera + 0x58);
-        uint64_t ptr1 = mem.Read<uint64_t>(gameObject + 0x58);
-        opticMatrixAddr = mem.Read<uint64_t>(ptr1 + 0x18);
+        mem.AddScatterReadRequest(
+            handle,
+            opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
+            &out.opticRaw,
+            sizeof(glm::highp_mat4)
+        );
     }
+
+    mem.ExecuteReadScatter(handle);
+    mem.CloseScatterHandle(handle);
+
+    out.fpsMatrixValid = matrixLooksValid(out.fpsRaw);
+    out.opticMatrixValid = out.queuedOptic && matrixLooksValid(out.opticRaw);
+
+    return out.fpsMatrixValid;
+}
+
+void Camera::applyFpsFrame(const FrameData& frame)
+{
+    if (validFov(frame.fov))
+        gameFOV = frame.fov;
+
+    if (validAspect(frame.aspect))
+        gameAspect = frame.aspect;
+
+    g_viewMatrixRAW = frame.fpsRaw;
+    g_viewMatrix = glm::transpose(frame.fpsRaw);
+}
+
+bool Camera::applyOpticFrame(const FrameData& frame, const ScopeState& scope)
+{
+    if (!scope.wantsOpticMatrix)
+        return false;
+
+    if (!frame.queuedOptic)
+        return false;
+
+    if (!frame.opticMatrixValid)
+        return false;
+
+    g_viewMatrixOpticRAW = frame.opticRaw;
+    g_viewMatrixOptic = glm::transpose(frame.opticRaw);
+
+    return true;
+}
+
+Camera::ScopeState Camera::readScopeState()
+{
+    ScopeState state{};
+
+    try
+    {
+        if (!Utils::valid_pointer(mainGame.localPlayerPWA))
+            return state;
+
+        const uint64_t opticsPtr =
+            mem.Read<uint64_t>(mainGame.localPlayerPWA + sdk::ProceduralWeaponAnimation::_optics);
+
+        if (!Utils::valid_pointer(opticsPtr))
+            return state;
+
+        MonoList<uint64_t> optics(opticsPtr);
+
+        if (optics.count <= 0 || optics.count > kMaxOpticCount)
+            return state;
+
+        const int opticCount = std::min<int>(optics.count, kMaxOpticCount);
+
+        for (int i = 0; i < opticCount; ++i)
+        {
+            const uint64_t optic = optics[i];
+
+            if (!Utils::valid_pointer(optic))
+                continue;
+
+            const uint64_t sightComponentPtr =
+                mem.Read<uint64_t>(optic + sdk::SightNBone::Mod);
+
+            if (!Utils::valid_pointer(sightComponentPtr))
+                continue;
+
+            SightComponentView sight(sightComponentPtr);
+
+            if (!sight.valid())
+                continue;
+
+            state.hasSight = true;
+            state.sightComponent = sightComponentPtr;
+
+            state.selectedScope = sight.selectedScope();
+            state.selectedMode = sight.selectedScopeMode(state.selectedScope);
+
+            // Prefer GetZoomLevel because it respects selected scope/mode better.
+            state.zoomLevel = sight.getZoomLevel();
+
+            // Fallback only.
+            state.scopeZoomValue = sight.scopeZoomValue();
+
+            if (validZoom(state.zoomLevel))
+                state.selectedZoom = state.zoomLevel;
+            else if (validZoom(state.scopeZoomValue))
+                state.selectedZoom = state.scopeZoomValue;
+            else
+                state.selectedZoom = -1.0f;
+
+            state.wantsOpticMatrix = zoomNeedsOptic(state.selectedZoom);
+
+            if (state.sightComponent != 0 && state.sightComponent != m_lastSightComponent)
+            {
+                m_lastSightComponent = state.sightComponent;
+                resetOpticBadFrames();
+            }
+
+            return state;
+        }
+
+        return state;
+    }
+    catch (...)
+    {
+        return state;
+    }
+}
+
+bool Camera::shouldUseOpticMatrix(const ScopeState& scope) const
+{
+    if (!scope.hasSight)
+        return false;
+
+    return scope.wantsOpticMatrix;
+}
+
+void Camera::handleOpticBadFrame(bool badFrame)
+{
+    if (!badFrame)
+    {
+        resetOpticBadFrames();
+        return;
+    }
+
+    ++m_opticBadFrames;
+
+    if (m_opticBadFrames < kOpticBadRefreshFrames)
+        return;
+
+    refreshCameraPointers();
+    m_opticBadFrames = 0;
+
+    LOGS.logWarn(
+        "Optic camera matrix invalid while zoomed. Refreshed camera pointers. "
+        "opticCamera=" + std::to_string(opticCamera) +
+        " opticMatrixAddr=" + std::to_string(opticMatrixAddr)
+    );
+}
+
+void Camera::resetOpticBadFrames()
+{
+    m_opticBadFrames = 0;
+}
+
+// ------------------------------------------------------------
+// Validation helpers
+// ------------------------------------------------------------
+
+bool Camera::matrixLooksValid(const glm::highp_mat4& m)
+{
+    int nonZeroCount = 0;
+    float maxAbs = 0.0f;
+
+    for (int c = 0; c < 4; ++c)
+    {
+        for (int r = 0; r < 4; ++r)
+        {
+            const float v = m[c][r];
+
+            if (!std::isfinite(v))
+                return false;
+
+            const float av = std::fabs(v);
+
+            if (av > 100000.0f)
+                return false;
+
+            if (av > 0.00001f)
+            {
+                ++nonZeroCount;
+                maxAbs = (std::max)(maxAbs, av);
+            }
+        }
+    }
+
+    if (nonZeroCount < 6)
+        return false;
+
+    if (maxAbs < 0.0001f)
+        return false;
+
+    return true;
+}
+
+bool Camera::validFov(float value)
+{
+    return std::isfinite(value) && value > 1.0f && value < 180.0f;
+}
+
+bool Camera::validAspect(float value)
+{
+    return std::isfinite(value) && value > 0.1f && value < 10.0f;
+}
+
+bool Camera::validZoom(float value)
+{
+    return std::isfinite(value) && value >= 0.0f && value < 100.0f;
+}
+
+bool Camera::zoomNeedsOptic(float value)
+{
+    return validZoom(value) && value > 1.01f;
 }
