@@ -2738,6 +2738,68 @@ void ShowMatrixTooltip(const glm::highp_mat4& mat) {
     }
 }
 
+// helpers for debug camera
+static const char* BoolText(bool v)
+{
+    return v ? "TRUE" : "FALSE";
+}
+
+static void DebugTextBool(const char* label, bool value)
+{
+    ImGui::Text("%s: %s", label, BoolText(value));
+}
+
+static void DebugTextPtr(const char* label, uint64_t ptr)
+{
+    const bool valid = Utils::valid_pointer(ptr);
+
+    ImGui::Text("%s: 0x%llX  [%s]",
+        label,
+        static_cast<unsigned long long>(ptr),
+        valid ? "VALID" : "INVALID"
+    );
+}
+
+static bool DebugMatrixLooksValid(const glm::highp_mat4& m)
+{
+    int nonZeroCount = 0;
+    float maxAbs = 0.0f;
+
+    for (int c = 0; c < 4; ++c)
+    {
+        for (int r = 0; r < 4; ++r)
+        {
+            const float v = m[c][r];
+
+            if (!std::isfinite(v))
+                return false;
+
+            const float av = std::fabs(v);
+
+            if (av > 100000.0f)
+                return false;
+
+            if (av > 0.00001f)
+            {
+                ++nonZeroCount;
+                maxAbs = (std::max)(maxAbs, av);
+            }
+        }
+    }
+
+    return nonZeroCount >= 6 && maxAbs >= 0.0001f;
+}
+
+static void DebugMatrixSummary(const char* label, const glm::highp_mat4& m)
+{
+    const bool valid = DebugMatrixLooksValid(m);
+
+    ImGui::Text("%s: %s  (hover)", label, valid ? "VALID" : "INVALID");
+
+    if (ImGui::IsItemHovered())
+        ShowMatrixTooltip(m);
+}
+
 static void renderDebugWindow()
 {
     std::string windowNameMain = "Debug";
@@ -2866,21 +2928,131 @@ static void renderDebugWindow()
                     }
                     if (ImGui::BeginTabItem("camera"))
                     {
-                        ImGui::Text("fpsCamera: %llu", camera.fpsCamera);
-                        ImGui::Text("opticCamera: %llu", camera.opticCamera);
-                        ImGui::Text("fps Matrix: %llu", camera.fpsMatrixAddr);
-                        ImGui::Text("optic Matrix: %llu", camera.opticMatrixAddr);
-                        ImGui::NewLine();
-                        ImGui::Text("gameFov: %.f", camera.gameFOV);
-                        ImGui::Text("gameAspect: %.f", camera.gameAspect);
-                        ImGui::NewLine();
-                        if (mainGame.localIsScoped) ImGui::Text("local Aiming: TRUE"); else ImGui::Text("Local Aiming: FALSE");
-                        if (camera.localmpCamera) ImGui::Text("localmpCamera: TRUE"); else ImGui::Text("localmpCamera: FALSE");
-                        ImGui::NewLine();
-                        ImGui::Text("fpsCamera RAW: (hover)"); ShowMatrixTooltip(camera.g_viewMatrixRAW);
-                        ImGui::Text("fpsCamera Transposed: (hover)"); ShowMatrixTooltip(camera.g_viewMatrix);
-                        ImGui::Text("opticCamera RAW: (hover)"); ShowMatrixTooltip(camera.g_viewMatrixOpticRAW);
-                        ImGui::Text("opticCamera Transposed: (hover)"); ShowMatrixTooltip(camera.g_viewMatrixOptic);
+                        const bool fpsCameraValid = Utils::valid_pointer(camera.fpsCamera);
+                        const bool opticCameraValid = Utils::valid_pointer(camera.opticCamera);
+                        const bool fpsMatrixPtrValid = Utils::valid_pointer(camera.fpsMatrixAddr);
+                        const bool opticMatrixPtrValid = Utils::valid_pointer(camera.opticMatrixAddr);
+
+                        const bool fpsRawValid = DebugMatrixLooksValid(camera.g_viewMatrixRAW);
+                        const bool fpsTransValid = DebugMatrixLooksValid(camera.g_viewMatrix);
+                        const bool opticRawValid = DebugMatrixLooksValid(camera.g_viewMatrixOpticRAW);
+                        const bool opticTransValid = DebugMatrixLooksValid(camera.g_viewMatrixOptic);
+
+                        const bool usingOpticMatrix = camera.localmpCamera;
+                        const bool localScoped = mainGame.localIsScoped;
+
+                        ImGui::Text("Camera Debug");
+                        ImGui::Separator();
+
+                        if (ImGui::Button("Refresh Camera Pointers"))
+                        {
+                            camera.getCameraPtrs();
+                            camera.getMatrixPtrs();
+                        }
+
+                        ImGui::SameLine();
+
+                        if (ImGui::Button("Clear Camera Cache"))
+                        {
+                            camera.clearCache();
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+
+                        ImGui::Text("State");
+                        DebugTextBool("Camera Inited", camera.initedCamera);
+                        DebugTextBool("Raid Started", mainGame.checkIfRaidStarted());
+                        DebugTextBool("Local Scoped / ADS Optic", localScoped);
+                        DebugTextBool("Using Optic Matrix", usingOpticMatrix);
+                        DebugTextBool("Using FPS Matrix", !usingOpticMatrix);
+
+                        ImGui::Spacing();
+
+                        if (usingOpticMatrix)
+                            ImGui::Text("Active Matrix: OPTIC");
+                        else
+                            ImGui::Text("Active Matrix: FPS");
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+
+                        ImGui::Text("Pointers");
+                        DebugTextPtr("fpsCamera", camera.fpsCamera);
+                        DebugTextPtr("opticCamera", camera.opticCamera);
+                        DebugTextPtr("fpsMatrixAddr", camera.fpsMatrixAddr);
+                        DebugTextPtr("opticMatrixAddr", camera.opticMatrixAddr);
+                        DebugTextPtr("cameraEntity", camera.cameraEntity);
+                        DebugTextPtr("opticCameraMatrix", camera.opticCameraMatrix);
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+
+                        ImGui::Text("Pointer Validity");
+                        DebugTextBool("fpsCamera Valid", fpsCameraValid);
+                        DebugTextBool("opticCamera Valid", opticCameraValid);
+                        DebugTextBool("fpsMatrixAddr Valid", fpsMatrixPtrValid);
+                        DebugTextBool("opticMatrixAddr Valid", opticMatrixPtrValid);
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+
+                        ImGui::Text("Camera Values");
+                        ImGui::Text("gameFOV: %.3f", camera.gameFOV);
+                        ImGui::Text("gameAspect: %.3f", camera.gameAspect);
+
+                        DebugTextBool(
+                            "FOV Looks Valid",
+                            std::isfinite(camera.gameFOV) && camera.gameFOV > 1.0f && camera.gameFOV < 180.0f
+                        );
+
+                        DebugTextBool(
+                            "Aspect Looks Valid",
+                            std::isfinite(camera.gameAspect) && camera.gameAspect > 0.1f && camera.gameAspect < 10.0f
+                        );
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+
+                        ImGui::Text("Matrix Validity");
+                        DebugTextBool("FPS RAW Valid", fpsRawValid);
+                        DebugTextBool("FPS Transposed Valid", fpsTransValid);
+                        DebugTextBool("Optic RAW Valid", opticRawValid);
+                        DebugTextBool("Optic Transposed Valid", opticTransValid);
+
+                        ImGui::Spacing();
+
+                        if (usingOpticMatrix && !opticRawValid)
+                        {
+                            ImGui::Text("WARNING: Using optic matrix but optic RAW matrix is invalid");
+                        }
+
+                        if (!usingOpticMatrix && !fpsRawValid)
+                        {
+                            ImGui::Text("WARNING: Using FPS matrix but FPS RAW matrix is invalid");
+                        }
+
+                        if (localScoped && !usingOpticMatrix)
+                        {
+                            ImGui::Text("Scoped/aiming but still using FPS matrix");
+                            ImGui::Text("This is expected for 1x reflex / low zoom modes.");
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+
+                        ImGui::Text("Matrices");
+                        DebugMatrixSummary("fpsCamera RAW", camera.g_viewMatrixRAW);
+                        DebugMatrixSummary("fpsCamera Transposed", camera.g_viewMatrix);
+                        DebugMatrixSummary("opticCamera RAW", camera.g_viewMatrixOpticRAW);
+                        DebugMatrixSummary("opticCamera Transposed", camera.g_viewMatrixOptic);
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+
+                        ImGui::Text("Closest Player");
+                        DebugTextPtr("closestPlayer", camera.closestPlayer);
+                        ImGui::Text("closestPlayerDist: %.2f", camera.closestPlayerDist);
 
                         ImGui::EndTabItem();
                     }
