@@ -732,7 +732,7 @@ namespace fuserRender
 
     static inline void RenderAmmoHud()
     {
-        std::vector<PlayerCache> cache = players.getCacheSnapshot();
+        std::vector<PlayerCache>& cache = players.getCache();
 
         if (cache.empty())
             return;
@@ -791,7 +791,7 @@ namespace fuserRender
     static inline void RenderPlayers()
     {
         
-            std::vector<PlayerCache> cache = players.getCacheSnapshot();
+            std::vector<PlayerCache>& cache = players.getCache();
 
             if (cache.empty())
                 return;
@@ -954,7 +954,7 @@ namespace fuserRender
         if (!espGlobals::drawLoot)
             return;
 
-        std::vector<LootList> lootList = Loot.getCacheLoot();
+        std::vector<LootList>& lootList = Loot.getCacheLoot();
 
         for (const auto& loot : lootList)
         {

@@ -163,19 +163,19 @@ inline void ClearPublishedQuestState()
 
 inline std::vector<QuestLocation> GetMasterLocationsSnapshot()
 {
-    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+    //std::lock_guard<std::mutex> lock(g_questCacheMutex);
     return masterLocations;
 }
 
 inline std::vector<std::string> GetMasterItemsSnapshot()
 {
-    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+    //std::lock_guard<std::mutex> lock(g_questCacheMutex);
     return masterItems;
 }
 
 inline std::vector<QuestData> GetQuestDataActiveSnapshot()
 {
-    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+    //std::lock_guard<std::mutex> lock(g_questCacheMutex);
     return questDataActive;
 }
 
