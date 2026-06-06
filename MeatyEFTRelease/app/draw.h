@@ -150,7 +150,7 @@ void drawWidgetTopLoot()
     const std::string windowNameMain = "Top Loot";
     static ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
 
-    std::vector<LootList>& lootCache = Loot.getCacheLoot();
+    std::vector<LootList> lootCache = Loot.getCacheLoot();
 
     struct AggregatedLoot
     {
@@ -176,6 +176,12 @@ void drawWidgetTopLoot()
 
     for (auto& loot : lootCache)
     {
+        if (loot.pendingResolve || loot.failed)
+            continue;
+
+        if (!loot.hasValidPosition)
+            continue;
+
         if (!loot.isItem)
             continue;
 
@@ -701,14 +707,19 @@ void drawLoot()
     if (!radarGlobals::drawLoot)
         return;
 
-    std::vector<LootList>& cacheLoot = Loot.getCacheLoot();
+    std::vector<LootList> cacheLoot = Loot.getCacheLoot();
 
     if (cacheLoot.size() == 0)
         return;
 
     for (auto& itemLoot : cacheLoot)
     {
-        
+
+        if (itemLoot.pendingResolve || itemLoot.failed)
+            continue;
+
+        if (!itemLoot.hasValidPosition)
+            continue;
 
         if (itemLoot.isContainer)
         {

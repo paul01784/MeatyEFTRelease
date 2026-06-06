@@ -279,7 +279,7 @@ namespace sdk
 
 	namespace LootableContainer
 	{
-		constexpr uint64_t ItemOwner = 0x168; //
+		constexpr uint64_t ItemOwner = 0x178; //
 	}
 
 	namespace LootableContainerItemOwner

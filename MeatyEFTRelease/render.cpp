@@ -435,7 +435,6 @@ static void renderMapDetails()
         }
 
         // Icebreaker floor selection by height.
-        // Highest floor first, then work downward.
         if (height >= ib_texture0_MinHeight)
         {
             texture = ib_texture0;
@@ -1119,7 +1118,7 @@ static void renderLootFiltersMenu()
             {
                 ImGui::SetWindowSize(ImVec2(900, 500));
 
-                std::vector<LootList>& cacheLoot = Loot.getCacheLoot();
+                std::vector<LootList> cacheLoot = Loot.getCacheLoot();
 
                 // ---------------------------------------------------------
                 // Search state for Tab 1
@@ -1364,7 +1363,7 @@ static void renderLootFiltersMenu()
                 ImGui::OpenPopup("lootList");
             }
 
-            std::vector<LootList>& lootCache = Loot.getCacheLoot();
+            std::vector<LootList> lootCache = Loot.getCacheLoot();
 
             if (ImGui::BeginPopupModal("lootList", &fullLootListPopupOpen, ImGuiWindowFlags_NoResize))
             {
@@ -2805,9 +2804,9 @@ static void DebugMatrixSummary(const char* label, const glm::highp_mat4& m)
 static void renderDebugWindow()
 {
     std::string windowNameMain = "Debug";
-    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse;
 
-    ImGui::SetNextWindowSize(ImVec2(600, 500));
+    ImGui::SetNextWindowSize(ImVec2(900, 500), ImGuiCond_FirstUseEver);
 
     static bool showInfo = true;
     static bool showWarn = true;
@@ -3121,16 +3120,615 @@ static void renderDebugWindow()
 
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem("loot"))
+                    if (ImGui::BeginTabItem("Loot"))
                     {
+                        const std::vector<LootList> cacheLoot = Loot.getCacheLoot();
+
+                        size_t pendingCount = 0;
+                        size_t failedCount = 0;
+                        size_t successfulCount = 0;
+
+                        size_t validPositionCount = 0;
+                        size_t invalidPositionCount = 0;
+
+                        size_t itemCount = 0;
+                        size_t questItemCount = 0;
+                        size_t containerCount = 0;
+                        size_t corpseCount = 0;
+                        size_t airdropCount = 0;
+                        size_t wantedCount = 0;
+
+                        for (const auto& item : cacheLoot)
+                        {
+                            if (item.pendingResolve)
+                            {
+                                ++pendingCount;
+                                continue;
+                            }
+
+                            if (item.failed)
+                            {
+                                ++failedCount;
+                                continue;
+                            }
+
+                            ++successfulCount;
+
+                            if (item.hasValidPosition)
+                                ++validPositionCount;
+                            else
+                                ++invalidPositionCount;
+
+                            if (item.isItem)
+                                ++itemCount;
+
+                            if (item.isQuestItem)
+                                ++questItemCount;
+
+                            if (item.isContainer)
+                                ++containerCount;
+
+                            if (item.isCorpse)
+                                ++corpseCount;
+
+                            if (item.isAirdrop)
+                                ++airdropCount;
+
+                            if (item.wanted)
+                                ++wantedCount;
+                        }
+
+                        const bool lootListPValid =
+                            Utils::valid_pointer(Loot.lootListP);
+
+                        const bool lootListPtrValid =
+                            Utils::valid_pointer(Loot.lootListPtr);
+
+                        const ImVec4 goodColour{
+                            0.25f,
+                            0.90f,
+                            0.25f,
+                            1.00f
+                        };
+
+                        const ImVec4 badColour{
+                            0.95f,
+                            0.25f,
+                            0.25f,
+                            1.00f
+                        };
+
+                        const ImVec4 warningColour{
+                            0.95f,
+                            0.75f,
+                            0.20f,
+                            1.00f
+                        };
+
+                        // pointers
 
                         ImGui::SeparatorText("Main Pointers");
-                        ImGui::Text("lootListP: %llu", Loot.lootListP);
-                        ImGui::Text("lootListPtr: %llu", Loot.lootListPtr);
-                        ImGui::Text("lootCount: %d", Loot.lootCount);
-                        const std::vector<LootList>& cacheLoot = Loot.getCacheLoot();
-                        ImGui::Text("LoolList Cache Size: %zu", cacheLoot.size());
 
+                        if (ImGui::BeginTable(
+                            "##loot_main_pointers",
+                            3,
+                            ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_SizingStretchProp))
+                        {
+                            ImGui::TableSetupColumn("Pointer");
+                            ImGui::TableSetupColumn("Address");
+                            ImGui::TableSetupColumn("State");
+                            ImGui::TableHeadersRow();
+
+                            ImGui::TableNextRow();
+
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted("lootListP");
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text(
+                                "0x%llX",
+                                static_cast<unsigned long long>(Loot.lootListP)
+                            );
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextColored(
+                                lootListPValid ? goodColour : badColour,
+                                lootListPValid ? "Valid" : "Invalid"
+                            );
+
+                            ImGui::TableNextRow();
+
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted("lootListPtr");
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text(
+                                "0x%llX",
+                                static_cast<unsigned long long>(Loot.lootListPtr)
+                            );
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextColored(
+                                lootListPtrValid ? goodColour : badColour,
+                                lootListPtrValid ? "Valid" : "Invalid"
+                            );
+
+                            ImGui::EndTable();
+                        }
+
+                        // cache summary
+
+                        ImGui::Spacing();
+                        ImGui::SeparatorText("Cache Summary");
+
+                        if (ImGui::BeginTable(
+                            "##loot_cache_summary",
+                            5,
+                            ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_SizingStretchSame))
+                        {
+                            ImGui::TableSetupColumn("Live Count");
+                            ImGui::TableSetupColumn("Cached");
+                            ImGui::TableSetupColumn("Pending");
+                            ImGui::TableSetupColumn("Successful");
+                            ImGui::TableSetupColumn("Failed");
+                            ImGui::TableHeadersRow();
+
+                            ImGui::TableNextRow();
+
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%ld", Loot.lootCount);
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%zu", cacheLoot.size());
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextColored(
+                                pendingCount == 0 ? goodColour : warningColour,
+                                "%zu",
+                                pendingCount
+                            );
+
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TextColored(
+                                goodColour,
+                                "%zu",
+                                successfulCount
+                            );
+
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::TextColored(
+                                failedCount == 0 ? goodColour : badColour,
+                                "%zu",
+                                failedCount
+                            );
+
+                            ImGui::EndTable();
+                        }
+
+                        if (Loot.lootCount > 0)
+                        {
+                            const float cacheRatio = std::clamp(
+                                static_cast<float>(cacheLoot.size()) /
+                                static_cast<float>(Loot.lootCount),
+                                0.0f,
+                                1.0f
+                            );
+
+                            char overlay[64]{};
+
+                            std::snprintf(
+                                overlay,
+                                sizeof(overlay),
+                                "%zu / %ld cached",
+                                cacheLoot.size(),
+                                Loot.lootCount
+                            );
+
+                            ImGui::ProgressBar(
+                                cacheRatio,
+                                ImVec2(-FLT_MIN, 0.0f),
+                                overlay
+                            );
+                        }
+
+                        // resolved summary
+
+                        ImGui::Spacing();
+                        ImGui::SeparatorText("Resolved Types");
+
+                        if (ImGui::BeginTable(
+                            "##loot_type_summary",
+                            4,
+                            ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_SizingStretchSame))
+                        {
+                            ImGui::TableSetupColumn("Type");
+                            ImGui::TableSetupColumn("Count");
+                            ImGui::TableSetupColumn("Type");
+                            ImGui::TableSetupColumn("Count");
+
+                            ImGui::TableNextRow();
+
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted("Loose Items");
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%zu", itemCount);
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted("Quest Items");
+
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%zu", questItemCount);
+
+                            ImGui::TableNextRow();
+
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted("Containers");
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%zu", containerCount);
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted("Corpses");
+
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%zu", corpseCount);
+
+                            ImGui::TableNextRow();
+
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted("Airdrops");
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%zu", airdropCount);
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted("Wanted");
+
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%zu", wantedCount);
+
+                            ImGui::TableNextRow();
+
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted("Valid Positions");
+
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::TextColored(
+                                goodColour,
+                                "%zu",
+                                validPositionCount
+                            );
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted("Invalid Positions");
+
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TextColored(
+                                invalidPositionCount == 0
+                                ? goodColour
+                                : warningColour,
+                                "%zu",
+                                invalidPositionCount
+                            );
+
+                            ImGui::EndTable();
+                        }
+
+                        ImGui::Spacing();
+
+                        // Pending entries
+
+                        if (ImGui::CollapsingHeader(
+                            "Pending Cache Entries",
+                            pendingCount > 0
+                            ? ImGuiTreeNodeFlags_DefaultOpen
+                            : 0))
+                        {
+                            if (pendingCount == 0)
+                            {
+                                ImGui::TextColored(
+                                    goodColour,
+                                    "No pending loot entries."
+                                );
+                            }
+                            else if (ImGui::BeginTable(
+                                "##pending_loot_entries",
+                                6,
+                                ImGuiTableFlags_Borders |
+                                ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_Resizable |
+                                ImGuiTableFlags_ScrollY |
+                                ImGuiTableFlags_SizingStretchProp,
+                                ImVec2(0.0f, 260.0f)))
+                            {
+                                ImGui::TableSetupScrollFreeze(0, 1);
+
+                                ImGui::TableSetupColumn(
+                                    "Instance",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    125.0f
+                                );
+
+                                ImGui::TableSetupColumn("Class");
+                                ImGui::TableSetupColumn("Object Name");
+
+                                ImGui::TableSetupColumn(
+                                    "Attempt",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    75.0f
+                                );
+
+                                ImGui::TableSetupColumn(
+                                    "Position",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    80.0f
+                                );
+
+                                ImGui::TableSetupColumn(
+                                    "Last Failure",
+                                    ImGuiTableColumnFlags_WidthStretch,
+                                    2.0f
+                                );
+
+                                ImGui::TableHeadersRow();
+
+                                for (const auto& item : cacheLoot)
+                                {
+                                    if (!item.pendingResolve)
+                                        continue;
+
+                                    ImGui::PushID(
+                                        reinterpret_cast<const void*>(
+                                            static_cast<uintptr_t>(item.instance)
+                                            )
+                                    );
+
+                                    ImGui::TableNextRow();
+
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::Text(
+                                        "0x%llX",
+                                        static_cast<unsigned long long>(item.instance)
+                                    );
+
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::TextUnformatted(
+                                        item.m_objectClassName.empty()
+                                        ? "<unknown>"
+                                        : item.m_objectClassName.c_str()
+                                    );
+
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::TextUnformatted(
+                                        item.gameObjectName.empty()
+                                        ? "<unknown>"
+                                        : item.gameObjectName.c_str()
+                                    );
+
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::Text(
+                                        "%u / 20",
+                                        static_cast<unsigned>(item.resolveAttempts)
+                                    );
+
+                                    ImGui::TableSetColumnIndex(4);
+                                    ImGui::TextColored(
+                                        item.hasValidPosition
+                                        ? goodColour
+                                        : warningColour,
+                                        item.hasValidPosition
+                                        ? "Valid"
+                                        : "Invalid"
+                                    );
+
+                                    ImGui::TableSetColumnIndex(5);
+                                    ImGui::TextWrapped(
+                                        item.failureReason.empty()
+                                        ? "<no reason>"
+                                        : item.failureReason.c_str()
+                                    );
+
+                                    ImGui::PopID();
+                                }
+
+                                ImGui::EndTable();
+                            }
+                        }
+
+                        // failed entries
+
+                        if (ImGui::CollapsingHeader(
+                            "Failed Cache Entries",
+                            failedCount > 0
+                            ? ImGuiTreeNodeFlags_DefaultOpen
+                            : 0))
+                        {
+                            if (failedCount == 0)
+                            {
+                                ImGui::TextColored(
+                                    goodColour,
+                                    "No failed loot entries."
+                                );
+                            }
+                            else if (ImGui::BeginTable(
+                                "##failed_loot_entries",
+                                6,
+                                ImGuiTableFlags_Borders |
+                                ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_Resizable |
+                                ImGuiTableFlags_ScrollY |
+                                ImGuiTableFlags_SizingStretchProp,
+                                ImVec2(0.0f, 260.0f)))
+                            {
+                                ImGui::TableSetupScrollFreeze(0, 1);
+
+                                ImGui::TableSetupColumn(
+                                    "Instance",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    125.0f
+                                );
+
+                                ImGui::TableSetupColumn("Class");
+                                ImGui::TableSetupColumn("Object Name");
+
+                                ImGui::TableSetupColumn(
+                                    "Attempts",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    75.0f
+                                );
+
+                                ImGui::TableSetupColumn(
+                                    "Position",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    80.0f
+                                );
+
+                                ImGui::TableSetupColumn(
+                                    "Failure Reason",
+                                    ImGuiTableColumnFlags_WidthStretch,
+                                    2.0f
+                                );
+
+                                ImGui::TableHeadersRow();
+
+                                for (const auto& item : cacheLoot)
+                                {
+                                    if (!item.failed)
+                                        continue;
+
+                                    ImGui::PushID(
+                                        reinterpret_cast<const void*>(
+                                            static_cast<uintptr_t>(item.instance)
+                                            )
+                                    );
+
+                                    ImGui::TableNextRow();
+
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::Text(
+                                        "0x%llX",
+                                        static_cast<unsigned long long>(item.instance)
+                                    );
+
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::TextUnformatted(
+                                        item.m_objectClassName.empty()
+                                        ? "<unknown>"
+                                        : item.m_objectClassName.c_str()
+                                    );
+
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::TextUnformatted(
+                                        item.gameObjectName.empty()
+                                        ? "<unknown>"
+                                        : item.gameObjectName.c_str()
+                                    );
+
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::Text(
+                                        "%u",
+                                        static_cast<unsigned>(item.resolveAttempts)
+                                    );
+
+                                    ImGui::TableSetColumnIndex(4);
+                                    ImGui::TextColored(
+                                        item.hasValidPosition
+                                        ? goodColour
+                                        : badColour,
+                                        item.hasValidPosition
+                                        ? "Valid"
+                                        : "Invalid"
+                                    );
+
+                                    ImGui::TableSetColumnIndex(5);
+                                    ImGui::TextWrapped(
+                                        item.failureReason.empty()
+                                        ? "<no reason>"
+                                        : item.failureReason.c_str()
+                                    );
+
+                                    ImGui::PopID();
+                                }
+
+                                ImGui::EndTable();
+                            }
+                        }
+
+                        // airdrop
+
+                        if (ImGui::CollapsingHeader("Airdrop Entries"))
+                        {
+                            if (airdropCount == 0)
+                            {
+                                ImGui::TextUnformatted(
+                                    "No successfully resolved airdrops currently cached."
+                                );
+                            }
+                            else if (ImGui::BeginTable(
+                                "##airdrop_entries",
+                                6,
+                                ImGuiTableFlags_Borders |
+                                ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_Resizable |
+                                ImGuiTableFlags_SizingStretchProp))
+                            {
+                                ImGui::TableSetupColumn("Instance");
+                                ImGui::TableSetupColumn("Position State");
+                                ImGui::TableSetupColumn("Distance");
+                                ImGui::TableSetupColumn("X");
+                                ImGui::TableSetupColumn("Y");
+                                ImGui::TableSetupColumn("Z");
+                                ImGui::TableHeadersRow();
+
+                                for (const auto& item : cacheLoot)
+                                {
+                                    if (item.pendingResolve || item.failed)
+                                        continue;
+
+                                    if (!item.isAirdrop)
+                                        continue;
+
+                                    ImGui::TableNextRow();
+
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::Text(
+                                        "0x%llX",
+                                        static_cast<unsigned long long>(item.instance)
+                                    );
+
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::TextColored(
+                                        item.hasValidPosition
+                                        ? goodColour
+                                        : warningColour,
+                                        item.hasValidPosition
+                                        ? "Valid"
+                                        : "Awaiting Update"
+                                    );
+
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::Text("%d", item.distance);
+
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::Text("%.2f", item.worldLocation.x);
+
+                                    ImGui::TableSetColumnIndex(4);
+                                    ImGui::Text("%.2f", item.worldLocation.y);
+
+                                    ImGui::TableSetColumnIndex(5);
+                                    ImGui::Text("%.2f", item.worldLocation.z);
+                                }
+
+                                ImGui::EndTable();
+                            }
+                        }
 
                         ImGui::EndTabItem();
                     }

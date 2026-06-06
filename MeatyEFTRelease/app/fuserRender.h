@@ -954,10 +954,16 @@ namespace fuserRender
         if (!espGlobals::drawLoot)
             return;
 
-        std::vector<LootList>& lootList = Loot.getCacheLoot();
+        std::vector<LootList> lootList = Loot.getCacheLoot();
 
         for (const auto& loot : lootList)
         {
+            if (loot.pendingResolve || loot.failed)
+                continue;
+
+            if (!loot.hasValidPosition)
+                continue;
+
             if (!loot.wanted)
                 continue;
 

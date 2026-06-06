@@ -2,7 +2,7 @@
 #include "app/globals.h"
 
 //define globals
-std::string globals::appVersion = "1.0.13";
+std::string globals::appVersion = "1.0.14";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -15,9 +15,9 @@ double globals::taskPlayers = 13;
 double globals::taskPlayersBones = 15;
 double globals::taskPlayersLocal = 22;
 double globals::taskGrenades = 20;
-double globals::taskPlayersEquipment = 1000;
-double globals::taskExfil = 1000;
-double globals::taskLoot = 7000;
+double globals::taskPlayersEquipment = 2000;
+double globals::taskExfil = 5000;
+double globals::taskLoot = 3000;
 double globals::taskQuest = 7000;
 double globals::taskWishManager = 1000;
 double globals::taskTripWire = 20;

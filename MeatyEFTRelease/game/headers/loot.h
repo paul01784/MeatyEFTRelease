@@ -2,168 +2,184 @@
 #include <map>
 #include <string>
 #include <glm/glm.hpp>
+#include <unordered_set>
+#include <chrono>
 
-struct corpseEquipment {
-	std::string equipmentName;
-	int value;
-	bool wanted;
+struct corpseEquipment
+{
+    std::string equipmentName;
+    int value = 0;
+    bool wanted = false;
 };
 
-struct lootFilterItems {
-	std::string bsgid;
-	std::string name;
-	std::string shortName;
-	long traderPrice;
-	long marketPrice;
-
-	lootFilterItems()
-		: bsgid(""),
-		name(""),
-		shortName(""),
-		traderPrice(0),
-		marketPrice(0) {
-	}
+struct lootFilterItems
+{
+    std::string bsgid;
+    std::string name;
+    std::string shortName;
+    long traderPrice = 0;
+    long marketPrice = 0;
 };
 
-struct LootFilters {
-	long id;
-	bool active;
-	std::string filterName;
-	glm::vec4 filterColour;
-	std::vector<lootFilterItems> lootItems;
+struct LootFilters
+{
+    long id = 0;
+    bool active = false;
 
+    std::string filterName;
+    glm::vec4 filterColour{};
+
+    std::vector<lootFilterItems> lootItems;
 };
 
-//list of loot in memory (not inside containers) cached items
-struct LootList {
-	uint64_t instance;
+struct LootList
+{
+    uint64_t instance = 0;
 
-	//stored ptrs
-	uint64_t m_itemObject;
-	uint64_t m_interactiveClass;
-	uint64_t m_baseObject;
-	uint64_t m_gameObject;
-	uint64_t m_pGameObjectName;
-	std::string m_objectClassName;
-	uint64_t m_objectClass;
-	uint64_t m_pointerToTransform1;
-	uint64_t m_pointerToTransform2;
+    uint64_t m_itemObject = 0;
+    uint64_t m_interactiveClass = 0;
+    uint64_t m_baseObject = 0;
+    uint64_t m_gameObject = 0;
+    uint64_t m_pGameObjectName = 0;
+    std::string m_objectClassName;
+    uint64_t m_objectClass = 0;
+    uint64_t m_pointerToTransform1 = 0;
+    uint64_t m_pointerToTransform2 = 0;
 
-	glm::vec3 worldLocation;
-	std::string gameObjectName;
-	std::string bsgId;
-	std::string longName;
-	std::string shortName;
-	int avgMarketPrice;
-	int traderPrice;
-	int corpseValue;
+    glm::vec3 worldLocation{};
 
-	int distance;
+    std::string gameObjectName;
+    std::string bsgId;
+    std::string longName;
+    std::string shortName;
 
-	//type
-	bool isItem;
-	bool isContainer;
-	bool isQuestItem;
-	bool isCorpse;
+    int avgMarketPrice = 0;
+    int traderPrice = 0;
+    int corpseValue = 0;
+    int distance = 0;
 
-	//corpse stuff
-	std::vector<corpseEquipment> corpseEquip;
+    bool isItem = false;
+    bool isContainer = false;
+    bool isQuestItem = false;
+    bool isCorpse = false;
+    bool isAirdrop = false;
 
-	//wanted or not
-	bool wanted;
-	bool forceWanted;
-	glm::vec4 color;
+    std::vector<corpseEquipment> corpseEquip;
 
-	LootList()
-		: m_itemObject(0),
-		m_interactiveClass(0),
-		m_baseObject(0),
-		m_gameObject(0),
-		m_pGameObjectName(0),
-		m_objectClassName(""),
-		m_objectClass(0),
-		m_pointerToTransform1(0),
-		m_pointerToTransform2(0),
-		worldLocation(glm::vec3()),
-		gameObjectName(""),
-		bsgId(""),
-		longName(""),
-		shortName(""),
-		avgMarketPrice(0),
-		traderPrice(0),
-		corpseValue(0),
-		isItem(false),
-		isContainer(false),
-		isQuestItem(false),
-		isCorpse(false),
-		wanted(false),
-		forceWanted(false),
-		color(glm::vec4()) {
-	}
+    bool wanted = false;
+    bool forceWanted = false;
+    glm::vec4 color{};
+
+    // Resolution state.
+    bool failed = false;
+    bool hasValidPosition = false;
+    std::string failureReason;
+    bool pendingResolve = false;
+    std::uint8_t resolveAttempts = 0;
+
+    std::chrono::steady_clock::time_point nextResolveAttempt{};
+    std::chrono::steady_clock::time_point lastPositionUpdate{};
 };
-
 
 extern std::vector<LootFilters> lootFilters;
 
-class loot {
+class loot
+{
 public:
+    loot() = default;
 
-	std::vector<LootList>& getCacheLoot();
+    void lootTask();
+    void clearCache();
 
-	void lootTask();
-	void clearCache();
+    [[nodiscard]] std::vector<LootList> getCacheLoot() const;
 
+    uint64_t lootListP = 0;
+    uint64_t lootListPtr = 0;
+    long lootCount = 0;
 
-	uint64_t lootListP;
-	uint64_t lootListPtr;
-	long lootCount;
-
-	bool drawDrawer;
-	bool drawDuffle;
-	bool drawSafe;
-	bool drawWeaponBox;
-	bool drawTechCrate;
-	bool drawRationCrate;
-	bool drawMedicalCrate;
-	bool drawJacket;
-	bool drawMedPackage;
-	bool drawMedBox;
-	bool drawToolbox;
-	bool drawGrenadeBox;
-	bool drawBuriedStash;
-	bool drawGroundCache;
-	bool drawWoodenCrate;
-	bool drawSuitcase;
-	bool drawAmmoBox;
-	bool drawDeadBody;
-	bool drawPCBlock;
-	bool drawRegister;
-	bool drawAirDrops;
-
-
-	
+    bool drawDrawer = false;
+    bool drawDuffle = false;
+    bool drawSafe = false;
+    bool drawWeaponBox = false;
+    bool drawTechCrate = false;
+    bool drawRationCrate = false;
+    bool drawMedicalCrate = false;
+    bool drawJacket = false;
+    bool drawMedPackage = false;
+    bool drawMedBox = false;
+    bool drawToolbox = false;
+    bool drawGrenadeBox = false;
+    bool drawBuriedStash = false;
+    bool drawGroundCache = false;
+    bool drawWoodenCrate = false;
+    bool drawSuitcase = false;
+    bool drawAmmoBox = false;
+    bool drawDeadBody = false;
+    bool drawPCBlock = false;
+    bool drawRegister = false;
+    bool drawAirDrops = false;
 
 private:
+    struct WantedLookup
+    {
+        std::unordered_set<std::string> questIds;
+        std::unordered_set<std::string> wishlistIds;
+        std::unordered_map<std::string, glm::vec4> activeFilterItems;
+    };
 
-	bool buildPointers();
+private:
+    bool buildPointers();
+    bool get_lootCount();
+    bool buildLootBuffer();
 
-	bool get_lootCount();
+    bool buildNewLootItemsScatter(
+        const std::vector<uint64_t>& newPointers,
+        std::vector<LootList>& outItems
+    );
 
-	bool buildLootBuffer();
+    void classifyObservedLootItemsScatter(std::vector<LootList>& items);
+    void classifyLootableContainersScatter(std::vector<LootList>& items);
+    void classifyCorpseLootItems(std::vector<LootList>& items);
 
-	bool isPointerInVector_lootList(uint64_t ptr) const;
+    void updateExistingLootItems(std::vector<LootList>& workingCache);
+    void updateCorpseRequirements(std::vector<LootList>& workingCache);
 
-	void scanCorpseEquipment(uint64_t interactive, LootList& lootList, bool update = false);
+    void scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool update = false);
 
-	std::chrono::steady_clock::time_point lastCorpseEquipUpdate;
-	void updateCorpseRequirements();
+    [[nodiscard]] WantedLookup buildWantedLookup() const;
+    void applyWantedState(LootList& lootItem, const WantedLookup& lookup) const;
 
-	//storage containers
-	std::vector<LootList> lootList;
-	std::vector<uint64_t> loot_buffer;
+    [[nodiscard]] bool isContainerEnabled(const std::string& name) const;
+    void cleanupMissingLoot(
+        std::vector<LootList>& workingCache,
+        const std::unordered_set<uint64_t>& livePointers
+    ) const;
 
+    void markFailed(LootList& item, std::string reason) const;
+
+    bool tryUpdateLootPosition(
+        LootList& item,
+        bool markAsFailedOnError
+    );
+
+    void mergeResolveResults(
+        std::vector<LootList>& workingCache,
+        std::vector<LootList>&& results,
+        std::chrono::steady_clock::time_point now
+    );
+
+private:
+    mutable std::shared_mutex lootMutex;
+
+    std::vector<LootList> lootList;
+    std::vector<uint64_t> loot_buffer;
+
+    std::chrono::steady_clock::time_point lastCorpseEquipUpdate{};
+    std::chrono::steady_clock::time_point lastDogTagUpdate{};
 };
 
-
-
 extern loot Loot;
+
+std::string getContainerName(const std::string& bsgid);
+std::string GetQuestItemDisplayName(const std::string& itemId);
+LootList updateLootDetails(std::string bsgid, LootList& item);

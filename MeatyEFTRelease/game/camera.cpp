@@ -522,40 +522,38 @@ bool Camera::checkIfOpticMatrix()
 
 bool Camera::matrixLooksValid(const glm::highp_mat4& m)
 {
+    constexpr float maxElementValue = 100000.0f;
+    constexpr float epsilon = 0.00001f;
+
     int nonZeroCount = 0;
-    float maxAbs = 0.0f;
 
-    for (int c = 0; c < 4; ++c)
+    for (int column = 0; column < 4; ++column)
     {
-        for (int r = 0; r < 4; ++r)
+        for (int row = 0; row < 4; ++row)
         {
-            const float v = m[c][r];
+            const float value = m[column][row];
 
-            if (!std::isfinite(v))
+            if (!std::isfinite(value))
                 return false;
 
-            const float av = std::fabs(v);
-
-            if (av > 100000.0f)
+            if (std::fabs(value) > maxElementValue)
                 return false;
 
-            if (av > 0.00001f)
-            {
+            if (std::fabs(value) > epsilon)
                 ++nonZeroCount;
-
-                if (av > maxAbs)
-                    maxAbs = av;
-            }
         }
     }
 
     if (nonZeroCount < 6)
         return false;
 
-    if (maxAbs < 0.0001f)
-        return false;
+    const bool diagonalEmpty =
+        std::fabs(m[0][0]) <= epsilon &&
+        std::fabs(m[1][1]) <= epsilon &&
+        std::fabs(m[2][2]) <= epsilon &&
+        std::fabs(m[3][3]) <= epsilon;
 
-    return true;
+    return !diagonalEmpty;
 }
 
 float Camera::matrixDiff(const glm::highp_mat4& a, const glm::highp_mat4& b)

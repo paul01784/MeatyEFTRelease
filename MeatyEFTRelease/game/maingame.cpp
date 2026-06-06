@@ -117,7 +117,7 @@ bool MainGame::checkIfRaidStarted()
 
     try
     {
-        className = ReadName(mainGame.localPlayerHands, 64);
+        className = ReadName(mainGame.localPlayerHands, 64, false);
     }
     catch (...)
     {
@@ -127,11 +127,6 @@ bool MainGame::checkIfRaidStarted()
     if (IsNullOrWhiteSpace(className))
         return false;
 
-    //not in raid yet / not fully spawned.
-    if (className == "ClientEmptyHandsController")
-        return false;
-
-    //safer if the name ever includes namespace/prefix/suffix.
     if (className.find("EmptyHandsController") != std::string::npos)
         return false;
 
