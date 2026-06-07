@@ -449,14 +449,15 @@ void Camera::cameraTask()
 {
     try
     {
-        if (!mainGame.checkIfRaidStarted())
+        // Removed at the moment to avoid grenades causing hands check fail
+        /*if (!mainGame.checkIfRaidStarted())
         {
             if (initedCamera || fpsCamera || opticCamera || fpsMatrixAddr || opticMatrixAddr)
                 clearCache();
 
             localmpCamera = false;
             return;
-        }
+        }*/
 
         if (!cameraPointersReady())
         {

@@ -604,25 +604,43 @@ namespace fuserRender
 
     static inline void RenderNades()
     {
-        std::vector<GrenadeList> nadeCache = explosiveManager.getGrenades();
+        const std::vector<GrenadeList> nadeCache = explosiveManager.getGrenades();
+
+        if (nadeCache.empty())
+            return;
 
         const float screenW = ScreenWidth();
         const float screenH = ScreenHeight();
 
         bool closeGrenade = false;
 
-        for (const auto& nade : nadeCache)
+        for (const GrenadeList& nade : nadeCache)
         {
-            const int distance = static_cast<int>(
-                glm::distance(mainGame.localLocation, nade.worldLocation)
-                );
+            if (!Utils::valid_pointer(nade.instance))
+                continue;
+
+            if (!Utils::isGoodVec3(nade.worldLocation))
+                continue;
+
+            const float distance =
+                glm::distance(
+                    mainGame.localLocation,
+                    nade.worldLocation);
 
             if (distance > espGlobals::drawGrenadesDist)
                 continue;
 
+            if (distance < 15.0f)
+                closeGrenade = true;
+
             glm::vec2 screenPos{};
-            if (!Utils::Camera::world_to_screen(nade.worldLocation, &screenPos))
+
+            if (!Utils::Camera::world_to_screen(
+                nade.worldLocation,
+                &screenPos))
+            {
                 continue;
+            }
 
             g_DxWindow.DrawString(
                 "NADE",
@@ -631,24 +649,19 @@ namespace fuserRender
                 14.0f,
                 coloursGlobals::grenades,
                 true,
-                true
-            );
-
-            if (distance < 15)
-                closeGrenade = true;
+                true);
         }
 
         if (closeGrenade)
         {
             g_DxWindow.DrawString(
-                "!!WARNING GRENADE NEAR YOU!!",
+                "!! WARNING: GRENADE NEAR YOU !!",
                 screenW * 0.5f,
                 screenH - 60.0f,
                 18.0f,
                 glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
                 true,
-                true
-            );
+                true);
         }
     }
 

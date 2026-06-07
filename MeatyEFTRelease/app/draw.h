@@ -833,14 +833,14 @@ void drawGrenades()
 {
     std::vector<GrenadeList> cacheGrenades = explosiveManager.getGrenades();
 
-    if (cacheGrenades.size() == 0)
+    if (cacheGrenades.empty())
         return;
 
-    for (auto& grenades : cacheGrenades)
+    for (const GrenadeList& grenade : cacheGrenades)
     {
-        glm::vec3 locationMap = mapControl.getMapPosition(grenades.worldLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
+        glm::vec3 locationMap = mapControl.getMapPosition(grenade.worldLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
 
-        DrawGrenade(locationMap.x, locationMap.y, mapControl.zoomLevel, grenades);
+        DrawGrenade(locationMap.x, locationMap.y, mapControl.zoomLevel, grenade);
 
     }
 }

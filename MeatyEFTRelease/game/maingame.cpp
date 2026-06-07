@@ -463,7 +463,7 @@ void MainGame::featuresTaskWorker()
         exfil.clearCache();
         Loot.clearCache();
         wishListData.clear();
-        //explosiveManager.clearCache();
+        explosiveManager.reset();
         
     }
     catch (const std::exception& e) {

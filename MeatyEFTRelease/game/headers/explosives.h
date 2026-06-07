@@ -6,70 +6,85 @@
 #include "../game/headers/transform.h"
 
 #include <chrono>
+#include <mutex>
 
-enum class ETripwireState
+enum class ExplosiveType : std::uint8_t
 {
-	None = 0,
-	Wait = 1,
-	Active = 2,
-	Exploding = 3,
-	Exploded = 4,
-	Inert = 5,
-};
+    Grenade = 0,
 
-enum class SynchronizableObjectType
-{
-	AirDrop = 0,
-	AirPlane = 1,
-	Tripwire = 2,
 };
-
 
 struct GrenadeList
 {
-	uint64_t instance = 0;
+    ExplosiveType type = ExplosiveType::Grenade;
 
-	uint64_t transformInternal = 0;
-	glm::vec3 worldLocation{ 0.f, 0.f, 0.f };
+    std::uint64_t instance = 0;
+    std::uint64_t transformInternal = 0;
 
-};
+    glm::vec3 worldLocation{ 0.0f, 0.0f, 0.0f };
 
-static constexpr auto TTL_GRENADE = std::chrono::seconds(25);
-static constexpr auto TTL_SMOKE = std::chrono::minutes(3);
-
-struct TripwireList
-{
-	uint64_t instance = 0;
-	int state = 0;
-	bool _destroyed = false;
-	bool _isActive = false;
-	glm::vec3 worldLocation{ 0.f, 0.f, 0.f };
+    bool isDestroyed = false;
 };
 
 class ExplosiveManager
 {
 public:
-	std::vector<GrenadeList>& getGrenades();
-	
-	void initManager();
-	void clearCacheNades();
-	void clearCacheTripwires();
-	void clearCache();
+    ExplosiveManager() = default;
+    ~ExplosiveManager() = default;
 
+    ExplosiveManager(const ExplosiveManager&) = delete;
+    ExplosiveManager& operator=(const ExplosiveManager&) = delete;
 
-	//manager raid ptrs
-	static uint64_t grenadesListPtr;
-	static uint64_t syncObjectorsPtr;
+    void initManager();
 
+    // Called when leaving the raid.
+    void reset();
+
+    [[nodiscard]] std::vector<GrenadeList> getGrenades() const;
+    [[nodiscard]] std::size_t getGrenadeCount() const;
+
+    // Debug
+    [[nodiscard]] std::uint64_t getLocalGameWorld() const;
+    [[nodiscard]] std::uint64_t getGrenadesController() const;
+    [[nodiscard]] std::uint64_t getGrenadesListPointer() const;
+    [[nodiscard]] std::size_t getLastUnityListCount() const;
+    [[nodiscard]] bool lastUnityListReadSucceeded() const;
 
 private:
+    bool initManagerUnlocked(std::uint64_t localGameWorld);
+    bool refreshPointersUnlocked();
 
-	std::vector<GrenadeList> grenadeList;
-	std::vector<TripwireList> tripwireList;
+    bool readGrenadeAddressesUnlocked(
+        std::vector<std::uint64_t>& addresses);
 
-	
-	std::unordered_set<uint64_t> tripwireSet; // tracks instances
+    void refreshGrenadesUnlocked();
+    void resetUnlocked();
 
+    static bool positionLooksValid(const glm::vec3& position);
+
+    static GrenadeList* findGrenade(
+        std::vector<GrenadeList>& grenades,
+        std::uint64_t instance);
+
+private:
+    // Stops two refresh operations from running at the same time.
+    mutable std::mutex m_refreshMutex;
+
+    // Protects the published grenade cache.
+    mutable std::mutex m_cacheMutex;
+
+    std::uint64_t m_localGameWorld = 0;
+
+    // localGameWorld + ClientLocalGameWorld::Grenades
+    std::uint64_t m_grenadesController = 0;
+
+    // grenadesController + 0x18
+    std::uint64_t m_grenadesListPointer = 0;
+
+    std::size_t m_lastUnityListCount = 0;
+    bool m_lastUnityListReadSucceeded = false;
+
+    std::vector<GrenadeList> m_grenades;
 };
 
 extern ExplosiveManager explosiveManager;
