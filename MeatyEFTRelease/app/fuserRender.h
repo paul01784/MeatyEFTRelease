@@ -881,12 +881,24 @@ namespace fuserRender
                         player.bonePositions[boneListIndexes::Head],
                         &headPos))
                     {
-                        g_DxWindow.DrawFilledCircle(
-                            headPos.x,
-                            headPos.y,
-                            espGlobals::headDotSize,
-                            playerColour
-                        );
+                        if (screenPos.x != 0.0f && screenPos.y != 0.0f)
+                        {
+                            const float padding = 2.0f;
+                            const float height = screenPos.y - headPos.y + padding;
+                            float radius = (height / 12) * (espGlobals::headDotSize / 5);
+                            if (radius < 1.0f) radius = 1.0f;
+                            float verticalOffset = height / 20.0f;
+                            glm::vec2 circleCenter = { headPos.x, headPos.y - verticalOffset };
+                            g_DxWindow.DrawCircle(
+                                circleCenter.x,
+                                circleCenter.y,
+                                radius,
+                                playerColour,
+                                1.0f
+                            );
+
+                        }
+
                     }
                 }
 
