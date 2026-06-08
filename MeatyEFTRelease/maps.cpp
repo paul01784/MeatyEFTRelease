@@ -253,8 +253,8 @@ float ib_texture10_MinHeight = 42.f;
 PDIRECT3DTEXTURE9 ib_texture11 = NULL;
 float ib_texture11_MinHeight = 45.f;
 
-int ib_orgW = 1280;
-int ib_orgH = 6392;
+int ib_orgW = 640;
+int ib_orgH = 3196;
 
 float ib_configX = 563.70f;
 float ib_configY = 2091.70f;
