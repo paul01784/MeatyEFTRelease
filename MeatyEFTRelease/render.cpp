@@ -155,19 +155,43 @@ std::vector<boneListIndexes> getAllBones() {
 
 bool showResSelectionBox()
 {
-    espGlobals::gameResInt = (espGlobals::gameRes.x == 2560 && espGlobals::gameRes.y == 1440) ? RES_1440P : RES_1080P;
+    if (espGlobals::gameRes.x == 3440 &&
+        espGlobals::gameRes.y == 1440)
+    {
+        espGlobals::gameResInt = RES_3440X1440;
+    }
+    else if (espGlobals::gameRes.x == 2560 &&
+        espGlobals::gameRes.y == 1440)
+    {
+        espGlobals::gameResInt = RES_1440P;
+    }
+    else
+    {
+        espGlobals::gameResInt = RES_1080P;
+    }
 
     // Resolution options
-    const char* resolutionOptions[] = { "1920x1080", "2560x1440" };
+    const char* resolutionOptions[] = { "1920x1080", "2560x1440", "3440x1440" };
 
     if (ImGui::Combo(" Game Resolution", &espGlobals::gameResInt, resolutionOptions, IM_ARRAYSIZE(resolutionOptions))) {
         // Update resolution based on selection
-        switch (espGlobals::gameResInt) {
+        switch (espGlobals::gameResInt)
+        {
         case RES_1080P:
             espGlobals::gameRes = { 1920, 1080 };
             break;
+
         case RES_1440P:
             espGlobals::gameRes = { 2560, 1440 };
+            break;
+
+        case RES_3440X1440:
+            espGlobals::gameRes = { 3440, 1440 };
+            break;
+
+        default:
+            espGlobals::gameResInt = RES_1080P;
+            espGlobals::gameRes = { 1920, 1080 };
             break;
         }
         return true;

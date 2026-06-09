@@ -27,9 +27,11 @@ bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, i
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-enum Resolution {
+enum GameResolution
+{
     RES_1080P = 0,
-    RES_1440P
+    RES_1440P,
+    RES_3440X1440
 };
 
 
