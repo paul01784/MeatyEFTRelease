@@ -91,6 +91,8 @@ public:
     void lootTask();
     void clearCache();
 
+    void markLootWanted(const std::vector<uint64_t>& instances, const glm::vec4& colour);
+
     [[nodiscard]] std::vector<LootList> getCacheLoot() const;
 
     uint64_t lootListP = 0;

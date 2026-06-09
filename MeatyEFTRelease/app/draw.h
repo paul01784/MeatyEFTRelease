@@ -151,7 +151,7 @@ void drawWidgetTopLoot()
     static ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
 
     std::vector<LootList> lootCache = Loot.getCacheLoot();
-
+    
     struct AggregatedLoot
     {
         std::string shortName;
@@ -227,7 +227,7 @@ void drawWidgetTopLoot()
                 entry.wanted = true;
         }
     }
-
+    
     std::vector<AggregatedLoot> topLoot;
     topLoot.reserve(groupedLoot.size());
 
@@ -242,7 +242,7 @@ void drawWidgetTopLoot()
 
     if (topLoot.size() > 6)
         topLoot.resize(6);
-
+    
     const int visibleRows = static_cast<int>(topLoot.size());
 
     const float fixedWidth = 700.0f;
@@ -281,37 +281,45 @@ void drawWidgetTopLoot()
                 if (ImGui::SmallButton(ICON_FK_SEARCH))
                 {
                     LootList* bestLoot = nullptr;
-                    float bestDist = FLT_MAX;
+                    float bestDistSq = FLT_MAX;
+
+                    std::vector<uint64_t> matchingInstances;
+                    matchingInstances.reserve(loot.items.size());
 
                     for (LootList* item : loot.items)
                     {
                         if (!item)
                             continue;
 
-                        glm::vec3 d = item->worldLocation - mainGame.localLocation;
-                        float distSq = d.x * d.x + d.y * d.y + d.z * d.z;
+                        if (item->instance != 0)
+                            matchingInstances.push_back(item->instance);
 
-                        if (distSq < bestDist)
+                        const glm::vec3 difference =
+                            item->worldLocation - mainGame.localLocation;
+
+                        const float distSq =
+                            difference.x * difference.x +
+                            difference.y * difference.y +
+                            difference.z * difference.z;
+
+                        if (distSq < bestDistSq)
                         {
-                            bestDist = distSq;
+                            bestDistSq = distSq;
                             bestLoot = item;
                         }
                     }
 
                     if (bestLoot)
                     {
+                        const glm::vec3 focusLocation = bestLoot->worldLocation;
+
                         mapGlobals::followLocal = false;
-                        mapGlobals::focusPoint = bestLoot->worldLocation;
+                        mapGlobals::focusPoint = focusLocation;
 
-                        for (LootList* item : loot.items)
-                        {
-                            if (!item)
-                                continue;
-
-                            item->wanted = true;
-                            item->forceWanted = true;
-                            item->color = coloursGlobals::valueLootColour;
-                        }
+                        Loot.markLootWanted(
+                            matchingInstances,
+                            coloursGlobals::valueLootColour
+                        );
                     }
                 }
 

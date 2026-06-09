@@ -297,6 +297,41 @@ void loot::markFailed(LootList& item, std::string reason) const
     item.wanted = false;
 }
 
+void loot::markLootWanted(
+    const std::vector<uint64_t>& instances,
+    const glm::vec4& colour)
+{
+    if (instances.empty())
+        return;
+
+    std::unordered_set<uint64_t> instanceSet;
+    instanceSet.reserve(instances.size());
+
+    for (const uint64_t instance : instances)
+    {
+        if (instance != 0)
+            instanceSet.insert(instance);
+    }
+
+    if (instanceSet.empty())
+        return;
+
+    std::unique_lock<std::shared_mutex> lock(lootMutex);
+
+    for (LootList& loot : lootCache)
+    {
+        if (loot.instance == 0)
+            continue;
+
+        if (instanceSet.find(loot.instance) == instanceSet.end())
+            continue;
+
+        loot.wanted = true;
+        loot.forceWanted = true;
+        loot.color = colour;
+    }
+}
+
 bool loot::tryUpdateLootPosition(
     LootList& item,
     bool markAsFailedOnError)

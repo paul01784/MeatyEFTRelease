@@ -55,6 +55,8 @@ int woods_0f_mapSizeH = 0;
 int gz_0f_mapSizeW = 0;
 int gz_0f_mapSizeH = 0;
 
+int ib_0f_mapSizeW = 0;
+int ib_0f_mapSizeH = 0;
 int ib_1f_mapSizeW = 0;
 int ib_1f_mapSizeH = 0;
 int ib_2f_mapSizeW = 0;
@@ -224,41 +226,41 @@ PDIRECT3DTEXTURE9 ib_texture1 = NULL;
 float ib_texture1_MinHeight = 12.f;
 
 PDIRECT3DTEXTURE9 ib_texture2 = NULL;
-float ib_texture2_MinHeight = 18.f;
+float ib_texture2_MinHeight = 21.f;
 
 PDIRECT3DTEXTURE9 ib_texture3 = NULL;
-float ib_texture3_MinHeight = 21.f;
+float ib_texture3_MinHeight = 24.f;
 
 PDIRECT3DTEXTURE9 ib_texture4 = NULL;
-float ib_texture4_MinHeight = 24.f;
+float ib_texture4_MinHeight = 27.f;
 
 PDIRECT3DTEXTURE9 ib_texture5 = NULL;
-float ib_texture5_MinHeight = 27.f;
+float ib_texture5_MinHeight = 30.f;
 
 PDIRECT3DTEXTURE9 ib_texture6 = NULL;
-float ib_texture6_MinHeight = 30.f;
+float ib_texture6_MinHeight = 33.f;
 
 PDIRECT3DTEXTURE9 ib_texture7 = NULL;
-float ib_texture7_MinHeight = 33.f;
+float ib_texture7_MinHeight = 36.f;
 
 PDIRECT3DTEXTURE9 ib_texture8 = NULL;
-float ib_texture8_MinHeight = 36.f;
+float ib_texture8_MinHeight = 39.f;
 
 PDIRECT3DTEXTURE9 ib_texture9 = NULL;
-float ib_texture9_MinHeight = 39.f;
+float ib_texture9_MinHeight = 42.f;
 
 PDIRECT3DTEXTURE9 ib_texture10 = NULL;
-float ib_texture10_MinHeight = 42.f;
+float ib_texture10_MinHeight = 45.f;
 
 PDIRECT3DTEXTURE9 ib_texture11 = NULL;
-float ib_texture11_MinHeight = 45.f;
+float ib_texture11_MinHeight = 48.f;
 
 int ib_orgW = 640;
 int ib_orgH = 3196;
 
-float ib_configX = 563.70f;
-float ib_configY = 2091.70f;
-float ib_configScale = 24.22f;
+float ib_configX = 320.10f;
+float ib_configY = 1580.10f;
+float ib_configScale = 18.3f;
 
 bool loadMaps(std::string mapToLoad)
 {

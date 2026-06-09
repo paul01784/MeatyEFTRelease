@@ -83,6 +83,8 @@ extern int woods_0f_mapSizeH;
 extern int gz_0f_mapSizeW;
 extern int gz_0f_mapSizeH;
 
+extern int ib_0f_mapSizeW;
+extern int ib_0f_mapSizeH;
 extern int ib_1f_mapSizeW;
 extern int ib_1f_mapSizeH;
 extern int ib_2f_mapSizeW;
