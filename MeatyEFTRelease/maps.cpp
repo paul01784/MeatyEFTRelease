@@ -642,11 +642,6 @@ void MapControl::Update(ImVec2 loadedImageSize) {
         zoomLevel = ImClamp(zoomLevel + zoomDelta * 0.05f, 0.1f, 2.9f);
 
         if (zoomDelta > 0.f || zoomDelta < 0.f) {
-            ImVec2 cursorPosImageSpaceAfterZoom = {
-                (ImGui::GetMousePos().x - imagePos.x) / zoomLevel,
-                (ImGui::GetMousePos().y - imagePos.y) / zoomLevel
-            };
-
             imagePos.x -= cursorPosImageSpaceBeforeZoom.x * (zoomLevel - oldZoomLevel);
             imagePos.y -= cursorPosImageSpaceBeforeZoom.y * (zoomLevel - oldZoomLevel);
         }
@@ -660,7 +655,7 @@ void MapControl::Update(ImVec2 loadedImageSize) {
 
     // Limit panning based on bounds
     imagePos.x = ImClamp(imagePos.x, ImGui::GetWindowContentRegionMin().x - imageSize.x, ImGui::GetWindowContentRegionMax().x);
-    imagePos.y = ImClamp(imagePos.y, ImGui::GetWindowContentRegionMin().y - imageSize.x, ImGui::GetWindowContentRegionMax().y);
+    imagePos.y = ImClamp(imagePos.y, ImGui::GetWindowContentRegionMin().y - imageSize.y, ImGui::GetWindowContentRegionMax().y);
 }
 
 glm::vec3 MapControl::getMapPosition(glm::vec3 worldPosition, float configX, float configY, float configScale) {
