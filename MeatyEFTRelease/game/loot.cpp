@@ -318,7 +318,7 @@ void loot::markLootWanted(
 
     std::unique_lock<std::shared_mutex> lock(lootMutex);
 
-    for (LootList& loot : lootCache)
+    for (LootList& loot : lootList)
     {
         if (loot.instance == 0)
             continue;
