@@ -11,74 +11,9 @@
 float currentMap::configX = 0.f;
 float currentMap::configY = 0.f;
 float currentMap::configScale = 0.f;
-
-// Map values
-int customs_mapSizeW = 0;
-int customs_mapSizeH = 0;
-
-int fact_base_mapSizeW = 0;
-int fact_base_mapSizeH = 0;
-int fact_0f_mapSizeW = 0;
-int fact_0f_mapSizeH = 0;
-
-int inter_0f_mapSizeW = 0;
-int inter_0f_mapSizeH = 0;
-int inter_1f_mapSizeW = 0;
-int inter_1f_mapSizeH = 0;
-int inter_2f_mapSizeW = 0;
-int inter_2f_mapSizeH = 0;
-
-int labs_0f_mapSizeW = 0;
-int labs_0f_mapSizeH = 0;
-int labs_1f_mapSizeW = 0;
-int labs_1f_mapSizeH = 0;
-int labs_2f_mapSizeW = 0;
-int labs_2f_mapSizeH = 0;
-
-int lighthouse_mapSizeW = 0;
-int lighthouse_mapSizeH = 0;
-
-int reserve_base_mapSizeW = 0;
-int reserve_base_mapSizeH = 0;
-int reserve_0f_mapSizeW = 0;
-int reserve_0f_mapSizeH = 0;
-
-int shoreline_0f_mapSizeW = 0;
-int shoreline_0f_mapSizeH = 0;
-
-int streets_0f_mapSizeW = 0;
-int streets_0f_mapSizeH = 0;
-
-int woods_0f_mapSizeW = 0;
-int woods_0f_mapSizeH = 0;
-
-int gz_0f_mapSizeW = 0;
-int gz_0f_mapSizeH = 0;
-
-int ib_0f_mapSizeW = 0;
-int ib_0f_mapSizeH = 0;
-int ib_1f_mapSizeW = 0;
-int ib_1f_mapSizeH = 0;
-int ib_2f_mapSizeW = 0;
-int ib_2f_mapSizeH = 0;
-int ib_3f_mapSizeW = 0;
-int ib_3f_mapSizeH = 0;
-int ib_4f_mapSizeW = 0;
-int ib_4f_mapSizeH = 0;
-int ib_5f_mapSizeW = 0;
-int ib_5f_mapSizeH = 0;
-int ib_6f_mapSizeW = 0;
-int ib_6f_mapSizeH = 0;
-int ib_7f_mapSizeW = 0;
-int ib_7f_mapSizeH = 0;
-int ib_8f_mapSizeW = 0;
-int ib_8f_mapSizeH = 0;
-int ib_9f_mapSizeW = 0;
-int ib_9f_mapSizeH = 0;
-int ib_10f_mapSizeW = 0;
-int ib_10f_mapSizeH = 0;
-int ib_11f_mapSizeW = 0;
-int ib_11f_mapSizeH = 0;
+int currentMap::mapSizeX = 0;
+int currentMap::mapSizeY = 0;
+std::string currentMap::mapPathName = "";
 
 // map settings
 
@@ -219,48 +154,45 @@ float gz_configScale = 10.41f;
 
 // Icebreaker
 
-PDIRECT3DTEXTURE9 ib_texture0 = NULL;
-float ib_texture0_MinHeight = 0.f;
-
 PDIRECT3DTEXTURE9 ib_texture1 = NULL;
-float ib_texture1_MinHeight = 12.f;
+float ib_texture1_MinHeight = -100.f;
 
 PDIRECT3DTEXTURE9 ib_texture2 = NULL;
-float ib_texture2_MinHeight = 21.f;
+float ib_texture2_MinHeight = 12.f;
 
 PDIRECT3DTEXTURE9 ib_texture3 = NULL;
-float ib_texture3_MinHeight = 24.f;
+float ib_texture3_MinHeight = 21.f;
 
 PDIRECT3DTEXTURE9 ib_texture4 = NULL;
-float ib_texture4_MinHeight = 27.f;
+float ib_texture4_MinHeight = 24.f;
 
 PDIRECT3DTEXTURE9 ib_texture5 = NULL;
-float ib_texture5_MinHeight = 30.f;
+float ib_texture5_MinHeight = 37.f;
 
 PDIRECT3DTEXTURE9 ib_texture6 = NULL;
-float ib_texture6_MinHeight = 33.f;
+float ib_texture6_MinHeight = 40.f;
 
 PDIRECT3DTEXTURE9 ib_texture7 = NULL;
-float ib_texture7_MinHeight = 36.f;
+float ib_texture7_MinHeight = 43.f;
 
 PDIRECT3DTEXTURE9 ib_texture8 = NULL;
-float ib_texture8_MinHeight = 39.f;
+float ib_texture8_MinHeight = 46.f;
 
 PDIRECT3DTEXTURE9 ib_texture9 = NULL;
-float ib_texture9_MinHeight = 42.f;
+float ib_texture9_MinHeight = 49.f;
 
 PDIRECT3DTEXTURE9 ib_texture10 = NULL;
-float ib_texture10_MinHeight = 45.f;
+float ib_texture10_MinHeight = 52.f;
 
 PDIRECT3DTEXTURE9 ib_texture11 = NULL;
-float ib_texture11_MinHeight = 48.f;
+float ib_texture11_MinHeight = 55.f;
 
 int ib_orgW = 640;
 int ib_orgH = 3196;
 
-float ib_configX = 320.10f;
-float ib_configY = 1580.10f;
-float ib_configScale = 18.3f;
+float ib_configX = 320.60f;
+float ib_configY = 1580.02f;
+float ib_configScale = 18.20f;
 
 bool loadMaps(std::string mapToLoad)
 {
@@ -273,7 +205,7 @@ bool loadMaps(std::string mapToLoad)
         std::string customsFilePathStr = file_path.string();
         const char* customsFilePathCStr = customsFilePathStr.c_str();
 
-        bool customs_ret = LoadTextureFromFile(customsFilePathCStr, &customs_texture, &customs_mapSizeW, &customs_mapSizeH);
+        bool customs_ret = LoadTextureFromFile(customsFilePathCStr, &customs_texture, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(customs_ret);
     }
 
@@ -286,7 +218,7 @@ bool loadMaps(std::string mapToLoad)
         std::string factoryFilePathStr = file_pathfactorybasement.string();
         const char* factoryFilePathCStr = factoryFilePathStr.c_str();
 
-        bool factory_basement = LoadTextureFromFile(factoryFilePathCStr, &factory_textureBase, &fact_base_mapSizeW, &fact_base_mapSizeH);
+        bool factory_basement = LoadTextureFromFile(factoryFilePathCStr, &factory_textureBase, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(factory_basement);
 
         //ground floor
@@ -294,7 +226,7 @@ bool loadMaps(std::string mapToLoad)
         std::string factoryFilePathStr0f = file_pathfactory0f.string();
         const char* factoryFilePathCStr0f = factoryFilePathStr0f.c_str();
 
-        bool factory_0f = LoadTextureFromFile(factoryFilePathCStr0f, &factory_texture0, &fact_0f_mapSizeW, &fact_0f_mapSizeH);
+        bool factory_0f = LoadTextureFromFile(factoryFilePathCStr0f, &factory_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(factory_0f);
     }
 
@@ -307,7 +239,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathinterchangegroundStr = file_pathinterchangeground.string();
         const char* file_pathinterchangegroundCStr = file_pathinterchangegroundStr.c_str();
 
-        bool interchange_ground = LoadTextureFromFile(file_pathinterchangegroundCStr, &interchange_texture0, &inter_0f_mapSizeW, &inter_0f_mapSizeH);
+        bool interchange_ground = LoadTextureFromFile(file_pathinterchangegroundCStr, &interchange_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(interchange_ground);
 
         //1st floor
@@ -315,7 +247,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathinterchange1Str = file_pathinterchange1.string();
         const char* file_pathinterchange1CStr = file_pathinterchange1Str.c_str();
 
-        bool interchange_1 = LoadTextureFromFile(file_pathinterchange1CStr, &interchange_texture1, &inter_1f_mapSizeW, &inter_1f_mapSizeH);
+        bool interchange_1 = LoadTextureFromFile(file_pathinterchange1CStr, &interchange_texture1, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(interchange_1);
 
         //2st floor
@@ -323,7 +255,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathinterchange2Str = file_pathinterchange2.string();
         const char* file_pathinterchange2CStr = file_pathinterchange2Str.c_str();
 
-        bool interchange_2 = LoadTextureFromFile(file_pathinterchange2CStr, &interchange_texture2, &inter_2f_mapSizeW, &inter_2f_mapSizeH);
+        bool interchange_2 = LoadTextureFromFile(file_pathinterchange2CStr, &interchange_texture2, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(interchange_2);
     }
 
@@ -335,7 +267,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathlabsgroundStr = file_pathlabsground.string();
         const char* file_pathlabsgroundStrCStr = file_pathlabsgroundStr.c_str();
 
-        bool labs_ground = LoadTextureFromFile(file_pathlabsgroundStrCStr, &labs_texture0, &labs_0f_mapSizeW, &labs_0f_mapSizeH);
+        bool labs_ground = LoadTextureFromFile(file_pathlabsgroundStrCStr, &labs_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(labs_ground);
 
         //1st floor
@@ -343,7 +275,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathlabs1Str = file_pathlabs1.string();
         const char* file_pathlabs1CStr = file_pathlabs1Str.c_str();
 
-        bool labs_1 = LoadTextureFromFile(file_pathlabs1CStr, &labs_texture1, &labs_1f_mapSizeW, &labs_1f_mapSizeH);
+        bool labs_1 = LoadTextureFromFile(file_pathlabs1CStr, &labs_texture1, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(labs_1);
 
         //2st floor
@@ -351,7 +283,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathlabs2Str = file_pathlabs2.string();
         const char* file_pathlabs2CStr = file_pathlabs2Str.c_str();
 
-        bool labs_2 = LoadTextureFromFile(file_pathlabs2CStr, &labs_texture2, &labs_2f_mapSizeW, &labs_2f_mapSizeH);
+        bool labs_2 = LoadTextureFromFile(file_pathlabs2CStr, &labs_texture2, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(labs_2);
     }
 
@@ -363,7 +295,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathlighthousegroundStr = file_pathlighthouseground.string();
         const char* file_pathlighthousegroundCStr = file_pathlighthousegroundStr.c_str();
 
-        bool lighthouse_ground = LoadTextureFromFile(file_pathlighthousegroundCStr, &lighthouse_texture, &lighthouse_mapSizeW, &lighthouse_mapSizeH);
+        bool lighthouse_ground = LoadTextureFromFile(file_pathlighthousegroundCStr, &lighthouse_texture, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(lighthouse_ground);
     }
 
@@ -375,7 +307,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathreservebaseStr = file_pathreservebase.string();
         const char* file_pathreservebaseCStr = file_pathreservebaseStr.c_str();
 
-        bool reserve_base = LoadTextureFromFile(file_pathreservebaseCStr, &reserve_texture_base, &reserve_base_mapSizeW, &reserve_base_mapSizeH);
+        bool reserve_base = LoadTextureFromFile(file_pathreservebaseCStr, &reserve_texture_base, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(reserve_base);
 
         //1st floor
@@ -383,7 +315,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathreserve1Str = file_pathreserve1.string();
         const char* file_pathreserve1CStr = file_pathreserve1Str.c_str();
 
-        bool reserve_0 = LoadTextureFromFile(file_pathreserve1CStr, &reserve_texture0, &reserve_0f_mapSizeW, &reserve_0f_mapSizeH);
+        bool reserve_0 = LoadTextureFromFile(file_pathreserve1CStr, &reserve_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(reserve_0);
     }
 
@@ -395,7 +327,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathshorelinegroundStr = file_pathshorelineground.string();
         const char* file_pathshorelinegroundCStr = file_pathshorelinegroundStr.c_str();
 
-        bool shoreline_ground = LoadTextureFromFile(file_pathshorelinegroundCStr, &shoreline_texture0, &shoreline_0f_mapSizeW, &shoreline_0f_mapSizeH);
+        bool shoreline_ground = LoadTextureFromFile(file_pathshorelinegroundCStr, &shoreline_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(shoreline_ground);
     }
 
@@ -407,7 +339,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathstreets0Str = file_pathstreets0.string();
         const char* file_pathstreets0CStr = file_pathstreets0Str.c_str();
 
-        bool streets_ground = LoadTextureFromFile(file_pathstreets0CStr, &streets_texture0, &streets_0f_mapSizeW, &streets_0f_mapSizeH);
+        bool streets_ground = LoadTextureFromFile(file_pathstreets0CStr, &streets_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(streets_ground);
     }
 
@@ -419,7 +351,7 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathwoods0Str = file_pathwoods0.string();
         const char* file_pathwoods0CStr = file_pathwoods0Str.c_str();
 
-        bool woods_ground = LoadTextureFromFile(file_pathwoods0CStr, &woods_texture0, &woods_0f_mapSizeW, &woods_0f_mapSizeH);
+        bool woods_ground = LoadTextureFromFile(file_pathwoods0CStr, &woods_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(woods_ground);
     }
 
@@ -432,24 +364,26 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathgz0Str = file_pathgz0.string();
         const char* file_pathgz0CStr = file_pathgz0Str.c_str();
 
-        bool gz_ground = LoadTextureFromFile(file_pathgz0CStr, &gz_texture0, &gz_0f_mapSizeW, &gz_0f_mapSizeH);
+        bool gz_ground = LoadTextureFromFile(file_pathgz0CStr, &gz_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(gz_ground);
     }
 
     if (mapToLoad == "Icebreaker")
     {
         // Icebreaker
-
-// Ground floor / 1F
+        
+        
+        // 1F
         std::filesystem::path file_pathib0 = cwd / "Maps" / "ib_01.png";
         std::string file_pathib0Str = file_pathib0.string();
         const char* file_pathib0CStr = file_pathib0Str.c_str();
 
+        currentMap::mapPathName = file_pathib0.string();
+
         bool ib_ground = LoadTextureFromFile(
             file_pathib0CStr,
-            &ib_texture0,
-            &ib_1f_mapSizeW,
-            &ib_1f_mapSizeH
+            &ib_texture1,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_ground);
 
@@ -459,11 +393,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib1Str = file_pathib1.string();
         const char* file_pathib1CStr = file_pathib1Str.c_str();
 
+        currentMap::mapPathName = file_pathib1.string();
+
         bool ib_2f = LoadTextureFromFile(
             file_pathib1CStr,
-            &ib_texture1,
-            &ib_2f_mapSizeW,
-            &ib_2f_mapSizeH
+            &ib_texture2,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_2f);
 
@@ -473,11 +408,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib2Str = file_pathib2.string();
         const char* file_pathib2CStr = file_pathib2Str.c_str();
 
+        currentMap::mapPathName = file_pathib2.string();
+
         bool ib_3f = LoadTextureFromFile(
             file_pathib2CStr,
-            &ib_texture2,
-            &ib_3f_mapSizeW,
-            &ib_3f_mapSizeH
+            &ib_texture3,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_3f);
 
@@ -487,11 +423,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib3Str = file_pathib3.string();
         const char* file_pathib3CStr = file_pathib3Str.c_str();
 
+        currentMap::mapPathName = file_pathib3.string();
+
         bool ib_4f = LoadTextureFromFile(
             file_pathib3CStr,
-            &ib_texture3,
-            &ib_4f_mapSizeW,
-            &ib_4f_mapSizeH
+            &ib_texture4,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_4f);
 
@@ -501,11 +438,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib4Str = file_pathib4.string();
         const char* file_pathib4CStr = file_pathib4Str.c_str();
 
+        currentMap::mapPathName = file_pathib4.string();
+
         bool ib_5f = LoadTextureFromFile(
             file_pathib4CStr,
-            &ib_texture4,
-            &ib_5f_mapSizeW,
-            &ib_5f_mapSizeH
+            &ib_texture5,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_5f);
 
@@ -515,11 +453,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib5Str = file_pathib5.string();
         const char* file_pathib5CStr = file_pathib5Str.c_str();
 
+        currentMap::mapPathName = file_pathib5.string();
+
         bool ib_6f = LoadTextureFromFile(
             file_pathib5CStr,
-            &ib_texture5,
-            &ib_6f_mapSizeW,
-            &ib_6f_mapSizeH
+            &ib_texture6,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_6f);
 
@@ -529,11 +468,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib6Str = file_pathib6.string();
         const char* file_pathib6CStr = file_pathib6Str.c_str();
 
+        currentMap::mapPathName = file_pathib6.string();
+
         bool ib_7f = LoadTextureFromFile(
             file_pathib6CStr,
-            &ib_texture6,
-            &ib_7f_mapSizeW,
-            &ib_7f_mapSizeH
+            &ib_texture7,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_7f);
 
@@ -543,11 +483,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib7Str = file_pathib7.string();
         const char* file_pathib7CStr = file_pathib7Str.c_str();
 
+        currentMap::mapPathName = file_pathib7.string();
+
         bool ib_8f = LoadTextureFromFile(
             file_pathib7CStr,
-            &ib_texture7,
-            &ib_8f_mapSizeW,
-            &ib_8f_mapSizeH
+            &ib_texture8,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_8f);
 
@@ -557,11 +498,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib8Str = file_pathib8.string();
         const char* file_pathib8CStr = file_pathib8Str.c_str();
 
+        currentMap::mapPathName = file_pathib8.string();
+
         bool ib_9f = LoadTextureFromFile(
             file_pathib8CStr,
-            &ib_texture8,
-            &ib_9f_mapSizeW,
-            &ib_9f_mapSizeH
+            &ib_texture9,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_9f);
 
@@ -571,11 +513,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib9Str = file_pathib9.string();
         const char* file_pathib9CStr = file_pathib9Str.c_str();
 
+        currentMap::mapPathName = file_pathib9.string();
+
         bool ib_10f = LoadTextureFromFile(
             file_pathib9CStr,
-            &ib_texture9,
-            &ib_10f_mapSizeW,
-            &ib_10f_mapSizeH
+            &ib_texture10,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_10f);
 
@@ -585,11 +528,12 @@ bool loadMaps(std::string mapToLoad)
         std::string file_pathib10Str = file_pathib10.string();
         const char* file_pathib10CStr = file_pathib10Str.c_str();
 
+        currentMap::mapPathName = file_pathib10.string();
+
         bool ib_11f = LoadTextureFromFile(
             file_pathib10CStr,
-            &ib_texture10,
-            &ib_11f_mapSizeW,
-            &ib_11f_mapSizeH
+            &ib_texture11,
+            &currentMap::mapSizeX, &currentMap::mapSizeY
         );
         IM_ASSERT(ib_11f);
     }

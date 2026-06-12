@@ -38,75 +38,10 @@ struct currentMap {
     static float configX;
     static float configY;
     static float configScale;
+    static int mapSizeX;
+    static int mapSizeY;
+    static std::string mapPathName;
 }extern;
-
-// Map details
-extern int customs_mapSizeW;
-extern int customs_mapSizeH;
-
-extern int fact_base_mapSizeW;
-extern int fact_base_mapSizeH;
-extern int fact_0f_mapSizeW;
-extern int fact_0f_mapSizeH;
-
-extern int inter_0f_mapSizeW;
-extern int inter_0f_mapSizeH;
-extern int inter_1f_mapSizeW;
-extern int inter_1f_mapSizeH;
-extern int inter_2f_mapSizeW;
-extern int inter_2f_mapSizeH;
-
-extern int labs_0f_mapSizeW;
-extern int labs_0f_mapSizeH;
-extern int labs_1f_mapSizeW;
-extern int labs_1f_mapSizeH;
-extern int labs_2f_mapSizeW;
-extern int labs_2f_mapSizeH;
-
-extern int lighthouse_mapSizeW;
-extern int lighthouse_mapSizeH;
-
-extern int reserve_base_mapSizeW;
-extern int reserve_base_mapSizeH;
-extern int reserve_0f_mapSizeW;
-extern int reserve_0f_mapSizeH;
-
-extern int shoreline_0f_mapSizeW;
-extern int shoreline_0f_mapSizeH;
-
-extern int streets_0f_mapSizeW;
-extern int streets_0f_mapSizeH;
-
-extern int woods_0f_mapSizeW;
-extern int woods_0f_mapSizeH;
-
-extern int gz_0f_mapSizeW;
-extern int gz_0f_mapSizeH;
-
-extern int ib_0f_mapSizeW;
-extern int ib_0f_mapSizeH;
-extern int ib_1f_mapSizeW;
-extern int ib_1f_mapSizeH;
-extern int ib_2f_mapSizeW;
-extern int ib_2f_mapSizeH;
-extern int ib_3f_mapSizeW;
-extern int ib_3f_mapSizeH;
-extern int ib_4f_mapSizeW;
-extern int ib_4f_mapSizeH;
-extern int ib_5f_mapSizeW;
-extern int ib_5f_mapSizeH;
-extern int ib_6f_mapSizeW;
-extern int ib_6f_mapSizeH;
-extern int ib_7f_mapSizeW;
-extern int ib_7f_mapSizeH;
-extern int ib_8f_mapSizeW;
-extern int ib_8f_mapSizeH;
-extern int ib_9f_mapSizeW;
-extern int ib_9f_mapSizeH;
-extern int ib_10f_mapSizeW;
-extern int ib_10f_mapSizeH;
-extern int ib_11f_mapSizeW;
-extern int ib_11f_mapSizeH;
 
 // map settings
 
@@ -248,8 +183,6 @@ extern float gz_configScale;
 
 // Icebreaker
 
-extern PDIRECT3DTEXTURE9 ib_texture0;
-extern float ib_texture0_MinHeight;
 extern PDIRECT3DTEXTURE9 ib_texture1;
 extern float ib_texture1_MinHeight;
 extern PDIRECT3DTEXTURE9 ib_texture2;

@@ -455,79 +455,54 @@ static void renderMapDetails()
             setCurrentMapSpecs = true;
         }
 
-        // Icebreaker floor selection by height.
-        // was incorrect direction doh
+        map_orgW = static_cast<float>(ib_orgW);
+        map_orgH = static_cast<float>(ib_orgH);
+
+        // Icebreaker floor selection by height
         if (height >= ib_texture11_MinHeight)
         {
             texture = ib_texture11;
-            map_orgW = static_cast<float>(ib_11f_mapSizeW);
-            map_orgH = static_cast<float>(ib_11f_mapSizeH);
+            
         }
         else if (height >= ib_texture10_MinHeight)
         {
             texture = ib_texture10;
-            map_orgW = static_cast<float>(ib_10f_mapSizeW);
-            map_orgH = static_cast<float>(ib_10f_mapSizeH);
         }
         else if (height >= ib_texture9_MinHeight)
         {
             texture = ib_texture9;
-            map_orgW = static_cast<float>(ib_9f_mapSizeW);
-            map_orgH = static_cast<float>(ib_9f_mapSizeH);
         }
         else if (height >= ib_texture8_MinHeight)
         {
             texture = ib_texture8;
-            map_orgW = static_cast<float>(ib_8f_mapSizeW);
-            map_orgH = static_cast<float>(ib_8f_mapSizeH);
         }
         else if (height >= ib_texture7_MinHeight)
         {
             texture = ib_texture7;
-            map_orgW = static_cast<float>(ib_7f_mapSizeW);
-            map_orgH = static_cast<float>(ib_7f_mapSizeH);
         }
         else if (height >= ib_texture6_MinHeight)
         {
             texture = ib_texture6;
-            map_orgW = static_cast<float>(ib_6f_mapSizeW);
-            map_orgH = static_cast<float>(ib_6f_mapSizeH);
         }
         else if (height >= ib_texture5_MinHeight)
         {
             texture = ib_texture5;
-            map_orgW = static_cast<float>(ib_5f_mapSizeW);
-            map_orgH = static_cast<float>(ib_5f_mapSizeH);
         }
         else if (height >= ib_texture4_MinHeight)
         {
             texture = ib_texture4;
-            map_orgW = static_cast<float>(ib_4f_mapSizeW);
-            map_orgH = static_cast<float>(ib_4f_mapSizeH);
         }
         else if (height >= ib_texture3_MinHeight)
         {
             texture = ib_texture3;
-            map_orgW = static_cast<float>(ib_3f_mapSizeW);
-            map_orgH = static_cast<float>(ib_3f_mapSizeH);
         }
         else if (height >= ib_texture2_MinHeight)
         {
             texture = ib_texture2;
-            map_orgW = static_cast<float>(ib_2f_mapSizeW);
-            map_orgH = static_cast<float>(ib_2f_mapSizeH);
         }
-        else if (height >= ib_texture1_MinHeight)
+        else //if (height >= ib_texture1_MinHeight)
         {
             texture = ib_texture1;
-            map_orgW = static_cast<float>(ib_1f_mapSizeW);
-            map_orgH = static_cast<float>(ib_1f_mapSizeH);
-        }
-        else
-        {
-            texture = ib_texture0;
-            map_orgW = static_cast<float>(ib_0f_mapSizeW);
-            map_orgH = static_cast<float>(ib_0f_mapSizeH);
         }
     }
     else
@@ -3839,6 +3814,13 @@ static void renderDebugWindow()
                        currentMap::configX,
                        currentMap::configY,
                        currentMap::configScale
+                   );
+
+                   ImGui::Text(
+                       "Current Loaded Map : %s (X %.2f | Y %.2f)",
+                       currentMap::mapPathName.c_str(),
+                       currentMap::mapSizeX,
+                       currentMap::mapSizeY
                    );
                }
                else
