@@ -500,7 +500,7 @@ static void renderMapDetails()
         {
             texture = ib_texture2;
         }
-        else //if (height >= ib_texture1_MinHeight)
+        else
         {
             texture = ib_texture1;
         }

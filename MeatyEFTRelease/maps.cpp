@@ -155,10 +155,10 @@ float gz_configScale = 10.41f;
 // Icebreaker
 
 PDIRECT3DTEXTURE9 ib_texture1 = NULL;
-float ib_texture1_MinHeight = -100.f;
+float ib_texture1_MinHeight = 1.f;
 
 PDIRECT3DTEXTURE9 ib_texture2 = NULL;
-float ib_texture2_MinHeight = 12.f;
+float ib_texture2_MinHeight = 17.f;
 
 PDIRECT3DTEXTURE9 ib_texture3 = NULL;
 float ib_texture3_MinHeight = 21.f;
