@@ -11,8 +11,8 @@ std::string globals::dogTagAPIKey = "";
 std::string globals::radarSubText = "";
 
 double globals::taskMainPlayers = 3000;
-double globals::taskPlayers = 13;
-double globals::taskPlayersBones = 15;
+double globals::taskPlayers = 20;
+double globals::taskPlayersBones = 21;
 double globals::taskPlayersLocal = 22;
 double globals::taskGrenades = 20;
 double globals::taskPlayersEquipment = 2000;

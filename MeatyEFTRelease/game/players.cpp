@@ -3089,7 +3089,7 @@ inline bool HandsInfo::update(const PlayerCache& playerCache)
         );
     }
 
-    if (!Utils::valid_pointer(itemBase))
+    if (!Utils::valid_pointer(itemBase) || itemName == "Unknown")
     {
         reset();
         cachedItem = 0;
