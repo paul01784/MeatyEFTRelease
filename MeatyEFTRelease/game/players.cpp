@@ -1241,7 +1241,7 @@ glm::vec3 GetBestPlayerBasePosition(const PlayerCache& cachePlayer)
     {
         //Feet should not be miles apart
         const float footSeparation = glm::distance(lFoot, rFoot);
-        if (footSeparation > 0.01f && footSeparation <= 1.5f)
+        if (footSeparation > 0.01f && footSeparation <= 5.5f)
         {
             feetMid = (lFoot + rFoot) * 0.5f;
             feetValid = true;

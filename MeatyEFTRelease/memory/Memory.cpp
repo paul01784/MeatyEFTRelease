@@ -632,7 +632,7 @@ bool Memory::Init(bool memMap, bool debug)
 		args.push_back("");
 		args.push_back("-device");
 		args.push_back("fpga://algo=0");
-		args.push_back("-norefresh");
+		//args.push_back("-norefresh");
 
 		if (debug)
 		{
