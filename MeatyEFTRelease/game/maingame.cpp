@@ -355,6 +355,11 @@ void MainGame::getGameWorldDetails() {
 
         while (true)
         {
+            // Small sleep while we wait for gameworld to resolve
+            Sleep(1000);
+
+            // Make sure our cache is refreshed
+            mem.RefreshLight();
 
             GameObjectManager gom;
 

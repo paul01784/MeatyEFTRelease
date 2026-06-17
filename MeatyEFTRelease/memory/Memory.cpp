@@ -566,8 +566,39 @@ void Memory::setCustomRefreshData()
 
 	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_PARTIAL, 200);
 	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_TOTAL, 2000);
-	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_READCACHE_TICKS, 2);
-	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_TLBCACHE_TICKS, 50);
+	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_READCACHE_TICKS, 50);
+	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_TLBCACHE_TICKS, 100);
+}
+
+// ------------------------------------------------------------
+// Refresh
+// ------------------------------------------------------------
+
+void Memory::RefreshLight()
+{
+	if (!vHandle)
+		return;
+
+	// Light-ish refresh: memory/read cache + TLB.
+	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_FREQ_MEM, 1);
+	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_FREQ_TLB, 1);
+}
+
+bool Memory::fullRefresh()
+{
+	if (!vHandle)
+	{
+		MemoryLogError("quickRefresh failed: vHandle is null");
+		return false;
+	}
+
+	if (!VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_ALL, 1))
+	{
+		MemoryLogError("quickRefresh failed");
+		return false;
+	}
+
+	return true;
 }
 
 // ------------------------------------------------------------
@@ -595,25 +626,36 @@ bool Memory::Init(bool memMap, bool debug)
 
 
 
-		LPCSTR args[] = { const_cast<LPCSTR>(""), const_cast<LPCSTR>("-device"), const_cast<LPCSTR>("fpga://algo=0"), const_cast<LPCSTR>(""), const_cast<LPCSTR>(""), const_cast<LPCSTR>(""), const_cast<LPCSTR>("") };
-		DWORD argc = 3;
+		std::vector<LPCSTR> args;
+		args.reserve(16);
+
+		args.push_back("");
+		args.push_back("-device");
+		args.push_back("fpga://algo=0");
+		args.push_back("-norefresh");
+
 		if (debug)
 		{
-			args[argc++] = const_cast<LPCSTR>("-v");
-			args[argc++] = const_cast<LPCSTR>("-printf");
+			args.push_back("-v");
+			args.push_back("-printf");
 		}
 
-		std::string path = "";
+		std::string path;
+
 		if (memMap)
 		{
 			auto temp_path = std::filesystem::current_path();
-			path = (temp_path.string() + "\\mmap.txt");
+			path = temp_path.string() + "\\mmap.txt";
+
 			bool dumped = false;
+
 			if (!std::filesystem::exists(path))
 				dumped = this->DumpMemoryMap(debug);
 			else
 				dumped = true;
+
 			MemoryLogInfo("dumping memory map to file...");
+
 			if (!dumped)
 			{
 				MemoryLogInfo("[!] ERROR: Could not dump memory map!");
@@ -623,12 +665,15 @@ bool Memory::Init(bool memMap, bool debug)
 			{
 				MemoryLogInfo("Dumped memory map!");
 
-				//Add the memory map to the arguments and increase arg count.
-				args[argc++] = const_cast<LPCSTR>("-memmap");
-				args[argc++] = const_cast<LPCSTR>(path.c_str());
+				args.push_back("-memmap");
+				args.push_back(path.c_str());
 			}
 		}
-		this->vHandle = VMMDLL_Initialize(argc, args);
+
+		this->vHandle = VMMDLL_Initialize(
+			static_cast<DWORD>(args.size()),
+			args.data()
+		);
 		if (!this->vHandle)
 		{
 			MemoryLogInfo("[!] Initialization failed! Is the DMA in use or disconnected?");
@@ -645,14 +690,14 @@ bool Memory::Init(bool memMap, bool debug)
 
 		MemoryLogInfo("success!");
 
-		this->setCustomRefreshData();
-
 		if (!this->SetFPGA())
 		{
 			MemoryLogInfo("[!] Could not set FPGA!");
 			VMMDLL_Close(this->vHandle);
 			return false;
 		}
+
+		this->setCustomRefreshData();
 
 		DMA_INITIALIZED = TRUE;
 		memoryGlobals::dmaConnected = TRUE;
@@ -1645,23 +1690,6 @@ bool Memory::ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool use
 // ------------------------------------------------------------
 // Misc
 // ------------------------------------------------------------
-
-bool Memory::quickRefresh()
-{
-	if (!vHandle)
-	{
-		MemoryLogError("quickRefresh failed: vHandle is null");
-		return false;
-	}
-
-	if (!VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_ALL, 1))
-	{
-		MemoryLogError("quickRefresh failed");
-		return false;
-	}
-
-	return true;
-}
 
 ULONG64 Memory::GET_MonoModuleAddress(char* module_name)
 {

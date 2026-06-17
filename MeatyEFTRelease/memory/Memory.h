@@ -41,6 +41,8 @@ private:
     bool SetFPGA();
     void setCustomRefreshData();
 
+    
+
     std::shared_ptr<c_keys> key;
     c_registry registry;
     c_shellcode shellcode;
@@ -87,6 +89,8 @@ public:
 
     bool FixCr3();
     bool DumpMemory(uintptr_t address, std::string path);
+
+    void RefreshLight();
 
     uint64_t FindSignature(
         const char* signature,
@@ -262,7 +266,7 @@ public:
         return pointer > 0x10000 && pointer < 0x0000800000000000;
     }
 
-    bool quickRefresh();
+    bool fullRefresh();
 
 
     ULONG64 GET_MonoModuleAddress(char* module_name);
