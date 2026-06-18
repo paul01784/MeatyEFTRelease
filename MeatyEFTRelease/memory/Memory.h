@@ -12,6 +12,77 @@
 #include <thread>
 #include <mutex>
 
+struct MemoryTrafficStats
+{
+    // Lifetime totals since construction or ResetTrafficStats()
+    uint64_t readOperations = 0;          // Direct reads + scatter execute-read batches.
+    uint64_t writeOperations = 0;         // Direct writes + scatter execute-write batches.
+
+    uint64_t readSuccesses = 0;
+    uint64_t writeSuccesses = 0;
+
+    uint64_t readFailures = 0;
+    uint64_t writeFailures = 0;
+
+    uint64_t readRequests = 0;
+    uint64_t writeRequests = 0;
+
+    uint64_t readBytesRequested = 0;
+    uint64_t writeBytesRequested = 0;
+
+    uint64_t directReadBytesReturned = 0;
+
+    uint64_t scatterReadBatches = 0;
+    uint64_t scatterWriteBatches = 0;
+
+    uint64_t scatterReadRequests = 0;
+    uint64_t scatterWriteRequests = 0;
+
+    uint64_t scatterClearFailures = 0;
+
+    double sampleWindowSeconds = 0.0;
+
+    double readOperationsPerSecond = 0.0;
+    double writeOperationsPerSecond = 0.0;
+
+    double readRequestsPerSecond = 0.0;
+    double writeRequestsPerSecond = 0.0;
+
+    double readBytesRequestedPerSecond = 0.0;
+    double writeBytesRequestedPerSecond = 0.0;
+};
+
+struct MemoryConnectionStats
+{
+    bool vmmHandleValid = false;
+    bool dmaInitialized = false;
+    bool processInitialized = false;
+
+    bool vmmLibraryLoaded = false;
+    bool leechCoreLibraryLoaded = false;
+    bool ftd3xxLibraryLoaded = false;
+
+    uint64_t vmmHandleAddress = 0;
+
+    uint32_t processId = 0;
+    std::string processName;
+
+    uint64_t targetBaseAddress = 0;
+    uint64_t targetBaseSize = 0;
+
+    bool fpgaInfoAvailable = false;
+    uint64_t fpgaId = 0;
+    uint64_t deviceId = 0;
+    uint64_t firmwareMajor = 0;
+    uint64_t firmwareMinor = 0;
+
+    bool cacheInfoAvailable = false;
+    uint64_t processCachePartialTicks = 0;
+    uint64_t processCacheTotalTicks = 0;
+    uint64_t readCacheTicks = 0;
+    uint64_t tlbCacheTicks = 0;
+};
+
 class Memory
 {
 private:
@@ -49,6 +120,106 @@ private:
 
     std::thread dmaThread;
     std::atomic_bool initRunning{ false };
+    
+private:
+    struct TrafficCounterSnapshot
+    {
+        uint64_t readOperations = 0;
+        uint64_t writeOperations = 0;
+
+        uint64_t readSuccesses = 0;
+        uint64_t writeSuccesses = 0;
+
+        uint64_t readFailures = 0;
+        uint64_t writeFailures = 0;
+
+        uint64_t readRequests = 0;
+        uint64_t writeRequests = 0;
+
+        uint64_t readBytesRequested = 0;
+        uint64_t writeBytesRequested = 0;
+
+        uint64_t directReadBytesReturned = 0;
+
+        uint64_t scatterReadBatches = 0;
+        uint64_t scatterWriteBatches = 0;
+
+        uint64_t scatterReadRequests = 0;
+        uint64_t scatterWriteRequests = 0;
+
+        uint64_t scatterClearFailures = 0;
+    };
+
+    struct TrafficRateSnapshot
+    {
+        double sampleWindowSeconds = 0.0;
+
+        double readOperationsPerSecond = 0.0;
+        double writeOperationsPerSecond = 0.0;
+
+        double readRequestsPerSecond = 0.0;
+        double writeRequestsPerSecond = 0.0;
+
+        double readBytesRequestedPerSecond = 0.0;
+        double writeBytesRequestedPerSecond = 0.0;
+    };
+
+    TrafficCounterSnapshot LoadTrafficCounters() const;
+
+    void RecordDirectRead(
+        size_t requestedBytes,
+        size_t returnedBytes,
+        bool success
+    ) const;
+
+    void RecordDirectWrite(
+        size_t requestedBytes,
+        bool success
+    ) const;
+
+    void RecordScatterReadRequest(size_t requestedBytes) const;
+    void RecordScatterWriteRequest(size_t requestedBytes) const;
+
+    void RecordScatterReadExecute(bool success) const;
+    void RecordScatterWriteExecute(bool success) const;
+
+    void RecordScatterClearFailure() const;
+
+    // Atomic counters: no locking in normal DMA read/write paths.
+    mutable std::atomic<uint64_t> statsReadOperations{ 0 };
+    mutable std::atomic<uint64_t> statsWriteOperations{ 0 };
+
+    mutable std::atomic<uint64_t> statsReadSuccesses{ 0 };
+    mutable std::atomic<uint64_t> statsWriteSuccesses{ 0 };
+
+    mutable std::atomic<uint64_t> statsReadFailures{ 0 };
+    mutable std::atomic<uint64_t> statsWriteFailures{ 0 };
+
+    mutable std::atomic<uint64_t> statsReadRequests{ 0 };
+    mutable std::atomic<uint64_t> statsWriteRequests{ 0 };
+
+    mutable std::atomic<uint64_t> statsReadBytesRequested{ 0 };
+    mutable std::atomic<uint64_t> statsWriteBytesRequested{ 0 };
+
+    mutable std::atomic<uint64_t> statsDirectReadBytesReturned{ 0 };
+
+    mutable std::atomic<uint64_t> statsScatterReadBatches{ 0 };
+    mutable std::atomic<uint64_t> statsScatterWriteBatches{ 0 };
+
+    mutable std::atomic<uint64_t> statsScatterReadRequests{ 0 };
+    mutable std::atomic<uint64_t> statsScatterWriteRequests{ 0 };
+
+    mutable std::atomic<uint64_t> statsScatterClearFailures{ 0 };
+
+    // stats from the debug UI.
+    mutable std::mutex trafficStatsMutex;
+    mutable bool trafficStatsBaselineValid = false;
+
+    mutable TrafficCounterSnapshot trafficStatsBaseline{};
+    mutable TrafficRateSnapshot trafficRateSnapshot{};
+
+    mutable std::chrono::steady_clock::time_point trafficStatsLastSample{};
+
     mutable std::mutex handleMutex;
 
 private:
@@ -91,6 +262,13 @@ public:
     bool DumpMemory(uintptr_t address, std::string path);
 
     void RefreshLight();
+
+    MemoryTrafficStats GetTrafficStats() const;
+    std::string GetTrafficStatsString() const;
+    void ResetTrafficStats();
+
+    MemoryConnectionStats GetConnectionStats() const;
+    std::string GetConnectionStatsString() const;
 
     uint64_t FindSignature(
         const char* signature,
@@ -282,9 +460,6 @@ public:
     uint64_t base = 0;
     uint64_t baseSize = 0;
 
-    static inline std::atomic<uint64_t> reads{ 0 };
-    static inline std::atomic<uint64_t> writes{ 0 };
-    static inline std::atomic<uint64_t> dataSize{ 0 };
 };
 
 inline Memory mem;

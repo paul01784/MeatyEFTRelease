@@ -2655,33 +2655,17 @@ static void renderBottomInfo()
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
     // Render our app version always
-    ImGui::SetCursorPos(ImVec2(viewport->Size.x - 180, viewport->Size.y - 30));
+    ImGui::SetCursorPos(ImVec2(viewport->Size.x - 150, viewport->Size.y - 30));
     ImGui::Text("MeatyEFT: %s", globals::appVersion);
 
     // Render DMA Stats if selected
     // Data
     if (memoryGlobals::dmaShowStats)
     {
-        std::string connected = "Disconnected";
-        if (memoryGlobals::processFound)
-        {
-            connected = "Connected";
-
-
-            //std::string formattedDataRate = formatDataRate(dataValue);
-            //ImGui::SetCursorPos(ImVec2(viewport->Size.x - 690, viewport->Size.y - 30));
-            //ImGui::Text("DMA Status : %s (%d R/S - %d W/S) Data Rate : (%s)", connected, readsValue, writesValue, formattedDataRate.c_str());
-        }
-        else
-        {
-            ImGui::SetCursorPos(ImVec2(viewport->Size.x - 360, viewport->Size.y - 30));
-            ImGui::Text("DMA Status : %s ", connected);
-        }
+            ImGui::SetCursorPos(ImVec2(viewport->Size.x - viewport->Size.x + 20, viewport->Size.y - 30));
+            ImGui::Text(mem.GetTrafficStatsString().c_str());
     }
 
-    // thread info
-    ImGui::SetCursorPos(ImVec2(viewport->Size.x - viewport->Size.x + 20, viewport->Size.y - 30));
-    //ImGui::Text("Timings : Players ( %d ms ), Camera ( %d ms ) ", playerTimerValue, cameraTimerValue);
 }
 // Helper function to convert MessageLevel to string
 std::string messageLevelToString(MessageLevel level) {

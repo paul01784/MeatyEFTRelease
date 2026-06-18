@@ -59,7 +59,7 @@ std::atomic_bool appGlobals::runThreads = false;
 bool memoryGlobals::dmaConnected = false;
 bool memoryGlobals::dmaAutoConnect = false;
 bool memoryGlobals::dmaCloseAll = true;
-bool memoryGlobals::dmaShowStats = false;
+bool memoryGlobals::dmaShowStats = true;
 bool memoryGlobals::processFound = false;
 
 

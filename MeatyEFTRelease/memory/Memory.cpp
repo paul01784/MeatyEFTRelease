@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cstring>
+#include <chrono>
 
 uint64_t cbSize = 0x80000;
 //callback for VfsFileListU
@@ -47,6 +48,86 @@ namespace
 	{
 		LOGS.logInfo("[Memory] " + message);
 	}
+}
+
+std::string FormatCount(double value)
+{
+	if (value < 0.0)
+		value = 0.0;
+
+	const uint64_t roundedValue =
+		static_cast<uint64_t>(value + 0.5);
+
+	std::string text = std::to_string(roundedValue);
+
+	for (int position = static_cast<int>(text.length()) - 3;
+		position > 0;
+		position -= 3)
+	{
+		text.insert(static_cast<size_t>(position), ",");
+	}
+
+	return text;
+}
+
+std::string FormatBytes(double bytes)
+{
+	static constexpr const char* units[] =
+	{
+		"B",
+		"KB",
+		"MB",
+		"GB"
+	};
+
+	int unitIndex = 0;
+
+	while (bytes >= 1024.0 && unitIndex < 3)
+	{
+		bytes /= 1024.0;
+		++unitIndex;
+	}
+
+	std::ostringstream oss;
+
+	if (unitIndex == 0)
+		oss << std::fixed << std::setprecision(0);
+	else
+		oss << std::fixed << std::setprecision(2);
+
+	oss << bytes << ' ' << units[unitIndex];
+	return oss.str();
+}
+
+std::string FormatRate(double value)
+{
+	std::ostringstream oss;
+
+	if (value < 100.0)
+		oss << std::fixed << std::setprecision(1);
+	else
+		oss << std::fixed << std::setprecision(0);
+
+	oss << value;
+	return oss.str();
+}
+
+std::string BuildTrafficStatsString(const MemoryTrafficStats& stats)
+{
+	std::ostringstream oss;
+
+	oss
+		<< "DMA I/O | "
+		<< "R: " << FormatRate(stats.readOperationsPerSecond) << " ops/s"
+		<< " | " << FormatRate(stats.readRequestsPerSecond) << " req/s"
+		<< " | " << FormatBytes(stats.readBytesRequestedPerSecond) << "/s"
+		<< " || W: " << FormatRate(stats.writeOperationsPerSecond) << " ops/s"
+		<< " | " << FormatRate(stats.writeRequestsPerSecond) << " req/s"
+		<< " | " << FormatBytes(stats.writeBytesRequestedPerSecond) << "/s"
+		<< " || Failures R/W: "
+		<< stats.readFailures << "/" << stats.writeFailures;
+
+	return oss.str();
 }
 
 // ------------------------------------------------------------
@@ -462,35 +543,68 @@ uint64_t Memory::FindSignature(
 
 	if (range_start >= range_end)
 	{
-		LOG("[FindSignature] Invalid scan range: start=0x%llX end=0x%llX\n",
-			range_start, range_end);
+		LOG(
+			"[FindSignature] Invalid scan range: start=0x%llX end=0x%llX\n",
+			range_start,
+			range_end
+		);
+		return 0;
+	}
+
+	if (!vHandle)
+	{
+		LOG("[FindSignature] vHandle is null\n");
 		return 0;
 	}
 
 	if (PID == 0)
 		PID = current_process.PID;
 
-	// Parse signature
+	if (PID == 0)
+	{
+		LOG("[FindSignature] PID is zero\n");
+		return 0;
+	}
+
+	// ------------------------------------------------------------
+	// Parse signature such as:
+	// "48 8B ?? ?? 89"
+	// ------------------------------------------------------------
 	std::vector<uint8_t> pattern;
 	std::vector<bool> mask;
 
 	for (const char* cur = signature; *cur;)
 	{
+		if (*cur == ' ')
+		{
+			++cur;
+			continue;
+		}
+
 		if (*cur == '?')
 		{
 			pattern.push_back(0);
 			mask.push_back(false);
-			cur += (cur[1] == '?') ? 2 : 1;
+
+			++cur;
+
+			if (*cur == '?')
+				++cur;
 		}
 		else
 		{
+			// Need two valid hex characters for a normal byte.
+			if (!cur[0] || !cur[1])
+			{
+				LOG("[FindSignature] Invalid signature byte\n");
+				return 0;
+			}
+
 			pattern.push_back(GetByte(cur));
 			mask.push_back(true);
+
 			cur += 2;
 		}
-
-		if (*cur == ' ')
-			++cur;
 	}
 
 	if (pattern.empty())
@@ -499,32 +613,71 @@ uint64_t Memory::FindSignature(
 		return 0;
 	}
 
+	const uint64_t scanSize = range_end - range_start;
+
+	if (scanSize < pattern.size())
+	{
+		LOG("[FindSignature] Scan range is smaller than signature\n");
+		return 0;
+	}
+
 	constexpr size_t CHUNK_SIZE = 0x10000;
-	std::vector<uint8_t> buffer(CHUNK_SIZE + pattern.size());
+
+	std::vector<uint8_t> buffer(
+		CHUNK_SIZE + pattern.size() - 1
+	);
 
 	for (uint64_t addr = range_start; addr < range_end; addr += CHUNK_SIZE)
 	{
-		size_t bytesToRead = std::min(
-			CHUNK_SIZE + pattern.size(),
-			static_cast<size_t>(range_end - addr)
-		);
+		const uint64_t remainingBytes = range_end - addr;
 
-		if (!VMMDLL_MemReadEx(
-			this->vHandle,
+		const size_t bytesToRead = static_cast<size_t>(
+			std::min<uint64_t>(
+				CHUNK_SIZE + pattern.size() - 1,
+				remainingBytes
+			)
+			);
+
+		if (bytesToRead < pattern.size())
+			break;
+
+		DWORD readSize = 0;
+
+		const bool ok = VMMDLL_MemReadEx(
+			vHandle,
 			PID,
 			addr,
 			buffer.data(),
+			static_cast<DWORD>(bytesToRead),
+			&readSize,
+			BuildReadFlags(useCache)
+		);
+
+		const bool completeRead = ok && readSize == bytesToRead;
+
+		// Includes direct signature scanning in traffic statistics.
+		RecordDirectRead(
 			bytesToRead,
-			0,
-			VMMDLL_FLAG_NOCACHE
-		))
+			readSize,
+			completeRead
+		);
+
+		if (!completeRead)
 		{
-			LOG("[FindSignature] MemRead failed at 0x%llX (size=0x%zX)\n",
-				addr, bytesToRead);
+			LOG(
+				"[FindSignature] MemRead failed at 0x%llX "
+				"(requested=0x%zX read=0x%X)\n",
+				addr,
+				bytesToRead,
+				readSize
+			);
+
 			continue;
 		}
 
-		for (size_t i = 0; i <= bytesToRead - pattern.size(); ++i)
+		const size_t lastStartOffset = bytesToRead - pattern.size();
+
+		for (size_t i = 0; i <= lastStartOffset; ++i)
 		{
 			bool match = true;
 
@@ -539,15 +692,23 @@ uint64_t Memory::FindSignature(
 
 			if (match)
 			{
-				uint64_t foundAt = addr + i;
-				LOG("[FindSignature] Match found at 0x%llX\n", foundAt);
+				const uint64_t foundAt = addr + i;
+
+				LOG(
+					"[FindSignature] Match found at 0x%llX\n",
+					foundAt
+				);
+
 				return foundAt;
 			}
 		}
 	}
 
-	LOG("[FindSignature] Signature not found in range 0x%llX–0x%llX\n",
-		range_start, range_end);
+	LOG(
+		"[FindSignature] Signature not found in range 0x%llX-0x%llX\n",
+		range_start,
+		range_end
+	);
 
 	return 0;
 }
@@ -1054,6 +1215,339 @@ uintptr_t Memory::GetImportTableAddress(std::string import, std::string process,
 	return address;
 }
 
+// Stats Section
+
+Memory::TrafficCounterSnapshot Memory::LoadTrafficCounters() const
+{
+	TrafficCounterSnapshot snapshot{};
+
+	snapshot.readOperations =
+		statsReadOperations.load(std::memory_order_relaxed);
+
+	snapshot.writeOperations =
+		statsWriteOperations.load(std::memory_order_relaxed);
+
+	snapshot.readSuccesses =
+		statsReadSuccesses.load(std::memory_order_relaxed);
+
+	snapshot.writeSuccesses =
+		statsWriteSuccesses.load(std::memory_order_relaxed);
+
+	snapshot.readFailures =
+		statsReadFailures.load(std::memory_order_relaxed);
+
+	snapshot.writeFailures =
+		statsWriteFailures.load(std::memory_order_relaxed);
+
+	snapshot.readRequests =
+		statsReadRequests.load(std::memory_order_relaxed);
+
+	snapshot.writeRequests =
+		statsWriteRequests.load(std::memory_order_relaxed);
+
+	snapshot.readBytesRequested =
+		statsReadBytesRequested.load(std::memory_order_relaxed);
+
+	snapshot.writeBytesRequested =
+		statsWriteBytesRequested.load(std::memory_order_relaxed);
+
+	snapshot.directReadBytesReturned =
+		statsDirectReadBytesReturned.load(std::memory_order_relaxed);
+
+	snapshot.scatterReadBatches =
+		statsScatterReadBatches.load(std::memory_order_relaxed);
+
+	snapshot.scatterWriteBatches =
+		statsScatterWriteBatches.load(std::memory_order_relaxed);
+
+	snapshot.scatterReadRequests =
+		statsScatterReadRequests.load(std::memory_order_relaxed);
+
+	snapshot.scatterWriteRequests =
+		statsScatterWriteRequests.load(std::memory_order_relaxed);
+
+	snapshot.scatterClearFailures =
+		statsScatterClearFailures.load(std::memory_order_relaxed);
+
+	return snapshot;
+}
+
+void Memory::RecordDirectRead(
+	size_t requestedBytes,
+	size_t returnedBytes,
+	bool success
+) const
+{
+	statsReadOperations.fetch_add(1, std::memory_order_relaxed);
+	statsReadRequests.fetch_add(1, std::memory_order_relaxed);
+
+	statsReadBytesRequested.fetch_add(
+		static_cast<uint64_t>(requestedBytes),
+		std::memory_order_relaxed
+	);
+
+	statsDirectReadBytesReturned.fetch_add(
+		static_cast<uint64_t>(returnedBytes),
+		std::memory_order_relaxed
+	);
+
+	if (success)
+		statsReadSuccesses.fetch_add(1, std::memory_order_relaxed);
+	else
+		statsReadFailures.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Memory::RecordDirectWrite(
+	size_t requestedBytes,
+	bool success
+) const
+{
+	statsWriteOperations.fetch_add(1, std::memory_order_relaxed);
+	statsWriteRequests.fetch_add(1, std::memory_order_relaxed);
+
+	statsWriteBytesRequested.fetch_add(
+		static_cast<uint64_t>(requestedBytes),
+		std::memory_order_relaxed
+	);
+
+	if (success)
+		statsWriteSuccesses.fetch_add(1, std::memory_order_relaxed);
+	else
+		statsWriteFailures.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Memory::RecordScatterReadRequest(size_t requestedBytes) const
+{
+	statsReadRequests.fetch_add(1, std::memory_order_relaxed);
+	statsScatterReadRequests.fetch_add(1, std::memory_order_relaxed);
+
+	statsReadBytesRequested.fetch_add(
+		static_cast<uint64_t>(requestedBytes),
+		std::memory_order_relaxed
+	);
+}
+
+void Memory::RecordScatterWriteRequest(size_t requestedBytes) const
+{
+	statsWriteRequests.fetch_add(1, std::memory_order_relaxed);
+	statsScatterWriteRequests.fetch_add(1, std::memory_order_relaxed);
+
+	statsWriteBytesRequested.fetch_add(
+		static_cast<uint64_t>(requestedBytes),
+		std::memory_order_relaxed
+	);
+}
+
+void Memory::RecordScatterReadExecute(bool success) const
+{
+	statsReadOperations.fetch_add(1, std::memory_order_relaxed);
+	statsScatterReadBatches.fetch_add(1, std::memory_order_relaxed);
+
+	if (success)
+		statsReadSuccesses.fetch_add(1, std::memory_order_relaxed);
+	else
+		statsReadFailures.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Memory::RecordScatterWriteExecute(bool success) const
+{
+	statsWriteOperations.fetch_add(1, std::memory_order_relaxed);
+	statsScatterWriteBatches.fetch_add(1, std::memory_order_relaxed);
+
+	if (success)
+		statsWriteSuccesses.fetch_add(1, std::memory_order_relaxed);
+	else
+		statsWriteFailures.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Memory::RecordScatterClearFailure() const
+{
+	statsScatterClearFailures.fetch_add(1, std::memory_order_relaxed);
+}
+
+MemoryTrafficStats Memory::GetTrafficStats() const
+{
+	const TrafficCounterSnapshot current = LoadTrafficCounters();
+	const auto now = std::chrono::steady_clock::now();
+
+	std::lock_guard<std::mutex> lock(trafficStatsMutex);
+
+	if (!trafficStatsBaselineValid)
+	{
+		trafficStatsBaseline = current;
+		trafficStatsLastSample = now;
+		trafficStatsBaselineValid = true;
+	}
+	else
+	{
+		const double elapsedSeconds =
+			std::chrono::duration<double>(
+				now - trafficStatsLastSample
+			).count();
+
+		if (elapsedSeconds >= 1.0)
+		{
+			trafficRateSnapshot.sampleWindowSeconds = elapsedSeconds;
+
+			trafficRateSnapshot.readOperationsPerSecond =
+				static_cast<double>(
+					current.readOperations - trafficStatsBaseline.readOperations
+					) / elapsedSeconds;
+
+			trafficRateSnapshot.writeOperationsPerSecond =
+				static_cast<double>(
+					current.writeOperations - trafficStatsBaseline.writeOperations
+					) / elapsedSeconds;
+
+			trafficRateSnapshot.readRequestsPerSecond =
+				static_cast<double>(
+					current.readRequests - trafficStatsBaseline.readRequests
+					) / elapsedSeconds;
+
+			trafficRateSnapshot.writeRequestsPerSecond =
+				static_cast<double>(
+					current.writeRequests - trafficStatsBaseline.writeRequests
+					) / elapsedSeconds;
+
+			trafficRateSnapshot.readBytesRequestedPerSecond =
+				static_cast<double>(
+					current.readBytesRequested -
+					trafficStatsBaseline.readBytesRequested
+					) / elapsedSeconds;
+
+			trafficRateSnapshot.writeBytesRequestedPerSecond =
+				static_cast<double>(
+					current.writeBytesRequested -
+					trafficStatsBaseline.writeBytesRequested
+					) / elapsedSeconds;
+
+			trafficStatsBaseline = current;
+			trafficStatsLastSample = now;
+		}
+	}
+
+	MemoryTrafficStats result{};
+
+	result.readOperations = current.readOperations;
+	result.writeOperations = current.writeOperations;
+
+	result.readSuccesses = current.readSuccesses;
+	result.writeSuccesses = current.writeSuccesses;
+
+	result.readFailures = current.readFailures;
+	result.writeFailures = current.writeFailures;
+
+	result.readRequests = current.readRequests;
+	result.writeRequests = current.writeRequests;
+
+	result.readBytesRequested = current.readBytesRequested;
+	result.writeBytesRequested = current.writeBytesRequested;
+
+	result.directReadBytesReturned =
+		current.directReadBytesReturned;
+
+	result.scatterReadBatches = current.scatterReadBatches;
+	result.scatterWriteBatches = current.scatterWriteBatches;
+
+	result.scatterReadRequests = current.scatterReadRequests;
+	result.scatterWriteRequests = current.scatterWriteRequests;
+
+	result.scatterClearFailures = current.scatterClearFailures;
+
+	result.sampleWindowSeconds =
+		trafficRateSnapshot.sampleWindowSeconds;
+
+	result.readOperationsPerSecond =
+		trafficRateSnapshot.readOperationsPerSecond;
+
+	result.writeOperationsPerSecond =
+		trafficRateSnapshot.writeOperationsPerSecond;
+
+	result.readRequestsPerSecond =
+		trafficRateSnapshot.readRequestsPerSecond;
+
+	result.writeRequestsPerSecond =
+		trafficRateSnapshot.writeRequestsPerSecond;
+
+	result.readBytesRequestedPerSecond =
+		trafficRateSnapshot.readBytesRequestedPerSecond;
+
+	result.writeBytesRequestedPerSecond =
+		trafficRateSnapshot.writeBytesRequestedPerSecond;
+
+	return result;
+}
+
+std::string Memory::GetTrafficStatsString() const
+{
+	bool connected = false;
+
+	{
+		std::lock_guard<std::mutex> lock(handleMutex);
+
+		connected =
+			(vHandle != nullptr) &&
+			DMA_INITIALIZED;
+	}
+
+	if (!connected)
+		return "DMA: Disconnected";
+
+	const MemoryTrafficStats stats = GetTrafficStats();
+
+	std::ostringstream oss;
+
+	oss
+		<< "DMA: Connected - "
+		<< "Reads: "
+		<< FormatCount(stats.readOperationsPerSecond)
+		<< "/s ("
+		<< FormatBytes(stats.readBytesRequestedPerSecond)
+		<< "/s)"
+		<< " | Writes: "
+		<< FormatCount(stats.writeOperationsPerSecond)
+		<< "/s ("
+		<< FormatBytes(stats.writeBytesRequestedPerSecond)
+		<< "/s)";
+
+	return oss.str();
+}
+
+void Memory::ResetTrafficStats()
+{
+	statsReadOperations.store(0, std::memory_order_relaxed);
+	statsWriteOperations.store(0, std::memory_order_relaxed);
+
+	statsReadSuccesses.store(0, std::memory_order_relaxed);
+	statsWriteSuccesses.store(0, std::memory_order_relaxed);
+
+	statsReadFailures.store(0, std::memory_order_relaxed);
+	statsWriteFailures.store(0, std::memory_order_relaxed);
+
+	statsReadRequests.store(0, std::memory_order_relaxed);
+	statsWriteRequests.store(0, std::memory_order_relaxed);
+
+	statsReadBytesRequested.store(0, std::memory_order_relaxed);
+	statsWriteBytesRequested.store(0, std::memory_order_relaxed);
+
+	statsDirectReadBytesReturned.store(0, std::memory_order_relaxed);
+
+	statsScatterReadBatches.store(0, std::memory_order_relaxed);
+	statsScatterWriteBatches.store(0, std::memory_order_relaxed);
+
+	statsScatterReadRequests.store(0, std::memory_order_relaxed);
+	statsScatterWriteRequests.store(0, std::memory_order_relaxed);
+
+	statsScatterClearFailures.store(0, std::memory_order_relaxed);
+
+	std::lock_guard<std::mutex> lock(trafficStatsMutex);
+
+	trafficStatsBaselineValid = false;
+	trafficStatsBaseline = {};
+	trafficRateSnapshot = {};
+	trafficStatsLastSample = {};
+}
+
 // ------------------------------------------------------------
 // Read / Write
 // ------------------------------------------------------------
@@ -1099,20 +1593,13 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache) c
 		BuildReadFlags(useCache)
 	);
 
-	reads.fetch_add(1, std::memory_order_relaxed);
-	dataSize.fetch_add(readSize, std::memory_order_relaxed);
+	const bool completeRead = ok && readSize == size;
 
-	if (!ok || readSize != size)
-	{
-		std::ostringstream oss;
-		oss << "Read failed at " << Hex64(address)
-			<< " requested=" << size
-			<< " read=" << readSize
-			<< " useCache=" << std::boolalpha << useCache;
-
-		//MemoryLogError(oss.str());
-		return false;
-	}
+	RecordDirectRead(
+		size,
+		readSize,
+		completeRead
+	);
 
 	return true;
 }
@@ -1128,12 +1615,6 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool us
 	if (!pid)
 	{
 		MemoryLogError("Read(pid) failed: pid is zero");
-		return false;
-	}
-
-	if (!address)
-	{
-		//MemoryLogError("Read failed: address is null"); // spams log files allot
 		return false;
 	}
 
@@ -1158,21 +1639,13 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool us
 		BuildReadFlags(useCache)
 	);
 
-	reads.fetch_add(1, std::memory_order_relaxed);
-	dataSize.fetch_add(readSize, std::memory_order_relaxed);
+	const bool completeRead = ok && readSize == size;
 
-	if (!ok || readSize != size)
-	{
-		std::ostringstream oss;
-		oss << "Read(pid) failed at " << Hex64(address)
-			<< " pid=" << pid
-			<< " requested=" << size
-			<< " read=" << readSize
-			<< " useCache=" << std::boolalpha << useCache;
-
-		//MemoryLogError(oss.str());
-		return false;
-	}
+	RecordDirectRead(
+		size,
+		readSize,
+		completeRead
+	);
 
 	return true;
 }
@@ -1205,14 +1678,13 @@ bool Memory::Write(uintptr_t address, const void* buffer, size_t size) const
 		size
 	);
 
+	RecordDirectWrite(size, ok);
+
 	if (!ok)
 	{
 		MemoryLogError("Write failed at " + Hex64(address));
 		return false;
 	}
-
-	writes.fetch_add(1, std::memory_order_relaxed);
-	dataSize.fetch_add(size, std::memory_order_relaxed);
 
 	return true;
 }
@@ -1245,14 +1717,13 @@ bool Memory::Write(uintptr_t address, const void* buffer, size_t size, int pid) 
 		size
 	);
 
+	RecordDirectWrite(size, ok);
+
 	if (!ok)
 	{
-		MemoryLogError("Write(pid) failed at " + Hex64(address));
+		MemoryLogError("Write failed at " + Hex64(address));
 		return false;
 	}
-
-	writes.fetch_add(1, std::memory_order_relaxed);
-	dataSize.fetch_add(size, std::memory_order_relaxed);
 
 	return true;
 }
@@ -1584,7 +2055,7 @@ bool Memory::AddScatterReadRequest(
 		return false;
 	}
 
-	dataSize.fetch_add(size, std::memory_order_relaxed);
+	RecordScatterReadRequest(size);
 	return true;
 }
 
@@ -1612,6 +2083,7 @@ bool Memory::AddScatterWriteRequest(
 		return false;
 	}
 
+	RecordScatterWriteRequest(size);
 	return true;
 }
 
@@ -1634,6 +2106,8 @@ bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool useC
 
 	const bool ok = VMMDLL_Scatter_ExecuteRead(handle);
 
+	RecordScatterReadExecute(ok);
+
 	if (!ok)
 		MemoryLogError("Failed to execute scatter read");
 
@@ -1641,12 +2115,10 @@ bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool useC
 
 	if (!VMMDLL_Scatter_Clear(handle, pid, clearFlags))
 	{
+		RecordScatterClearFailure();
 		MemoryLogError("Failed to clear scatter read handle");
 		return false;
 	}
-
-	if (ok)
-		reads.fetch_add(1, std::memory_order_relaxed);
 
 	return ok;
 }
@@ -1670,6 +2142,8 @@ bool Memory::ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool use
 
 	const bool ok = VMMDLL_Scatter_Execute(handle);
 
+	RecordScatterWriteExecute(ok);
+
 	if (!ok)
 		MemoryLogError("Failed to execute scatter write");
 
@@ -1677,12 +2151,10 @@ bool Memory::ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool use
 
 	if (!VMMDLL_Scatter_Clear(handle, pid, clearFlags))
 	{
+		RecordScatterClearFailure();
 		MemoryLogError("Failed to clear scatter write handle");
 		return false;
 	}
-
-	if (ok)
-		writes.fetch_add(1, std::memory_order_relaxed);
 
 	return ok;
 }
@@ -1756,4 +2228,171 @@ int Memory::FindSignatureOffset(
 	return -1;
 }
 
+//stats functions
 
+MemoryConnectionStats Memory::GetConnectionStats() const
+{
+	MemoryConnectionStats stats{};
+
+	std::lock_guard<std::mutex> lock(handleMutex);
+
+	stats.vmmHandleValid = (vHandle != nullptr);
+	stats.dmaInitialized = DMA_INITIALIZED;
+	stats.processInitialized = PROCESS_INITIALIZED;
+
+	stats.vmmLibraryLoaded = (modules.VMM != nullptr);
+	stats.leechCoreLibraryLoaded = (modules.LEECHCORE != nullptr);
+	stats.ftd3xxLibraryLoaded = (modules.FTD3XX != nullptr);
+
+	stats.vmmHandleAddress =
+		static_cast<uint64_t>(
+			reinterpret_cast<uintptr_t>(vHandle)
+			);
+
+	stats.processId = current_process.PID;
+	stats.processName = current_process.process_name;
+
+	stats.targetBaseAddress = current_process.base_address;
+	stats.targetBaseSize = current_process.base_size;
+
+	if (!vHandle)
+		return stats;
+
+	ULONG64 fpgaId = 0;
+	ULONG64 deviceId = 0;
+	ULONG64 firmwareMajor = 0;
+	ULONG64 firmwareMinor = 0;
+
+	const bool gotFpgaId =
+		VMMDLL_ConfigGet(vHandle, LC_OPT_FPGA_FPGA_ID, &fpgaId);
+
+	const bool gotDeviceId =
+		VMMDLL_ConfigGet(vHandle, LC_OPT_FPGA_DEVICE_ID, &deviceId);
+
+	const bool gotFirmwareMajor =
+		VMMDLL_ConfigGet(
+			vHandle,
+			LC_OPT_FPGA_VERSION_MAJOR,
+			&firmwareMajor
+		);
+
+	const bool gotFirmwareMinor =
+		VMMDLL_ConfigGet(
+			vHandle,
+			LC_OPT_FPGA_VERSION_MINOR,
+			&firmwareMinor
+		);
+
+	stats.fpgaInfoAvailable =
+		gotFpgaId &&
+		gotDeviceId &&
+		gotFirmwareMajor &&
+		gotFirmwareMinor;
+
+	stats.fpgaId = fpgaId;
+	stats.deviceId = deviceId;
+	stats.firmwareMajor = firmwareMajor;
+	stats.firmwareMinor = firmwareMinor;
+
+	ULONG64 processPartialTicks = 0;
+	ULONG64 processTotalTicks = 0;
+	ULONG64 readCacheTicks = 0;
+	ULONG64 tlbCacheTicks = 0;
+
+	const bool gotPartial =
+		VMMDLL_ConfigGet(
+			vHandle,
+			VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_PARTIAL,
+			&processPartialTicks
+		);
+
+	const bool gotTotal =
+		VMMDLL_ConfigGet(
+			vHandle,
+			VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_TOTAL,
+			&processTotalTicks
+		);
+
+	const bool gotReadCache =
+		VMMDLL_ConfigGet(
+			vHandle,
+			VMMDLL_OPT_CONFIG_READCACHE_TICKS,
+			&readCacheTicks
+		);
+
+	const bool gotTlbCache =
+		VMMDLL_ConfigGet(
+			vHandle,
+			VMMDLL_OPT_CONFIG_TLBCACHE_TICKS,
+			&tlbCacheTicks
+		);
+
+	stats.cacheInfoAvailable =
+		gotPartial &&
+		gotTotal &&
+		gotReadCache &&
+		gotTlbCache;
+
+	stats.processCachePartialTicks = processPartialTicks;
+	stats.processCacheTotalTicks = processTotalTicks;
+	stats.readCacheTicks = readCacheTicks;
+	stats.tlbCacheTicks = tlbCacheTicks;
+
+	return stats;
+}
+
+std::string Memory::GetConnectionStatsString() const
+{
+	const MemoryConnectionStats connection = GetConnectionStats();
+	const MemoryTrafficStats traffic = GetTrafficStats();
+
+	std::ostringstream oss;
+
+	oss
+		<< "DMA: "
+		<< (connection.dmaInitialized ? "Connected" : "Disconnected")
+		<< " | VMM Handle: "
+		<< (connection.vmmHandleValid
+			? Hex64(connection.vmmHandleAddress)
+			: "None")
+
+		<< "\nLibraries: "
+		<< "vmm=" << (connection.vmmLibraryLoaded ? "OK" : "Missing")
+		<< " | leechcore=" << (connection.leechCoreLibraryLoaded ? "OK" : "Missing")
+		<< " | FTD3XX=" << (connection.ftd3xxLibraryLoaded ? "OK" : "Missing")
+
+		<< "\nTarget: "
+		<< (connection.processName.empty()
+			? "<none>"
+			: connection.processName)
+		<< " | PID: " << connection.processId
+		<< " | Base: " << Hex64(connection.targetBaseAddress)
+		<< " | Size: " << FormatBytes(
+			static_cast<double>(connection.targetBaseSize)
+		);
+
+	if (connection.fpgaInfoAvailable)
+	{
+		oss
+			<< "\nFPGA ID: " << Hex64(connection.fpgaId)
+			<< " | Device ID: " << Hex64(connection.deviceId)
+			<< " | Firmware: "
+			<< connection.firmwareMajor
+			<< '.'
+			<< connection.firmwareMinor;
+	}
+
+	if (connection.cacheInfoAvailable)
+	{
+		oss
+			<< "\nCache ticks: "
+			<< "ProcPartial=" << connection.processCachePartialTicks
+			<< " | ProcTotal=" << connection.processCacheTotalTicks
+			<< " | Read=" << connection.readCacheTicks
+			<< " | TLB=" << connection.tlbCacheTicks;
+	}
+
+	oss << "\n" << BuildTrafficStatsString(traffic);
+
+	return oss.str();
+}
