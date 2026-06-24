@@ -344,7 +344,7 @@ private:
 
 	std::string voice2Name(std::string voiceName);
 
-	PlayerCache getBonePtrs(PlayerCache& players);
+	bool getBonePtrs(PlayerCache& players);
 
 	void readDogTagComponent(PlayerCache& players, bool force = false);
 

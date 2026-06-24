@@ -229,18 +229,35 @@ std::vector<PlayerGroups>& Players::getGroupCache() {
     return playerGroups;
 }
 
-PlayerCache Players::getBonePtrs(PlayerCache& players)
+bool Players::getBonePtrs(PlayerCache& player)
 {
+    if (!Utils::valid_pointer(player.playerBoneMatrixPtr))
+        return false;
 
-    int index = 0;
-    for (auto& curBone : players.boneList)
+    if (player.boneList.empty())
+        return false;
+
+    if (player.bonePtrs.size() != player.boneList.size())
+        player.bonePtrs.resize(player.boneList.size(), 0);
+
+    bool allResolved = true;
+
+    for (size_t i = 0; i < player.boneList.size(); ++i)
     {
-        players.bonePtrs[index] = mem.ReadChain(players.playerBoneMatrixPtr, { (0x20 + (static_cast<uint64_t>(curBone) * 0x8)), 0x10 });
-        //std::cout << "BonePointer[" << std::to_string(index) << "] 0x" << std::hex << players.bonePtrs[index] << std::endl;
-        index++;
+        const uint64_t bonePtr = mem.ReadChain(
+            player.playerBoneMatrixPtr,
+            {
+                0x20 + (static_cast<uint64_t>(player.boneList[i]) * 0x8),
+                0x10
+            });
+
+        player.bonePtrs[i] = Utils::valid_pointer(bonePtr) ? bonePtr : 0;
+
+        if (!player.bonePtrs[i])
+            allResolved = false;
     }
 
-    return players;
+    return allResolved;
 }
 
 void Players::readDogTagComponent(PlayerCache& player, bool force)
@@ -311,201 +328,401 @@ void Players::readDogTagComponent(PlayerCache& player, bool force)
 
 void Players::boneTask()
 {
+    constexpr int MAX_TRANSFORM_CHAIN = 512;
+    constexpr auto BONE_PTR_REFRESH_INTERVAL = std::chrono::milliseconds(500);
+
+    struct HierarchySnapshot
+    {
+        uint64_t pTransformArray{};
+        uint64_t pTransformIndices{};
+    };
+
+    struct PlayerBoneSnapshot
+    {
+        uint64_t instance{};
+
+        std::vector<uint64_t> bonePtrs;
+        std::vector<TransformAccessReadOnly> transforms;
+        std::vector<HierarchySnapshot> hierarchy;
+
+        std::vector<std::vector<Matrix34>> matrices;
+        std::vector<std::vector<int32_t>> indices;
+
+        bool invalidBones{ false };
+        bool refreshBonePtrs{ false };
+    };
+
+    struct ScatterGuard
+    {
+        Memory& mem;
+        VMMDLL_SCATTER_HANDLE handle{ nullptr };
+
+        explicit ScatterGuard(Memory& memory)
+            : mem(memory),
+            handle(memory.CreateScatterHandle())
+        {
+        }
+
+        ~ScatterGuard()
+        {
+            if (handle)
+                mem.CloseScatterHandle(handle);
+        }
+    };
+
     try
     {
-        if (!mem.vHandle) return;
-        if (!Utils::valid_pointer(mainGame.localPlayerPtr)) return;
+        if (!mem.vHandle)
+            return;
+
+        if (!Utils::valid_pointer(mainGame.localPlayerPtr))
+            return;
+
+        std::vector<PlayerBoneSnapshot> snapshots;
+
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+
+            std::vector<PlayerCache>& cache = players.getCache();
+
+            if (cache.empty())
+                return;
+
+            snapshots.reserve(cache.size());
+
+            for (auto& player : cache)
+            {
+                if (!Utils::valid_pointer(player.instance))
+                    continue;
+
+                if (player.isBTR || player.isDead || player.hasExfiled)
+                    continue;
+
+                const size_t boneCount = player.bonePtrs.size();
+
+                if (boneCount == 0 ||
+                    player.boneTransforms.size() != boneCount ||
+                    player.boneTransformsData.size() != boneCount)
+                {
+                    player.invalidBones = true;
+                    continue;
+                }
+
+                snapshots.emplace_back();
+
+                PlayerBoneSnapshot& snapshot = snapshots.back();
+
+                snapshot.instance = player.instance;
+                snapshot.bonePtrs = player.bonePtrs;
+
+                snapshot.transforms.resize(boneCount);
+                snapshot.hierarchy.resize(boneCount);
+                snapshot.matrices.resize(boneCount);
+                snapshot.indices.resize(boneCount);
+            }
+        }
+
+        if (snapshots.empty())
+            return;
+
+        ScatterGuard scatter(mem);
+
+        if (!scatter.handle)
+            return;
+
+        bool hasRequests = false;
+
+        for (auto& snapshot : snapshots)
+        {
+            for (size_t i = 0; i < snapshot.bonePtrs.size(); ++i)
+            {
+                const uint64_t bonePtr = snapshot.bonePtrs[i];
+
+                if (!Utils::valid_pointer(bonePtr))
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                snapshot.transforms[i] = {};
+
+                const uint64_t address = bonePtr + UnityOffsets::TransformInternal_TransformAccessOffset;
+
+                if (!mem.AddScatterReadRequest(scatter.handle, address, &snapshot.transforms[i], sizeof(TransformAccessReadOnly)))
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                hasRequests = true;
+            }
+        }
+
+        if (hasRequests && !mem.ExecuteReadScatter(scatter.handle))
+        {
+            for (auto& snapshot : snapshots)
+                snapshot.invalidBones = true;
+        }
+
+        hasRequests = false;
+
+        for (auto& snapshot : snapshots)
+        {
+            if (snapshot.invalidBones)
+                continue;
+
+            for (size_t i = 0; i < snapshot.bonePtrs.size(); ++i)
+            {
+                const TransformAccessReadOnly& access = snapshot.transforms[i];
+
+                if (!Utils::valid_pointer(access.pTransformData) || access.index < 0 || access.index >= MAX_TRANSFORM_CHAIN)
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                HierarchySnapshot& hierarchy = snapshot.hierarchy[i];
+                hierarchy = {};
+
+                if (!mem.AddScatterReadRequest( scatter.handle, access.pTransformData + UnityOffsets::Hierarchy_VerticesOffset, &hierarchy.pTransformArray, sizeof(uint64_t)))
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                if (!mem.AddScatterReadRequest( scatter.handle, access.pTransformData + UnityOffsets::Hierarchy_IndicesOffset, &hierarchy.pTransformIndices, sizeof(uint64_t)))
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                hasRequests = true;
+            }
+        }
+
+        if (hasRequests && !mem.ExecuteReadScatter(scatter.handle))
+        {
+            for (auto& snapshot : snapshots)
+                snapshot.invalidBones = true;
+        }
+
+        hasRequests = false;
+
+        for (auto& snapshot : snapshots)
+        {
+            if (snapshot.invalidBones)
+                continue;
+
+            for (size_t i = 0; i < snapshot.bonePtrs.size(); ++i)
+            {
+                const TransformAccessReadOnly& access = snapshot.transforms[i];
+
+                const HierarchySnapshot& hierarchy = snapshot.hierarchy[i];
+
+                if (!Utils::valid_pointer(hierarchy.pTransformArray) || !Utils::valid_pointer(hierarchy.pTransformIndices))
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                const size_t transformCount = static_cast<size_t>(access.index) + 1;
+
+                if (transformCount == 0 || transformCount > static_cast<size_t>(MAX_TRANSFORM_CHAIN))
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                std::vector<Matrix34>& matrices = snapshot.matrices[i];
+
+                std::vector<int32_t>& indices = snapshot.indices[i];
+
+                matrices.assign(transformCount, Matrix34{});
+                indices.assign(transformCount, 0);
+
+                const SIZE_T matrixBytes = static_cast<SIZE_T>( transformCount * sizeof(Matrix34));
+
+                const SIZE_T indexBytes = static_cast<SIZE_T>( transformCount * sizeof(int32_t));
+
+                if (!mem.AddScatterReadRequest(scatter.handle, hierarchy.pTransformArray, matrices.data(), matrixBytes))
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                if (!mem.AddScatterReadRequest(scatter.handle, hierarchy.pTransformIndices, indices.data(), indexBytes))
+                {
+                    snapshot.invalidBones = true;
+                    snapshot.refreshBonePtrs = true;
+                    break;
+                }
+
+                hasRequests = true;
+            }
+        }
+
+        if (hasRequests && !mem.ExecuteReadScatter(scatter.handle))
+        {
+            for (auto& snapshot : snapshots)
+                snapshot.invalidBones = true;
+        }
 
         std::lock_guard<std::mutex> lock(playerMutex);
 
         std::vector<PlayerCache>& cache = players.getCache();
-        if (cache.empty()) return;
 
-        struct ScatterGuard {
-            Memory& mem;
-            HANDLE handle;
-            ScatterGuard(Memory& m) : mem(m), handle(m.CreateScatterHandle()) {}
-            ~ScatterGuard() { if (handle) mem.CloseScatterHandle(handle); }
-        } scatter(mem);
+        static std::unordered_map<uint64_t, std::chrono::steady_clock::time_point > nextBonePtrRefresh;
 
-        if (!scatter.handle) return;
+        const auto now = std::chrono::steady_clock::now();
 
-        
-        constexpr int MAX_TRANSFORM_CHAIN = 512;
-
-        // Read TransformAccessReadOnly
-        for (auto& player : cache)
-        {
-            if (!Utils::valid_pointer(player.instance)) continue;
-            if (player.isBTR) continue;
-            if (player.isDead) continue;
-            if (player.hasExfiled) continue;
-            player.invalidBones = false;
-
-            size_t count = std::min(player.bonePtrs.size(), player.boneTransforms.size());
-            if (count == 0) continue;
-            
-            
-
-            for (size_t i = 0; i < count; ++i)
+        auto ensureBuffer = [](void*& buffer, SIZE_T& capacity, SIZE_T requiredBytes) -> bool
             {
-                
+                if (buffer && capacity >= requiredBytes)
+                    return true;
 
-                uint64_t addr = player.bonePtrs[i] + UnityOffsets::TransformInternal_TransformAccessOffset;
+                void* resized = realloc(buffer, requiredBytes);
 
-                mem.AddScatterReadRequest(
-                    scatter.handle,
-                    addr,
-                    &player.boneTransforms[i],
-                    sizeof(TransformAccessReadOnly));
+                if (!resized)
+                    return false;
+
+                buffer = resized;
+                capacity = requiredBytes;
+
+                return true;
+            };
+
+        for (auto& snapshot : snapshots)
+        {
+            auto playerIt = std::find_if(
+                cache.begin(),
+                cache.end(),
+                [&snapshot](const PlayerCache& player)
+                {
+                    return player.instance == snapshot.instance;
+                });
+
+            if (playerIt == cache.end())
+                continue;
+
+            PlayerCache& player = *playerIt;
+
+            if (!Utils::valid_pointer(player.instance))
+                continue;
+
+            if (player.isBTR || player.isDead || player.hasExfiled)
+                continue;
+
+            const size_t boneCount = snapshot.bonePtrs.size();
+
+            if (player.bonePtrs.size() != boneCount ||
+                player.boneTransforms.size() != boneCount ||
+                player.boneTransformsData.size() != boneCount ||
+                player.bonePtrs != snapshot.bonePtrs)
+            {
+                continue;
             }
-        }
-        mem.ExecuteReadScatter(scatter.handle);
 
-        // Same filtering
-        for (auto& player : cache)
-        {
-
-            if (!Utils::valid_pointer(player.instance)) continue;
-            if (player.isBTR || player.invalidBones || player.isDead) continue;
-
-            if (player.hasExfiled) continue;
-
-            size_t count = std::min(player.bonePtrs.size(), player.boneTransforms.size());
-            count = std::min(count, player.boneTransformsData.size());
-            if (count == 0) continue;
-
-            
-
-            for (size_t i = 0; i < count; ++i)
+            if (snapshot.invalidBones)
             {
-                
+                player.invalidBones = true;
 
-                auto& access = player.boneTransforms[i];
-                auto& out = player.boneTransformsData[i];
-                if (!access.pTransformData) { player.invalidBones = true; break; }
+                if (snapshot.refreshBonePtrs)
+                {
+                    auto& nextAllowed = nextBonePtrRefresh[player.instance];
 
-                uint64_t base = access.pTransformData;
-                mem.AddScatterReadRequest(
-                    scatter.handle,
-                    base + UnityOffsets::Hierarchy_VerticesOffset,
-                    &out.pTransformArray,
-                    sizeof(uint64_t));
-                mem.AddScatterReadRequest(
-                    scatter.handle,
-                    base + UnityOffsets::Hierarchy_IndicesOffset,
-                    &out.pTransformIndices,
-                    sizeof(uint64_t));
+                    if (now >= nextAllowed)
+                    {
+                        getBonePtrs(player);
+
+                        nextAllowed = now + BONE_PTR_REFRESH_INTERVAL;
+                    }
+                }
+
+                continue;
             }
-        }
-        mem.ExecuteReadScatter(scatter.handle);
 
-        // Same filtering
-        for (auto& player : cache)
-        {
+            if (player.pMatriciesBuffers.size() < boneCount)
+                player.pMatriciesBuffers.resize(boneCount, nullptr);
 
-            if (!Utils::valid_pointer(player.instance)) continue;
-            if (player.isBTR || player.invalidBones || player.isDead) continue;
-            if (player.hasExfiled) continue;
+            if (player.pIndicesBuffers.size() < boneCount)
+                player.pIndicesBuffers.resize(boneCount, nullptr);
 
-            size_t count = std::min(player.bonePtrs.size(), player.boneTransforms.size());
-            count = std::min(count, player.boneTransformsData.size());
-            if (count == 0) continue;
+            if (player.matCap.size() < boneCount)
+                player.matCap.resize(boneCount, 0);
 
-            
+            if (player.idxCap.size() < boneCount)
+                player.idxCap.resize(boneCount, 0);
 
-            // Ensure vectors sized correctly
-            if (player.pMatriciesBuffers.size() < count)
-                player.pMatriciesBuffers.resize(count, nullptr);
-            if (player.pIndicesBuffers.size() < count)
-                player.pIndicesBuffers.resize(count, nullptr);
-            if (player.matCap.size() < count)
-                player.matCap.resize(count, 0);
-            if (player.idxCap.size() < count)
-                player.idxCap.resize(count, 0);
+            bool buffersReady = true;
 
-            for (size_t i = 0; i < count; ++i)
+            for (size_t i = 0; i < boneCount; ++i)
             {
-                
+                const SIZE_T matrixBytes = static_cast<SIZE_T>( snapshot.matrices[i].size() * sizeof(Matrix34));
 
-                auto& access = player.boneTransforms[i];
-                auto& data = player.boneTransformsData[i];
+                const SIZE_T indexBytes = static_cast<SIZE_T>( snapshot.indices[i].size() * sizeof(int32_t));
 
-                if (!data.pTransformArray || !data.pTransformIndices)
+                if (!ensureBuffer(player.pMatriciesBuffers[i], player.matCap[i], matrixBytes) ||
+                    !ensureBuffer(player.pIndicesBuffers[i], player.idxCap[i], indexBytes))
                 {
-                    player.invalidBones = true;
+                    buffersReady = false;
                     break;
                 }
+            }
 
-                int tCount = access.index + 1;
-                if (tCount <= 0 || tCount > MAX_TRANSFORM_CHAIN)
-                {
-                    player.invalidBones = true;
-                    break;
-                }
+            if (!buffersReady)
+            {
+                player.invalidBones = true;
+                continue;
+            }
 
-                SIZE_T matSize = tCount * sizeof(Matrix34);
-                SIZE_T idxSize = tCount * sizeof(int32_t);
+            for (size_t i = 0; i < boneCount; ++i)
+            {
+                player.boneTransforms[i] = snapshot.transforms[i];
 
-                // Grow / allocate matrices buffer if needed
-                if (!player.pMatriciesBuffers[i] || player.matCap[i] < matSize)
-                {
-                    if (player.pMatriciesBuffers[i])
-                        free(player.pMatriciesBuffers[i]);
+                player.boneTransformsData[i].pTransformArray = snapshot.hierarchy[i].pTransformArray;
 
-                    player.pMatriciesBuffers[i] = malloc(matSize);
-                    player.matCap[i] = matSize;
-                }
+                player.boneTransformsData[i].pTransformIndices = snapshot.hierarchy[i].pTransformIndices;
 
-                // Grow / allocate indices buffer if needed
-                if (!player.pIndicesBuffers[i] || player.idxCap[i] < idxSize)
-                {
-                    if (player.pIndicesBuffers[i])
-                        free(player.pIndicesBuffers[i]);
+                const SIZE_T matrixBytes = static_cast<SIZE_T>(snapshot.matrices[i].size() * sizeof(Matrix34));
 
-                    player.pIndicesBuffers[i] = malloc(idxSize);
-                    player.idxCap[i] = idxSize;
-                }
+                const SIZE_T indexBytes = static_cast<SIZE_T>(snapshot.indices[i].size() * sizeof(int32_t));
 
-                if (!player.pMatriciesBuffers[i] || !player.pIndicesBuffers[i])
-                {
-                    player.invalidBones = true;
-                    break;
-                }
-
-                mem.AddScatterReadRequest(
-                    scatter.handle,
-                    data.pTransformArray,
+                memcpy(
                     player.pMatriciesBuffers[i],
-                    matSize);
+                    snapshot.matrices[i].data(),
+                    matrixBytes);
 
-                mem.AddScatterReadRequest(
-                    scatter.handle,
-                    data.pTransformIndices,
+                memcpy(
                     player.pIndicesBuffers[i],
-                    idxSize);
+                    snapshot.indices[i].data(),
+                    indexBytes);
             }
-        }
 
-        mem.ExecuteReadScatter(scatter.handle);
+            player.invalidBones = false;
+            nextBonePtrRefresh.erase(player.instance);
 
-        // final bone positions
-        for (auto& player : cache)
-        {
-            if (!Utils::valid_pointer(player.instance)) continue;
-            if (!player.isBTR && !player.invalidBones && !player.isDead && !player.hasExfiled)
-                player.UpdateBonePositions();
-            //else
-               // std::cout << "Failed boneposition checks" << std::endl;
+            player.UpdateBonePositions();
         }
     }
-    catch (const std::exception& e) {
-        LOGS.logError("Exception caught in BoneTask: " + std::string(e.what()) + ". Retrying...");
-        return;
+    catch (const std::exception& e)
+    {
+        LOGS.logError(
+            "Exception caught in BoneTask: " +
+            std::string(e.what()) +
+            ". Retrying...");
     }
-    catch (...) {
-        LOGS.logError("Unknown exception caught in BoneTask. Retrying...");
-        return;
+    catch (...)
+    {
+        LOGS.logError(
+            "Unknown exception caught in BoneTask. Retrying...");
     }
 }
 
@@ -1180,7 +1397,11 @@ std::optional<PlayerCache> Players::buildEntity(const uint64_t instance, bool is
     {
         try
         {
-            newEntity = getBonePtrs(newEntity);
+            if (!getBonePtrs(newEntity))
+            {
+                LogInitFail("Failed to resolve one or more bone pointers");
+                return std::nullopt;
+            }
         }
         catch (...)
         {
