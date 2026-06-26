@@ -2398,23 +2398,54 @@ static void renderMenuSettings()
 
 
                 ImGui::SeparatorText("Radar Control");
-                if (!memoryGlobals::dmaConnected)
+                const bool dmaConnected = memoryGlobals::dmaConnected.load(
+                    std::memory_order_acquire
+                );
+
+                const bool processFound = memoryGlobals::processFound.load(
+                    std::memory_order_acquire
+                );
+
+                const bool working = mem.IsInitRunning();
+                const bool stopping = mem.IsDisconnectRequested();
+
+                if (working)
                 {
-                    if (ImGui::Button("DMA Connect", ImVec2(140, 30))) { mem.doDMAConnect(); }
-                   
-                    //auto connect if not connected and auto connect ticked
-                    if (!memoryGlobals::dmaConnected && memoryGlobals::dmaAutoConnect)
+                    ImGui::BeginDisabled();
+
+                    ImGui::Button(
+                        stopping ? "Stopping..." : "Working...",
+                        ImVec2(140, 30)
+                    );
+
+                    ImGui::EndDisabled();
+
+                    ImGui::SameLine();
+
+                    if (!stopping && ImGui::Button("Disconnect", ImVec2(140, 30)))
+                    {
+                        mem.doDMADisconnect();
+                    }
+                }
+                else if (!dmaConnected)
+                {
+                    if (ImGui::Button("Connect", ImVec2(140, 30)))
                     {
                         mem.doDMAConnect();
                     }
-
                 }
                 else
                 {
-                    if (ImGui::Button("Disconnect", ImVec2(140, 30))) { mem.~Memory(); exit(1); }
+                    if (ImGui::Button("Disconnect", ImVec2(140, 30)))
+                    {
+                        mem.doDMADisconnect();
+                    }
+
                     ImGui::SameLine();
-                    if (ImGui::Button("Soft Restart", ImVec2(140, 30))) {
-                        //std::unique_lock<std::mutex> lockPlayers(playerMtx);
+
+                    if (processFound &&
+                        ImGui::Button("Soft Restart", ImVec2(140, 30)))
+                    {
                         players.softRestart();
                     }
                 }
@@ -3993,25 +4024,40 @@ static void renderMainScreen()
     {
         const char* Text = "";
 
-        //enable testing of in raid view, comment out for production
-        //memoryGlobals::dmaConnected, memoryGlobals::processFound, appGlobals::runRadar = true; mapGlobals::currentMapName = "bigmap";
+        const bool dmaConnected = memoryGlobals::dmaConnected.load(
+            std::memory_order_acquire
+        );
 
-        if (!memoryGlobals::dmaConnected)
+        const bool processFound = memoryGlobals::processFound.load(
+            std::memory_order_acquire
+        );
+
+        const bool working = mem.IsInitRunning();
+        const bool stopping = mem.IsDisconnectRequested();
+
+        if (stopping)
+        {
+            Text = "Disconnecting DMA";
+        }
+        else if (working && !dmaConnected)
+        {
+            Text = "Connecting to DMA";
+        }
+        else if (!dmaConnected)
         {
             Text = "Waiting for DMA Connection";
         }
-        if (memoryGlobals::dmaConnected && !memoryGlobals::processFound)
+        else if (!processFound)
         {
-            Text = "Waiting for EFT Process";
+            Text = "Waiting for Process";
         }
-        if (memoryGlobals::dmaConnected && memoryGlobals::processFound && !appGlobals::runRadar.load(std::memory_order_acquire))
+        else if (!appGlobals::runRadar.load(std::memory_order_acquire))
         {
-
-            if (gameGlobals::inHideout)
-                Text = "In Hideout Session";
-            else
-                Text = "Waiting for Raid Start";
-
+            Text = "Waiting for Raid Start";
+        }
+        else
+        {
+            Text = "Connected";
         }
 
 

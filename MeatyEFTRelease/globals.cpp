@@ -56,11 +56,11 @@ std::atomic_bool appGlobals::runRadar = false;
 std::atomic_bool appGlobals::runThreads = false;
 
 // memoryGlobals struct
-bool memoryGlobals::dmaConnected = false;
+std::atomic_bool memoryGlobals::dmaConnected{ false };
+std::atomic_bool memoryGlobals::processFound{ false };
 bool memoryGlobals::dmaAutoConnect = false;
 bool memoryGlobals::dmaCloseAll = true;
 bool memoryGlobals::dmaShowStats = true;
-bool memoryGlobals::processFound = false;
 
 
 bool radarGlobals::drawPlayers = false;

@@ -83,6 +83,15 @@ struct MemoryConnectionStats
     uint64_t tlbCacheTicks = 0;
 };
 
+enum class DmaConnectionState : uint8_t
+{
+    Disconnected,
+    Connecting,
+    WaitingForProcess,
+    Connected,
+    Failed
+};
+
 class Memory
 {
 private:
@@ -112,14 +121,15 @@ private:
     bool SetFPGA();
     void setCustomRefreshData();
 
-    
+    std::thread dmaThread;
+
+    std::atomic_bool initRunning{ false };
+    std::atomic_bool cancelInit{ false };
+    std::atomic<DmaConnectionState> dmaState{ DmaConnectionState::Disconnected };
 
     std::shared_ptr<c_keys> key;
     c_registry registry;
     c_shellcode shellcode;
-
-    std::thread dmaThread;
-    std::atomic_bool initRunning{ false };
     
 private:
     struct TrafficCounterSnapshot
@@ -243,7 +253,13 @@ public:
     const c_shellcode& GetShellcode() const { return shellcode; }
 
     bool Init(bool memMap = true, bool debug = false);
+    bool WaitForRetryOrCancel(DWORD milliseconds);
+    void CloseAndReset();
     void doDMAConnect();
+
+    DmaConnectionState GetDmaState() const;
+
+    bool IsInitRunning() const;
 
     DWORD GetPidFromName(const std::string& process_name);
     std::vector<int> GetPidListFromName(const std::string& process_name);
@@ -445,6 +461,10 @@ public:
     }
 
     bool fullRefresh();
+
+    void doDMADisconnect();
+
+    bool IsDisconnectRequested() const;
 
 
     ULONG64 GET_MonoModuleAddress(char* module_name);

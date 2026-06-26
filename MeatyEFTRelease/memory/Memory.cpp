@@ -44,6 +44,14 @@ namespace
 		LOGS.logError("[Memory] " + message);
 	}
 
+	void MemoryLogInfo(const char* message)
+	{
+		LOGS.logInfo(
+			std::string("[Memory] ") +
+			(message ? message : "")
+		);
+	}
+
 	void MemoryLogInfo(const std::string& message)
 	{
 		LOGS.logInfo("[Memory] " + message);
@@ -215,77 +223,242 @@ Memory::~Memory()
 
 void Memory::doDMAConnect()
 {
-	if (initRunning.exchange(true))
-		return;
+	bool expected = false;
+
+	if (!initRunning.compare_exchange_strong(
+		expected,
+		true,
+		std::memory_order_acq_rel
+	))
+	{
+		return; // Already connecting / waiting for process.
+	}
+
+	// Previous worker completed but its std::thread object still exists.
+	// It is safe to join here because initRunning was false before CAS succeeded.
+	if (dmaThread.joinable())
+		dmaThread.join();
+
+	cancelInit.store(false, std::memory_order_release);
 
 	dmaThread = std::thread([this]()
 		{
-			Init();
-			initRunning = false;
+			bool success = false;
+
+			try
+			{
+				success = Init(true, false);
+			}
+			catch (const std::exception& e)
+			{
+				MemoryLogInfo(std::string("[!] DMA worker exception: ") + e.what());
+			}
+			catch (...)
+			{
+				MemoryLogInfo("[!] Unknown DMA worker exception");
+			}
+
+			// Init returns false when cancelled or when DMA setup genuinely fails.
+			if (!success || cancelInit.load(std::memory_order_acquire))
+			{
+				CloseAndReset();
+			}
+
+			initRunning.store(false, std::memory_order_release);
 		});
+}
+
+DmaConnectionState Memory::GetDmaState() const
+{
+	return dmaState.load(std::memory_order_acquire);
+}
+
+bool Memory::IsInitRunning() const
+{
+	return initRunning.load(std::memory_order_acquire);
 }
 
 // ------------------------------------------------------------
 // Restricted / unsupported routines
 // ------------------------------------------------------------
 
+std::filesystem::path GetMemMapPath()
+{
+	std::error_code ec;
+	const auto currentDir = std::filesystem::current_path(ec);
+	return ec
+		? std::filesystem::path("mmap.txt")
+		: currentDir / "mmap.txt";
+}
+
+bool IsMemMapFileValid(const std::filesystem::path& mapPath)
+{
+	std::error_code ec;
+
+	if (!std::filesystem::is_regular_file(mapPath, ec) || ec)
+		return false;
+
+	const auto fileSize = std::filesystem::file_size(mapPath, ec);
+	if (ec || fileSize == 0)
+		return false;
+
+	std::ifstream file(mapPath);
+	if (!file.is_open())
+		return false;
+
+	std::string line;
+	bool foundValidRange = false;
+
+	while (std::getline(file, line))
+	{
+		if (line.find_first_not_of(" \t\r\n") == std::string::npos)
+			continue;
+
+		std::istringstream stream(line);
+
+		std::uint64_t start = 0;
+		std::uint64_t end = 0;
+		std::string trailing;
+
+		if (!(stream >> std::hex >> start >> end))
+			return false;
+
+		if (start > end)
+			return false;
+
+		if (stream >> trailing)
+			return false;
+
+		foundValidRange = true;
+	}
+
+	return foundValidRange;
+}
+
 bool Memory::DumpMemoryMap(bool debug)
 {
-	LPCSTR args[] = { const_cast<LPCSTR>(""), const_cast<LPCSTR>("-device"), const_cast<LPCSTR>("fpga://algo=0"), const_cast<LPCSTR>(""), const_cast<LPCSTR>("") };
-	int argc = 3;
+	const std::filesystem::path mapPath = GetMemMapPath();
+	std::filesystem::path tempMapPath = mapPath;
+	tempMapPath += ".tmp";
+
+	std::vector<LPCSTR> args;
+	args.reserve(8);
+
+	args.push_back("");
+	args.push_back("-device");
+	args.push_back("fpga://algo=0");
+
 	if (debug)
 	{
-		args[argc++] = const_cast<LPCSTR>("-v");
-		args[argc++] = const_cast<LPCSTR>("-printf");
+		args.push_back("-v");
+		args.push_back("-printf");
 	}
 
-	VMM_HANDLE handle = VMMDLL_Initialize(argc, args);
-	if (!handle)
+	VMM_HANDLE tempHandle = VMMDLL_Initialize(
+		static_cast<DWORD>(args.size()),
+		args.data()
+	);
+
+	if (!tempHandle)
 	{
-		LOG("[!] Failed to open a VMM Handle\n");
+		MemoryLogInfo("[!] Failed to open temporary VMM handle for mmap dump");
 		return false;
 	}
 
-	PVMMDLL_MAP_PHYSMEM pPhysMemMap = NULL;
-	if (!VMMDLL_Map_GetPhysMem(handle, &pPhysMemMap))
+	PVMMDLL_MAP_PHYSMEM pPhysMemMap = nullptr;
+
+	if (!VMMDLL_Map_GetPhysMem(tempHandle, &pPhysMemMap))
 	{
-		LOG("[!] Failed to get physical memory map\n");
-		VMMDLL_Close(handle);
+		MemoryLogInfo("[!] Failed to get physical memory map");
+
+		VMMDLL_Close(tempHandle);
 		return false;
 	}
 
-	if (pPhysMemMap->dwVersion != VMMDLL_MAP_PHYSMEM_VERSION)
+	if (!pPhysMemMap ||
+		pPhysMemMap->dwVersion != VMMDLL_MAP_PHYSMEM_VERSION ||
+		pPhysMemMap->cMap == 0)
 	{
-		LOG("[!] Invalid VMM Map Version\n");
+		MemoryLogInfo("[!] Invalid or empty physical memory map");
+
 		VMMDLL_MemFree(pPhysMemMap);
-		VMMDLL_Close(handle);
+		VMMDLL_Close(tempHandle);
 		return false;
 	}
 
-	if (pPhysMemMap->cMap == 0)
+	std::error_code ec;
+	std::filesystem::remove(tempMapPath, ec);
+
+	std::ofstream file(tempMapPath, std::ios::out | std::ios::trunc);
+	if (!file.is_open())
 	{
-		printf("[!] Failed to get physical memory map\n");
+		MemoryLogInfo("[!] Failed to create temporary mmap file");
+
 		VMMDLL_MemFree(pPhysMemMap);
-		VMMDLL_Close(handle);
+		VMMDLL_Close(tempHandle);
 		return false;
 	}
-	//Dump map to file
-	std::stringstream sb;
-	for (DWORD i = 0; i < pPhysMemMap->cMap; i++)
+
+	bool writeOk = true;
+	DWORD writtenRanges = 0;
+
+	for (DWORD i = 0; i < pPhysMemMap->cMap; ++i)
 	{
-		sb << std::hex << pPhysMemMap->pMap[i].pa << " " << (pPhysMemMap->pMap[i].pa + pPhysMemMap->pMap[i].cb - 1) << std::endl;
+		const ULONG64 start = pPhysMemMap->pMap[i].pa;
+		const ULONG64 length = pPhysMemMap->pMap[i].cb;
+
+		if (length == 0)
+			continue;
+
+		if (start > (std::numeric_limits<ULONG64>::max() - (length - 1)))
+		{
+			MemoryLogInfo("[!] Invalid physical memory range while building mmap");
+			writeOk = false;
+			break;
+		}
+
+		const ULONG64 end = start + length - 1;
+
+		file << std::hex << start << ' ' << end << '\n';
+
+		if (!file.good())
+		{
+			MemoryLogInfo("[!] Failed while writing mmap file");
+			writeOk = false;
+			break;
+		}
+
+		++writtenRanges;
 	}
 
-	auto temp_path = std::filesystem::current_path();
-	std::ofstream nFile(temp_path.string() + "\\mmap.txt");
-	nFile << sb.str();
-	nFile.close();
+	file.flush();
+	writeOk = writeOk && file.good() && writtenRanges > 0;
+
+	file.close();
 
 	VMMDLL_MemFree(pPhysMemMap);
-	LOG("Successfully dumped memory map to file!\n");
-	//Little sleep to make sure it's written to file.
-	Sleep(3000);
-	VMMDLL_Close(handle);
+	VMMDLL_Close(tempHandle);
+
+	if (!writeOk)
+	{
+		std::filesystem::remove(tempMapPath, ec);
+		return false;
+	}
+
+	std::filesystem::remove(mapPath, ec);
+
+	ec.clear();
+	std::filesystem::rename(tempMapPath, mapPath, ec);
+
+	if (ec)
+	{
+		MemoryLogInfo("[!] Failed to move temporary mmap into place");
+
+		std::filesystem::remove(tempMapPath, ec);
+		return false;
+	}
+
+	MemoryLogInfo("Successfully dumped memory map to mmap.txt");
 	return true;
 }
 
@@ -763,32 +936,197 @@ bool Memory::fullRefresh()
 }
 
 // ------------------------------------------------------------
+// Disconnect from dma device
+// ------------------------------------------------------------
+
+void Memory::doDMADisconnect()
+{
+	cancelInit.store(true, std::memory_order_release);
+
+	// If Init is still running, its worker will see cancelInit,
+	// leave its retry loop, then call CloseAndReset().
+	if (initRunning.load(std::memory_order_acquire))
+		return;
+
+	// Already connected; start cleanup on a worker too.
+	bool expected = false;
+
+	if (!initRunning.compare_exchange_strong(
+		expected,
+		true,
+		std::memory_order_acq_rel
+	))
+	{
+		return;
+	}
+
+	if (dmaThread.joinable())
+		dmaThread.join();
+
+	dmaThread = std::thread([this]()
+		{
+			CloseAndReset();
+
+			cancelInit.store(false, std::memory_order_release);
+			initRunning.store(false, std::memory_order_release);
+		});
+}
+
+bool Memory::IsDisconnectRequested() const
+{
+	return cancelInit.load(std::memory_order_acquire);
+}
+
+// ------------------------------------------------------------
 // Init
 // ------------------------------------------------------------
 
 bool Memory::Init(bool memMap, bool debug)
 {
-	std::lock_guard<std::mutex> lock(handleMutex);
+	constexpr LPCSTR processName = "EscapeFromTarkov.exe";
+	constexpr LPCSTR targetModule = "UnityPlayer.dll";
 
-	if (DMA_INITIALIZED)
+	auto clearProcessState = [this]()
+		{
+			PROCESS_INITIALIZED = FALSE;
+
+			memoryGlobals::processFound.store(false, std::memory_order_release);
+
+			current_process.PID = 0;
+			current_process.base_address = 0;
+			current_process.base_size = 0;
+			current_process.process_name.clear();
+		};
+
+	auto closeAndReset = [this, &clearProcessState]()
+		{
+			clearProcessState();
+
+			{
+				std::lock_guard<std::mutex> lock(handleMutex);
+
+				if (vHandle)
+				{
+					VMMDLL_Close(vHandle);
+					vHandle = nullptr;
+				}
+
+				DMA_INITIALIZED = FALSE;
+			}
+
+			memoryGlobals::dmaConnected.store(false, std::memory_order_release);
+		};
+
+	// Disconnect was pressed before the worker properly started.
+	if (cancelInit.load(std::memory_order_acquire))
 	{
-		MemoryLogInfo("DMA already initialized");
-		return true;
+		closeAndReset();
+		return false;
 	}
 
-	std::string process_name;
-	process_name = "EscapeFromTarkov.exe";
+	//INITIALISATION
 
-	if (!DMA_INITIALIZED)
+	bool dmaReady = false;
+
 	{
-		MemoryLogInfo("inizializing...");
-	reinit:
+		std::lock_guard<std::mutex> lock(handleMutex);
 
+		// Protect against a bad partial state.
+		if (DMA_INITIALIZED && !vHandle)
+		{
+			MemoryLogInfo("[!]DMA was marked initialised but VMM handle was null");
 
+			DMA_INITIALIZED = FALSE;
+			memoryGlobals::dmaConnected.store(false, std::memory_order_release);
+		}
 
+		dmaReady = (DMA_INITIALIZED && vHandle);
+	}
+
+	if (!dmaReady)
+	{
+		MemoryLogInfo("Initialising DMA...");
+
+		std::filesystem::path memMapPath;
+		std::error_code fsError;
+
+		memMapPath = std::filesystem::current_path(fsError);
+
+		if (fsError)
+		{
+			MemoryLogInfo("[!] Could not resolve current path; using local mmap.txt");
+			memMapPath = "mmap.txt";
+		}
+		else
+		{
+			memMapPath /= "mmap.txt";
+		}
+
+		bool useMemMap = false;
+
+		if (memMap)
+		{
+			fsError.clear();
+
+			bool mapExists =
+				std::filesystem::is_regular_file(memMapPath, fsError) &&
+				!fsError;
+
+			if (mapExists)
+			{
+				const auto mapSize = std::filesystem::file_size(memMapPath, fsError);
+
+				mapExists = !fsError && mapSize > 0;
+			}
+
+			if (!mapExists)
+			{
+				MemoryLogInfo("No valid mmap.txt found; generating memory map...");
+
+				fsError.clear();
+				std::filesystem::remove(memMapPath, fsError);
+
+				if (DumpMemoryMap(debug))
+				{
+					fsError.clear();
+
+					useMemMap =
+						std::filesystem::is_regular_file(memMapPath, fsError) &&
+						!fsError;
+
+					if (useMemMap)
+					{
+						const auto mapSize =
+							std::filesystem::file_size(memMapPath, fsError);
+
+						useMemMap = !fsError && mapSize > 0;
+					}
+
+					if (useMemMap)
+						MemoryLogInfo("Memory map created successfully");
+					else
+						MemoryLogInfo("[!] mmap dump reported success but mmap.txt was invalid");
+				}
+				else
+				{
+					MemoryLogInfo("[!] Could not create mmap.txt; continuing without memory map");
+				}
+			}
+			else
+			{
+				useMemMap = true;
+				MemoryLogInfo("Using existing mmap.txt");
+			}
+		}
+
+		if (cancelInit.load(std::memory_order_acquire))
+		{
+			closeAndReset();
+			return false;
+		}
 
 		std::vector<LPCSTR> args;
-		args.reserve(16);
+		args.reserve(10);
 
 		args.push_back("");
 		args.push_back("-device");
@@ -800,118 +1138,307 @@ bool Memory::Init(bool memMap, bool debug)
 			args.push_back("-printf");
 		}
 
-		std::string path;
+		std::string memMapPathString;
 
-		if (memMap)
+		if (useMemMap)
 		{
-			auto temp_path = std::filesystem::current_path();
-			path = temp_path.string() + "\\mmap.txt";
+			memMapPathString = memMapPath.string();
 
-			bool dumped = false;
-
-			if (!std::filesystem::exists(path))
-				dumped = this->DumpMemoryMap(debug);
-			else
-				dumped = true;
-
-			MemoryLogInfo("dumping memory map to file...");
-
-			if (!dumped)
-			{
-				MemoryLogInfo("[!] ERROR: Could not dump memory map!");
-				MemoryLogInfo("Defaulting to no memory map!");
-			}
-			else
-			{
-				MemoryLogInfo("Dumped memory map!");
-
-				args.push_back("-memmap");
-				args.push_back(path.c_str());
-			}
+			args.push_back("-memmap");
+			args.push_back(memMapPathString.c_str());
 		}
 
-		this->vHandle = VMMDLL_Initialize(
+		VMM_HANDLE newHandle = VMMDLL_Initialize(
 			static_cast<DWORD>(args.size()),
 			args.data()
 		);
-		if (!this->vHandle)
+
+		if (!newHandle)
 		{
-			MemoryLogInfo("[!] Initialization failed! Is the DMA in use or disconnected?");
-			VMMDLL_Close(this->vHandle);
-			DMA_INITIALIZED = FALSE;
-			memoryGlobals::dmaConnected = FALSE;
+			MemoryLogInfo("[!] DMA initialisation failed. Is the DMA disconnected or already in use?");
+
+			closeAndReset();
 			return false;
 		}
 
-		ULONG64 FPGA_ID = 0, DEVICE_ID = 0;
+		bool fpgaConfigured = false;
 
-		VMMDLL_ConfigGet(this->vHandle, LC_OPT_FPGA_FPGA_ID, &FPGA_ID);
-		VMMDLL_ConfigGet(this->vHandle, LC_OPT_FPGA_DEVICE_ID, &DEVICE_ID);
-
-		MemoryLogInfo("success!");
-
-		if (!this->SetFPGA())
 		{
-			MemoryLogInfo("[!] Could not set FPGA!");
-			VMMDLL_Close(this->vHandle);
+			std::lock_guard<std::mutex> lock(handleMutex);
+
+			// A stale handle should not survive a reconnect attempt.
+			if (vHandle)
+			{
+				VMMDLL_Close(vHandle);
+				vHandle = nullptr;
+			}
+
+			if (cancelInit.load(std::memory_order_acquire))
+			{
+				VMMDLL_Close(newHandle);
+				newHandle = nullptr;
+			}
+			else
+			{
+				vHandle = newHandle;
+				newHandle = nullptr;
+
+				ULONG64 FPGA_ID = 0;
+				ULONG64 DEVICE_ID = 0;
+
+				VMMDLL_ConfigGet(vHandle, LC_OPT_FPGA_FPGA_ID, &FPGA_ID);
+				VMMDLL_ConfigGet(vHandle, LC_OPT_FPGA_DEVICE_ID, &DEVICE_ID);
+
+				if (SetFPGA())
+				{
+					DMA_INITIALIZED = TRUE;
+					fpgaConfigured = true;
+				}
+				else
+				{
+					MemoryLogInfo("[!] Could not configure FPGA");
+
+					VMMDLL_Close(vHandle);
+					vHandle = nullptr;
+
+					DMA_INITIALIZED = FALSE;
+				}
+			}
+		}
+
+		if (newHandle)
+		{
+			VMMDLL_Close(newHandle);
+			newHandle = nullptr;
+		}
+
+		if (!fpgaConfigured)
+		{
+			closeAndReset();
 			return false;
 		}
 
-		DMA_INITIALIZED = TRUE;
-		memoryGlobals::dmaConnected = TRUE;
+		memoryGlobals::dmaConnected.store(true, std::memory_order_release);
+
+		MemoryLogInfo("DMA connected successfully");
 	}
 	else
-		MemoryLogInfo("DMA already initialized!");
-
-	if (PROCESS_INITIALIZED)
 	{
-		MemoryLogInfo("Process already initialized!");
-		return true;
+		memoryGlobals::dmaConnected.store(true, std::memory_order_release);
+		MemoryLogInfo("DMA already initialised");
 	}
 
-getPID:
+	
+	// INITIALISATION
 
-	current_process.PID = GetPidFromName(process_name);
-	if (!current_process.PID)
+	if (cancelInit.load(std::memory_order_acquire))
 	{
-		MemoryLogInfo("[!] Could not get PID from name!");
-
-		Sleep(5000);
-		goto getPID;
-	}
-	current_process.process_name = process_name;
-
-getBase:
-
-	current_process.base_address = GetBaseDaddy("UnityPlayer.dll");
-	if (!current_process.base_address)
-	{
-		MemoryLogInfo("[!] Could not get base address!");
-		Sleep(5000);
-		goto getBase;
-	}
-	current_process.base_size = GetBaseSize(process_name);
-
-	if (!current_process.base_size)
-	{
-		MemoryLogInfo("[!] Could not get base size!\n");
-	}
-
-	PROCESS_INITIALIZED = TRUE;
-	memoryGlobals::processFound = TRUE;
-
-
-	//get keyboard
-	/*if (!mem.GetKeyboard()->InitKeyboard())
-	{
-		std::cout << "[KeyManager] Failed - Hotkeys will not work" << std::endl;
+		closeAndReset();
 		return false;
 	}
-	else {
-		std::cout << "[KeyManager] Setup / Connected" << std::endl;
-	}*/
 
-	return true;
+	// Check whether an existing cached process still matches
+	if (PROCESS_INITIALIZED)
+	{
+		DWORD livePid = 0;
+		bool handleValid = false;
+
+		{
+			std::lock_guard<std::mutex> lock(handleMutex);
+
+			handleValid = (vHandle != nullptr);
+
+			if (handleValid)
+				livePid = GetPidFromName(processName);
+		}
+
+		if (handleValid &&
+			livePid != 0 &&
+			livePid == current_process.PID)
+		{
+			MemoryLogInfo("Process already initialised");
+			return true;
+		}
+
+		MemoryLogInfo("Cached process state is stale; resolving process again");
+		clearProcessState();
+	}
+	else
+	{
+		clearProcessState();
+	}
+
+	/*
+		Outer loop:
+		- waits for game
+		- then waits for UnityPlayer.dll
+		- restarts PID lookup if the game closes/restarts mid-attach
+	*/
+	while (!cancelInit.load(std::memory_order_acquire))
+	{
+		DWORD foundPid = 0;
+		bool handleValid = false;
+
+		{
+			std::lock_guard<std::mutex> lock(handleMutex);
+
+			handleValid = (vHandle != nullptr);
+
+			if (handleValid)
+				foundPid = GetPidFromName(processName);
+		}
+
+		if (!handleValid)
+		{
+			MemoryLogInfo("[!] VMM handle became invalid while waiting for process");
+
+			closeAndReset();
+			return false;
+		}
+
+		if (!foundPid)
+		{
+			MemoryLogInfo("Waiting for target process...");
+
+			if (!WaitForRetryOrCancel(5000))
+				break;
+
+			continue;
+		}
+
+		current_process.PID = foundPid;
+		current_process.process_name = processName;
+		current_process.base_address = 0;
+		current_process.base_size = 0;
+
+		MemoryLogInfo("Target process found; waiting for UnityPlayer.dll...");
+
+		bool processRestarted = false;
+
+		while (!cancelInit.load(std::memory_order_acquire))
+		{
+			uint64_t moduleBase = 0;
+			DWORD livePid = 0;
+			bool innerHandleValid = false;
+
+			{
+				std::lock_guard<std::mutex> lock(handleMutex);
+
+				innerHandleValid = (vHandle != nullptr);
+
+				if (innerHandleValid)
+				{
+					moduleBase = GetBaseDaddy(targetModule);
+
+					if (!moduleBase)
+						livePid = GetPidFromName(processName);
+				}
+			}
+
+			if (!innerHandleValid)
+			{
+				MemoryLogInfo("[!] VMM handle became invalid while resolving UnityPlayer.dll");
+
+				closeAndReset();
+				return false;
+			}
+
+			if (moduleBase)
+			{
+				current_process.base_address = moduleBase;
+
+				{
+					std::lock_guard<std::mutex> lock(handleMutex);
+
+					if (vHandle)
+						current_process.base_size = GetBaseSize(targetModule);
+				}
+
+				if (!current_process.base_size)
+					MemoryLogInfo("[!] Could not get UnityPlayer.dll module size");
+
+				PROCESS_INITIALIZED = TRUE;
+
+				memoryGlobals::processFound.store(
+					true,
+					std::memory_order_release
+				);
+
+				MemoryLogInfo("Target process initialised successfully");
+				return true;
+			}
+
+			// Game closed or restarted while we were waiting for UnityPlayer.dll.
+			if (livePid == 0 || livePid != current_process.PID)
+			{
+				MemoryLogInfo("Target process restarted while attaching; resolving PID again");
+
+				clearProcessState();
+				processRestarted = true;
+				break;
+			}
+
+			if (!WaitForRetryOrCancel(1000))
+				break;
+		}
+
+		if (!processRestarted &&
+			cancelInit.load(std::memory_order_acquire))
+		{
+			break;
+		}
+	}
+
+	// Only reached when Disconnect was requested.
+	closeAndReset();
+	return false;
+}
+
+bool Memory::WaitForRetryOrCancel(DWORD totalMilliseconds)
+{
+	constexpr DWORD sliceMilliseconds = 100;
+
+	for (DWORD elapsed = 0; elapsed < totalMilliseconds; elapsed += sliceMilliseconds)
+	{
+		if (cancelInit.load(std::memory_order_acquire))
+			return false;
+
+		const DWORD remaining = totalMilliseconds - elapsed;
+
+		Sleep((remaining < sliceMilliseconds)
+			? remaining
+			: sliceMilliseconds);
+	}
+
+	return !cancelInit.load(std::memory_order_acquire);
+}
+
+void Memory::CloseAndReset()
+{
+	// Stop other code
+	memoryGlobals::processFound.store(false, std::memory_order_release);
+	PROCESS_INITIALIZED = FALSE;
+
+	current_process.PID = 0;
+	current_process.base_address = 0;
+	current_process.base_size = 0;
+	current_process.process_name.clear();
+
+	{
+		std::lock_guard<std::mutex> lock(handleMutex);
+
+		if (vHandle)
+		{
+			VMMDLL_Close(vHandle);
+			vHandle = nullptr;
+		}
+
+		DMA_INITIALIZED = FALSE;
+	}
+
+	memoryGlobals::dmaConnected.store(false, std::memory_order_release);
+
+	MemoryLogInfo("DMA disconnected");
 }
 
 // ------------------------------------------------------------

@@ -69,11 +69,11 @@ struct appGlobals {
 };
 
 struct memoryGlobals {
-    static bool dmaConnected;
+    static std::atomic_bool dmaConnected;
+    static std::atomic_bool processFound;
     static bool dmaAutoConnect;
     static bool dmaCloseAll;
     static bool dmaShowStats;
-    static bool processFound;
 };
 
 struct radarGlobals {

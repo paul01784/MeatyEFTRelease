@@ -481,14 +481,27 @@ void MainGame::featuresTaskWorker()
     }
 }
 
-void MainGame::mainThread() {
+void MainGame::mainThread()
+{
     bool doOnce = false;
 
     while (true)
     {
-        if (!mem.vHandle)
+        const bool initRunning = mem.IsInitRunning();
+
+        const bool dmaConnected = memoryGlobals::dmaConnected.load(
+            std::memory_order_acquire
+        );
+
+        const bool processFound = memoryGlobals::processFound.load(
+            std::memory_order_acquire
+        );
+
+        if (initRunning || !dmaConnected || !processFound)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+            doOnce = false;
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
             continue;
         }
 
