@@ -161,31 +161,31 @@ PDIRECT3DTEXTURE9 ib_texture2 = NULL;
 float ib_texture2_MinHeight = 16.f;
 
 PDIRECT3DTEXTURE9 ib_texture3 = NULL;
-float ib_texture3_MinHeight = 20.f;
+float ib_texture3_MinHeight = 19.f;
 
 PDIRECT3DTEXTURE9 ib_texture4 = NULL;
-float ib_texture4_MinHeight = 23.f;
+float ib_texture4_MinHeight = 22.f;
 
 PDIRECT3DTEXTURE9 ib_texture5 = NULL;
-float ib_texture5_MinHeight = 26.f;
+float ib_texture5_MinHeight = 25.f;
 
 PDIRECT3DTEXTURE9 ib_texture6 = NULL;
-float ib_texture6_MinHeight = 29.f;
+float ib_texture6_MinHeight = 28.f;
 
 PDIRECT3DTEXTURE9 ib_texture7 = NULL;
-float ib_texture7_MinHeight = 32.f;
+float ib_texture7_MinHeight = 31.f;
 
 PDIRECT3DTEXTURE9 ib_texture8 = NULL;
-float ib_texture8_MinHeight = 35.f;
+float ib_texture8_MinHeight = 34.f;
 
 PDIRECT3DTEXTURE9 ib_texture9 = NULL;
-float ib_texture9_MinHeight = 38.f;
+float ib_texture9_MinHeight = 37.f;
 
 PDIRECT3DTEXTURE9 ib_texture10 = NULL;
-float ib_texture10_MinHeight = 41.f;
+float ib_texture10_MinHeight = 40.f;
 
 PDIRECT3DTEXTURE9 ib_texture11 = NULL;
-float ib_texture11_MinHeight = 44.f;
+float ib_texture11_MinHeight = 43.f;
 
 int ib_orgW = 640;
 int ib_orgH = 3196;
