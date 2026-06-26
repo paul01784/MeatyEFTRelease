@@ -359,7 +359,7 @@ void MainGame::getGameWorldDetails() {
             Sleep(1000);
 
             // Make sure our cache is refreshed
-            mem.RefreshLight();
+            //mem.RefreshLight();
 
             GameObjectManager gom;
 
