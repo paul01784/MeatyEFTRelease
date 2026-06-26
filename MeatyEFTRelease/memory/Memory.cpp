@@ -793,7 +793,6 @@ bool Memory::Init(bool memMap, bool debug)
 		args.push_back("");
 		args.push_back("-device");
 		args.push_back("fpga://algo=0");
-		//args.push_back("-norefresh");
 
 		if (debug)
 		{
@@ -857,8 +856,6 @@ bool Memory::Init(bool memMap, bool debug)
 			VMMDLL_Close(this->vHandle);
 			return false;
 		}
-
-		this->setCustomRefreshData();
 
 		DMA_INITIALIZED = TRUE;
 		memoryGlobals::dmaConnected = TRUE;
