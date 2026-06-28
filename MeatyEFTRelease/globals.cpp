@@ -31,6 +31,8 @@ double globals::taskAimBot = 10;
 bool appMenu::appSettings = false;
 bool appMenu::appLootFilters = false;
 bool appMenu::appFuser = false;
+bool appMenu::appMakcu = false;
+
 bool appMenu::appQuests = false;
 
 bool appMenu::widgetPlayers = true;

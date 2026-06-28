@@ -19,6 +19,7 @@
 #include "game/headers/questManager.h"
 #include "game/headers/wishlist.h"
 #include "app/DogTagAPI.h"
+#include "app/makcu.h"
 
 
 ConfigManager configManager("config.json", "lootFilters.json");
@@ -35,6 +36,8 @@ void closeSettingWindows(std::string dontClose)
         appMenu::appQuests = false;
     if (dontClose != "fuser")
         appMenu::appFuser = false;
+    if (dontClose != "makcu")
+        appMenu::appMakcu = false;
 }
 
 // Function to convert enum to string for display purposes
@@ -3887,6 +3890,7 @@ static void renderMenuIcons()
     std::string settingIcon = ICON_FK_COGS;
     std::string fuserIcon = ICON_FK_TELEVISION;
     std::string filterIcon = ICON_FK_FILTER;
+    std::string makcuIcon = ICON_FK_CROSSHAIRS;
     std::string questsIcon = ICON_FK_USER;
 
 
@@ -3933,6 +3937,21 @@ static void renderMenuIcons()
 
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 100.f });
+    if (ImGui::ButtonMenu(makcuIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) {
+        appMenu::appMakcu = !appMenu::appMakcu;
+        closeSettingWindows("makcu");
+    }
+    else
+    {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Makcu Settings");
+            ImGui::EndTooltip();
+        }
+    }
+
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 145.f });
     if (ImGui::ButtonMenu(filterIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) {
         appMenu::appLootFilters = !appMenu::appLootFilters;
         closeSettingWindows("lootfilters");
@@ -3947,7 +3966,7 @@ static void renderMenuIcons()
         }
     }
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 145.f });
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 190.f });
     if (ImGui::ButtonMenu(questsIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) {
         appMenu::appQuests = !appMenu::appQuests;
         closeSettingWindows("quests");
@@ -3967,7 +3986,7 @@ static void renderMenuIcons()
     //widgets
 
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 200.f });
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 250.f });
     if (ImGui::ButtonMenu(widgetDebugIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) { appMenu::widgetDebug = !appMenu::widgetDebug; }
 
 
@@ -3976,13 +3995,13 @@ static void renderMenuIcons()
     if (mainGame.localPlayerPtr)
     {
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 245.f });
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 300.f });
         if (ImGui::ButtonMenu(widgetExitIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) { appMenu::widgetExfil = !appMenu::widgetExfil; }
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 290.f });
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 350.f });
         if (ImGui::ButtonMenu(widgetLootIcon.c_str(), ImVec2(40, 40), ImVec2(30, 10))) { appMenu::widgetTopLoot = !appMenu::widgetTopLoot; }
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 335.f });
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 400.f });
         if (ImGui::ButtonMenu(widgetPlayersIcon.c_str(), ImVec2(40, 40), ImVec2(30, 10))) { appMenu::widgetPlayers = !appMenu::widgetPlayers; }
 
 
@@ -4001,6 +4020,18 @@ static void renderMenuIcons()
 
     if (appMenu::appQuests)
         renderQuestsWindow();
+
+    if (appMenu::appMakcu)
+    {
+        RenderMakcuWindow(
+            &appMenu::appMakcu,
+            globals::appWindowAlpha,
+            []()
+            {
+                configManager.SaveConfig();
+            }
+        );
+    }
 
 
 
