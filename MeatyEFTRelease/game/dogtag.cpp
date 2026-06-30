@@ -1,6 +1,5 @@
 #include "headers/dogtag.h"
 
-// Replace these includes with your real project headers
 #include "headers/utils.h"
 #include "headers/unityHelper.h"
 #include "headers/sdk.h"

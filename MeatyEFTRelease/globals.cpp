@@ -1,6 +1,7 @@
 #include "app/includes.h"
 #include "app/globals.h"
 
+
 //define globals
 std::string globals::appVersion = "1.0.19";
 float globals::appTextScale = 1.f;
@@ -25,7 +26,7 @@ double globals::taskKeyManager = 25;
 double globals::taskCamera = 1;
 double globals::taskRaidMonitor = 800;
 double globals::taskWrites = 50;
-double globals::taskAimBot = 10;
+double globals::taskAim = 5;
 
 // App menu settings/status
 bool appMenu::appSettings = false;
@@ -103,6 +104,9 @@ float aimGlobals::aimFOV = 50.f;
 int aimGlobals::aimDistance = 100;
 boneListIndexes aimGlobals::aiBone = boneListIndexes::Head;
 boneListIndexes aimGlobals::pmcBone = boneListIndexes::Head;
+TargetMode aimGlobals::targetMode = TargetMode::FOV;
+bool aimGlobals::targetLock = false;
+float aimGlobals::aimSmooth = 4.f;
 
 
 glm::vec4 coloursGlobals::playerPMC = { 1,1,1,1 };

@@ -1,7 +1,7 @@
 #pragma once
-
 #include "render.h"
 #include "../external/glm/glm.hpp"
+
 
 struct globals {
     static std::string appVersion;
@@ -27,7 +27,7 @@ struct globals {
     static double taskCamera;
     static double taskRaidMonitor;
     static double taskWrites;
-    static double taskAimBot;
+    static double taskAim;
 
 };
 
@@ -121,6 +121,9 @@ struct aimGlobals {
     static int aimDistance;
     static boneListIndexes aiBone;
     static boneListIndexes pmcBone;
+    static TargetMode targetMode;
+    static bool targetLock;
+    static float aimSmooth;
 
 };
 

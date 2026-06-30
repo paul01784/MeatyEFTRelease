@@ -1365,6 +1365,15 @@ bool Memory::Init(bool memMap, bool debug)
 				);
 
 				MemoryLogInfo("Target process initialised successfully");
+
+				if (!mem.GetKeyboard()->InitKeyboard())
+				{
+					MemoryLogError("[KeyManager] Failed - Hotkeys will not work");
+				}
+				else {
+					MemoryLogInfo("[KeyManager] Setup / Connected");
+				}
+
 				return true;
 			}
 

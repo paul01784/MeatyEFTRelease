@@ -138,7 +138,7 @@
       <StringPooling>true</StringPooling>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;
 dxgi.lib;
@@ -533,6 +533,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="game\headers\maingame.h" />
     <ClInclude Include="game\headers\players.h" />
     <ClInclude Include="game\headers\questManager.h" />
+    <ClInclude Include="game\headers\readOnlyAim.h" />
     <ClInclude Include="game\headers\sdk.h" />
     <ClInclude Include="game\headers\tarkovdevquery.h" />
     <ClInclude Include="game\headers\transform.h" />
@@ -577,6 +578,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="game\maingame.cpp" />
     <ClCompile Include="game\players.cpp" />
     <ClCompile Include="game\questManager.cpp" />
+    <ClCompile Include="game\readOnlyAim.cpp" />
     <ClCompile Include="game\tarkovdevquery.cpp" />
     <ClCompile Include="game\transform.cpp" />
     <ClCompile Include="game\utils.cpp" />

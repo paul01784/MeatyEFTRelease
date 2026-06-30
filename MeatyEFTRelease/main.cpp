@@ -7,8 +7,11 @@
 #include "game/headers/tarkovdevquery.h"
 #include "app/DogTagAPI.h"
 
-int main() 
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevIntance, PSTR pCmdLine, int nShowCmd)
 {
+	//Remove to get console debug
+	::ShowWindow(::GetConsoleWindow(), SW_HIDE);
+
 	LOGS.logInfo("[MAIN] Loading application");
 	std::cout << "[MAIN] Loading application" << std::endl;
 
@@ -41,8 +44,7 @@ int main()
 	Sleep(1000);
 
 
-	//Remove to get console debug
-	//::ShowWindow(::GetConsoleWindow(), SW_HIDE);
+	
 
 	//start threads
 	std::thread main(&MainGame::mainThread, &mainGame);

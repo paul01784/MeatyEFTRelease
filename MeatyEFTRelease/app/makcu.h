@@ -70,11 +70,8 @@ public:
 
     bool RefreshDiagnostics();
 
-    // Sends a native ASCII command and always waits for >>>
-    // The supplied command must start with "km."
     bool SendCommand(const std::string& command, std::string* reply = nullptr, std::uint32_t timeoutMs = 100);
 
-    // Every helper waits for the corresponding >>> response
     bool Move(int dx, int dy, std::uint32_t timeoutMs = 100);
 
     bool Wheel(int delta, std::uint32_t timeoutMs = 100);
@@ -124,6 +121,10 @@ private:
 
     std::string lastReply_;
     std::string lastError_;
+
+public:
+    float mouseUnitsPerScreenPixelX = 1.f;
+    float mouseUnitsPerScreenPixelY = 1.0f;
 };
 
 extern MakcuController makcu;

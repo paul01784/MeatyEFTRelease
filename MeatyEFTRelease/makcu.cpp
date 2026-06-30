@@ -21,6 +21,8 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include "app/render.h"
+#include "game/headers/readOnlyAim.h"
 
 #pragma comment(lib, "setupapi.lib")
 
@@ -44,18 +46,13 @@ namespace
     constexpr std::string_view kVersionCommand = "km.version()";
     constexpr std::string_view kVersionReplyPrefix = "km.MAKCU";
 
-    bool StartsWith(
-        const std::string& value,
-        std::string_view prefix
-    )
+    bool StartsWith(const std::string& value, std::string_view prefix)
     {
         return value.size() >= prefix.size() &&
             value.compare(0, prefix.size(), prefix) == 0;
     }
 
-    void TrimAscii(
-        std::string& value
-    )
+    void TrimAscii(std::string& value)
     {
         const auto first = std::find_if_not(
             value.begin(),
@@ -84,9 +81,7 @@ namespace
         value.assign(first, last);
     }
 
-    std::string ToUpperAscii(
-        std::string value
-    )
+    std::string ToUpperAscii(std::string value)
     {
         std::transform(
             value.begin(),
@@ -101,13 +96,9 @@ namespace
         return value;
     }
 
-    bool ContainsInsensitive(
-        const std::string& value,
-        std::string_view needle
-    )
+    bool ContainsInsensitive(const std::string& value, std::string_view needle)
     {
-        return ToUpperAscii(value).find(ToUpperAscii(std::string(needle))) !=
-            std::string::npos;
+        return ToUpperAscii(value).find(ToUpperAscii(std::string(needle))) != std::string::npos;
     }
 
     bool IsComPortName(const std::string& value)
@@ -193,15 +184,7 @@ namespace
 
         std::vector<char> buffer(requiredSize + 1, '\0');
 
-        if (!SetupDiGetDeviceRegistryPropertyA(
-            deviceInfoSet,
-            &deviceInfoData,
-            property,
-            &propertyType,
-            reinterpret_cast<PBYTE>(buffer.data()),
-            static_cast<DWORD>(buffer.size()),
-            &requiredSize
-        ))
+        if (!SetupDiGetDeviceRegistryPropertyA(deviceInfoSet, &deviceInfoData, property, &propertyType, reinterpret_cast<PBYTE>(buffer.data()), static_cast<DWORD>(buffer.size()), &requiredSize))
         {
             return {};
         }
@@ -323,9 +306,7 @@ MakcuController::~MakcuController()
     Disconnect();
 }
 
-bool MakcuController::Connect(
-    const MakcuConfig& config
-)
+bool MakcuController::Connect(const MakcuConfig& config)
 {
     return Connect(config.comPort);
 }
@@ -542,17 +523,9 @@ bool MakcuController::Move(int dx, int dy, std::uint32_t timeoutMs)
     std::scoped_lock lock(mutex_);
 
     const std::string command =
-        "km.move(" +
-        std::to_string(dx) +
-        "," +
-        std::to_string(dy) +
-        ")";
+        "km.move(" + std::to_string(dx) + "," + std::to_string(dy) + ")";
 
-    return ExecuteAsciiLocked(
-        command,
-        nullptr,
-        timeoutMs
-    );
+    return ExecuteAsciiLocked(command, nullptr, timeoutMs);
 }
 
 bool MakcuController::Wheel(int delta, std::uint32_t timeoutMs)
@@ -751,7 +724,7 @@ bool MakcuController::SwitchToNativeBaudLocked()
         return false;
     }
 
-    // Native documentation specifies 100ms before reopening
+    // doc specifies 100ms before reopening
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     ClosePortLocked();
@@ -761,7 +734,7 @@ bool MakcuController::SwitchToNativeBaudLocked()
         return false;
     }
 
-    // Native documentation specifies a further 50ms settle period
+    // doc specifies a further 50ms settle period
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     PurgeComm(serialHandle_, PURGE_RXABORT | PURGE_RXCLEAR);
@@ -843,9 +816,7 @@ bool MakcuController::ExecuteAsciiLocked(const std::string& command, std::string
     std::string rawReply;
     rawReply.reserve(256);
 
-    const auto deadline =
-        std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(timeoutMs);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
 
     while (std::chrono::steady_clock::now() < deadline)
     {
@@ -1091,6 +1062,173 @@ void MakcuController::SetErrorLocked(const std::string& error)
     lastError_ = error;
 }
 
+namespace
+{
+    const char* BoneToString(boneListIndexes key) {
+        switch (key) {
+        case boneListIndexes::Head: return "Head";
+        case boneListIndexes::Pelvis: return "Pelvis";
+        case boneListIndexes::Neck: return "Neck";
+        case boneListIndexes::Spine: return "Spine";
+        case boneListIndexes::LForearm: return "LForearm";
+        case boneListIndexes::LPalm: return "LPalm";
+        case boneListIndexes::RForearm: return "RForearm";
+        case boneListIndexes::RPalm: return "RPalm";
+        case boneListIndexes::LThigh: return "LThigh";
+        case boneListIndexes::LFoot: return "LFoot";
+        case boneListIndexes::RThigh: return "RThigh";
+        case boneListIndexes::RFoot: return "RFoot";
+        default: return "Unknown";
+        }
+    }
+
+    bool DrawBoneIndexInput(const char* label, boneListIndexes& bone)
+    {
+        using BoneUnderlying =
+            std::underlying_type_t<boneListIndexes>;
+
+        int value = static_cast<int>(
+            static_cast<BoneUnderlying>(bone)
+            );
+
+        if (!ImGui::InputInt(label, &value))
+            return false;
+
+        // Prevent invalid negative indexes.
+        value = std::max(value, 0);
+
+        bone = static_cast<boneListIndexes>(value);
+        return true;
+    }
+
+    void DrawTargetDebugBlock(const char* title, const std::optional<TargetResult>& target)
+    {
+        ImGui::SeparatorText(title);
+
+        if (!target.has_value())
+        {
+            ImGui::TextDisabled("No valid target");
+            return;
+        }
+
+        const glm::vec2 screenCentre(
+            espGlobals::gameRes.x * 0.5f,
+            espGlobals::gameRes.y * 0.5f
+        );
+
+        const float errorX = target->screenPos.x - screenCentre.x;
+        const float errorY = target->screenPos.y - screenCentre.y;
+
+        ImGui::Text(
+            "Instance: 0x%llX",
+            static_cast<unsigned long long>(target->player.instance)
+        );
+
+        ImGui::Text(
+            "Target type: %s",
+            target->player.isAi ? "AI" : "PMC / Player"
+        );
+
+        ImGui::Text(
+            "Selected bone: %s (%d)",
+            BoneToString(target->selectedBone),
+            static_cast<int>(target->selectedBone)
+        );
+
+        ImGui::Text(
+            "Bone world: %.2f, %.2f, %.2f",
+            target->boneWorldPos.x,
+            target->boneWorldPos.y,
+            target->boneWorldPos.z
+        );
+
+        ImGui::Text(
+            "Bone screen: %.1f, %.1f",
+            target->screenPos.x,
+            target->screenPos.y
+        );
+
+        ImGui::Text(
+            "Screen error: X %.1f | Y %.1f px",
+            errorX,
+            errorY
+        );
+
+        ImGui::Text(
+            "Screen distance: %.1f px",
+            std::sqrt(target->screenDistanceSq)
+        );
+
+        ImGui::Text(
+            "World distance: %.1f m",
+            std::sqrt(target->worldDistanceSq)
+        );
+    }
+
+    
+
+    std::vector<boneListIndexes> getAllBones() {
+        return {
+            boneListIndexes::Pelvis,
+            boneListIndexes::Head,
+            boneListIndexes::Neck,
+            boneListIndexes::Spine,
+            boneListIndexes::LForearm,
+            boneListIndexes::LPalm,
+            boneListIndexes::RForearm,
+            boneListIndexes::RPalm,
+            boneListIndexes::LThigh,
+            boneListIndexes::LFoot,
+            boneListIndexes::RThigh,
+            boneListIndexes::RFoot
+        };
+    }
+
+    bool ShowBoneSelectionBox(boneListIndexes& bone, const char* label)
+    {
+        static const std::vector<boneListIndexes> bones = getAllBones();
+
+        auto currentIt = std::find(
+            bones.begin(),
+            bones.end(),
+            bone
+        );
+
+        int currentIndex = 0;
+
+        if (currentIt != bones.end())
+        {
+            currentIndex = static_cast<int>(std::distance(bones.begin(), currentIt));
+        }
+
+        const char* preview = BoneToString(bones[currentIndex]);
+
+        bool changed = false;
+
+        if (ImGui::BeginCombo(label, preview))
+        {
+            for (int i = 0; i < static_cast<int>(bones.size()); ++i)
+            {
+                const bool selected = (i == currentIndex);
+                const char* boneName = BoneToString(bones[i]);
+
+                if (ImGui::Selectable(boneName, selected))
+                {
+                    bone = bones[i];
+                    changed = true;
+                }
+
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+
+            ImGui::EndCombo();
+        }
+
+        return changed;
+    }
+}
+
 void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<void()>& onConfigChanged)
 {
     if (!pOpen || !*pOpen)
@@ -1116,7 +1254,10 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
     const float maxWindowHeight = viewport->Size.y - 20.0f;
 
     ImGui::SetNextWindowPos(
-        ImVec2((viewport->Pos.x + viewport->Size.x) - 410, viewport->Pos.y + 10)
+        ImVec2(
+            (viewport->Pos.x + viewport->Size.x) - 479.0f,
+            viewport->Pos.y + 10.0f
+        )
     );
 
     ImGui::SetNextWindowSizeConstraints(
@@ -1137,6 +1278,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
         ImGuiTabBarFlags_FittingPolicyResizeDown
     ))
     {
+        // Connection
         if (ImGui::BeginTabItem("Connection"))
         {
             bool configChanged = false;
@@ -1158,14 +1300,12 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 for (const MakcuSerialPort& port : serialPorts)
                 {
                     const bool selected =
-                        port.portName == NormalizeComPort(makcuConfig.comPort);
+                        port.portName ==
+                        NormalizeComPort(makcuConfig.comPort);
 
                     const std::string label = BuildPortLabel(port);
 
-                    if (ImGui::Selectable(
-                        label.c_str(),
-                        selected
-                    ))
+                    if (ImGui::Selectable(label.c_str(), selected))
                     {
                         CopyStringToFixedBuffer(
                             makcuConfig.comPort,
@@ -1173,7 +1313,8 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                             port.portName
                         );
 
-                        configChanged = true;
+                        if (onConfigChanged)
+                            onConfigChanged();
                     }
 
                     if (selected)
@@ -1181,9 +1322,26 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 }
 
                 ImGui::EndCombo();
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Connection Preferences");
+
+                configChanged |= ImGui::Checkbox(
+                    "Connect on startup",
+                    &makcuConfig.connectOnStartup
+                );
+
+                ImGui::TextDisabled(
+                    "Attempts to connect to the selected COM port on startup."
+                );
+
+                if (configChanged && onConfigChanged)
+                    onConfigChanged();
+
+
             }
 
-            if (ImGui::Button("Scan Ports", ImVec2(90.0f, 0.0f)))
+            if (ImGui::Button("Scan Ports"))
             {
                 serialPorts = MakcuController::EnumerateSerialPorts();
             }
@@ -1196,35 +1354,27 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             }
             else
             {
-                const std::size_t makcuCandidates = static_cast<std::size_t>(
-                    std::count_if(
-                        serialPorts.begin(),
-                        serialPorts.end(),
-                        [](const MakcuSerialPort& port)
-                        {
-                            return port.isMakcuCandidate;
-                        }
-                    )
-                    );
+                const std::size_t makcuCandidates =
+                    static_cast<std::size_t>(
+                        std::count_if(
+                            serialPorts.begin(),
+                            serialPorts.end(),
+                            [](const MakcuSerialPort& port)
+                            {
+                                return port.isMakcuCandidate;
+                            }
+                        )
+                        );
 
                 if (makcuCandidates > 0)
                 {
                     ImGui::TextColored(
                         ImVec4(0.20f, 1.00f, 0.20f, 1.00f),
-                        "%zu MAKCU USB-serial candidate%s found",
-                        makcuCandidates,
-                        makcuCandidates == 1 ? "" : "s"
+                        "%zu MAKCU USB-serial found",
+                        makcuCandidates
                     );
                 }
             }
-
-            configChanged |= ImGui::Checkbox(
-                "Connect on startup",
-                &makcuConfig.connectOnStartup
-            );
-
-            if (configChanged && onConfigChanged)
-                onConfigChanged();
 
             ImGui::Spacing();
             ImGui::SeparatorText("Native Connection");
@@ -1266,31 +1416,258 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
             if (connected)
             {
-                if (ImGui::Button(
-                    "Refresh",
-                    ImVec2(140.0f, 30.0f)
-                ))
-                {
-                    makcu.RefreshDiagnostics();
-                }
+                ImGui::TextColored(
+                    ImVec4(0.20f, 1.00f, 0.20f, 1.00f),
+                    "Connected"
+                );
             }
             else
             {
-                ImGui::BeginDisabled();
-
-                ImGui::Button(
-                    "Refresh",
-                    ImVec2(140.0f, 30.0f)
+                ImGui::TextColored(
+                    ImVec4(1.00f, 0.35f, 0.35f, 1.00f),
+                    "Disconnected"
                 );
-
-                ImGui::EndDisabled();
             }
 
+            ImGui::EndTabItem();
+        }
+
+        // Settings
+        if (ImGui::BeginTabItem("Settings"))
+        {
+            bool configChanged = false;
+
+            ImGui::SeparatorText("Aim Settings");
+
+            configChanged |= ImGui::Checkbox(
+                "Enable aim",
+                &aimGlobals::aimEnabled
+            );
+
+            ImGui::BeginDisabled(!aimGlobals::aimEnabled);
+
+            configChanged |= ImGui::DragFloat(
+                "Aim FOV",
+                &aimGlobals::aimFOV,
+                1.0f,
+                1.0f,
+                200.0f,
+                "%.0f px"
+            );
+
+            configChanged |= ImGui::DragInt(
+                "Aim distance",
+                &aimGlobals::aimDistance,
+                1.0f,
+                1,
+                2000,
+                "%d m"
+            );
+
+            configChanged |= ImGui::DragFloat(
+                "Aim smoothing",
+                &aimGlobals::aimSmooth,
+                0.1f,
+                1.0f,
+                100.0f,
+                "%.1f"
+            );
+
+            ImGui::TextDisabled(
+                "FOV is the pixel radius from screen centre."
+            );
+
             ImGui::Spacing();
-            ImGui::SeparatorText("Status");
+            ImGui::SeparatorText("Mouse Calibration");
+
+            configChanged |= ImGui::DragFloat(
+                "X units per screen pixel",
+                &makcu.mouseUnitsPerScreenPixelX,
+                0.001f,
+                0.001f,
+                5.0f,
+                "%.4f"
+            );
+
+            configChanged |= ImGui::DragFloat(
+                "Y units per screen pixel",
+                &makcu.mouseUnitsPerScreenPixelY,
+                0.001f,
+                0.001f,
+                5.0f,
+                "%.4f"
+            );
+
+            if (ImGui::Button("Reset mouse calibration"))
+            {
+                makcu.mouseUnitsPerScreenPixelX = 1.0f;
+                makcu.mouseUnitsPerScreenPixelY = 1.0f;
+                configChanged = true;
+            }
+
+            ImGui::TextDisabled(
+                "Start at 1.0000. Raise a value if movement is too slow."
+            );
+
+            ImGui::TextDisabled(
+                "X and Y may need slightly different values."
+            );
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Target Selection");
+
+            static constexpr const char* targetModeOptions[] =
+            {
+                "FOV - closest to screen centre",
+                "CQB - closest to local player"
+            };
+
+            int targetModeIndex = static_cast<int>(
+                aimGlobals::targetMode
+                );
+
+            targetModeIndex = std::clamp(
+                targetModeIndex,
+                0,
+                IM_ARRAYSIZE(targetModeOptions) - 1
+            );
+
+            if (ImGui::Combo(
+                "Target mode",
+                &targetModeIndex,
+                targetModeOptions,
+                IM_ARRAYSIZE(targetModeOptions)
+            ))
+            {
+                aimGlobals::targetMode =
+                    static_cast<TargetMode>(targetModeIndex);
+
+                configChanged = true;
+            }
+
+            configChanged |= ImGui::Checkbox(
+                "Lock target while key is held",
+                &aimGlobals::targetLock
+            );
+
+            ImGui::TextDisabled(
+                "When enabled, the first valid target remains selected\n"
+                "until the key is released or it becomes invalid."
+            );
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Aim Bones");
+
+            configChanged |= ShowBoneSelectionBox(
+                aimGlobals::aiBone,
+                "AI target bone"
+            );
+
+            configChanged |= ShowBoneSelectionBox(
+                aimGlobals::pmcBone,
+                "PMC target bone"
+            );
+
+            ImGui::TextDisabled(
+                "AI and PMC targets can use different bones."
+            );
+
+            ImGui::EndDisabled();
+
+            // Your original Settings tab did not call this at the end.
+            if (configChanged && onConfigChanged)
+                onConfigChanged();
+
+            ImGui::EndTabItem();
+        }
+
+        // Debug
+        if (ImGui::BeginTabItem("Debug"))
+        {
+            const bool connected = makcu.IsConnected();
 
             const MakcuDiagnostics diagnostics =
                 makcu.GetDiagnostics();
+
+            const std::optional<TargetResult> bestTarget =
+                readOnlyAim.GetLiveTarget();
+
+            const std::optional<TargetResult> activeTarget =
+                readOnlyAim.GetActiveTarget();
+
+            ImGui::SeparatorText("Aim State");
+
+            ImGui::Text(
+                "Aim enabled: %s",
+                aimGlobals::aimEnabled ? "true" : "false"
+            );
+
+            ImGui::Text(
+                "Target lock: %s",
+                aimGlobals::targetLock ? "true" : "false"
+            );
+
+            ImGui::Text(
+                "Target mode: %s",
+                aimGlobals::targetMode == TargetMode::CQB
+                ? "CQB"
+                : "FOV"
+            );
+
+            ImGui::Text(
+                "Aim FOV: %.0f px",
+                aimGlobals::aimFOV
+            );
+
+            ImGui::Text(
+                "Aim distance: %d m",
+                aimGlobals::aimDistance
+            );
+
+            ImGui::Text(
+                "Aim smoothing: %.2f",
+                aimGlobals::aimSmooth
+            );
+
+            ImGui::Text(
+                "Mouse calibration: X %.4f | Y %.4f",
+                makcu.mouseUnitsPerScreenPixelX,
+                makcu.mouseUnitsPerScreenPixelY
+            );
+
+            ImGui::Text(
+                "AI bone: %s (%d)",
+                BoneToString(aimGlobals::aiBone),
+                static_cast<int>(aimGlobals::aiBone)
+            );
+
+            ImGui::Text(
+                "PMC bone: %s (%d)",
+                BoneToString(aimGlobals::pmcBone),
+                static_cast<int>(aimGlobals::pmcBone)
+            );
+
+            ImGui::Spacing();
+
+            DrawTargetDebugBlock(
+                "Best Target (Live)",
+                bestTarget
+            );
+
+            ImGui::Spacing();
+
+            DrawTargetDebugBlock(
+                "Active Target",
+                activeTarget
+            );
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("MAKCU Runtime");
+
+            ImGui::Text(
+                "Connection state: %s",
+                connected ? "Connected" : "Disconnected"
+            );
 
             if (diagnostics.connected)
             {
@@ -1305,27 +1682,30 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             {
                 ImGui::TextColored(
                     ImVec4(1.00f, 0.35f, 0.35f, 1.00f),
-                    "Disconnected"
+                    "No active MAKCU connection"
                 );
             }
 
-            ImGui::Text("Firmware:");
-
-            ImGui::TextWrapped(
-                "%s",
+            ImGui::Text(
+                "Firmware: %s",
                 diagnostics.firmwareVersion.empty()
                 ? "Not queried"
                 : diagnostics.firmwareVersion.c_str()
             );
 
+            if (ImGui::Button(
+                "Refresh Diagnostics",
+                ImVec2(170.0f, 28.0f)
+            ))
+            {
+                if (connected)
+                    makcu.RefreshDiagnostics();
+            }
+
             if (!diagnostics.lastError.empty())
             {
                 ImGui::Spacing();
-
-                ImGui::TextColored(
-                    ImVec4(1.00f, 0.65f, 0.20f, 1.00f),
-                    "Last Error"
-                );
+                ImGui::SeparatorText("Last Error");
 
                 ImGui::TextWrapped(
                     "%s",
@@ -1333,7 +1713,10 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 );
             }
 
-            if (ImGui::CollapsingHeader("Last Device Reply"))
+            if (ImGui::CollapsingHeader(
+                "Last Device Reply",
+                ImGuiTreeNodeFlags_DefaultOpen
+            ))
             {
                 ImGui::TextWrapped(
                     "%s",
@@ -1343,7 +1726,6 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 );
             }
 
-           
             ImGui::EndTabItem();
         }
 

@@ -57,23 +57,7 @@ const char* WindowsKeyToString(WindowsKey key) {
     }
 }
 
-const char* BoneToString(boneListIndexes key) {
-    switch (key) {
-    case boneListIndexes::Head: return "Head";
-    case boneListIndexes::Pelvis: return "Pelvis";
-    case boneListIndexes::Neck: return "Neck";
-    case boneListIndexes::Spine: return "Spine";
-    case boneListIndexes::LForearm: return "LForearm";
-    case boneListIndexes::LPalm: return "LPalm";
-    case boneListIndexes::RForearm: return "RForearm";
-    case boneListIndexes::RPalm: return "RPalm";
-    case boneListIndexes::LThigh: return "LThigh";
-    case boneListIndexes::LFoot: return "LFoot";
-    case boneListIndexes::RThigh: return "RThigh";
-    case boneListIndexes::RFoot: return "RFoot";
-    default: return "Unknown";
-    }
-}
+
 
 int WindowsKeyToIndex(WindowsKey key) {
     switch (key) {
@@ -139,22 +123,7 @@ boneListIndexes IndexToBoneList(int index) {
     }
 }
 
-std::vector<boneListIndexes> getAllBones() {
-    return {
-        boneListIndexes::Pelvis,
-        boneListIndexes::Head,
-        boneListIndexes::Neck,
-        boneListIndexes::Spine,
-        boneListIndexes::LForearm,
-        boneListIndexes::LPalm,
-        boneListIndexes::RForearm,
-        boneListIndexes::RPalm,
-        boneListIndexes::LThigh,
-        boneListIndexes::LFoot,
-        boneListIndexes::RThigh,
-        boneListIndexes::RFoot
-    };
-}
+
 
 bool showResSelectionBox()
 {
@@ -200,35 +169,6 @@ bool showResSelectionBox()
         return true;
     }
     return false;
-}
-bool showBoneSelectionBox(boneListIndexes& bone, std::string selection_name)
-{
-    static std::vector<boneListIndexes> keys = getAllBones();
-    static std::vector<const char*> items;
-
-    if (items.empty()) {
-        for (const auto& key : keys) {
-            items.push_back(BoneToString(key));
-        }
-    }
-
-    int currentItem = std::distance(keys.begin(), std::find(keys.begin(), keys.end(), bone));
-
-    if (ImGui::BeginCombo(selection_name.c_str(), items[currentItem])) {
-        for (int i = 0; i < items.size(); i++) {
-            bool isSelected = (currentItem == i);
-            if (ImGui::Selectable(items[i], isSelected)) {
-                currentItem = i;
-                bone = IndexToBoneList(i); // Map selection to enum
-            }
-            if (isSelected) {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    return true;
-
 }
 
 bool ShowKeySelectionBox(WindowsKey& aimKey, std::string selection_name) {

@@ -11,15 +11,6 @@
 #include <nlohmann/json.hpp>
 #include <unordered_set>
 
-#pragma once
-
-#include <vector>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <mutex>
-#include <optional>
-
 class DogTagCache
 {
 public:

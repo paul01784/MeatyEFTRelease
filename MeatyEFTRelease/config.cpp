@@ -186,6 +186,15 @@ void from_json(const nlohmann::json& j, BoneList& k) {
     k = static_cast<BoneList>(j.get<int>());
 }
 
+// Custom serialization for TargetMode
+void to_json(nlohmann::json& j, const TargetMode& k) {
+    j = static_cast<int>(k);
+}
+
+void from_json(const nlohmann::json& j, TargetMode& k) {
+    k = static_cast<TargetMode>(j.get<int>());
+}
+
 // Custom serialization for Globals
 void to_json(nlohmann::json& j, const globals& r) {
     j = nlohmann::json{
@@ -435,7 +444,9 @@ void to_json(nlohmann::json& j, const aimGlobals& a) {
         {"aimFOV", a.aimFOV},
         {"aimDistance", a.aimDistance},
         {"aiBone", a.aiBone},
-        {"pmcBone", a.pmcBone}
+        {"pmcBone", a.pmcBone},
+        {"targetLock", a.targetLock},
+        {"targetMode", a.targetMode}
     };
 }
 
@@ -445,6 +456,8 @@ void from_json(const nlohmann::json& j, aimGlobals& a) {
     a.aimDistance = j.value("aimDistance", a.aimDistance);
     a.aiBone = j.value("aiBone", a.aiBone);
     a.pmcBone = j.value("pmcBone", a.pmcBone);
+    a.targetLock = j.value("targetLock", a.targetLock);
+    a.targetMode = j.value("targetMode", a.targetMode);
 }
 
 

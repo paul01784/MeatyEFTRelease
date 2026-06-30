@@ -78,6 +78,12 @@ enum class BoneList
 
 };
 
+enum class TargetMode
+{
+    FOV,
+    CQB
+};
+
 const char* WindowsKeyToString(WindowsKey key);
 
 

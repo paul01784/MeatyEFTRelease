@@ -24,6 +24,7 @@
 #include "headers/wishlist.h"
 #include "headers/explosives.h"
 #include "headers/dogtag.h"
+#include "headers/readOnlyAim.h"
 
 
 
@@ -433,6 +434,7 @@ void MainGame::cameraAndAimWorker()
 
         //Task List
         cameraAndAimTask.addTask("cameraTask", std::bind(&Camera::cameraTask, &camera), &globals::taskCamera);
+        cameraAndAimTask.addTask("readOnlyAim", std::bind(&ReadOnlyAim::aimTask, &readOnlyAim), &globals::taskAim);
         
         //run the tasks
         cameraAndAimTask.run();

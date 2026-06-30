@@ -9,9 +9,6 @@
     <ClInclude Include="app\render.h">
       <Filter>app</Filter>
     </ClInclude>
-    <ClInclude Include="app\globals.h">
-      <Filter>app</Filter>
-    </ClInclude>
     <ClInclude Include="app\debug.h">
       <Filter>app</Filter>
     </ClInclude>
@@ -417,6 +414,8 @@
     <ClInclude Include="fuser\colour.h" />
     <ClInclude Include="game\modules\HandsManager.h" />
     <ClInclude Include="app\makcu.h" />
+    <ClInclude Include="app\globals.h" />
+    <ClInclude Include="game\headers\readOnlyAim.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="debug.cpp" />
@@ -456,6 +455,7 @@
     <ClCompile Include="DogTagAPI.cpp" />
     <ClCompile Include="DxRenderWindow.cpp" />
     <ClCompile Include="makcu.cpp" />
+    <ClCompile Include="game\readOnlyAim.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Font Include="app\fonts\forkawesome-webfont.ttf" />

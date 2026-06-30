@@ -41,6 +41,9 @@ public:
 
     bool checkIfOpticMatrix();
 
+
+    bool cameraPointersReady() const;
+
     static bool initedCamera;
 
     static uint64_t fpsCamera;
@@ -110,7 +113,6 @@ private:
 
 private:
 
-    bool cameraPointersReady() const;
     void clearCameraPointerCacheOnly();
     bool refreshCameraPointersStrict();
 
