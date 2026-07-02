@@ -2845,45 +2845,172 @@ static void renderDebugWindow()
             }
             if (ImGui::BeginTabItem("Performance"))
             {
+                static bool freezeList = false;
+                static bool newestFirst = false;
+                static bool jumpToNewest = false;
+
+                static auto displaySamples = PerfMonitor::Instance().GetRecent();
+
+                static auto lastRefresh = std::chrono::steady_clock::time_point{};
+
+                const auto now = std::chrono::steady_clock::now();
+
+                // Only refresh the table data four times per second unless frozen
+                if (!freezeList &&
+                    (lastRefresh == std::chrono::steady_clock::time_point{} ||
+                        now - lastRefresh >= std::chrono::milliseconds(250)))
+                {
+                    displaySamples = PerfMonitor::Instance().GetRecent();
+                    lastRefresh = now;
+                }
+
                 const double peakMs = PerfMonitor::Instance().GetPeakMs();
                 const std::string peakName = PerfMonitor::Instance().GetPeakName();
                 const std::string peakDetail = PerfMonitor::Instance().GetPeakDetail();
 
                 ImGui::Text("Peak spike: %.1f ms", peakMs);
+
                 if (!peakName.empty())
                     ImGui::Text("Source: %s", peakName.c_str());
+
                 if (!peakDetail.empty())
                     ImGui::Text("Detail: %s", peakDetail.c_str());
 
                 if (ImGui::Button("Reset peak"))
                     PerfMonitor::Instance().ResetPeak();
 
+                ImGui::SameLine();
+
+                if (ImGui::Button("Refresh now"))
+                {
+                    displaySamples = PerfMonitor::Instance().GetRecent();
+                    lastRefresh = now;
+                }
+
                 ImGui::Separator();
+
+                if (ImGui::Checkbox("Freeze list", &freezeList))
+                {
+                    // Capture a final stable snapshot at the instant it is frozen
+                    if (freezeList)
+                    {
+                        displaySamples = PerfMonitor::Instance().GetRecent();
+                        lastRefresh = now;
+                    }
+                }
+
+                ImGui::SameLine();
+
+                if (ImGui::Checkbox("Newest first", &newestFirst))
+                    jumpToNewest = true;
+
+                ImGui::SameLine();
+
+                if (ImGui::Button("Jump to newest"))
+                    jumpToNewest = true;
+
                 ImGui::TextWrapped(
                     "Silent lag usually comes from DMA mutex contention: multiple threads "
                     "(players, bones, camera, loot, grenades) waiting on scatter reads. "
-                    "Entries below are tasks/scatters slower than ~25-35ms.");
+                    "Entries below are tasks/scatters slower than ~25-35ms."
+                );
 
-                if (ImGui::BeginTable("PerfTable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 360)))
+                if (ImGui::BeginTable(
+                    "PerfTable",
+                    4,
+                    ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_ScrollY |
+                    ImGuiTableFlags_BordersInnerV,
+                    ImVec2(0, 360)))
                 {
-                    ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-                    ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 180.0f);
-                    ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn(
+                        "Time",
+                        ImGuiTableColumnFlags_WidthFixed,
+                        75.0f
+                    );
+
+                    ImGui::TableSetupColumn(
+                        "ms",
+                        ImGuiTableColumnFlags_WidthFixed,
+                        55.0f
+                    );
+
+                    ImGui::TableSetupColumn(
+                        "Name",
+                        ImGuiTableColumnFlags_WidthFixed,
+                        180.0f
+                    );
+
+                    ImGui::TableSetupColumn(
+                        "Detail",
+                        ImGuiTableColumnFlags_WidthStretch
+                    );
+
                     ImGui::TableHeadersRow();
 
-                    const auto samples = PerfMonitor::Instance().GetRecent();
-                    for (auto it = samples.rbegin(); it != samples.rend(); ++it)
+                    auto drawSample = [](const auto& sample)
+                        {
+                            ImGui::TableNextRow();
+
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%.1fs", sample.timestampSec);
+
+                            ImGui::TableSetColumnIndex(1);
+
+                            if (sample.durationMs >= 100.0)
+                            {
+                                ImGui::TextColored(
+                                    ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                                    "%.0f",
+                                    sample.durationMs
+                                );
+                            }
+                            else if (sample.durationMs >= 50.0)
+                            {
+                                ImGui::TextColored(
+                                    ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
+                                    "%.0f",
+                                    sample.durationMs
+                                );
+                            }
+                            else
+                            {
+                                ImGui::Text("%.0f", sample.durationMs);
+                            }
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(sample.name.c_str());
+
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TextUnformatted(sample.detail.c_str());
+                        };
+
+                    if (newestFirst)
                     {
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::Text("%.1fs", it->timestampSec);
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%.0f", it->durationMs);
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::TextUnformatted(it->name.c_str());
-                        ImGui::TableSetColumnIndex(3);
-                        ImGui::TextUnformatted(it->detail.c_str());
+                        // Latest event at the top.
+                        for (auto it = displaySamples.rbegin();
+                            it != displaySamples.rend();
+                            ++it)
+                        {
+                            drawSample(*it);
+                        }
+
+                        if (jumpToNewest)
+                        {
+                            ImGui::SetScrollY(0.0f);
+                            jumpToNewest = false;
+                        }
+                    }
+                    else
+                    {
+                        for (const auto& sample : displaySamples)
+                            drawSample(sample);
+
+                        if (jumpToNewest)
+                        {
+                            ImGui::SetScrollHereY(1.0f);
+                            jumpToNewest = false;
+                        }
                     }
 
                     ImGui::EndTable();

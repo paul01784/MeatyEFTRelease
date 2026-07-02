@@ -416,6 +416,7 @@
     <ClInclude Include="app\makcu.h" />
     <ClInclude Include="app\globals.h" />
     <ClInclude Include="game\headers\readOnlyAim.h" />
+    <ClInclude Include="app\perfMonitor.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="debug.cpp" />

@@ -147,7 +147,6 @@ void MainGame::updateLocalPlayerPtr()
 
 bool MainGame::updatePlayerList()
 {
-    
     if (!mem.vHandle)
         return false;
 
@@ -157,6 +156,19 @@ bool MainGame::updatePlayerList()
     const auto keepStaleList = [&]() -> bool
         {
             return mainGame.registeredPlayersCount > 0;
+        };
+
+    const auto commitEmptyPlayerList = [&]()
+        {
+            mainGame.registeredPlayers = 0;
+            mainGame.registeredPlayersList = 0;
+            mainGame.registeredPlayersCount = 0;
+
+            std::fill(
+                std::begin(mainGame.player_buffer),
+                std::end(mainGame.player_buffer),
+                0
+            );
         };
 
     try
@@ -211,7 +223,8 @@ bool MainGame::updatePlayerList()
     int registeredPlayersCount = 0;
 
     if (!TryReadValue(
-        mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers,
+        mainGame.localGameWorld +
+        sdk::ClientLocalGameWorld::RegisteredPlayers,
         registeredPlayers))
     {
         return keepStaleList();
@@ -220,25 +233,35 @@ bool MainGame::updatePlayerList()
     if (!Utils::valid_pointer(registeredPlayers))
         return keepStaleList();
 
+    if (!TryReadValue(registeredPlayers + 0x18, registeredPlayersCount))
+        return keepStaleList();
+
+    constexpr int MAX_REASONABLE_REGISTERED_PLAYERS = 512;
+
+    if (registeredPlayersCount < 0 ||
+        registeredPlayersCount > MAX_REASONABLE_REGISTERED_PLAYERS)
+    {
+        LOGS.logError(
+            "[PLAYERS][LIST] registeredPlayersCount invalid: " +
+            std::to_string(registeredPlayersCount)
+        );
+
+        return keepStaleList();
+    }
+
+    // This is a valid read of a genuinely empty list
+    // Do not retain old raid/player data
+    if (registeredPlayersCount == 0)
+    {
+        commitEmptyPlayerList();
+        return true;
+    }
+
     if (!TryReadValue(registeredPlayers + 0x10, registeredPlayersList))
         return keepStaleList();
 
     if (!Utils::valid_pointer(registeredPlayersList))
         return keepStaleList();
-
-    if (!TryReadValue(registeredPlayers + 0x18, registeredPlayersCount))
-        return keepStaleList();
-
-    if (registeredPlayersCount <= 0)
-        return keepStaleList();
-
-    constexpr int MAX_REASONABLE_REGISTERED_PLAYERS = 512;
-
-    if (registeredPlayersCount > MAX_REASONABLE_REGISTERED_PLAYERS)
-    {
-        LOGS.logError("[PLAYERS][LIST] registeredPlayersCount too large, skipping update");
-        return false;
-    }
 
     const int bufferCapacity =
         static_cast<int>(std::size(mainGame.player_buffer));
@@ -247,10 +270,12 @@ bool MainGame::updatePlayerList()
         std::min(registeredPlayersCount, bufferCapacity);
 
     if (readCount <= 0)
-        return false;
+        return keepStaleList();
 
-    std::vector<uint64_t> tempBuffer;
-    tempBuffer.resize(static_cast<size_t>(readCount), 0);
+    std::vector<uint64_t> tempBuffer(
+        static_cast<size_t>(readCount),
+        0
+    );
 
     const uint64_t playerArrayStart = registeredPlayersList + 0x20;
 
@@ -262,7 +287,6 @@ bool MainGame::updatePlayerList()
         return keepStaleList();
     }
 
-    //valid player pointers into the real buffer.
     int validCount = 0;
 
     for (int i = 0; i < readCount; ++i)
@@ -272,14 +296,18 @@ bool MainGame::updatePlayerList()
         if (!Utils::valid_pointer(player))
             continue;
 
-        mainGame.player_buffer[validCount] = player;
-        validCount++;
+        mainGame.player_buffer[validCount++] = player;
     }
 
+    // The list claimed to have players, but none were usable
+    // Treat this as a transient/bad list read, not an empty raid
     if (validCount <= 0)
         return keepStaleList();
 
-    //commit final values after the whole read succeeded.
+    // Clear old entries left after the new shorter list
+    for (int i = validCount; i < bufferCapacity; ++i)
+        mainGame.player_buffer[i] = 0;
+
     mainGame.registeredPlayers = registeredPlayers;
     mainGame.registeredPlayersList = registeredPlayersList;
     mainGame.registeredPlayersCount = validCount;
@@ -656,10 +684,12 @@ void MainGame::raidMonitorTask()
 
         constexpr int kZeroCountShutdownTicks = 12;
         constexpr int kInvalidGwShutdownTicks = 10;
+        constexpr int kMaxReasonableRegisteredPlayers = 512;
 
         auto countActiveCachedPlayers = []() -> int
             {
                 const std::vector<PlayerCache> snapshot = players.getCacheSnapshot();
+
                 int active = 0;
 
                 for (const auto& player : snapshot)
@@ -676,22 +706,12 @@ void MainGame::raidMonitorTask()
                 return active;
             };
 
-        auto raidStillLooksActive = [&]() -> bool
-            {
-                if (countActiveCachedPlayers() >= 2)
-                    return true;
-
-                if (mainGame.registeredPlayersCount >= 2)
-                    return true;
-
-                return false;
-            };
-
-        auto logIgnoredShutdown = [&](const char* reason, int observed)
+        auto logIgnoredShutdown = [&](const char* reason, int observed, int cachedActive)
             {
                 const auto now = std::chrono::steady_clock::now();
+
                 if (lastIgnoredZeroLog != std::chrono::steady_clock::time_point{} &&
-                    now - lastIgnoredZeroLog < std::chrono::seconds(10))
+                    (now - lastIgnoredZeroLog) < std::chrono::seconds(10))
                 {
                     return;
                 }
@@ -699,13 +719,56 @@ void MainGame::raidMonitorTask()
                 lastIgnoredZeroLog = now;
 
                 LOGS.logWarn(
-                    std::string("[RAID] Ignoring premature shutdown (") +
+                    std::string("[RAID] Delaying shutdown (") +
                     reason +
                     "=" + std::to_string(observed) +
-                    ", cached=" + std::to_string(countActiveCachedPlayers()) +
-                    ", staleList=" + std::to_string(mainGame.registeredPlayersCount) +
+                    ", cachedActive=" + std::to_string(cachedActive) +
                     ")"
                 );
+            };
+
+        auto requestShutdown = [&](const std::string& reason)
+            {
+                LOGS.logInfo(reason);
+
+                appGlobals::runThreads.store(false, std::memory_order_release);
+                appGlobals::runRadar.store(false, std::memory_order_release);
+
+                raidWasSeenActive = false;
+                zeroCountTicks = 0;
+                invalidListTicks = 0;
+            };
+
+        auto markInvalidListState = [&](const char* reason)
+            {
+                
+                zeroCountTicks = 0;
+
+                if (!raidWasSeenActive)
+                {
+                    invalidListTicks = 0;
+                    return;
+                }
+
+                ++invalidListTicks;
+
+                const int cachedActivePlayers = countActiveCachedPlayers();
+
+                if (cachedActivePlayers >= 2 && invalidListTicks <= 3)
+                {
+                    logIgnoredShutdown(reason, invalidListTicks, cachedActivePlayers);
+                }
+
+                if (invalidListTicks >= kInvalidGwShutdownTicks)
+                {
+                    requestShutdown(
+                        std::string("[RAID] ") +
+                        reason +
+                        " remained invalid for " +
+                        std::to_string(invalidListTicks) +
+                        " consecutive checks. Requesting shutdown."
+                    );
+                }
             };
 
         auto TryReadValue = [&](uint64_t address, auto& out) -> bool
@@ -739,32 +802,7 @@ void MainGame::raidMonitorTask()
 
         if (!Utils::valid_pointer(mainGame.localGameWorld))
         {
-            if (raidWasSeenActive)
-            {
-                if (raidStillLooksActive())
-                {
-                    invalidListTicks = 0;
-                    logIgnoredShutdown("invalidGameWorld", 0);
-                    return;
-                }
-
-                invalidListTicks++;
-
-                if (invalidListTicks >= kInvalidGwShutdownTicks)
-                {
-                    LOGS.logInfo(
-                        "[RAID] localGameWorld invalid after raid was active. Requesting shutdown."
-                    );
-
-                    appGlobals::runThreads.store(false, std::memory_order_release);
-                    appGlobals::runRadar.store(false, std::memory_order_release);
-
-                    raidWasSeenActive = false;
-                    zeroCountTicks = 0;
-                    invalidListTicks = 0;
-                }
-            }
-
+            markInvalidListState("localGameWorld");
             return;
         }
 
@@ -776,39 +814,29 @@ void MainGame::raidMonitorTask()
             mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers,
             registeredPlayers))
         {
-            if (raidWasSeenActive)
-                invalidListTicks++;
-
+            markInvalidListState("registeredPlayersPtr");
             return;
         }
 
         if (!TryReadPtr(registeredPlayers + 0x10, registeredPlayersList))
         {
-            if (raidWasSeenActive)
-                invalidListTicks++;
-
+            markInvalidListState("registeredPlayersList");
             return;
         }
 
         if (!TryReadValue(registeredPlayers + 0x18, registeredPlayersCount))
         {
-            if (raidWasSeenActive)
-                invalidListTicks++;
-
+            markInvalidListState("registeredPlayersCountRead");
             return;
         }
 
-        constexpr int MAX_REASONABLE_REGISTERED_PLAYERS = 512;
-
-        if (registeredPlayersCount < 0 || registeredPlayersCount > MAX_REASONABLE_REGISTERED_PLAYERS)
+        if (registeredPlayersCount < 0 ||
+            registeredPlayersCount > kMaxReasonableRegisteredPlayers)
         {
-            if (raidWasSeenActive)
-                invalidListTicks++;
-
+            markInvalidListState("registeredPlayersCountInvalid");
             return;
         }
 
-        // Raid/player list is healthy again.
         invalidListTicks = 0;
 
         if (registeredPlayersCount > 0)
@@ -818,39 +846,47 @@ void MainGame::raidMonitorTask()
             return;
         }
 
-        // Count is genuinely zero.
-        if (raidWasSeenActive && registeredPlayersCount == 0)
+        if (!raidWasSeenActive)
         {
-            if (raidStillLooksActive())
-            {
-                zeroCountTicks = 0;
-                logIgnoredShutdown("registeredPlayersCount", registeredPlayersCount);
-                return;
-            }
+            zeroCountTicks = 0;
+            return;
+        }
 
-            zeroCountTicks++;
+        const int cachedActivePlayers = countActiveCachedPlayers();
 
-            // Debounce transient DMA/read failures during heavy load.
-            if (zeroCountTicks >= kZeroCountShutdownTicks)
-            {
-                LOGS.logInfo("[RAID] RegisteredPlayers count is 0. Requesting shutdown.");
+        if (cachedActivePlayers >= 2 && zeroCountTicks < 3)
+        {
+            logIgnoredShutdown(
+                "registeredPlayersCount",
+                registeredPlayersCount,
+                cachedActivePlayers
+            );
+        }
 
-                appGlobals::runThreads.store(false, std::memory_order_release);
-                appGlobals::runRadar.store(false, std::memory_order_release);
+        ++zeroCountTicks;
 
-                raidWasSeenActive = false;
-                zeroCountTicks = 0;
-                invalidListTicks = 0;
-            }
+        if (zeroCountTicks >= kZeroCountShutdownTicks)
+        {
+            requestShutdown(
+                "[RAID] RegisteredPlayers count remained 0 for " +
+                std::to_string(zeroCountTicks) +
+                " consecutive valid reads. Requesting shutdown."
+            );
         }
     }
     catch (const std::exception& e)
     {
-        LOGS.logError("Exception caught in raidMonitorTask: " + std::string(e.what()) + ". Retrying...");
+        LOGS.logError(
+            "Exception caught in raidMonitorTask: " +
+            std::string(e.what()) +
+            ". Retrying..."
+        );
     }
     catch (...)
     {
-        LOGS.logError("Unknown exception caught in raidMonitorTask. Retrying...");
+        LOGS.logError(
+            "Unknown exception caught in raidMonitorTask. Retrying..."
+        );
     }
 }
 

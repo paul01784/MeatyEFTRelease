@@ -286,23 +286,23 @@ void Players::readDogTagComponent(PlayerCache& player, bool force)
         uint64_t dogtagItem = mem.Read<uint64_t>(slot.addr + sdk::Slot::ContainedItem);
         if (!Utils::valid_pointer(dogtagItem))
         {
-            std::cout << "[DogTag] Fail: invalid dogtag item ptr\n";
+            //std::cout << "[DogTag] Fail: invalid dogtag item ptr\n";
             break;
         }
 
         uint64_t dogtagComp = mem.Read<uint64_t>(dogtagItem + sdk::BarterOtherOffsets::Dogtag);
         if (!Utils::valid_pointer(dogtagComp))
         {
-            std::cout << "[DogTag] Fail: invalid dogtag component ptr\n";
+            //std::cout << "[DogTag] Fail: invalid dogtag component ptr\n";
             break;
         }
 
-        std::cout << "[DogTag] Read Data:\n";
-        std::cout << "  Nickname: " << player.DT_nickname << "\n";
-        std::cout << "  ProfileID: " << player.DT_profileId << "\n";
-        std::cout << "  AccountID: " << player.DT_accountId << "\n";
-        std::cout << "  Level: " << player.DT_lvl << "\n";
-        std::cout << "  Side: " << player.DT_Side << "\n";
+        //std::cout << "[DogTag] Read Data:\n";
+        //std::cout << "  Nickname: " << player.DT_nickname << "\n";
+        //std::cout << "  ProfileID: " << player.DT_profileId << "\n";
+        //std::cout << "  AccountID: " << player.DT_accountId << "\n";
+        //std::cout << "  Level: " << player.DT_lvl << "\n";
+        //std::cout << "  Side: " << player.DT_Side << "\n";
 
         if (!player.DT_nickname.empty() ||
             player.DT_lvl > 0 ||
@@ -328,348 +328,1015 @@ void Players::readDogTagComponent(PlayerCache& player, bool force)
     }
 }
 
-namespace {
-
-constexpr int kMaxTransformChain = 512;
-constexpr int kBonePtrRefreshTicks = 240;
-constexpr size_t kMaxBoneReadsPerTick = 72;
-constexpr size_t kMaxBonePtrRefreshPerTick = 2;
-constexpr size_t kMaxNewPlayersPerTick = 4;
-constexpr size_t kMaxQuickPositionBoneReads = 120;
-constexpr size_t kMaxCombinedMatrixElements = 12288;
-
-constexpr int kEspBoundsBoneSlots[] = {
-    boneListIndexes::Head,
-    boneListIndexes::Pelvis,
-    boneListIndexes::LFoot,
-    boneListIndexes::RFoot,
-    boneListIndexes::LPalm,
-    boneListIndexes::RPalm,
-};
-
-constexpr int kQuickPositionBoneSlots[] = {
-    boneListIndexes::Pelvis,
-    boneListIndexes::Head,
-    boneListIndexes::LFoot,
-    boneListIndexes::RFoot,
-};
-
-glm::vec3 computeTransformPosition(const Matrix34* matrices, const int32_t* indices, int32_t index, int count)
+namespace
 {
-    if (!matrices || !indices || index < 0 || count <= 0 || index >= count)
-        return glm::vec3(0.0f);
+    using Clock = std::chrono::steady_clock;
+    using TimePoint = Clock::time_point;
+    using Milliseconds = std::chrono::milliseconds;
 
-    __m128 result = *(__m128*)((uint8_t*)matrices + sizeof(Matrix34) * static_cast<size_t>(index));
+    constexpr int kMaxTransformChain = 512;
 
-    const __m128 mulVec0 = { -2.0f,  2.0f, -2.0f, 0.0f };
-    const __m128 mulVec1 = {  2.0f, -2.0f, -2.0f, 0.0f };
-    const __m128 mulVec2 = { -2.0f, -2.0f,  2.0f, 0.0f };
+    constexpr size_t kMaxBoneReadsPerTick = 72;
+    constexpr size_t kMaxBonePtrRefreshPerTick = 2;
+    constexpr size_t kMaxCombinedMatrixElements = 12288;
 
-    int transformIndex = indices[index];
-    int safety = 0;
-    while (transformIndex >= 0 && safety++ < 1000)
+    constexpr Milliseconds kQuickBoneInterval{ 4 };
+    constexpr Milliseconds kNormalBoneInterval{ 200 };
+
+    constexpr Milliseconds kBonePtrRefreshInterval{ 4000 };
+    constexpr Milliseconds kFailedBonePtrRetryInterval{ 500 };
+
+    constexpr Milliseconds kTransformMetaValidationInterval{ 5000 };
+    constexpr Milliseconds kTransformMetaValidationJitter{ 750 };
+    constexpr Milliseconds kTransformMetaRetryInterval{ 500 };
+
+    constexpr float kQuickBoneDistance = 80.0f;
+
+    constexpr int kMinimalBoneSlots[] =
     {
-        if (transformIndex < 0 || transformIndex >= count)
-            break;
+        boneListIndexes::Base,
+        boneListIndexes::LFoot,
+        boneListIndexes::RFoot,
+    };
 
-        const Matrix34& matrix34 = matrices[transformIndex];
+    enum class BoneReadKind : uint8_t
+    {
+        Quick,
+        Normal
+    };
 
-        __m128 xxxx = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x00));
-        __m128 yyyy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x55));
-        __m128 zwxy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x8E));
-        __m128 wzyw = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0xDB));
-        __m128 zzzz = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0xAA));
-        __m128 yxwy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x71));
+    struct LiveBoneRead
+    {
+        uint64_t playerInstance{};
+        uint64_t boneTransform{};
 
-        __m128 tmp7 = _mm_mul_ps(*(__m128*)(&matrix34.vec2), result);
+        int boneSlot{ -1 };
 
-        result = _mm_add_ps(
-            _mm_add_ps(
+        BoneTransformCacheEntry cache{};
+        TransformAccessReadOnly access{};
+
+        int count{};
+        size_t bufOffset{};
+
+        bool needsMetadata{};
+        bool needsHierarchy{};
+        bool hierarchyQueued{};
+        bool metadataDirty{};
+
+        bool matrixQueued{};
+        bool indicesQueued{};
+
+        bool hasPosition{};
+        glm::vec3 position{};
+
+        BoneReadKind kind{ BoneReadKind::Normal };
+    };
+
+    struct BonePlayerSnapshot
+    {
+        uint64_t instance{};
+
+        float distance{};
+        bool isLocal{};
+
+        std::vector<uint64_t> bonePtrs;
+        std::vector<BoneTransformCacheEntry> transformCache;
+
+        TimePoint nextQuickBoneRead{};
+        TimePoint nextBoneRead{};
+
+        TimePoint lastQuickBoneUpdate{};
+        TimePoint lastBoneUpdate{};
+    };
+
+    struct BonePtrRefreshCandidate
+    {
+        uint64_t instance{};
+
+        int distance{};
+        bool isLocal{};
+        bool urgent{};
+
+        TimePoint due{};
+    };
+
+    struct AppliedBoneFlags
+    {
+        uint64_t instance{};
+
+        bool quickUpdated{};
+        bool normalUpdated{};
+    };
+
+    struct ScatterGuard
+    {
+        Memory& mem;
+        VMMDLL_SCATTER_HANDLE handle{ nullptr };
+
+        explicit ScatterGuard(Memory& memory)
+            : mem(memory),
+            handle(memory.CreateScatterHandle())
+        {
+        }
+
+        ~ScatterGuard()
+        {
+            if (!handle)
+                return;
+
+            try
+            {
+                mem.CloseScatterHandle(handle);
+            }
+            catch (...)
+            {
+            }
+        }
+    };
+
+    uint64_t MixSeed(uint64_t value)
+    {
+        value += 0x9E3779B97F4A7C15ULL;
+        value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        value = (value ^ (value >> 27)) * 0x94D049BB133111EBULL;
+        return value ^ (value >> 31);
+    }
+
+    Milliseconds GetStagger(uint64_t playerInstance, uint64_t salt, Milliseconds interval)
+    {
+        const int64_t intervalMs = interval.count();
+
+        if (intervalMs <= 0)
+            return Milliseconds{ 0 };
+
+        const uint64_t mixed =
+            MixSeed(playerInstance ^ salt);
+
+        return Milliseconds(
+            static_cast<int64_t>(
+                mixed % static_cast<uint64_t>(intervalMs)
+                )
+        );
+    }
+
+    void InitialiseDueTime(TimePoint& due, TimePoint now, uint64_t playerInstance, uint64_t salt, Milliseconds interval, bool immediate)
+    {
+        if (due != TimePoint{})
+            return;
+
+        due = immediate
+            ? now
+            : now + GetStagger(
+                playerInstance,
+                salt,
+                interval
+            );
+    }
+
+    void AdvanceDueTime(TimePoint& due, TimePoint now, Milliseconds interval)
+    {
+        if (due == TimePoint{})
+        {
+            due = now + interval;
+            return;
+        }
+
+        do
+        {
+            due += interval;
+        } while (due <= now);
+    }
+
+    bool IsFinitePosition(const glm::vec3& value)
+    {
+        return std::isfinite(value.x) &&
+            std::isfinite(value.y) &&
+            std::isfinite(value.z);
+    }
+
+    PlayerCache* FindPlayerByInstance(std::vector<PlayerCache>& cache, uint64_t instance)
+    {
+        const auto it = std::find_if(
+            cache.begin(),
+            cache.end(),
+            [&](const PlayerCache& player)
+            {
+                return player.instance == instance;
+            }
+        );
+
+        return it == cache.end()
+            ? nullptr
+            : &(*it);
+    }
+
+    void EnsureTransformCacheShape(PlayerCache& player)
+    {
+        const size_t boneCount = player.bonePtrs.size();
+
+        if (player.boneTransformCache.size() != boneCount)
+            player.boneTransformCache.resize(boneCount);
+
+        for (size_t i = 0; i < boneCount; ++i)
+        {
+            BoneTransformCacheEntry& entry =
+                player.boneTransformCache[i];
+
+            const uint64_t currentBonePtr =
+                player.bonePtrs[i];
+
+            if (entry.boneTransform != currentBonePtr)
+            {
+                entry = {};
+                entry.boneTransform = currentBonePtr;
+            }
+        }
+    }
+
+    bool HasUsableTransformMetadata(const LiveBoneRead& read)
+    {
+        return read.cache.valid &&
+            read.cache.boneTransform == read.boneTransform &&
+            Utils::valid_pointer(read.cache.transformArray) &&
+            Utils::valid_pointer(read.cache.transformIndices) &&
+            read.cache.transformIndex >= 0 &&
+            read.cache.transformIndex < kMaxTransformChain;
+    }
+
+    bool NeedsTransformMetadataRefresh(const LiveBoneRead& read, TimePoint now)
+    {
+        if (!HasUsableTransformMetadata(read))
+            return true;
+
+        return read.cache.nextValidation == TimePoint{} ||
+            now >= read.cache.nextValidation;
+    }
+
+    glm::vec3 computeTransformPosition(const Matrix34* matrices, const int32_t* indices, int32_t index, int count)
+    {
+        if (!matrices ||
+            !indices ||
+            index < 0 ||
+            count <= 0 ||
+            index >= count)
+        {
+            return glm::vec3(0.0f);
+        }
+
+        __m128 result = *(__m128*)(
+            (uint8_t*)matrices +
+            sizeof(Matrix34) * static_cast<size_t>(index)
+            );
+
+        const __m128 mulVec0 = { -2.0f,  2.0f, -2.0f, 0.0f };
+        const __m128 mulVec1 = { 2.0f, -2.0f, -2.0f, 0.0f };
+        const __m128 mulVec2 = { -2.0f, -2.0f,  2.0f, 0.0f };
+
+        int transformIndex = indices[index];
+        int safety = 0;
+
+        while (transformIndex >= 0 &&
+            safety++ < kMaxTransformChain)
+        {
+            if (transformIndex >= count)
+                break;
+
+            const Matrix34& matrix34 =
+                matrices[transformIndex];
+
+            __m128 xxxx = _mm_castsi128_ps(
+                _mm_shuffle_epi32(
+                    *(__m128i*)(&matrix34.vec1),
+                    0x00
+                )
+            );
+
+            __m128 yyyy = _mm_castsi128_ps(
+                _mm_shuffle_epi32(
+                    *(__m128i*)(&matrix34.vec1),
+                    0x55
+                )
+            );
+
+            __m128 zwxy = _mm_castsi128_ps(
+                _mm_shuffle_epi32(
+                    *(__m128i*)(&matrix34.vec1),
+                    0x8E
+                )
+            );
+
+            __m128 wzyw = _mm_castsi128_ps(
+                _mm_shuffle_epi32(
+                    *(__m128i*)(&matrix34.vec1),
+                    0xDB
+                )
+            );
+
+            __m128 zzzz = _mm_castsi128_ps(
+                _mm_shuffle_epi32(
+                    *(__m128i*)(&matrix34.vec1),
+                    0xAA
+                )
+            );
+
+            __m128 yxwy = _mm_castsi128_ps(
+                _mm_shuffle_epi32(
+                    *(__m128i*)(&matrix34.vec1),
+                    0x71
+                )
+            );
+
+            __m128 tmp7 = _mm_mul_ps(
+                *(__m128*)(&matrix34.vec2),
+                result
+            );
+
+            result = _mm_add_ps(
                 _mm_add_ps(
-                    _mm_mul_ps(
-                        _mm_sub_ps(
-                            _mm_mul_ps(_mm_mul_ps(xxxx, mulVec1), zwxy),
-                            _mm_mul_ps(_mm_mul_ps(yyyy, mulVec2), wzyw)),
-                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0xAA))),
-                    _mm_mul_ps(
-                        _mm_sub_ps(
-                            _mm_mul_ps(_mm_mul_ps(zzzz, mulVec2), wzyw),
-                            _mm_mul_ps(_mm_mul_ps(xxxx, mulVec0), yxwy)),
-                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0x55)))),
-                _mm_add_ps(
-                    _mm_mul_ps(
-                        _mm_sub_ps(
-                            _mm_mul_ps(_mm_mul_ps(yyyy, mulVec0), yxwy),
-                            _mm_mul_ps(_mm_mul_ps(zzzz, mulVec1), zwxy)),
-                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0x00))),
-                    tmp7)),
-            *(__m128*)(&matrix34.vec0));
+                    _mm_add_ps(
+                        _mm_mul_ps(
+                            _mm_sub_ps(
+                                _mm_mul_ps(
+                                    _mm_mul_ps(xxxx, mulVec1),
+                                    zwxy
+                                ),
+                                _mm_mul_ps(
+                                    _mm_mul_ps(yyyy, mulVec2),
+                                    wzyw
+                                )
+                            ),
+                            _mm_castsi128_ps(
+                                _mm_shuffle_epi32(
+                                    _mm_castps_si128(tmp7),
+                                    0xAA
+                                )
+                            )
+                        ),
+                        _mm_mul_ps(
+                            _mm_sub_ps(
+                                _mm_mul_ps(
+                                    _mm_mul_ps(zzzz, mulVec2),
+                                    wzyw
+                                ),
+                                _mm_mul_ps(
+                                    _mm_mul_ps(xxxx, mulVec0),
+                                    yxwy
+                                )
+                            ),
+                            _mm_castsi128_ps(
+                                _mm_shuffle_epi32(
+                                    _mm_castps_si128(tmp7),
+                                    0x55
+                                )
+                            )
+                        )
+                    ),
+                    _mm_add_ps(
+                        _mm_mul_ps(
+                            _mm_sub_ps(
+                                _mm_mul_ps(
+                                    _mm_mul_ps(yyyy, mulVec0),
+                                    yxwy
+                                ),
+                                _mm_mul_ps(
+                                    _mm_mul_ps(zzzz, mulVec1),
+                                    zwxy
+                                )
+                            ),
+                            _mm_castsi128_ps(
+                                _mm_shuffle_epi32(
+                                    _mm_castps_si128(tmp7),
+                                    0x00
+                                )
+                            )
+                        ),
+                        tmp7
+                    )
+                ),
+                *(__m128*)(&matrix34.vec0)
+            );
 
-        const int oldTransformIndex = transformIndex;
-        transformIndex = indices[transformIndex];
-        if (oldTransformIndex == transformIndex && transformIndex == 0)
-            break;
-    }
+            const int previousTransformIndex =
+                transformIndex;
 
-    return glm::vec3(result.m128_f32[0], result.m128_f32[1], result.m128_f32[2]);
-}
+            transformIndex =
+                indices[transformIndex];
 
-struct LiveBoneRead
-{
-    PlayerCache* player{};
-    int boneSlot{ -1 };
-    uint64_t boneTransform{};
-    TransformAccessReadOnly access{};
-    uint64_t transformArray{};
-    uint64_t transformIndices{};
-    int count{};
-    size_t bufOffset{};
-};
-
-struct ScatterGuard
-{
-    Memory& mem;
-    VMMDLL_SCATTER_HANDLE handle{ nullptr };
-
-    explicit ScatterGuard(Memory& memory)
-        : mem(memory),
-        handle(memory.CreateScatterHandle())
-    {
-    }
-
-    ~ScatterGuard()
-    {
-        if (handle)
-            mem.CloseScatterHandle(handle);
-    }
-};
-
-bool batchReadBoneWorldPositions(Memory& mem, std::vector<LiveBoneRead>& reads)
-{
-    if (reads.empty())
-        return false;
-
-    {
-        ScatterGuard scatter(mem);
-        if (!scatter.handle)
-            return false;
-
-        for (auto& slot : reads)
-        {
-            if (!mem.AddScatterReadRequest(
-                scatter.handle,
-                slot.boneTransform + UnityOffsets::TransformInternal_TransformAccessOffset,
-                &slot.access,
-                sizeof(TransformAccessReadOnly)))
+            if (previousTransformIndex == transformIndex &&
+                transformIndex == 0)
             {
-                slot.count = 0;
+                break;
             }
         }
 
-        if (!mem.ExecuteReadScatter(scatter.handle))
-            return false;
+        return glm::vec3(
+            result.m128_f32[0],
+            result.m128_f32[1],
+            result.m128_f32[2]
+        );
     }
 
+    void BatchReadBoneWorldPositions(Memory& memory, std::vector<LiveBoneRead>& reads, TimePoint now)
     {
-        ScatterGuard scatter(mem);
-        if (!scatter.handle)
-            return false;
+        if (reads.empty())
+            return;
 
-        bool any = false;
-        for (auto& slot : reads)
+        bool queuedMetadataReads = false;
+
         {
-            if (!Utils::valid_pointer(slot.access.pTransformData) ||
-                slot.access.index < 0 ||
-                slot.access.index >= kMaxTransformChain)
+            ScatterGuard scatter(memory);
+
+            if (!scatter.handle)
+                return;
+
+            for (LiveBoneRead& read : reads)
             {
-                slot.count = 0;
-                continue;
+                if (!NeedsTransformMetadataRefresh(read, now))
+                    continue;
+
+                read.needsMetadata = true;
+                read.metadataDirty = true;
+
+                read.cache = {};
+                read.cache.boneTransform =
+                    read.boneTransform;
+
+                if (!memory.AddScatterReadRequest(
+                    scatter.handle,
+                    read.boneTransform +
+                    UnityOffsets::TransformInternal_TransformAccessOffset,
+                    &read.access,
+                    sizeof(TransformAccessReadOnly)))
+                {
+                    read.cache.valid = false;
+                    read.cache.nextValidation =
+                        now + kTransformMetaRetryInterval;
+
+                    continue;
+                }
+
+                queuedMetadataReads = true;
             }
 
-            slot.count = slot.access.index + 1;
-            any = true;
-
-            if (!mem.AddScatterReadRequest(
-                scatter.handle,
-                slot.access.pTransformData + UnityOffsets::Hierarchy_VerticesOffset,
-                &slot.transformArray,
-                sizeof(uint64_t)))
+            if (queuedMetadataReads &&
+                !memory.ExecuteReadScatter(scatter.handle))
             {
-                slot.count = 0;
-                continue;
-            }
+                for (LiveBoneRead& read : reads)
+                {
+                    if (!read.needsMetadata)
+                        continue;
 
-            if (!mem.AddScatterReadRequest(
-                scatter.handle,
-                slot.access.pTransformData + UnityOffsets::Hierarchy_IndicesOffset,
-                &slot.transformIndices,
-                sizeof(uint64_t)))
-            {
-                slot.count = 0;
+                    read.cache.valid = false;
+                    read.cache.nextValidation =
+                        now + kTransformMetaRetryInterval;
+                }
+
+                return;
             }
         }
 
-        if (any && !mem.ExecuteReadScatter(scatter.handle))
-            return false;
-    }
-
-    thread_local std::vector<Matrix34> matrices;
-    thread_local std::vector<int32_t> indices;
-
-    size_t total = 0;
-    for (const auto& slot : reads)
-    {
-        if (slot.count > 0 &&
-            Utils::valid_pointer(slot.transformArray) &&
-            Utils::valid_pointer(slot.transformIndices))
+        for (LiveBoneRead& read : reads)
         {
-            total += static_cast<size_t>(slot.count);
+            if (!read.needsMetadata)
+                continue;
+
+            if (!Utils::valid_pointer(
+                read.access.pTransformData) ||
+                read.access.index < 0 ||
+                read.access.index >= kMaxTransformChain)
+            {
+                read.cache.valid = false;
+                read.cache.nextValidation =
+                    now + kTransformMetaRetryInterval;
+
+                continue;
+            }
+
+            read.cache.transformData =
+                read.access.pTransformData;
+
+            read.cache.transformIndex =
+                read.access.index;
+
+            read.needsHierarchy = true;
+        }
+
+        bool queuedHierarchyReads = false;
+
+        {
+            ScatterGuard scatter(memory);
+
+            if (!scatter.handle)
+                return;
+
+            for (LiveBoneRead& read : reads)
+            {
+                if (!read.needsHierarchy)
+                    continue;
+
+                const bool matrixPointerQueued =
+                    memory.AddScatterReadRequest(
+                        scatter.handle,
+                        read.cache.transformData +
+                        UnityOffsets::Hierarchy_VerticesOffset,
+                        &read.cache.transformArray,
+                        sizeof(uint64_t)
+                    );
+
+                const bool indexPointerQueued =
+                    memory.AddScatterReadRequest(
+                        scatter.handle,
+                        read.cache.transformData +
+                        UnityOffsets::Hierarchy_IndicesOffset,
+                        &read.cache.transformIndices,
+                        sizeof(uint64_t)
+                    );
+
+                if (!matrixPointerQueued ||
+                    !indexPointerQueued)
+                {
+                    read.cache.valid = false;
+                    read.cache.nextValidation =
+                        now + kTransformMetaRetryInterval;
+
+                    continue;
+                }
+
+                read.hierarchyQueued = true;
+                queuedHierarchyReads = true;
+            }
+
+            if (queuedHierarchyReads &&
+                !memory.ExecuteReadScatter(scatter.handle))
+            {
+                for (LiveBoneRead& read : reads)
+                {
+                    if (!read.hierarchyQueued)
+                        continue;
+
+                    read.cache.valid = false;
+                    read.cache.nextValidation =
+                        now + kTransformMetaRetryInterval;
+                }
+
+                return;
+            }
+        }
+
+        for (LiveBoneRead& read : reads)
+        {
+            if (!read.needsHierarchy ||
+                !read.hierarchyQueued)
+            {
+                continue;
+            }
+
+            if (!Utils::valid_pointer(
+                read.cache.transformArray) ||
+                !Utils::valid_pointer(
+                    read.cache.transformIndices))
+            {
+                read.cache.valid = false;
+                read.cache.nextValidation =
+                    now + kTransformMetaRetryInterval;
+
+                continue;
+            }
+
+            read.cache.valid = true;
+
+            read.cache.nextValidation =
+                now +
+                kTransformMetaValidationInterval +
+                GetStagger(
+                    read.playerInstance ^
+                    static_cast<uint64_t>(
+                        static_cast<uint32_t>(
+                            read.boneSlot)),
+                    0x91B4C2D7ULL,
+                    kTransformMetaValidationJitter
+                );
+        }
+
+        size_t totalMatrixElements = 0;
+
+        for (LiveBoneRead& read : reads)
+        {
+            if (!HasUsableTransformMetadata(read))
+                continue;
+
+            const size_t matrixCount =
+                static_cast<size_t>(
+                    read.cache.transformIndex + 1
+                    );
+
+            if (matrixCount == 0 ||
+                matrixCount > kMaxTransformChain ||
+                totalMatrixElements + matrixCount >
+                kMaxCombinedMatrixElements)
+            {
+                continue;
+            }
+
+            read.count =
+                static_cast<int>(matrixCount);
+
+            totalMatrixElements += matrixCount;
+        }
+
+        if (totalMatrixElements == 0)
+            return;
+
+        thread_local std::vector<Matrix34> matrices;
+        thread_local std::vector<int32_t> indices;
+
+        matrices.resize(totalMatrixElements);
+        indices.resize(totalMatrixElements);
+
+        bool queuedPositionReads = false;
+
+        {
+            ScatterGuard scatter(memory);
+
+            if (!scatter.handle)
+                return;
+
+            size_t cursor = 0;
+
+            for (LiveBoneRead& read : reads)
+            {
+                if (read.count <= 0)
+                    continue;
+
+                const size_t matrixCount =
+                    static_cast<size_t>(read.count);
+
+                read.bufOffset = cursor;
+                cursor += matrixCount;
+
+                const bool matrixQueued =
+                    memory.AddScatterReadRequest(
+                        scatter.handle,
+                        read.cache.transformArray,
+                        matrices.data() + read.bufOffset,
+                        static_cast<SIZE_T>(
+                            sizeof(Matrix34) * matrixCount
+                            )
+                    );
+
+                const bool indicesQueued =
+                    memory.AddScatterReadRequest(
+                        scatter.handle,
+                        read.cache.transformIndices,
+                        indices.data() + read.bufOffset,
+                        static_cast<SIZE_T>(
+                            sizeof(int32_t) * matrixCount
+                            )
+                    );
+
+                if (!matrixQueued || !indicesQueued)
+                {
+                    read.count = 0;
+                    continue;
+                }
+
+                read.matrixQueued = true;
+                read.indicesQueued = true;
+                queuedPositionReads = true;
+            }
+
+            if (!queuedPositionReads ||
+                !memory.ExecuteReadScatter(scatter.handle))
+            {
+                return;
+            }
+        }
+
+        for (LiveBoneRead& read : reads)
+        {
+            if (read.count <= 0 ||
+                !read.matrixQueued ||
+                !read.indicesQueued)
+            {
+                continue;
+            }
+
+            const glm::vec3 position =
+                computeTransformPosition(
+                    matrices.data() + read.bufOffset,
+                    indices.data() + read.bufOffset,
+                    read.cache.transformIndex,
+                    read.count
+                );
+
+            if (!IsFinitePosition(position))
+                continue;
+
+            read.position = position;
+            read.hasPosition = true;
         }
     }
 
-    if (total == 0)
-        return false;
-
-    if (total > kMaxCombinedMatrixElements)
-        return false;
-
-    matrices.resize(total);
-    indices.resize(total);
-
+    void ApplyBoneResults(std::vector<LiveBoneRead>& reads, TimePoint now)
     {
-        ScatterGuard scatter(mem);
-        if (!scatter.handle)
-            return false;
+        if (reads.empty())
+            return;
 
-        size_t cursor = 0;
-        for (auto& slot : reads)
+        std::vector<AppliedBoneFlags> applied;
+        applied.reserve(reads.size());
+
+        std::lock_guard<std::mutex> lock(playerMutex);
+
+        std::vector<PlayerCache>& cache =
+            players.getCache();
+
+        for (const LiveBoneRead& read : reads)
         {
-            if (slot.count <= 0 ||
-                !Utils::valid_pointer(slot.transformArray) ||
-                !Utils::valid_pointer(slot.transformIndices))
+            PlayerCache* player =
+                FindPlayerByInstance(
+                    cache,
+                    read.playerInstance
+                );
+
+            if (!player ||
+                !Utils::valid_pointer(player->instance))
             {
                 continue;
             }
 
-            const size_t need = static_cast<size_t>(slot.count);
-            slot.bufOffset = cursor;
+            const size_t boneIndex =
+                static_cast<size_t>(read.boneSlot);
 
-            if (!mem.AddScatterReadRequest(
-                scatter.handle,
-                slot.transformArray,
-                matrices.data() + cursor,
-                static_cast<SIZE_T>(sizeof(Matrix34) * need)))
+            if (read.boneSlot < 0 ||
+                boneIndex >= player->bonePtrs.size() ||
+                player->bonePtrs[boneIndex] !=
+                read.boneTransform)
             {
-                slot.count = 0;
                 continue;
             }
 
-            if (!mem.AddScatterReadRequest(
-                scatter.handle,
-                slot.transformIndices,
-                indices.data() + cursor,
-                static_cast<SIZE_T>(sizeof(int32_t) * need)))
+            EnsureTransformCacheShape(*player);
+
+            if (boneIndex < player->boneTransformCache.size() &&
+                read.metadataDirty)
             {
-                slot.count = 0;
+                player->boneTransformCache[boneIndex] =
+                    read.cache;
+            }
+
+            if (!read.hasPosition ||
+                boneIndex >= player->bonePositions.size())
+            {
                 continue;
             }
 
-            cursor += need;
+            player->bonePositions[boneIndex] =
+                read.position;
+
+            auto appliedIt = std::find_if(
+                applied.begin(),
+                applied.end(),
+                [&](const AppliedBoneFlags& entry)
+                {
+                    return entry.instance ==
+                        player->instance;
+                }
+            );
+
+            if (appliedIt == applied.end())
+            {
+                applied.push_back({
+                    player->instance,
+                    read.kind == BoneReadKind::Quick,
+                    read.kind == BoneReadKind::Normal
+                    });
+            }
+            else
+            {
+                if (read.kind == BoneReadKind::Quick)
+                    appliedIt->quickUpdated = true;
+                else
+                    appliedIt->normalUpdated = true;
+            }
         }
 
-        if (!mem.ExecuteReadScatter(scatter.handle))
-            return false;
+        for (const AppliedBoneFlags& flags : applied)
+        {
+            PlayerCache* player =
+                FindPlayerByInstance(
+                    cache,
+                    flags.instance
+                );
+
+            if (!player)
+                continue;
+
+            if (flags.quickUpdated)
+            {
+                player->lastQuickBoneUpdate = now;
+
+                AdvanceDueTime(
+                    player->nextQuickBoneRead,
+                    now,
+                    kQuickBoneInterval
+                );
+            }
+
+            // Any successful quick or normal job updated this player's
+            // appropriate current bone set, so do not immediately queue
+            // a duplicate normal job as well.
+            if (flags.quickUpdated ||
+                flags.normalUpdated)
+            {
+                player->lastBoneUpdate = now;
+
+                AdvanceDueTime(
+                    player->nextBoneRead,
+                    now,
+                    kNormalBoneInterval
+                );
+            }
+        }
     }
 
-    for (const auto& slot : reads)
+    void MarkPlayersForBonePointerRefresh(const std::vector<uint64_t>& playerInstances, TimePoint now)
     {
-        if (slot.count <= 0 || slot.player == nullptr || slot.boneSlot < 0)
-            continue;
+        if (playerInstances.empty())
+            return;
 
-        const size_t boneIndex = static_cast<size_t>(slot.boneSlot);
-        if (boneIndex >= slot.player->bonePositions.size())
-            continue;
+        std::lock_guard<std::mutex> lock(playerMutex);
 
-        const glm::vec3 pos = computeTransformPosition(
-            matrices.data() + slot.bufOffset,
-            indices.data() + slot.bufOffset,
-            slot.access.index,
-            slot.count);
+        std::vector<PlayerCache>& cache =
+            players.getCache();
 
-        slot.player->bonePositions[boneIndex] = pos;
+        for (const uint64_t instance : playerInstances)
+        {
+            PlayerCache* player =
+                FindPlayerByInstance(cache, instance);
+
+            if (!player)
+                continue;
+
+            player->invalidBones = true;
+            player->nextBonePtrRefresh = now;
+        }
     }
 
-    return true;
-}
-
-void quickRefreshEspBones()
-{
-    if (!mem.IsDmaOperational())
-        return;
-
-    std::vector<LiveBoneRead> reads;
-    std::vector<PlayerCache*> nearby;
-
+    bool RefreshBonePointersForPlayer(uint64_t playerInstance, TimePoint now)
     {
         std::lock_guard<std::mutex> lock(playerMutex);
 
-        std::vector<PlayerCache>& cache = players.getCache();
-        nearby.reserve(cache.size());
+        std::vector<PlayerCache>& cache =
+            players.getCache();
 
-        const int maxDist = espGlobals::drawPlayerDist > 0 ? espGlobals::drawPlayerDist : 250;
+        PlayerCache* player =
+            FindPlayerByInstance(
+                cache,
+                playerInstance
+            );
 
-        for (auto& player : cache)
+        if (!player ||
+            !Utils::valid_pointer(player->instance))
         {
-            if (!Utils::valid_pointer(player.instance))
-                continue;
-
-            if (player.isBTR || player.isDead || player.hasExfiled)
-                continue;
-
-            if (!Utils::valid_pointer(player.playerBoneMatrixPtr) || player.invalidBones)
-                continue;
-
-            if (!player.isLocal && player.distance > maxDist)
-                continue;
-
-            nearby.push_back(&player);
+            return false;
         }
 
-        std::sort(
-            nearby.begin(),
-            nearby.end(),
-            [](const PlayerCache* a, const PlayerCache* b)
-            {
-                return a->distance < b->distance;
-            });
+        bool ok = false;
 
-        for (PlayerCache* player : nearby)
+        try
         {
-            if (reads.size() >= kMaxQuickPositionBoneReads)
-                break;
-
-            for (const int slot : kQuickPositionBoneSlots)
-            {
-                if (reads.size() >= kMaxQuickPositionBoneReads)
-                    break;
-
-                if (slot < 0 || static_cast<size_t>(slot) >= player->bonePtrs.size())
-                    continue;
-
-                const uint64_t bonePtr = player->bonePtrs[static_cast<size_t>(slot)];
-                if (!Utils::valid_pointer(bonePtr))
-                    continue;
-
-                reads.push_back({ player, slot, bonePtr, {}, {}, {}, 0, 0 });
-            }
+            ok = Players::getBonePtrs(*player);
         }
+        catch (...)
+        {
+            ok = false;
+        }
+
+        player->invalidBones = !ok;
+
+        EnsureTransformCacheShape(*player);
+
+        if (ok)
+        {
+            player->nextBonePtrRefresh =
+                now +
+                kBonePtrRefreshInterval +
+                GetStagger(
+                    player->instance,
+                    0xD31A4C62ULL,
+                    Milliseconds{ 750 }
+                );
+        }
+        else
+        {
+            player->nextBonePtrRefresh =
+                now +
+                kFailedBonePtrRetryInterval +
+                GetStagger(
+                    player->instance,
+                    0xE50D4F17ULL,
+                    Milliseconds{ 250 }
+                );
+        }
+
+        return ok;
     }
 
-    if (!reads.empty())
-        batchReadBoneWorldPositions(mem, reads);
+    enum class AppendResult
+    {
+        Queued,
+        Capacity,
+        InvalidBonePointer,
+        NoBones
+    };
+
+    AppendResult AppendPlayerBoneReads(const BonePlayerSnapshot& player, BoneReadKind kind, bool readFullBoneList, std::vector<LiveBoneRead>& reads)
+    {
+        std::array<int, 3> selectedSlots{};
+        size_t selectedCount = 0;
+
+        if (readFullBoneList)
+        {
+            selectedCount = player.bonePtrs.size();
+
+            if (selectedCount == 0)
+                return AppendResult::NoBones;
+        }
+        else
+        {
+            for (const int slot : kMinimalBoneSlots)
+            {
+                if (slot < 0 ||
+                    static_cast<size_t>(slot) >=
+                    player.bonePtrs.size())
+                {
+                    continue;
+                }
+
+                selectedSlots[selectedCount++] = slot;
+            }
+
+            if (selectedCount == 0)
+                return AppendResult::NoBones;
+        }
+
+        if (reads.size() + selectedCount >
+            kMaxBoneReadsPerTick)
+        {
+            return AppendResult::Capacity;
+        }
+
+        for (size_t i = 0; i < selectedCount; ++i)
+        {
+            const int slot = readFullBoneList
+                ? static_cast<int>(i)
+                : selectedSlots[i];
+
+            const size_t boneIndex =
+                static_cast<size_t>(slot);
+
+            if (boneIndex >= player.bonePtrs.size() ||
+                !Utils::valid_pointer(
+                    player.bonePtrs[boneIndex]))
+            {
+                return AppendResult::InvalidBonePointer;
+            }
+        }
+
+        for (size_t i = 0; i < selectedCount; ++i)
+        {
+            const int slot = readFullBoneList
+                ? static_cast<int>(i)
+                : selectedSlots[i];
+
+            const size_t boneIndex =
+                static_cast<size_t>(slot);
+
+            LiveBoneRead read{};
+
+            read.playerInstance =
+                player.instance;
+
+            read.boneTransform =
+                player.bonePtrs[boneIndex];
+
+            read.boneSlot = slot;
+            read.kind = kind;
+
+            if (boneIndex <
+                player.transformCache.size())
+            {
+                read.cache =
+                    player.transformCache[boneIndex];
+            }
+
+            reads.push_back(std::move(read));
+        }
+
+        return AppendResult::Queued;
+    }
 }
 
-} // namespace
 
 void Players::boneTask()
 {
@@ -681,195 +1348,409 @@ void Players::boneTask()
         if (!Utils::valid_pointer(mainGame.localPlayerPtr))
             return;
 
-        const bool fullSkeleton = espGlobals::drawSkeletons;
-        std::vector<LiveBoneRead> reads;
-        std::vector<PlayerCache*> urgentRefresh;
-        std::vector<PlayerCache*> slowRefresh;
-        static size_t boneRoundRobin = 0;
+        const TimePoint now = Clock::now();
 
-        auto appendBoneReads = [&](PlayerCache& player)
+        const float drawPlayerDistance =
+            static_cast<float>(espGlobals::drawPlayerDist);
+
+        // Full bones only for non-local players inside ESP draw range
+        // Local player and players outside range always get the
+        // lightweight Base/LFoot/RFoot set
+        const auto shouldReadFullBoneList =
+            [drawPlayerDistance](
+                const BonePlayerSnapshot& player) -> bool
             {
-                if (reads.size() >= kMaxBoneReadsPerTick)
-                    return;
-
-                const size_t boneCount = player.bonePtrs.size();
-                if (boneCount == 0)
-                {
-                    player.invalidBones = true;
-                    urgentRefresh.push_back(&player);
-                    return;
-                }
-
-                if (fullSkeleton)
-                {
-                    for (size_t i = 0; i < boneCount; ++i)
-                    {
-                        if (reads.size() >= kMaxBoneReadsPerTick)
-                            return;
-
-                        const uint64_t bonePtr = player.bonePtrs[i];
-                        if (!Utils::valid_pointer(bonePtr))
-                        {
-                            player.invalidBones = true;
-                            urgentRefresh.push_back(&player);
-                            reads.erase(
-                                std::remove_if(
-                                    reads.begin(),
-                                    reads.end(),
-                                    [&](const LiveBoneRead& slot) { return slot.player == &player; }),
-                                reads.end());
-                            return;
-                        }
-
-                        reads.push_back({ &player, static_cast<int>(i), bonePtr, {}, {}, {}, 0, 0 });
-                    }
-                }
-                else
-                {
-                    for (const int slot : kEspBoundsBoneSlots)
-                    {
-                        if (reads.size() >= kMaxBoneReadsPerTick)
-                            return;
-
-                        if (slot < 0 || static_cast<size_t>(slot) >= boneCount)
-                            continue;
-
-                        const uint64_t bonePtr = player.bonePtrs[static_cast<size_t>(slot)];
-                        if (!Utils::valid_pointer(bonePtr))
-                        {
-                            player.invalidBones = true;
-                            urgentRefresh.push_back(&player);
-                            reads.erase(
-                                std::remove_if(
-                                    reads.begin(),
-                                    reads.end(),
-                                    [&](const LiveBoneRead& slotRead) { return slotRead.player == &player; }),
-                                reads.end());
-                            return;
-                        }
-
-                        reads.push_back({ &player, slot, bonePtr, {}, {}, {}, 0, 0 });
-                    }
-                }
+                return !player.isLocal &&
+                    player.distance <= drawPlayerDistance;
             };
+
+        // Stage 1: select pointer refreshes without retaining pointers
+        std::vector<BonePtrRefreshCandidate> refreshCandidates;
 
         {
             std::lock_guard<std::mutex> lock(playerMutex);
 
-            std::vector<PlayerCache>& cache = players.getCache();
-            if (cache.empty())
-                return;
+            std::vector<PlayerCache>& cache =
+                players.getCache();
 
-            reads.reserve(std::min(cache.size() * (fullSkeleton ? 13u : 6u), kMaxBoneReadsPerTick));
-
-            std::vector<PlayerCache*> eligible;
-            eligible.reserve(cache.size());
-
-            for (auto& player : cache)
+            for (PlayerCache& player : cache)
             {
                 if (!Utils::valid_pointer(player.instance))
                     continue;
 
-                if (player.isBTR || player.isDead || player.hasExfiled)
-                    continue;
-
-                if (!Utils::valid_pointer(player.playerBoneMatrixPtr) || player.invalidBones)
+                if (player.isBTR ||
+                    player.isDead ||
+                    player.hasExfiled)
                 {
-                    urgentRefresh.push_back(&player);
                     continue;
                 }
 
-                if (++player.bonePtrRefreshTick >= kBonePtrRefreshTicks)
+                const bool bonePointersMissing =
+                    !Utils::valid_pointer(
+                        player.playerBoneMatrixPtr) ||
+                    player.bonePtrs.empty() ||
+                    player.invalidBones;
+
+                if (bonePointersMissing)
                 {
-                    player.bonePtrRefreshTick = 0;
-                    slowRefresh.push_back(&player);
-                }
-
-                eligible.push_back(&player);
-            }
-
-            if (!eligible.empty())
-            {
-                std::sort(
-                    eligible.begin(),
-                    eligible.end(),
-                    [](const PlayerCache* a, const PlayerCache* b)
+                    if (player.nextBonePtrRefresh ==
+                        TimePoint{})
                     {
-                        return a->distance < b->distance;
-                    });
-
-                const int nearDist =
-                    espGlobals::drawPlayerDist > 0 ? espGlobals::drawPlayerDist : 250;
-
-                for (PlayerCache* player : eligible)
-                {
-                    if (reads.size() >= kMaxBoneReadsPerTick)
-                        break;
-
-                    if (player->isLocal || player->distance <= nearDist)
-                        appendBoneReads(*player);
-                }
-
-                if (reads.size() < kMaxBoneReadsPerTick)
-                {
-                    const size_t start = boneRoundRobin % eligible.size();
-
-                    for (size_t n = 0; n < eligible.size() && reads.size() < kMaxBoneReadsPerTick; ++n)
-                    {
-                        PlayerCache* player = eligible[(start + n) % eligible.size()];
-
-                        if (player->isLocal || player->distance <= nearDist)
-                            continue;
-
-                        appendBoneReads(*player);
+                        player.nextBonePtrRefresh = now;
                     }
 
-                    boneRoundRobin = (boneRoundRobin + 1) % eligible.size();
+                    if (now >= player.nextBonePtrRefresh)
+                    {
+                        refreshCandidates.push_back({
+                            player.instance,
+                            player.distance,
+                            player.isLocal,
+                            true,
+                            player.nextBonePtrRefresh
+                            });
+                    }
+
+                    continue;
+                }
+
+                InitialiseDueTime(
+                    player.nextBonePtrRefresh,
+                    now,
+                    player.instance,
+                    0xA7C44E91ULL,
+                    kBonePtrRefreshInterval,
+                    false
+                );
+
+                if (now >= player.nextBonePtrRefresh)
+                {
+                    refreshCandidates.push_back({
+                        player.instance,
+                        player.distance,
+                        player.isLocal,
+                        false,
+                        player.nextBonePtrRefresh
+                        });
                 }
             }
         }
 
-        auto refreshBonePtrs = [&](const std::vector<PlayerCache*>& queue, size_t& refreshed)
+        std::sort(
+            refreshCandidates.begin(),
+            refreshCandidates.end(),
+            [](const BonePtrRefreshCandidate& a,
+                const BonePtrRefreshCandidate& b)
             {
-                for (PlayerCache* player : queue)
+                if (a.urgent != b.urgent)
+                    return a.urgent > b.urgent;
+
+                if (a.due != b.due)
+                    return a.due < b.due;
+
+                if (a.isLocal != b.isLocal)
+                    return a.isLocal > b.isLocal;
+
+                return a.distance < b.distance;
+            }
+        );
+
+        size_t refreshedCount = 0;
+
+        for (const BonePtrRefreshCandidate& candidate :
+            refreshCandidates)
+        {
+            if (refreshedCount >=
+                kMaxBonePtrRefreshPerTick)
+            {
+                break;
+            }
+
+            RefreshBonePointersForPlayer(
+                candidate.instance,
+                now
+            );
+
+            ++refreshedCount;
+        }
+
+        // Stage 2: take safe local snapshots
+        std::vector<BonePlayerSnapshot> playersToRead;
+
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+
+            std::vector<PlayerCache>& cache =
+                players.getCache();
+
+            playersToRead.reserve(cache.size());
+
+            for (PlayerCache& player : cache)
+            {
+                if (!Utils::valid_pointer(player.instance))
+                    continue;
+
+                if (player.isBTR ||
+                    player.isDead ||
+                    player.hasExfiled ||
+                    player.invalidBones ||
+                    player.bonePtrs.empty())
                 {
-                    if (!player || refreshed >= kMaxBonePtrRefreshPerTick)
-                        break;
-
-                    const bool ok = getBonePtrs(*player);
-
-                    {
-                        std::lock_guard<std::mutex> lock(playerMutex);
-                        player->invalidBones = !ok;
-                        if (ok)
-                            player->bonePtrRefreshTick = 0;
-                    }
-
-                    ++refreshed;
+                    continue;
                 }
-            };
 
-        size_t refreshed = 0;
-        refreshBonePtrs(urgentRefresh, refreshed);
-        refreshBonePtrs(slowRefresh, refreshed);
+                EnsureTransformCacheShape(player);
 
-        if (!reads.empty())
-            batchReadBoneWorldPositions(mem, reads);
+                InitialiseDueTime(
+                    player.nextQuickBoneRead,
+                    now,
+                    player.instance,
+                    0x8C5D13F1ULL,
+                    kQuickBoneInterval,
+                    player.isLocal
+                );
+
+                InitialiseDueTime(
+                    player.nextBoneRead,
+                    now,
+                    player.instance,
+                    0x2AF6E701ULL,
+                    kNormalBoneInterval,
+                    player.isLocal
+                );
+
+                BonePlayerSnapshot snapshot{};
+
+                snapshot.instance = player.instance;
+                snapshot.distance = player.distance;
+                snapshot.isLocal = player.isLocal;
+
+                snapshot.bonePtrs = player.bonePtrs;
+                snapshot.transformCache =
+                    player.boneTransformCache;
+
+                snapshot.nextQuickBoneRead =
+                    player.nextQuickBoneRead;
+
+                snapshot.nextBoneRead =
+                    player.nextBoneRead;
+
+                snapshot.lastQuickBoneUpdate =
+                    player.lastQuickBoneUpdate;
+
+                snapshot.lastBoneUpdate =
+                    player.lastBoneUpdate;
+
+                playersToRead.push_back(
+                    std::move(snapshot)
+                );
+            }
+        }
+
+        if (playersToRead.empty())
+            return;
+
+        // priority scheduler
+        std::vector<const BonePlayerSnapshot*> quickCandidates;
+        std::vector<const BonePlayerSnapshot*> normalCandidates;
+
+        quickCandidates.reserve(playersToRead.size());
+        normalCandidates.reserve(playersToRead.size());
+
+        for (const BonePlayerSnapshot& player :
+            playersToRead)
+        {
+            const bool quickEligible =
+                player.isLocal ||
+                player.distance <= espGlobals::drawPlayerDist; //kQuickBoneDistance;
+
+            if (quickEligible &&
+                now >= player.nextQuickBoneRead)
+            {
+                quickCandidates.push_back(&player);
+            }
+
+            if (now >= player.nextBoneRead)
+            {
+                normalCandidates.push_back(&player);
+            }
+        }
+
+        std::sort(
+            quickCandidates.begin(),
+            quickCandidates.end(),
+            [](const BonePlayerSnapshot* a,
+                const BonePlayerSnapshot* b)
+            {
+                if (a->nextQuickBoneRead !=
+                    b->nextQuickBoneRead)
+                {
+                    return a->nextQuickBoneRead <
+                        b->nextQuickBoneRead;
+                }
+
+                if (a->isLocal != b->isLocal)
+                    return a->isLocal > b->isLocal;
+
+                return a->distance < b->distance;
+            }
+        );
+
+        std::sort(
+            normalCandidates.begin(),
+            normalCandidates.end(),
+            [](const BonePlayerSnapshot* a,
+                const BonePlayerSnapshot* b)
+            {
+                if (a->nextBoneRead !=
+                    b->nextBoneRead)
+                {
+                    return a->nextBoneRead <
+                        b->nextBoneRead;
+                }
+
+                if (a->lastBoneUpdate !=
+                    b->lastBoneUpdate)
+                {
+                    return a->lastBoneUpdate <
+                        b->lastBoneUpdate;
+                }
+
+                if (a->isLocal != b->isLocal)
+                    return a->isLocal > b->isLocal;
+
+                return a->distance < b->distance;
+            }
+        );
+
+        std::vector<LiveBoneRead> reads;
+        reads.reserve(kMaxBoneReadsPerTick);
+
+        std::vector<uint64_t> invalidBonePlayers;
+        std::vector<uint64_t> quickScheduledPlayers;
+
+        // Quick reads
+        for (const BonePlayerSnapshot* player :
+            quickCandidates)
+        {
+            if (reads.size() >=
+                kMaxBoneReadsPerTick)
+            {
+                break;
+            }
+
+            const bool readFullBoneList =
+                shouldReadFullBoneList(*player);
+
+            const AppendResult result =
+                AppendPlayerBoneReads(
+                    *player,
+                    BoneReadKind::Quick,
+                    readFullBoneList,
+                    reads
+                );
+
+            if (result == AppendResult::Queued)
+            {
+                quickScheduledPlayers.push_back(
+                    player->instance
+                );
+            }
+            else if (result ==
+                AppendResult::InvalidBonePointer)
+            {
+                invalidBonePlayers.push_back(
+                    player->instance
+                );
+            }
+        }
+
+        
+        // Normal reads
+        for (const BonePlayerSnapshot* player :
+            normalCandidates)
+        {
+            if (reads.size() >=
+                kMaxBoneReadsPerTick)
+            {
+                break;
+            }
+
+            const bool alreadyHasQuickJob =
+                std::find(
+                    quickScheduledPlayers.begin(),
+                    quickScheduledPlayers.end(),
+                    player->instance
+                ) != quickScheduledPlayers.end();
+
+            if (alreadyHasQuickJob)
+                continue;
+
+            const bool readFullBoneList =
+                shouldReadFullBoneList(*player);
+
+            const AppendResult result =
+                AppendPlayerBoneReads(
+                    *player,
+                    BoneReadKind::Normal,
+                    readFullBoneList,
+                    reads
+                );
+
+            if (result ==
+                AppendResult::InvalidBonePointer)
+            {
+                invalidBonePlayers.push_back(
+                    player->instance
+                );
+            }
+        }
+
+        std::sort(
+            invalidBonePlayers.begin(),
+            invalidBonePlayers.end()
+        );
+
+        invalidBonePlayers.erase(
+            std::unique(
+                invalidBonePlayers.begin(),
+                invalidBonePlayers.end()
+            ),
+            invalidBonePlayers.end()
+        );
+
+        MarkPlayersForBonePointerRefresh(
+            invalidBonePlayers,
+            now
+        );
+
+        if (reads.empty())
+            return;
+
+        BatchReadBoneWorldPositions(
+            mem,
+            reads,
+            now
+        );
+
+        ApplyBoneResults(
+            reads,
+            now
+        );
     }
     catch (const std::exception& e)
     {
         LOGS.logError(
-            "Exception caught in BoneTask: " +
-            std::string(e.what()) +
-            ". Retrying...");
+            "[PLAYERS][BONES] Exception: " +
+            std::string(e.what())
+        );
     }
     catch (...)
     {
         LOGS.logError(
-            "Unknown exception caught in BoneTask. Retrying...");
+            "[PLAYERS][BONES] Unknown exception"
+        );
     }
 }
-
 
 void PlayerCache::UpdateBonePositions()
 {
@@ -921,10 +1802,13 @@ glm::vec3 PlayerCache::GetTransformPosition(int boneIndex)
     return computeTransformPosition(matrices, indices, index, count);
 }
 
+constexpr size_t kMaxNewPlayersPerTick = 4;
+
 void Players::playersTask()
 {
     static int failedPlayerListFrames = 0;
-    static auto lastCacheClear = std::chrono::steady_clock::time_point{};
+    static auto lastCacheClear =
+        std::chrono::steady_clock::time_point{};
 
     try
     {
@@ -935,21 +1819,27 @@ void Players::playersTask()
 
         if (!playerListUpdated)
         {
-            failedPlayerListFrames++;
+            ++failedPlayerListFrames;
 
-            // Light TLB/mem refresh after sustained read failures (stale CR3/cache).
-            if (failedPlayerListFrames == 50 || failedPlayerListFrames == 200)
+            if (failedPlayerListFrames == 50 ||
+                failedPlayerListFrames == 200)
+            {
                 mem.RefreshLight();
+            }
 
             constexpr int kFailureThreshold = 200;
-            constexpr auto kClearCooldown = std::chrono::seconds(15);
+            constexpr auto kClearCooldown =
+                std::chrono::seconds(15);
 
             const auto now = std::chrono::steady_clock::now();
+
             const bool cooldownElapsed =
-                lastCacheClear == std::chrono::steady_clock::time_point{} ||
+                lastCacheClear ==
+                std::chrono::steady_clock::time_point{} ||
                 (now - lastCacheClear) >= kClearCooldown;
 
-            if (failedPlayerListFrames > kFailureThreshold && cooldownElapsed)
+            if (failedPlayerListFrames > kFailureThreshold &&
+                cooldownElapsed)
             {
                 {
                     std::lock_guard<std::mutex> lock(playerMutex);
@@ -961,8 +1851,8 @@ void Players::playersTask()
                 lastCacheClear = now;
 
                 LOGS.logInfo(
-                    "[PLAYERS] Cleared player cache after sustained list-read failures "
-                    "(local player state kept)"
+                    "[PLAYERS] Cleared player cache after sustained "
+                    "list-read failures (local player state kept)"
                 );
             }
 
@@ -971,13 +1861,13 @@ void Players::playersTask()
 
         failedPlayerListFrames = 0;
 
-        // Copy current registered player list locally
         std::vector<uint64_t> registeredPlayers;
         registeredPlayers.reserve(mainGame.registeredPlayersCount);
 
-        for (int i = 0; i < mainGame.registeredPlayersCount; i++)
+        for (int i = 0; i < mainGame.registeredPlayersCount; ++i)
         {
-            const uint64_t currentPlayer = mainGame.player_buffer[i];
+            const uint64_t currentPlayer =
+                mainGame.player_buffer[i];
 
             if (Utils::valid_pointer(currentPlayer))
                 registeredPlayers.emplace_back(currentPlayer);
@@ -986,7 +1876,6 @@ void Players::playersTask()
         if (registeredPlayers.empty())
             return;
 
-        // Snapshot existing cache instances under short lock
         std::unordered_set<uint64_t> existingInstances;
 
         {
@@ -1001,7 +1890,7 @@ void Players::playersTask()
             }
         }
 
-        // Build new entities OUTSIDE the lock (cap per tick to avoid multi-hundred-ms DMA spikes).
+        // Build only a few new entities each pass
         std::vector<PlayerCache> pendingNewEntities;
         pendingNewEntities.reserve(kMaxNewPlayersPerTick);
 
@@ -1012,40 +1901,46 @@ void Players::playersTask()
             if (builtThisTick >= kMaxNewPlayersPerTick)
                 break;
 
-            if (existingInstances.find(currentPlayer) != existingInstances.end())
+            if (existingInstances.contains(currentPlayer))
                 continue;
 
-            const bool isLocal = currentPlayer == mainGame.localPlayerPtr;
+            const bool isLocal =
+                currentPlayer == mainGame.localPlayerPtr;
 
-            auto builtEntity = buildEntity(currentPlayer, isLocal);
+            auto builtEntity =
+                buildEntity(currentPlayer, isLocal);
 
-            if (builtEntity.has_value())
-            {
-                pendingNewEntities.emplace_back(std::move(*builtEntity));
-                ++builtThisTick;
-            }
+            if (!builtEntity.has_value())
+                continue;
+
+            pendingNewEntities.emplace_back(
+                std::move(*builtEntity)
+            );
+
+            ++builtThisTick;
         }
 
-        // Append new entities under short lock
-        // Recheck duplicates because cache may have changed.
         if (!pendingNewEntities.empty())
         {
             std::lock_guard<std::mutex> lock(playerMutex);
 
             for (auto& entity : pendingNewEntities)
             {
-                auto it = std::find_if(
+                const auto it = std::find_if(
                     playerCache.begin(),
                     playerCache.end(),
                     [&](const PlayerCache& cachedPlayer)
                     {
-                        return cachedPlayer.instance == entity.instance;
-                    });
+                        return cachedPlayer.instance ==
+                            entity.instance;
+                    }
+                );
 
                 if (it != playerCache.end())
                     continue;
 
                 std::ostringstream ss;
+
                 ss << "[PLAYERS][INIT] Adding player : 0x"
                     << std::hex << entity.instance
                     << " className : " << entity.className
@@ -1056,8 +1951,6 @@ void Players::playersTask()
                 playerCache.emplace_back(std::move(entity));
             }
         }
-
-        quickRefreshEspBones();
 
         {
             std::lock_guard<std::mutex> lock(playerMutex);
@@ -1074,7 +1967,11 @@ void Players::playersTask()
     }
     catch (const std::exception& e)
     {
-        LOGS.logError("Exception caught in playersTask: " + std::string(e.what()) + ". Retrying...");
+        LOGS.logError(
+            "Exception caught in playersTask: " +
+            std::string(e.what()) +
+            ". Retrying..."
+        );
     }
     catch (...)
     {
@@ -1705,6 +2602,17 @@ void Players::updateEntity()
     if (!mem.vHandle)
         return;
 
+    using Clock = std::chrono::steady_clock;
+    using Milliseconds = std::chrono::milliseconds;
+
+    const Clock::time_point now = Clock::now();
+
+    static constexpr Milliseconds kCorpseReadInterval{ 1000 };
+    static constexpr Milliseconds kHealthReadInterval{ 1500 };
+    static constexpr Milliseconds kHandsControllerReadInterval{ 2000 };
+    static constexpr Milliseconds kHeldItemRefreshInterval{ 2500 };
+    static constexpr Milliseconds kFailedReadRetryInterval{ 250 };
+
     auto AddSafeScatter = [](auto handle, uint64_t address, void* out, size_t size) -> bool
         {
             if (!handle)
@@ -1738,7 +2646,9 @@ void Players::updateEntity()
             }
             catch (...)
             {
-                LOGS.logError(std::string("[PLAYERS][UPDATE] Scatter execute failed: ") + name);
+                LOGS.logError(
+                    std::string("[PLAYERS][UPDATE] Scatter execute failed: ") + name
+                );
             }
 
             try
@@ -1747,119 +2657,227 @@ void Players::updateEntity()
             }
             catch (...)
             {
-                LOGS.logError(std::string("[PLAYERS][UPDATE] Scatter close failed: ") + name);
+                LOGS.logError(
+                    std::string("[PLAYERS][UPDATE] Scatter close failed: ") + name
+                );
             }
 
             handle = {};
         };
 
-    auto handleRotation = mem.CreateScatterHandle();
-    auto handleCorpse = mem.CreateScatterHandle();
-    auto handleHealth = mem.CreateScatterHandle();
-    auto handleHands = mem.CreateScatterHandle();
-    auto handleIsAiming = mem.CreateScatterHandle();
-    auto handleBtr = mem.CreateScatterHandle();
+    // SplitMix64-style deterministic mixer.
+    // This avoids using rand(), locks, or shared RNG state.
+    auto MixPlayerSeed = [](uint64_t value) -> uint64_t
+        {
+            value += 0x9E3779B97F4A7C15ULL;
+            value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ULL;
+            value = (value ^ (value >> 27)) * 0x94D049BB133111EBULL;
+            return value ^ (value >> 31);
+        };
 
+    // Each player gets a stable initial offset across the entire interval.
+    // Once scheduled, next reads stay offset because each is scheduled
+    // relative to the tick on which that player was processed.
+    auto GetInitialStagger = [&](uint64_t playerSeed,
+        uint64_t salt,
+        Milliseconds interval) -> Milliseconds
+        {
+            const uint64_t intervalMs =
+                static_cast<uint64_t>(interval.count());
+
+            return Milliseconds(
+                static_cast<int64_t>(
+                    MixPlayerSeed(playerSeed ^ salt) % intervalMs
+                    )
+            );
+        };
+
+    auto IsTimedReadDue = [&](Clock::time_point& nextRead,
+        uint64_t playerSeed,
+        uint64_t salt,
+        Milliseconds interval) -> bool
+        {
+            if (nextRead == Clock::time_point{})
+            {
+                nextRead = now + GetInitialStagger(
+                    playerSeed,
+                    salt,
+                    interval
+                );
+            }
+
+            return now >= nextRead;
+        };
+
+    auto ScheduleTimedRead = [&](Clock::time_point& nextRead,
+        Milliseconds interval,
+        bool requestQueued)
+        {
+            nextRead = now + (
+                requestQueued
+                ? interval
+                : kFailedReadRetryInterval
+                );
+        };
+
+    // ------------------------------------------------------------------------
+    // Single scatter execute for every queued player request.
+    // ------------------------------------------------------------------------
     {
         std::lock_guard<std::mutex> lock(playerMutex);
 
         std::vector<PlayerCache>& cache = players.getCache();
 
         if (cache.empty())
-        {
-            ExecuteAndClose(handleBtr, "BTR");
-            ExecuteAndClose(handleRotation, "Rotation");
-            ExecuteAndClose(handleCorpse, "Corpse");
-            ExecuteAndClose(handleHealth, "Health");
-            ExecuteAndClose(handleHands, "Hands");
-            ExecuteAndClose(handleIsAiming, "IsAiming");
             return;
-        }
 
-        for (auto& cachePlayer : cache)
+        auto updateHandle = mem.CreateScatterHandle();
+
+        if (!updateHandle)
         {
-            if (cachePlayer.isBTR)
+            LOGS.logError(
+                "[PLAYERS][UPDATE] Failed to create player update scatter handle"
+            );
+        }
+        else
+        {
+            for (auto& cachePlayer : cache)
             {
-                if (Utils::valid_pointer(cachePlayer.btrView))
+                if (cachePlayer.isBTR)
                 {
                     AddSafeScatter(
-                        handleBtr,
+                        updateHandle,
                         cachePlayer.btrView + sdk::BTRView::previousPosition,
                         &cachePlayer.location,
-                        sizeof(glm::vec3));
+                        sizeof(glm::vec3)
+                    );
+
+                    continue;
                 }
 
-                continue;
-            }
+                if (cachePlayer.isDead || cachePlayer.hasExfiled)
+                    continue;
 
-            if (cachePlayer.isDead || cachePlayer.hasExfiled)
-                continue;
+                if (!Utils::valid_pointer(cachePlayer.instance))
+                    continue;
 
-            if (!Utils::valid_pointer(cachePlayer.instance))
-                continue;
+                const uint64_t playerSeed = cachePlayer.instance;
 
-            cachePlayer.P_CorpseClass = 0;
-
-            if (cachePlayer.isLocal)
-            {
-                mainGame.localGroupId = cachePlayer.groupId;
-                mainGame.localPlayerHands = cachePlayer.P_HandsController;
-                mainGame.localplayerProfile = cachePlayer.P_Profile;
-                mainGame.localPlayerPWA = cachePlayer.P_PWA;
-            }
-
-            const bool isOfflinePlayer =
-                cachePlayer.className == "LocalPlayer" ||
-                cachePlayer.className == "ClientPlayer";
-
-            AddSafeScatter(
-                handleRotation,
-                cachePlayer.P_RotationAddress,
-                &cachePlayer.rotationRAW,
-                sizeof(glm::vec2));
-
-            AddSafeScatter(
-                handleCorpse,
-                cachePlayer.P_CorpseAddr,
-                &cachePlayer.P_CorpseClass,
-                sizeof(uint64_t));
-
-            AddSafeScatter(
-                handleHands,
-                cachePlayer.P_HandsControllerAddr,
-                &cachePlayer.P_HandsController,
-                sizeof(uint64_t));
-
-            if (isOfflinePlayer)
-            {
-                cachePlayer.isAiming = false;
-
-                if (Utils::valid_pointer(cachePlayer.P_PWA))
+                if (cachePlayer.isLocal)
                 {
-                    AddSafeScatter(
-                        handleIsAiming,
-                        cachePlayer.P_PWA + sdk::ProceduralWeaponAnimation::_isAiming,
-                        &cachePlayer.isAiming,
-                        sizeof(bool));
+                    mainGame.localGroupId = cachePlayer.groupId;
+                    mainGame.localPlayerHands = cachePlayer.P_HandsController;
+                    mainGame.localplayerProfile = cachePlayer.P_Profile;
+                    mainGame.localPlayerPWA = cachePlayer.P_PWA;
+                }
+
+                const bool isOfflinePlayer =
+                    cachePlayer.className == "LocalPlayer" ||
+                    cachePlayer.className == "ClientPlayer";
+
+                // Rotation remains live every update tick.
+                AddSafeScatter(
+                    updateHandle,
+                    cachePlayer.P_RotationAddress,
+                    &cachePlayer.rotationRAW,
+                    sizeof(glm::vec2)
+                );
+
+                // Corpse state: once per second, individually staggered.
+                if (Utils::valid_pointer(cachePlayer.P_CorpseAddr) &&
+                    IsTimedReadDue(
+                        cachePlayer.nextCorpseRead,
+                        playerSeed,
+                        0xA1C3E001ULL,
+                        kCorpseReadInterval))
+                {
+                    // Only reset immediately before the next corpse read.
+                    cachePlayer.P_CorpseClass = 0;
+
+                    const bool queued = AddSafeScatter(
+                        updateHandle,
+                        cachePlayer.P_CorpseAddr,
+                        &cachePlayer.P_CorpseClass,
+                        sizeof(uint64_t)
+                    );
+
+                    ScheduleTimedRead(
+                        cachePlayer.nextCorpseRead,
+                        kCorpseReadInterval,
+                        queued
+                    );
+                }
+
+                // Hands-controller pointer: once every two seconds.
+                if (Utils::valid_pointer(cachePlayer.P_HandsControllerAddr) &&
+                    IsTimedReadDue(
+                        cachePlayer.nextHandsControllerRead,
+                        playerSeed,
+                        0xB2D4F002ULL,
+                        kHandsControllerReadInterval))
+                {
+                    const bool queued = AddSafeScatter(
+                        updateHandle,
+                        cachePlayer.P_HandsControllerAddr,
+                        &cachePlayer.P_HandsController,
+                        sizeof(uint64_t)
+                    );
+
+                    ScheduleTimedRead(
+                        cachePlayer.nextHandsControllerRead,
+                        kHandsControllerReadInterval,
+                        queued
+                    );
+                }
+
+                // Local/offline aiming state remains live.
+                if (isOfflinePlayer)
+                {
+                    cachePlayer.isAiming = false;
+
+                    if (Utils::valid_pointer(cachePlayer.P_PWA))
+                    {
+                        AddSafeScatter(
+                            updateHandle,
+                            cachePlayer.P_PWA +
+                            sdk::ProceduralWeaponAnimation::_isAiming,
+                            &cachePlayer.isAiming,
+                            sizeof(bool)
+                        );
+                    }
+                }
+                // Health: once every 1.5 seconds, individually staggered.
+                else if (
+                    Utils::valid_pointer(
+                        cachePlayer.P_ObservedHealthController
+                    ) &&
+                    IsTimedReadDue(
+                        cachePlayer.nextHealthRead,
+                        playerSeed,
+                        0xC3E5A003ULL,
+                        kHealthReadInterval))
+                {
+                    const bool queued = AddSafeScatter(
+                        updateHandle,
+                        cachePlayer.P_ObservedHealthController +
+                        sdk::ObservedHealthController::HealthStatus,
+                        &cachePlayer.healthETAG,
+                        sizeof(ETagStatus)
+                    );
+
+                    ScheduleTimedRead(
+                        cachePlayer.nextHealthRead,
+                        kHealthReadInterval,
+                        queued
+                    );
                 }
             }
-            else if (Utils::valid_pointer(cachePlayer.P_ObservedHealthController))
-            {
-                AddSafeScatter(
-                    handleHealth,
-                    cachePlayer.P_ObservedHealthController + sdk::ObservedHealthController::HealthStatus,
-                    &cachePlayer.healthETAG,
-                    sizeof(ETagStatus));
-            }
+
+            // One scatter execute for BTR, rotation, corpse, hands, aiming,
+            // and health reads queued above.
+            ExecuteAndClose(updateHandle, "PlayerUpdate");
         }
     }
-
-    ExecuteAndClose(handleBtr, "BTR");
-    ExecuteAndClose(handleRotation, "Rotation");
-    ExecuteAndClose(handleCorpse, "Corpse");
-    ExecuteAndClose(handleHealth, "Health");
-    ExecuteAndClose(handleHands, "Hands");
-    ExecuteAndClose(handleIsAiming, "IsAiming");
 
     auto ApplyPlayerColour = [&](PlayerCache& cachePlayer)
         {
@@ -1871,12 +2889,16 @@ void Players::updateEntity()
                 return;
             }
 
-            if (cachePlayer.isAi && !cachePlayer.isPlayerScav && !cachePlayer.isPlayer)
+            if (cachePlayer.isAi &&
+                !cachePlayer.isPlayerScav &&
+                !cachePlayer.isPlayer)
             {
                 cachePlayer.colour = coloursGlobals::playerAI;
             }
 
-            if (cachePlayer.isPlayerScav && !cachePlayer.isAi && cachePlayer.isPlayer)
+            if (cachePlayer.isPlayerScav &&
+                !cachePlayer.isAi &&
+                cachePlayer.isPlayer)
             {
                 cachePlayer.colour = coloursGlobals::playerScav;
             }
@@ -1886,7 +2908,9 @@ void Players::updateEntity()
                 cachePlayer.colour = coloursGlobals::playerBoss;
             }
 
-            if (cachePlayer.isPlayer && !cachePlayer.isPlayerScav && !cachePlayer.isAi)
+            if (cachePlayer.isPlayer &&
+                !cachePlayer.isPlayerScav &&
+                !cachePlayer.isAi)
             {
                 cachePlayer.colour = coloursGlobals::playerPMC;
             }
@@ -1920,29 +2944,37 @@ void Players::updateEntity()
 
         for (auto& cachePlayer : cache)
         {
-            // BTR only
             if (cachePlayer.isBTR)
             {
                 cachePlayer.colour = coloursGlobals::aiBTR;
-                cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+                cachePlayer.distance = getDistance(
+                    cachePlayer.location,
+                    mainGame.localLocation
+                );
                 continue;
             }
 
-            // Already dead / exfiled
             if (cachePlayer.isDead || cachePlayer.hasExfiled)
             {
-                cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+                cachePlayer.distance = getDistance(
+                    cachePlayer.location,
+                    mainGame.localLocation
+                );
+
                 ApplyPlayerColour(cachePlayer);
                 continue;
             }
 
-            // Corpse check early
             if (Utils::valid_pointer(cachePlayer.P_CorpseClass))
             {
                 cachePlayer.isDead = true;
-                cachePlayer.instance = 0x0;
+                cachePlayer.instance = 0;
 
-                cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+                cachePlayer.distance = getDistance(
+                    cachePlayer.location,
+                    mainGame.localLocation
+                );
+
                 ApplyPlayerColour(cachePlayer);
                 continue;
             }
@@ -1950,62 +2982,119 @@ void Players::updateEntity()
             if (!Utils::valid_pointer(cachePlayer.instance))
                 continue;
 
-            // Position (keep last good location when bones are briefly stale)
+            const uint64_t playerSeed = cachePlayer.instance;
+
+            // Preserve the prior good position if bone data briefly fails.
+            const glm::vec3 newLocation =
+                GetBestPlayerBasePosition(cachePlayer);
+
+            if (newLocation.x != 0.0f ||
+                newLocation.y != 0.0f ||
+                newLocation.z != 0.0f)
             {
-                const glm::vec3 newLocation = GetBestPlayerBasePosition(cachePlayer);
-                if (newLocation.x != 0.0f || newLocation.y != 0.0f || newLocation.z != 0.0f)
-                    cachePlayer.location = newLocation;
+                cachePlayer.location = newLocation;
             }
 
             if (cachePlayer.isLocal)
                 mainGame.localLocation = cachePlayer.location;
 
-            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+            cachePlayer.distance = getDistance(
+                cachePlayer.location,
+                mainGame.localLocation
+            );
 
-            // Held item
+            // Held item name: every 2.5 seconds.
+            // A genuine hands-controller pointer change forces one immediate
+            // refresh so weapon switches do not wait for the normal interval.
             try
             {
-                if (Utils::valid_pointer(cachePlayer.P_HandsController))
+                if (!Utils::valid_pointer(cachePlayer.P_HandsController))
                 {
-                    cachePlayer.observedHandsInfo.update(cachePlayer);
+                    cachePlayer.itemInHand.clear();
+                    cachePlayer.lastHeldItemHandsController = 0;
+                    cachePlayer.nextHeldItemRefresh = {};
                 }
                 else
                 {
-                    cachePlayer.itemInHand.clear();
+                    const bool handsControllerChanged =
+                        cachePlayer.lastHeldItemHandsController !=
+                        cachePlayer.P_HandsController;
+
+                    if (handsControllerChanged)
+                    {
+                        const bool hadPreviousHandsController =
+                            Utils::valid_pointer(
+                                cachePlayer.lastHeldItemHandsController
+                            );
+
+                        cachePlayer.lastHeldItemHandsController =
+                            cachePlayer.P_HandsController;
+
+                        // Existing player changing weapon/controller:
+                        // refresh immediately.
+                        if (hadPreviousHandsController)
+                        {
+                            cachePlayer.nextHeldItemRefresh = now;
+                        }
+                    }
+
+                    if (IsTimedReadDue(
+                        cachePlayer.nextHeldItemRefresh,
+                        playerSeed,
+                        0xD4F6B004ULL,
+                        kHeldItemRefreshInterval))
+                    {
+                        cachePlayer.observedHandsInfo.update(cachePlayer);
+
+                        ScheduleTimedRead(
+                            cachePlayer.nextHeldItemRefresh,
+                            kHeldItemRefreshInterval,
+                            true
+                        );
+                    }
                 }
             }
             catch (...)
             {
                 cachePlayer.itemInHand.clear();
+
+                cachePlayer.nextHeldItemRefresh =
+                    now + kFailedReadRetryInterval;
+
                 LOGS.logError("[PLAYERS][UPDATE] heldItemName failed");
             }
 
-            // Rotation
             try
             {
                 cachePlayer.rotation =
-                    Utils::Player::Rotation::correctRotation2d(cachePlayer.rotationRAW);
+                    Utils::Player::Rotation::correctRotation2d(
+                        cachePlayer.rotationRAW
+                    );
             }
             catch (...)
             {
                 cachePlayer.rotation = {};
-                LOGS.logError("[PLAYERS][UPDATE] Rotation correction failed");
+                LOGS.logError(
+                    "[PLAYERS][UPDATE] Rotation correction failed"
+                );
             }
 
-            // Dogtag cache / profile data
             if (cachePlayer.isPlayer && !cachePlayer.profileId.empty())
             {
-                auto now = std::chrono::steady_clock::now();
+                const auto profileNow = Clock::now();
 
                 if (!cachePlayer.foundDogTagCache &&
                     cachePlayer.name.contains("PMC") &&
-                    now - cachePlayer.lastDogTagLookup > std::chrono::seconds(5))
+                    profileNow - cachePlayer.lastDogTagLookup >
+                    std::chrono::seconds(5))
                 {
-                    cachePlayer.lastDogTagLookup = now;
+                    cachePlayer.lastDogTagLookup = profileNow;
 
                     try
                     {
-                        auto result = g_dogTagCache.GetByProfileId(cachePlayer.profileId);
+                        auto result = g_dogTagCache.GetByProfileId(
+                            cachePlayer.profileId
+                        );
 
                         if (result.has_value())
                         {
@@ -2018,7 +3107,9 @@ void Players::updateEntity()
                     }
                     catch (...)
                     {
-                        LOGS.logError("[PLAYERS][UPDATE] Dogtag cache lookup failed");
+                        LOGS.logError(
+                            "[PLAYERS][UPDATE] Dogtag cache lookup failed"
+                        );
                     }
                 }
 
@@ -2032,30 +3123,44 @@ void Players::updateEntity()
                     try
                     {
                         auto profile =
-                            TarkovDevProfileClient::GetProfileForAccountId(cachePlayer.accountId);
+                            TarkovDevProfileClient::GetProfileForAccountId(
+                                cachePlayer.accountId
+                            );
 
                         if (profile)
                         {
                             cachePlayer.profileStats = *profile;
                             cachePlayer.hasProfileData = true;
 
-                            cachePlayer.DT_lvl = ConvertXpToLevel(profile->experience);
-                            cachePlayer.kd = CalculateKD(profile->Kills, profile->deathsPMC);
-                            cachePlayer.pkd = CalculatePKD(profile->killedPMC, profile->deathsPMC);
+                            cachePlayer.DT_lvl =
+                                ConvertXpToLevel(profile->experience);
+
+                            cachePlayer.kd =
+                                CalculateKD(
+                                    profile->Kills,
+                                    profile->deathsPMC
+                                );
+
+                            cachePlayer.pkd =
+                                CalculatePKD(
+                                    profile->killedPMC,
+                                    profile->deathsPMC
+                                );
+
                             cachePlayer.hours = profile->hoursPlayed;
                         }
                     }
                     catch (...)
                     {
-                        LOGS.logError("[PLAYERS][UPDATE] Tarkov profile lookup failed");
+                        LOGS.logError(
+                            "[PLAYERS][UPDATE] Tarkov profile lookup failed"
+                        );
                     }
                 }
             }
 
-            // Colours
             ApplyPlayerColour(cachePlayer);
 
-            // Local player final update
             if (cachePlayer.isLocal &&
                 Utils::valid_pointer(cachePlayer.instance) &&
                 mainGame.localPlayerPtr == cachePlayer.instance)

@@ -13,7 +13,7 @@ std::string globals::radarSubText = "";
 
 double globals::taskMainPlayers = 3000;
 double globals::taskPlayers = 33;
-double globals::taskPlayersBones = 33;
+double globals::taskPlayersBones = 15;
 double globals::taskPlayersLocal = 22;
 double globals::taskGrenades = 200;
 double globals::taskPlayersEquipment = 2000;
@@ -23,10 +23,10 @@ double globals::taskQuest = 7000;
 double globals::taskWishManager = 1000;
 double globals::taskTripWire = 20;
 double globals::taskKeyManager = 25;
-double globals::taskCamera = 33;
+double globals::taskCamera = 3;
 double globals::taskRaidMonitor = 800;
 double globals::taskWrites = 50;
-double globals::taskAim = 5;
+double globals::taskAim = 1;
 
 // App menu settings/status
 bool appMenu::appSettings = false;

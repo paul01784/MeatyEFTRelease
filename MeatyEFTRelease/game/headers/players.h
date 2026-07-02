@@ -136,6 +136,20 @@ struct slots
 	bool wanted;
 };
 
+struct BoneTransformCacheEntry
+{
+	uint64_t boneTransform{};
+	uint64_t transformData{};
+	uint64_t transformArray{};
+	uint64_t transformIndices{};
+
+	int32_t transformIndex{ -1 };
+
+	std::chrono::steady_clock::time_point nextValidation{};
+
+	bool valid{ false };
+};
+
 struct PlayerCache {
 
 	uint64_t instance;
@@ -190,6 +204,22 @@ struct PlayerCache {
 	bool hasExfiled;
 
 	bool isAiming;
+
+	std::chrono::steady_clock::time_point nextCorpseRead{};
+	std::chrono::steady_clock::time_point nextHealthRead{};
+	std::chrono::steady_clock::time_point nextHandsControllerRead{};
+	std::chrono::steady_clock::time_point nextHeldItemRefresh{};
+
+	uint64_t lastHeldItemHandsController = 0;
+
+	std::vector<BoneTransformCacheEntry> boneTransformCache;
+
+	std::chrono::steady_clock::time_point nextBonePtrRefresh{};
+	std::chrono::steady_clock::time_point nextQuickBoneRead{};
+	std::chrono::steady_clock::time_point nextBoneRead{};
+
+	std::chrono::steady_clock::time_point lastQuickBoneUpdate{};
+	std::chrono::steady_clock::time_point lastBoneUpdate{};
 
 	std::chrono::steady_clock::time_point lastWeaponUpdate{};
 	std::chrono::milliseconds weaponUpdateInterval{};
@@ -333,6 +363,8 @@ public:
 	void playerEquipment();
 
 	static bool groupIDSet;
+
+	static bool getBonePtrs(PlayerCache& players);
 	
 
 private:
@@ -345,7 +377,7 @@ private:
 
 	std::string voice2Name(std::string voiceName);
 
-	bool getBonePtrs(PlayerCache& players);
+	
 
 	void readDogTagComponent(PlayerCache& players, bool force = false);
 
@@ -363,6 +395,7 @@ private:
 
 	uint64_t getPlayerHealthControllerPtr(uint64_t instance);
 	uint64_t getPlayerBoneMatrixPtr(uint64_t instance);
+
 	
 };
 
