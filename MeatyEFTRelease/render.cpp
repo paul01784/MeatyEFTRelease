@@ -2,6 +2,7 @@
 #include "memory/Memory.h"
 #include "app/debug.h"
 #include "app/globals.h"
+#include "app/perfMonitor.h"
 
 #include "external/glm/glm.hpp"
 #include "external/glm/gtc/matrix_access.hpp"
@@ -2840,6 +2841,54 @@ static void renderDebugWindow()
                     ImGui::SetScrollHereY(1.0f);
                 }
                 ImGui::EndTable();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Performance"))
+            {
+                const double peakMs = PerfMonitor::Instance().GetPeakMs();
+                const std::string peakName = PerfMonitor::Instance().GetPeakName();
+                const std::string peakDetail = PerfMonitor::Instance().GetPeakDetail();
+
+                ImGui::Text("Peak spike: %.1f ms", peakMs);
+                if (!peakName.empty())
+                    ImGui::Text("Source: %s", peakName.c_str());
+                if (!peakDetail.empty())
+                    ImGui::Text("Detail: %s", peakDetail.c_str());
+
+                if (ImGui::Button("Reset peak"))
+                    PerfMonitor::Instance().ResetPeak();
+
+                ImGui::Separator();
+                ImGui::TextWrapped(
+                    "Silent lag usually comes from DMA mutex contention: multiple threads "
+                    "(players, bones, camera, loot, grenades) waiting on scatter reads. "
+                    "Entries below are tasks/scatters slower than ~25-35ms.");
+
+                if (ImGui::BeginTable("PerfTable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 360)))
+                {
+                    ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                    ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+                    ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableHeadersRow();
+
+                    const auto samples = PerfMonitor::Instance().GetRecent();
+                    for (auto it = samples.rbegin(); it != samples.rend(); ++it)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("%.1fs", it->timestampSec);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.0f", it->durationMs);
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted(it->name.c_str());
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextUnformatted(it->detail.c_str());
+                    }
+
+                    ImGui::EndTable();
+                }
+
                 ImGui::EndTabItem();
             }
            if (ImGui::BeginTabItem("Memory"))

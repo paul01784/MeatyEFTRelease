@@ -8,12 +8,13 @@
 struct TimedTask {
     std::function<void()> function;
     const double* interval;       
-    double elapsedTime = 0.0; 
+    double elapsedTime = 0.0;
+    double phaseOffsetMs = 0.0;
 };
 
 class TaskManager {
 public:
-    void addTask(const std::string& name, std::function<void()> func, const double* interval);
+    void addTask(const std::string& name, std::function<void()> func, const double* interval, double phaseOffsetMs = 0.0);
     void removeTask(const std::string& name);
     void run();
 

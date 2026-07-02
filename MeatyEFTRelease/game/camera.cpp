@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -244,8 +245,13 @@ bool Camera::cameraPointersReady() const
 {
     return
         Utils::valid_pointer(fpsCamera) &&
+        Utils::valid_pointer(fpsMatrixAddr);
+}
+
+bool Camera::opticPointersReady() const
+{
+    return
         Utils::valid_pointer(opticCamera) &&
-        Utils::valid_pointer(fpsMatrixAddr) &&
         Utils::valid_pointer(opticMatrixAddr);
 }
 
@@ -279,7 +285,7 @@ bool Camera::readFrameData(FrameData& out)
     out.aspect = gameAspect;
 
     out.queuedFps = true;
-    out.queuedOptic = true;
+    out.queuedOptic = opticPointersReady();
 
     auto handle = mem.CreateScatterHandle();
 
@@ -307,20 +313,24 @@ bool Camera::readFrameData(FrameData& out)
         sizeof(glm::highp_mat4)
     );
 
-    mem.AddScatterReadRequest(
-        handle,
-        opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
-        &out.opticRaw,
-        sizeof(glm::highp_mat4)
-    );
+    if (out.queuedOptic)
+    {
+        mem.AddScatterReadRequest(
+            handle,
+            opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
+            &out.opticRaw,
+            sizeof(glm::highp_mat4)
+        );
+    }
 
     mem.ExecuteReadScatter(handle);
     mem.CloseScatterHandle(handle);
 
     out.fpsMatrixValid = matrixLooksValid(out.fpsRaw);
-    out.opticMatrixValid = matrixLooksValid(out.opticRaw);
+    out.opticMatrixValid = out.queuedOptic && matrixLooksValid(out.opticRaw);
 
-    return out.fpsMatrixValid && out.opticMatrixValid;
+    // Relizth: only FPS matrix is required; optic is optional until ADS.
+    return out.fpsMatrixValid;
 }
 
 void Camera::applyFpsFrame(const FrameData& frame)
@@ -447,17 +457,12 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
 
 void Camera::cameraTask()
 {
+    static int matrixFailStreak = 0;
+
     try
     {
-        // Removed at the moment to avoid grenades causing hands check fail
-        /*if (!mainGame.checkIfRaidStarted())
-        {
-            if (initedCamera || fpsCamera || opticCamera || fpsMatrixAddr || opticMatrixAddr)
-                clearCache();
-
-            localmpCamera = false;
+        if (!mem.IsDmaOperational())
             return;
-        }*/
 
         if (!cameraPointersReady())
         {
@@ -469,6 +474,32 @@ void Camera::cameraTask()
             }
         }
 
+        // Optic camera spawns lazily; probe infrequently to avoid scanning all cameras every 16ms.
+        if (!opticPointersReady())
+        {
+            static auto lastOpticProbe = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+
+            if (lastOpticProbe == std::chrono::steady_clock::time_point{} ||
+                (now - lastOpticProbe) >= std::chrono::seconds(2))
+            {
+                lastOpticProbe = now;
+
+                const uint64_t prevOpticCam = opticCamera;
+                const uint64_t prevOpticMatrix = opticMatrixAddr;
+
+                getCameraPtrs();
+                if (Utils::valid_pointer(opticCamera))
+                    getMatrixPtrs();
+
+                if (!Utils::valid_pointer(opticCamera))
+                {
+                    opticCamera = prevOpticCam;
+                    opticMatrixAddr = prevOpticMatrix;
+                }
+            }
+        }
+
         FrameData frame{};
 
         if (!readFrameData(frame))
@@ -476,11 +507,19 @@ void Camera::cameraTask()
             localmpCamera = false;
             m_matrixDebug.usingOpticMatrix = false;
 
+            matrixFailStreak++;
+
+            if (matrixFailStreak < 30)
+                return;
+
+            matrixFailStreak = 0;
             clearCameraPointerCacheOnly();
 
             LOGS.logWarn("[CAMERA] Matrix read invalid. Cleared camera pointer cache for retry.");
             return;
         }
+
+        matrixFailStreak = 0;
 
         // Always update both matrix caches
         applyFpsFrame(frame);

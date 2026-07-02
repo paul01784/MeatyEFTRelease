@@ -28,7 +28,9 @@ constexpr std::chrono::milliseconds LOOT_RESOLVE_RETRY_DELAY{
 
 namespace
 {
-    constexpr int MAX_LOOT_COUNT = 100000;
+    constexpr int MAX_LOOT_COUNT = 12000;
+    constexpr int MAX_LOOT_BUFFER_ITEMS = 8000;
+    constexpr size_t MAX_LOOT_RESOLVE_PER_TICK = 32;
     constexpr size_t MAX_OBJECT_NAME_LENGTH = 64;
     constexpr size_t MAX_CLASS_NAME_LENGTH = 64;
 
@@ -348,10 +350,18 @@ bool loot::tryUpdateLootPosition(
 
     try
     {
-        UnityTransform transform(item.m_pointerToTransform1);
+        UnityTransform transform(item.m_pointerToTransform1, false);
+        if (!transform.IsValid())
+        {
+            if (markAsFailedOnError)
+                markFailed(item, "Invalid transform hierarchy");
+
+            return false;
+        }
+
         const glm::vec3 newPosition = transform.UpdatePosition();
 
-        if (!isValidLootPosition(newPosition))
+        if (!transform.IsValid() || !isValidLootPosition(newPosition))
         {
             if (markAsFailedOnError)
                 markFailed(item, "Transform returned an invalid position");
@@ -531,47 +541,69 @@ bool loot::buildPointers()
     if (Utils::valid_pointer(lootListP) && Utils::valid_pointer(lootListPtr))
         return true;
 
-    lootListP = mem.Read<uint64_t>(
-        mainGame.localGameWorld + sdk::ClientLocalGameWorld::LootList
-    );
-
-    if (!Utils::valid_pointer(lootListP))
+    if (!Utils::valid_pointer(mainGame.localGameWorld))
         return false;
 
-    int count = 0;
-
+    for (int attempt = 0; attempt < 3; ++attempt)
     {
-        ScatterBatch batch;
-        batch.add(lootListP + 0x10, lootListPtr);
-        batch.add(lootListP + 0x18, count);
+        lootListP = mem.Read<uint64_t>(
+            mainGame.localGameWorld + sdk::ClientLocalGameWorld::LootList
+        );
 
-        if (!batch.execute())
+        if (!Utils::valid_pointer(lootListP))
+        {
+            if (attempt < 2)
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            continue;
+        }
+
+        int count = 0;
+
+        {
+            ScatterBatch batch;
+            batch.add(lootListP + 0x10, lootListPtr);
+            batch.add(lootListP + 0x18, count);
+
+            if (!batch.execute())
+            {
+                if (attempt < 2)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                continue;
+            }
+        }
+
+        lootCount = count;
+
+        if (!Utils::valid_pointer(lootListPtr))
+            continue;
+
+        if (lootCount <= 0 || lootCount > MAX_LOOT_COUNT)
             return false;
+
+        return true;
     }
 
-    lootCount = count;
-
-    if (!Utils::valid_pointer(lootListPtr))
-        return false;
-
-    if (lootCount <= 0 || lootCount > MAX_LOOT_COUNT)
-        return false;
-
-    return true;
+    return false;
 }
 
 bool loot::get_lootCount()
 {
+    if (!Utils::valid_pointer(lootListP))
+        return lootCount > 0;
+
     int count = 0;
 
-    if (!mem.TryRead<int>(lootListP + 0x18, count))
+    if (!mem.TryRead<int>(lootListP + 0x18, count, true))
+        return lootCount > 0;
+
+    if (count <= 0 || count > MAX_LOOT_COUNT)
+    {
+        if (lootCount > 0)
+            return true;
         return false;
+    }
 
     lootCount = count;
-
-    if (lootCount <= 0 || lootCount > MAX_LOOT_COUNT)
-        return false;
-
     return true;
 }
 
@@ -589,9 +621,10 @@ bool loot::buildLootBuffer()
         return false;
     }
 
-    loot_buffer.assign(static_cast<size_t>(lootCount), 0);
+    const int itemsToRead = (lootCount < MAX_LOOT_BUFFER_ITEMS) ? lootCount : MAX_LOOT_BUFFER_ITEMS;
+    loot_buffer.assign(static_cast<size_t>(itemsToRead), 0);
 
-    const size_t bytes = sizeof(uint64_t) * static_cast<size_t>(lootCount);
+    const size_t bytes = sizeof(uint64_t) * static_cast<size_t>(itemsToRead);
 
     if (!mem.Read(lootListPtr + 0x20, loot_buffer.data(), bytes))
         return false;
@@ -1664,33 +1697,75 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
 void loot::lootTask()
 {
+    static int lootFailStreak = 0;
+    static int lootCountFailStreak = 0;
+    static int lootBufferFailStreak = 0;
+    static std::chrono::steady_clock::time_point lootBackoffUntil{};
+
     try
     {
+        if (!mem.IsDmaOperational())
+            return;
+
         if (!Utils::valid_pointer(mainGame.localPlayerPtr))
             return;
 
-        if (!radarGlobals::drawLoot)
+        if (!radarGlobals::drawLoot && !espGlobals::drawLoot)
+            return;
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now < lootBackoffUntil)
             return;
 
         if (!buildPointers())
         {
-            LOGS.logError("[LOOT] Pointer Build Error");
+            lootFailStreak++;
+            if (lootFailStreak == 1 || lootFailStreak % 10 == 0)
+                LOGS.logError("[LOOT] Pointer Build Error");
+
+            if (lootFailStreak >= 5)
+                lootBackoffUntil = now + std::chrono::seconds(20);
+
             return;
         }
+
+        lootFailStreak = 0;
 
         if (!get_lootCount())
         {
-            LOGS.logError("[LOOT] Count Error");
+            lootCountFailStreak++;
+            if (lootCountFailStreak >= 3)
+            {
+                lootListP = 0;
+                lootListPtr = 0;
+            }
+            if (lootCountFailStreak == 1 || lootCountFailStreak % 10 == 0)
+                LOGS.logError("[LOOT] Count Error");
+
+            if (lootCountFailStreak >= 5)
+                lootBackoffUntil = now + std::chrono::seconds(20);
+
             return;
         }
+
+        lootCountFailStreak = 0;
 
         if (!buildLootBuffer())
         {
-            LOGS.logError("[LOOT] Loot Buffer Error");
+            lootBufferFailStreak++;
+            if (lootBufferFailStreak == 1 || lootBufferFailStreak % 10 == 0)
+                LOGS.logError("[LOOT] Loot Buffer Error");
+
+            if (lootBufferFailStreak >= 5)
+                lootListPtr = 0;
+
+            if (lootBufferFailStreak >= 3)
+                lootBackoffUntil = now + std::chrono::seconds(15);
+
             return;
         }
 
-        const auto now = std::chrono::steady_clock::now();
+        lootBufferFailStreak = 0;
 
         std::unordered_set<uint64_t> livePointers;
         livePointers.reserve(loot_buffer.size());
@@ -1753,6 +1828,9 @@ void loot::lootTask()
 
         for (const uint64_t pointer : resolvePointerSet)
             pointersToResolve.emplace_back(pointer);
+
+        if (pointersToResolve.size() > MAX_LOOT_RESOLVE_PER_TICK)
+            pointersToResolve.resize(MAX_LOOT_RESOLVE_PER_TICK);
 
         if (!pointersToResolve.empty())
         {

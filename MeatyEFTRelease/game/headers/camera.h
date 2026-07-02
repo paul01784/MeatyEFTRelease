@@ -43,6 +43,7 @@ public:
 
 
     bool cameraPointersReady() const;
+    bool opticPointersReady() const;
 
     static bool initedCamera;
 

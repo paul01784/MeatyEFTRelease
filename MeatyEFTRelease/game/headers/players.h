@@ -184,6 +184,7 @@ struct PlayerCache {
 	bool isBTR;
 	uint64_t btrView;
 	bool invalidBones;
+	int bonePtrRefreshTick{ 0 };
 
 	bool isDead;
 	bool hasExfiled;

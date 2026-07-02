@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <cstring>
+#include <algorithm>
 #include "../../memory/Memory.h"
 #include "../headers/unitysdk.h"
 #include "../headers/sdk.h"
@@ -240,8 +241,11 @@ struct GameObjectManager
         }
 
         // STEP 1: Collect node addresses from linked list
+        constexpr size_t kMaxGomScanNodes = 2048;
+        constexpr size_t kGomScatterBatch = 512;
+
         std::vector<uint64_t> nodeAddrs;
-        nodeAddrs.reserve(512);
+        nodeAddrs.reserve(kMaxGomScanNodes);
 
         uint64_t curr = headNode.NextObjectLink; // FIXED: skip sentinel head node
         size_t walkCount = 0;
@@ -251,13 +255,13 @@ struct GameObjectManager
             nodeAddrs.push_back(curr);
             walkCount++;
 
-            curr = mem.Read<uint64_t>(curr + offsetof(LinkedListObject, NextObjectLink));
-
-            if (walkCount > 10000)
+            if (walkCount >= kMaxGomScanNodes)
             {
-                dbg("Safety stop: too many nodes");
+                dbg("Safety stop: node cap reached");
                 break;
             }
+
+            curr = mem.Read<uint64_t>(curr + offsetof(LinkedListObject, NextObjectLink));
         }
 
         dbg("WALK collected " + std::to_string(nodeAddrs.size()) + " nodes");
@@ -270,10 +274,13 @@ struct GameObjectManager
 
         const size_t count = nodeAddrs.size();
 
-        // STEP 2: Scatter read LinkedListObjects
+        // STEP 2: Scatter read LinkedListObjects (chunked)
         std::vector<LinkedListObject> nodes(count);
 
+        for (size_t offset = 0; offset < count; offset += kGomScatterBatch)
         {
+            const size_t batch = std::min(kGomScatterBatch, count - offset);
+
             auto h = mem.CreateScatterHandle();
             if (!h)
             {
@@ -281,8 +288,14 @@ struct GameObjectManager
                 return 0;
             }
 
-            for (size_t i = 0; i < count; i++)
-                mem.AddScatterReadRequest(h, nodeAddrs[i], &nodes[i], sizeof(LinkedListObject));
+            for (size_t i = 0; i < batch; ++i)
+            {
+                mem.AddScatterReadRequest(
+                    h,
+                    nodeAddrs[offset + i],
+                    &nodes[offset + i],
+                    sizeof(LinkedListObject));
+            }
 
             mem.ExecuteReadScatter(h);
             mem.CloseScatterHandle(h);
@@ -297,10 +310,13 @@ struct GameObjectManager
             dbg("Node[0].Prev: " + hex(nodes[0].PreviousObjectLink));
         }
 
-        // STEP 3: Scatter read pointers to object names
+        // STEP 3: Scatter read pointers to object names (chunked)
         std::vector<uint64_t> namePtrs(count, 0);
 
+        for (size_t offset = 0; offset < count; offset += kGomScatterBatch)
         {
+            const size_t batch = std::min(kGomScatterBatch, count - offset);
+
             auto h = mem.CreateScatterHandle();
             if (!h)
             {
@@ -308,18 +324,26 @@ struct GameObjectManager
                 return 0;
             }
 
-            for (size_t i = 0; i < count; i++)
+            bool any = false;
+            for (size_t i = 0; i < batch; ++i)
             {
-                if (!Utils::valid_pointer(nodes[i].ThisObject)) continue;
+                const size_t idx = offset + i;
+                if (!Utils::valid_pointer(nodes[idx].ThisObject))
+                    continue;
+
+                any = true;
                 mem.AddScatterReadRequest(
                     h,
-                    nodes[i].ThisObject + UnityOffsets::GameObject_NameOffset,
-                    &namePtrs[i],
-                    sizeof(uint64_t)
-                );
+                    nodes[idx].ThisObject + UnityOffsets::GameObject_NameOffset,
+                    &namePtrs[idx],
+                    sizeof(uint64_t));
             }
 
-            mem.ExecuteReadScatter(h);
+            if (any)
+            {
+                mem.ExecuteReadScatter(h);
+            }
+
             mem.CloseScatterHandle(h);
         }
 

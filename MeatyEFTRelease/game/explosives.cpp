@@ -4,6 +4,7 @@
 #include "headers/utils.h"
 #include "headers/unityHelper.h"
 #include "headers/unitysdk.h"
+#include "../app/globals.h"
 
 
 #include "../memory/memory.h"
@@ -20,6 +21,9 @@ namespace
 
 void ExplosiveManager::initManager()
 {
+    if (!espGlobals::drawGrenades && !radarGlobals::drawGrenades)
+        return;
+
     std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
 
     if (!Utils::valid_pointer(mainGame.localGameWorld))
