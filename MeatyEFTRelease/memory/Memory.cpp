@@ -2,6 +2,7 @@
 #include "Memory.h"
 #include "../app/globals.h"
 #include "../app/debug.h"
+#include "../app/perfMonitor.h"
 
 #include <thread>
 #include <iostream>
@@ -39,10 +40,32 @@ namespace
 		return oss.str();
 	}
 
-	void MemoryLogError(const std::string& message)
-	{
-		LOGS.logError("[Memory] " + message);
-	}
+    void MemoryLogError(const std::string& message)
+    {
+        LOGS.logError("[Memory] " + message);
+    }
+
+    void MemoryLogErrorThrottled(const char* key, const std::string& message, std::chrono::milliseconds interval = std::chrono::seconds(5))
+    {
+        using Clock = std::chrono::steady_clock;
+
+        static std::mutex throttleMutex;
+        static std::unordered_map<std::string, Clock::time_point> lastLogged;
+
+        const auto now = Clock::now();
+        const std::string throttleKey = key ? key : message;
+
+        {
+            std::lock_guard<std::mutex> lock(throttleMutex);
+            const auto it = lastLogged.find(throttleKey);
+            if (it != lastLogged.end() && (now - it->second) < interval)
+                return;
+
+            lastLogged[throttleKey] = now;
+        }
+
+        MemoryLogError(message);
+    }
 
 	void MemoryLogInfo(const char* message)
 	{
@@ -275,7 +298,21 @@ DmaConnectionState Memory::GetDmaState() const
 
 bool Memory::IsInitRunning() const
 {
-	return initRunning.load(std::memory_order_acquire);
+    return initRunning.load(std::memory_order_acquire);
+}
+
+bool Memory::IsDmaOperational() const
+{
+    if (!vHandle || !current_process.PID)
+        return false;
+
+    if (!memoryGlobals::dmaConnected.load(std::memory_order_acquire))
+        return false;
+
+    if (!memoryGlobals::processFound.load(std::memory_order_acquire))
+        return false;
+
+    return true;
 }
 
 // ------------------------------------------------------------
@@ -347,6 +384,7 @@ bool Memory::DumpMemoryMap(bool debug)
 	args.push_back("");
 	args.push_back("-device");
 	args.push_back("fpga://algo=0");
+	args.push_back("-waitinitialize");
 
 	if (debug)
 	{
@@ -1131,6 +1169,7 @@ bool Memory::Init(bool memMap, bool debug)
 		args.push_back("");
 		args.push_back("-device");
 		args.push_back("fpga://algo=0");
+		args.push_back("-waitinitialize");
 
 		if (debug)
 		{
@@ -1148,14 +1187,83 @@ bool Memory::Init(bool memMap, bool debug)
 			args.push_back(memMapPathString.c_str());
 		}
 
-		VMM_HANDLE newHandle = VMMDLL_Initialize(
-			static_cast<DWORD>(args.size()),
-			args.data()
-		);
+		auto tryInitializeVmm = [&]() -> VMM_HANDLE
+			{
+				return VMMDLL_Initialize(
+					static_cast<DWORD>(args.size()),
+					args.data()
+				);
+			};
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+		VMM_HANDLE newHandle = nullptr;
+
+		constexpr int kMaxInitAttempts = 4;
+
+		for (int attempt = 1; attempt <= kMaxInitAttempts; ++attempt)
+		{
+			if (cancelInit.load(std::memory_order_acquire))
+				break;
+
+			newHandle = tryInitializeVmm();
+
+			if (newHandle)
+			{
+				if (attempt > 1)
+				{
+					MemoryLogInfo(
+						"DMA connected on retry attempt " + std::to_string(attempt)
+					);
+				}
+
+				break;
+			}
+
+			if (attempt < kMaxInitAttempts)
+			{
+				MemoryLogInfo(
+					"DMA init attempt " + std::to_string(attempt) +
+					" failed; retrying in 750ms (device may still be releasing)..."
+				);
+
+				std::this_thread::sleep_for(std::chrono::milliseconds(750));
+			}
+		}
+
+		if (!newHandle && useMemMap)
+		{
+			MemoryLogInfo("Refreshing mmap.txt and retrying DMA init...");
+
+			std::this_thread::sleep_for(std::chrono::seconds(2));
+
+			if (DumpMemoryMap(debug))
+			{
+				for (int attempt = 1; attempt <= 2; ++attempt)
+				{
+					if (cancelInit.load(std::memory_order_acquire))
+						break;
+
+					newHandle = tryInitializeVmm();
+
+					if (newHandle)
+					{
+						MemoryLogInfo("DMA connected after mmap refresh");
+						break;
+					}
+
+					if (attempt < 2)
+						std::this_thread::sleep_for(std::chrono::milliseconds(750));
+				}
+			}
+		}
 
 		if (!newHandle)
 		{
-			MemoryLogInfo("[!] DMA initialisation failed. Is the DMA disconnected or already in use?");
+			MemoryLogInfo(
+				"[!] DMA initialisation failed. Close Relizth/other DMA tools, "
+				"wait 3s, then reconnect. If it persists, re-seat USB or power-cycle the FPGA."
+			);
 
 			closeAndReset();
 			return false;
@@ -1219,6 +1327,8 @@ bool Memory::Init(bool memMap, bool debug)
 		}
 
 		memoryGlobals::dmaConnected.store(true, std::memory_order_release);
+
+		setCustomRefreshData();
 
 		MemoryLogInfo("DMA connected successfully");
 	}
@@ -1443,6 +1553,12 @@ void Memory::CloseAndReset()
 		}
 
 		DMA_INITIALIZED = FALSE;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+		scatterQueuedReads.clear();
+		scatterQueuedWrites.clear();
 	}
 
 	memoryGlobals::dmaConnected.store(false, std::memory_order_release);
@@ -2089,13 +2205,13 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache) c
 {
 	if (!vHandle)
 	{
-		MemoryLogError("Read failed: vHandle is null");
+		MemoryLogErrorThrottled("read_vhandle", "Read failed: vHandle is null");
 		return false;
 	}
 
 	if (!current_process.PID)
 	{
-		MemoryLogError("Read failed: process PID is zero");
+		MemoryLogErrorThrottled("read_pid", "Read failed: process PID is zero");
 		return false;
 	}
 
@@ -2116,6 +2232,8 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache) c
 
 	DWORD readSize = 0;
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
 	const bool ok = VMMDLL_MemReadEx(
 		vHandle,
 		current_process.PID,
@@ -2134,7 +2252,8 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache) c
 		completeRead
 	);
 
-	return true;
+	// ZEROPAD_ON_FAIL: ok may be TRUE with a full buffer even when physical read failed.
+	return ok && readSize >= size;
 }
 
 bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool useCache) const
@@ -2162,6 +2281,8 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool us
 
 	DWORD readSize = 0;
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
 	const bool ok = VMMDLL_MemReadEx(
 		vHandle,
 		pid,
@@ -2180,7 +2301,7 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool us
 		completeRead
 	);
 
-	return true;
+	return completeRead;
 }
 
 bool Memory::Write(uintptr_t address, const void* buffer, size_t size) const
@@ -2202,6 +2323,8 @@ bool Memory::Write(uintptr_t address, const void* buffer, size_t size) const
 		MemoryLogError("Write failed: invalid args at " + Hex64(address));
 		return false;
 	}
+
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
 
 	const bool ok = VMMDLL_MemWrite(
 		vHandle,
@@ -2529,6 +2652,8 @@ VMMDLL_SCATTER_HANDLE Memory::CreateScatterHandle(bool useCache) const
 		return nullptr;
 	}
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
 	const VMMDLL_SCATTER_HANDLE scatterHandle = VMMDLL_Scatter_Initialize(
 		vHandle,
 		current_process.PID,
@@ -2536,8 +2661,13 @@ VMMDLL_SCATTER_HANDLE Memory::CreateScatterHandle(bool useCache) const
 	);
 
 	if (!scatterHandle)
+	{
 		MemoryLogError("Failed to create scatter handle");
+		return nullptr;
+	}
 
+	scatterQueuedReads[scatterHandle] = 0;
+	scatterQueuedWrites[scatterHandle] = 0;
 	return scatterHandle;
 }
 
@@ -2549,6 +2679,8 @@ VMMDLL_SCATTER_HANDLE Memory::CreateScatterHandle(int pid, bool useCache) const
 		return nullptr;
 	}
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
 	const VMMDLL_SCATTER_HANDLE scatterHandle = VMMDLL_Scatter_Initialize(
 		vHandle,
 		pid,
@@ -2556,8 +2688,13 @@ VMMDLL_SCATTER_HANDLE Memory::CreateScatterHandle(int pid, bool useCache) const
 	);
 
 	if (!scatterHandle)
+	{
 		MemoryLogError("Failed to create scatter handle for pid=" + std::to_string(pid));
+		return nullptr;
+	}
 
+	scatterQueuedReads[scatterHandle] = 0;
+	scatterQueuedWrites[scatterHandle] = 0;
 	return scatterHandle;
 }
 
@@ -2566,6 +2703,10 @@ void Memory::CloseScatterHandle(VMMDLL_SCATTER_HANDLE handle)
 	if (!handle)
 		return;
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+	scatterQueuedReads.erase(handle);
+	scatterQueuedWrites.erase(handle);
 	VMMDLL_Scatter_CloseHandle(handle);
 }
 
@@ -2582,12 +2723,15 @@ bool Memory::AddScatterReadRequest(
 		return false;
 	}
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
 	if (!VMMDLL_Scatter_PrepareEx(handle, address, size, static_cast<PBYTE>(buffer), nullptr))
 	{
 		MemoryLogError("Failed to prepare scatter read at " + Hex64(address));
 		return false;
 	}
 
+	++scatterQueuedReads[handle];
 	RecordScatterReadRequest(size);
 	return true;
 }
@@ -2605,6 +2749,8 @@ bool Memory::AddScatterWriteRequest(
 		return false;
 	}
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
 	if (!VMMDLL_Scatter_PrepareWrite(
 		handle,
 		address,
@@ -2616,6 +2762,7 @@ bool Memory::AddScatterWriteRequest(
 		return false;
 	}
 
+	++scatterQueuedWrites[handle];
 	RecordScatterWriteRequest(size);
 	return true;
 }
@@ -2637,9 +2784,28 @@ bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool useC
 		return false;
 	}
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+	const auto it = scatterQueuedReads.find(handle);
+	if (it == scatterQueuedReads.end() || it->second == 0)
+		return true;
+
+	const size_t queuedReads = it->second;
+
+	const auto scatterStart = std::chrono::steady_clock::now();
 	const bool ok = VMMDLL_Scatter_ExecuteRead(handle);
+	const double scatterMs =
+		std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scatterStart).count();
 
 	RecordScatterReadExecute(ok);
+
+	if (scatterMs >= PerfMonitor::kSlowScatterMs)
+	{
+		PerfMonitor::Instance().Record(
+			"dma.scatter",
+			scatterMs,
+			std::to_string(queuedReads) + " reads");
+	}
 
 	if (!ok)
 		MemoryLogError("Failed to execute scatter read");
@@ -2650,9 +2816,11 @@ bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool useC
 	{
 		RecordScatterClearFailure();
 		MemoryLogError("Failed to clear scatter read handle");
+		scatterQueuedReads[handle] = 0;
 		return false;
 	}
 
+	scatterQueuedReads[handle] = 0;
 	return ok;
 }
 
@@ -2673,6 +2841,12 @@ bool Memory::ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool use
 		return false;
 	}
 
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+	const auto it = scatterQueuedWrites.find(handle);
+	if (it == scatterQueuedWrites.end() || it->second == 0)
+		return true;
+
 	const bool ok = VMMDLL_Scatter_Execute(handle);
 
 	RecordScatterWriteExecute(ok);
@@ -2686,9 +2860,11 @@ bool Memory::ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool use
 	{
 		RecordScatterClearFailure();
 		MemoryLogError("Failed to clear scatter write handle");
+		scatterQueuedWrites[handle] = 0;
 		return false;
 	}
 
+	scatterQueuedWrites[handle] = 0;
 	return ok;
 }
 

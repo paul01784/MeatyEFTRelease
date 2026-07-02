@@ -11,6 +11,7 @@
 #include <limits>
 #include <thread>
 #include <mutex>
+#include <unordered_map>
 
 struct MemoryTrafficStats
 {
@@ -231,6 +232,9 @@ private:
     mutable std::chrono::steady_clock::time_point trafficStatsLastSample{};
 
     mutable std::mutex handleMutex;
+    mutable std::mutex dmaOpsMutex;
+    mutable std::unordered_map<VMMDLL_SCATTER_HANDLE, uint32_t> scatterQueuedReads;
+    mutable std::unordered_map<VMMDLL_SCATTER_HANDLE, uint32_t> scatterQueuedWrites;
 
 private:
     [[nodiscard]] static DWORD BuildReadFlags(bool useCache);
@@ -260,6 +264,7 @@ public:
     DmaConnectionState GetDmaState() const;
 
     bool IsInitRunning() const;
+    bool IsDmaOperational() const;
 
     DWORD GetPidFromName(const std::string& process_name);
     std::vector<int> GetPidListFromName(const std::string& process_name);

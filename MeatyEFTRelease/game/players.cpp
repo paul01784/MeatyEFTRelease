@@ -17,6 +17,8 @@
 #include "headers/wishlist.h"
 #include "headers/dogtag.h"
 #include "../app/DogTagAPI.h"
+#include <chrono>
+#include <algorithm>
 
 std::mutex playerMutex;
 Players players;
@@ -326,69 +328,442 @@ void Players::readDogTagComponent(PlayerCache& player, bool force)
     }
 }
 
+namespace {
+
+constexpr int kMaxTransformChain = 512;
+constexpr int kBonePtrRefreshTicks = 240;
+constexpr size_t kMaxBoneReadsPerTick = 72;
+constexpr size_t kMaxBonePtrRefreshPerTick = 2;
+constexpr size_t kMaxNewPlayersPerTick = 4;
+constexpr size_t kMaxQuickPositionBoneReads = 120;
+constexpr size_t kMaxCombinedMatrixElements = 12288;
+
+constexpr int kEspBoundsBoneSlots[] = {
+    boneListIndexes::Head,
+    boneListIndexes::Pelvis,
+    boneListIndexes::LFoot,
+    boneListIndexes::RFoot,
+    boneListIndexes::LPalm,
+    boneListIndexes::RPalm,
+};
+
+constexpr int kQuickPositionBoneSlots[] = {
+    boneListIndexes::Pelvis,
+    boneListIndexes::Head,
+    boneListIndexes::LFoot,
+    boneListIndexes::RFoot,
+};
+
+glm::vec3 computeTransformPosition(const Matrix34* matrices, const int32_t* indices, int32_t index, int count)
+{
+    if (!matrices || !indices || index < 0 || count <= 0 || index >= count)
+        return glm::vec3(0.0f);
+
+    __m128 result = *(__m128*)((uint8_t*)matrices + sizeof(Matrix34) * static_cast<size_t>(index));
+
+    const __m128 mulVec0 = { -2.0f,  2.0f, -2.0f, 0.0f };
+    const __m128 mulVec1 = {  2.0f, -2.0f, -2.0f, 0.0f };
+    const __m128 mulVec2 = { -2.0f, -2.0f,  2.0f, 0.0f };
+
+    int transformIndex = indices[index];
+    int safety = 0;
+    while (transformIndex >= 0 && safety++ < 1000)
+    {
+        if (transformIndex < 0 || transformIndex >= count)
+            break;
+
+        const Matrix34& matrix34 = matrices[transformIndex];
+
+        __m128 xxxx = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x00));
+        __m128 yyyy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x55));
+        __m128 zwxy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x8E));
+        __m128 wzyw = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0xDB));
+        __m128 zzzz = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0xAA));
+        __m128 yxwy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x71));
+
+        __m128 tmp7 = _mm_mul_ps(*(__m128*)(&matrix34.vec2), result);
+
+        result = _mm_add_ps(
+            _mm_add_ps(
+                _mm_add_ps(
+                    _mm_mul_ps(
+                        _mm_sub_ps(
+                            _mm_mul_ps(_mm_mul_ps(xxxx, mulVec1), zwxy),
+                            _mm_mul_ps(_mm_mul_ps(yyyy, mulVec2), wzyw)),
+                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0xAA))),
+                    _mm_mul_ps(
+                        _mm_sub_ps(
+                            _mm_mul_ps(_mm_mul_ps(zzzz, mulVec2), wzyw),
+                            _mm_mul_ps(_mm_mul_ps(xxxx, mulVec0), yxwy)),
+                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0x55)))),
+                _mm_add_ps(
+                    _mm_mul_ps(
+                        _mm_sub_ps(
+                            _mm_mul_ps(_mm_mul_ps(yyyy, mulVec0), yxwy),
+                            _mm_mul_ps(_mm_mul_ps(zzzz, mulVec1), zwxy)),
+                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0x00))),
+                    tmp7)),
+            *(__m128*)(&matrix34.vec0));
+
+        const int oldTransformIndex = transformIndex;
+        transformIndex = indices[transformIndex];
+        if (oldTransformIndex == transformIndex && transformIndex == 0)
+            break;
+    }
+
+    return glm::vec3(result.m128_f32[0], result.m128_f32[1], result.m128_f32[2]);
+}
+
+struct LiveBoneRead
+{
+    PlayerCache* player{};
+    int boneSlot{ -1 };
+    uint64_t boneTransform{};
+    TransformAccessReadOnly access{};
+    uint64_t transformArray{};
+    uint64_t transformIndices{};
+    int count{};
+    size_t bufOffset{};
+};
+
+struct ScatterGuard
+{
+    Memory& mem;
+    VMMDLL_SCATTER_HANDLE handle{ nullptr };
+
+    explicit ScatterGuard(Memory& memory)
+        : mem(memory),
+        handle(memory.CreateScatterHandle())
+    {
+    }
+
+    ~ScatterGuard()
+    {
+        if (handle)
+            mem.CloseScatterHandle(handle);
+    }
+};
+
+bool batchReadBoneWorldPositions(Memory& mem, std::vector<LiveBoneRead>& reads)
+{
+    if (reads.empty())
+        return false;
+
+    {
+        ScatterGuard scatter(mem);
+        if (!scatter.handle)
+            return false;
+
+        for (auto& slot : reads)
+        {
+            if (!mem.AddScatterReadRequest(
+                scatter.handle,
+                slot.boneTransform + UnityOffsets::TransformInternal_TransformAccessOffset,
+                &slot.access,
+                sizeof(TransformAccessReadOnly)))
+            {
+                slot.count = 0;
+            }
+        }
+
+        if (!mem.ExecuteReadScatter(scatter.handle))
+            return false;
+    }
+
+    {
+        ScatterGuard scatter(mem);
+        if (!scatter.handle)
+            return false;
+
+        bool any = false;
+        for (auto& slot : reads)
+        {
+            if (!Utils::valid_pointer(slot.access.pTransformData) ||
+                slot.access.index < 0 ||
+                slot.access.index >= kMaxTransformChain)
+            {
+                slot.count = 0;
+                continue;
+            }
+
+            slot.count = slot.access.index + 1;
+            any = true;
+
+            if (!mem.AddScatterReadRequest(
+                scatter.handle,
+                slot.access.pTransformData + UnityOffsets::Hierarchy_VerticesOffset,
+                &slot.transformArray,
+                sizeof(uint64_t)))
+            {
+                slot.count = 0;
+                continue;
+            }
+
+            if (!mem.AddScatterReadRequest(
+                scatter.handle,
+                slot.access.pTransformData + UnityOffsets::Hierarchy_IndicesOffset,
+                &slot.transformIndices,
+                sizeof(uint64_t)))
+            {
+                slot.count = 0;
+            }
+        }
+
+        if (any && !mem.ExecuteReadScatter(scatter.handle))
+            return false;
+    }
+
+    thread_local std::vector<Matrix34> matrices;
+    thread_local std::vector<int32_t> indices;
+
+    size_t total = 0;
+    for (const auto& slot : reads)
+    {
+        if (slot.count > 0 &&
+            Utils::valid_pointer(slot.transformArray) &&
+            Utils::valid_pointer(slot.transformIndices))
+        {
+            total += static_cast<size_t>(slot.count);
+        }
+    }
+
+    if (total == 0)
+        return false;
+
+    if (total > kMaxCombinedMatrixElements)
+        return false;
+
+    matrices.resize(total);
+    indices.resize(total);
+
+    {
+        ScatterGuard scatter(mem);
+        if (!scatter.handle)
+            return false;
+
+        size_t cursor = 0;
+        for (auto& slot : reads)
+        {
+            if (slot.count <= 0 ||
+                !Utils::valid_pointer(slot.transformArray) ||
+                !Utils::valid_pointer(slot.transformIndices))
+            {
+                continue;
+            }
+
+            const size_t need = static_cast<size_t>(slot.count);
+            slot.bufOffset = cursor;
+
+            if (!mem.AddScatterReadRequest(
+                scatter.handle,
+                slot.transformArray,
+                matrices.data() + cursor,
+                static_cast<SIZE_T>(sizeof(Matrix34) * need)))
+            {
+                slot.count = 0;
+                continue;
+            }
+
+            if (!mem.AddScatterReadRequest(
+                scatter.handle,
+                slot.transformIndices,
+                indices.data() + cursor,
+                static_cast<SIZE_T>(sizeof(int32_t) * need)))
+            {
+                slot.count = 0;
+                continue;
+            }
+
+            cursor += need;
+        }
+
+        if (!mem.ExecuteReadScatter(scatter.handle))
+            return false;
+    }
+
+    for (const auto& slot : reads)
+    {
+        if (slot.count <= 0 || slot.player == nullptr || slot.boneSlot < 0)
+            continue;
+
+        const size_t boneIndex = static_cast<size_t>(slot.boneSlot);
+        if (boneIndex >= slot.player->bonePositions.size())
+            continue;
+
+        const glm::vec3 pos = computeTransformPosition(
+            matrices.data() + slot.bufOffset,
+            indices.data() + slot.bufOffset,
+            slot.access.index,
+            slot.count);
+
+        slot.player->bonePositions[boneIndex] = pos;
+    }
+
+    return true;
+}
+
+void quickRefreshEspBones()
+{
+    if (!mem.IsDmaOperational())
+        return;
+
+    std::vector<LiveBoneRead> reads;
+    std::vector<PlayerCache*> nearby;
+
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+
+        std::vector<PlayerCache>& cache = players.getCache();
+        nearby.reserve(cache.size());
+
+        const int maxDist = espGlobals::drawPlayerDist > 0 ? espGlobals::drawPlayerDist : 250;
+
+        for (auto& player : cache)
+        {
+            if (!Utils::valid_pointer(player.instance))
+                continue;
+
+            if (player.isBTR || player.isDead || player.hasExfiled)
+                continue;
+
+            if (!Utils::valid_pointer(player.playerBoneMatrixPtr) || player.invalidBones)
+                continue;
+
+            if (!player.isLocal && player.distance > maxDist)
+                continue;
+
+            nearby.push_back(&player);
+        }
+
+        std::sort(
+            nearby.begin(),
+            nearby.end(),
+            [](const PlayerCache* a, const PlayerCache* b)
+            {
+                return a->distance < b->distance;
+            });
+
+        for (PlayerCache* player : nearby)
+        {
+            if (reads.size() >= kMaxQuickPositionBoneReads)
+                break;
+
+            for (const int slot : kQuickPositionBoneSlots)
+            {
+                if (reads.size() >= kMaxQuickPositionBoneReads)
+                    break;
+
+                if (slot < 0 || static_cast<size_t>(slot) >= player->bonePtrs.size())
+                    continue;
+
+                const uint64_t bonePtr = player->bonePtrs[static_cast<size_t>(slot)];
+                if (!Utils::valid_pointer(bonePtr))
+                    continue;
+
+                reads.push_back({ player, slot, bonePtr, {}, {}, {}, 0, 0 });
+            }
+        }
+    }
+
+    if (!reads.empty())
+        batchReadBoneWorldPositions(mem, reads);
+}
+
+} // namespace
+
 void Players::boneTask()
 {
-    constexpr int MAX_TRANSFORM_CHAIN = 512;
-    constexpr auto BONE_PTR_REFRESH_INTERVAL = std::chrono::milliseconds(500);
-
-    struct HierarchySnapshot
-    {
-        uint64_t pTransformArray{};
-        uint64_t pTransformIndices{};
-    };
-
-    struct PlayerBoneSnapshot
-    {
-        uint64_t instance{};
-
-        std::vector<uint64_t> bonePtrs;
-        std::vector<TransformAccessReadOnly> transforms;
-        std::vector<HierarchySnapshot> hierarchy;
-
-        std::vector<std::vector<Matrix34>> matrices;
-        std::vector<std::vector<int32_t>> indices;
-
-        bool invalidBones{ false };
-        bool refreshBonePtrs{ false };
-    };
-
-    struct ScatterGuard
-    {
-        Memory& mem;
-        VMMDLL_SCATTER_HANDLE handle{ nullptr };
-
-        explicit ScatterGuard(Memory& memory)
-            : mem(memory),
-            handle(memory.CreateScatterHandle())
-        {
-        }
-
-        ~ScatterGuard()
-        {
-            if (handle)
-                mem.CloseScatterHandle(handle);
-        }
-    };
-
     try
     {
-        if (!mem.vHandle)
+        if (!mem.IsDmaOperational())
             return;
 
         if (!Utils::valid_pointer(mainGame.localPlayerPtr))
             return;
 
-        std::vector<PlayerBoneSnapshot> snapshots;
+        const bool fullSkeleton = espGlobals::drawSkeletons;
+        std::vector<LiveBoneRead> reads;
+        std::vector<PlayerCache*> urgentRefresh;
+        std::vector<PlayerCache*> slowRefresh;
+        static size_t boneRoundRobin = 0;
+
+        auto appendBoneReads = [&](PlayerCache& player)
+            {
+                if (reads.size() >= kMaxBoneReadsPerTick)
+                    return;
+
+                const size_t boneCount = player.bonePtrs.size();
+                if (boneCount == 0)
+                {
+                    player.invalidBones = true;
+                    urgentRefresh.push_back(&player);
+                    return;
+                }
+
+                if (fullSkeleton)
+                {
+                    for (size_t i = 0; i < boneCount; ++i)
+                    {
+                        if (reads.size() >= kMaxBoneReadsPerTick)
+                            return;
+
+                        const uint64_t bonePtr = player.bonePtrs[i];
+                        if (!Utils::valid_pointer(bonePtr))
+                        {
+                            player.invalidBones = true;
+                            urgentRefresh.push_back(&player);
+                            reads.erase(
+                                std::remove_if(
+                                    reads.begin(),
+                                    reads.end(),
+                                    [&](const LiveBoneRead& slot) { return slot.player == &player; }),
+                                reads.end());
+                            return;
+                        }
+
+                        reads.push_back({ &player, static_cast<int>(i), bonePtr, {}, {}, {}, 0, 0 });
+                    }
+                }
+                else
+                {
+                    for (const int slot : kEspBoundsBoneSlots)
+                    {
+                        if (reads.size() >= kMaxBoneReadsPerTick)
+                            return;
+
+                        if (slot < 0 || static_cast<size_t>(slot) >= boneCount)
+                            continue;
+
+                        const uint64_t bonePtr = player.bonePtrs[static_cast<size_t>(slot)];
+                        if (!Utils::valid_pointer(bonePtr))
+                        {
+                            player.invalidBones = true;
+                            urgentRefresh.push_back(&player);
+                            reads.erase(
+                                std::remove_if(
+                                    reads.begin(),
+                                    reads.end(),
+                                    [&](const LiveBoneRead& slotRead) { return slotRead.player == &player; }),
+                                reads.end());
+                            return;
+                        }
+
+                        reads.push_back({ &player, slot, bonePtr, {}, {}, {}, 0, 0 });
+                    }
+                }
+            };
 
         {
             std::lock_guard<std::mutex> lock(playerMutex);
 
             std::vector<PlayerCache>& cache = players.getCache();
-
             if (cache.empty())
                 return;
 
-            snapshots.reserve(cache.size());
+            reads.reserve(std::min(cache.size() * (fullSkeleton ? 13u : 6u), kMaxBoneReadsPerTick));
+
+            std::vector<PlayerCache*> eligible;
+            eligible.reserve(cache.size());
 
             for (auto& player : cache)
             {
@@ -398,319 +773,88 @@ void Players::boneTask()
                 if (player.isBTR || player.isDead || player.hasExfiled)
                     continue;
 
-                const size_t boneCount = player.bonePtrs.size();
-
-                if (boneCount == 0 ||
-                    player.boneTransforms.size() != boneCount ||
-                    player.boneTransformsData.size() != boneCount)
+                if (!Utils::valid_pointer(player.playerBoneMatrixPtr) || player.invalidBones)
                 {
-                    player.invalidBones = true;
+                    urgentRefresh.push_back(&player);
                     continue;
                 }
 
-                snapshots.emplace_back();
+                if (++player.bonePtrRefreshTick >= kBonePtrRefreshTicks)
+                {
+                    player.bonePtrRefreshTick = 0;
+                    slowRefresh.push_back(&player);
+                }
 
-                PlayerBoneSnapshot& snapshot = snapshots.back();
+                eligible.push_back(&player);
+            }
 
-                snapshot.instance = player.instance;
-                snapshot.bonePtrs = player.bonePtrs;
+            if (!eligible.empty())
+            {
+                std::sort(
+                    eligible.begin(),
+                    eligible.end(),
+                    [](const PlayerCache* a, const PlayerCache* b)
+                    {
+                        return a->distance < b->distance;
+                    });
 
-                snapshot.transforms.resize(boneCount);
-                snapshot.hierarchy.resize(boneCount);
-                snapshot.matrices.resize(boneCount);
-                snapshot.indices.resize(boneCount);
+                const int nearDist =
+                    espGlobals::drawPlayerDist > 0 ? espGlobals::drawPlayerDist : 250;
+
+                for (PlayerCache* player : eligible)
+                {
+                    if (reads.size() >= kMaxBoneReadsPerTick)
+                        break;
+
+                    if (player->isLocal || player->distance <= nearDist)
+                        appendBoneReads(*player);
+                }
+
+                if (reads.size() < kMaxBoneReadsPerTick)
+                {
+                    const size_t start = boneRoundRobin % eligible.size();
+
+                    for (size_t n = 0; n < eligible.size() && reads.size() < kMaxBoneReadsPerTick; ++n)
+                    {
+                        PlayerCache* player = eligible[(start + n) % eligible.size()];
+
+                        if (player->isLocal || player->distance <= nearDist)
+                            continue;
+
+                        appendBoneReads(*player);
+                    }
+
+                    boneRoundRobin = (boneRoundRobin + 1) % eligible.size();
+                }
             }
         }
 
-        if (snapshots.empty())
-            return;
-
-        ScatterGuard scatter(mem);
-
-        if (!scatter.handle)
-            return;
-
-        bool hasRequests = false;
-
-        for (auto& snapshot : snapshots)
-        {
-            for (size_t i = 0; i < snapshot.bonePtrs.size(); ++i)
+        auto refreshBonePtrs = [&](const std::vector<PlayerCache*>& queue, size_t& refreshed)
             {
-                const uint64_t bonePtr = snapshot.bonePtrs[i];
-
-                if (!Utils::valid_pointer(bonePtr))
+                for (PlayerCache* player : queue)
                 {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
+                    if (!player || refreshed >= kMaxBonePtrRefreshPerTick)
+                        break;
+
+                    const bool ok = getBonePtrs(*player);
+
+                    {
+                        std::lock_guard<std::mutex> lock(playerMutex);
+                        player->invalidBones = !ok;
+                        if (ok)
+                            player->bonePtrRefreshTick = 0;
+                    }
+
+                    ++refreshed;
                 }
-
-                snapshot.transforms[i] = {};
-
-                const uint64_t address = bonePtr + UnityOffsets::TransformInternal_TransformAccessOffset;
-
-                if (!mem.AddScatterReadRequest(scatter.handle, address, &snapshot.transforms[i], sizeof(TransformAccessReadOnly)))
-                {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
-                }
-
-                hasRequests = true;
-            }
-        }
-
-        if (hasRequests && !mem.ExecuteReadScatter(scatter.handle))
-        {
-            for (auto& snapshot : snapshots)
-                snapshot.invalidBones = true;
-        }
-
-        hasRequests = false;
-
-        for (auto& snapshot : snapshots)
-        {
-            if (snapshot.invalidBones)
-                continue;
-
-            for (size_t i = 0; i < snapshot.bonePtrs.size(); ++i)
-            {
-                const TransformAccessReadOnly& access = snapshot.transforms[i];
-
-                if (!Utils::valid_pointer(access.pTransformData) || access.index < 0 || access.index >= MAX_TRANSFORM_CHAIN)
-                {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
-                }
-
-                HierarchySnapshot& hierarchy = snapshot.hierarchy[i];
-                hierarchy = {};
-
-                if (!mem.AddScatterReadRequest( scatter.handle, access.pTransformData + UnityOffsets::Hierarchy_VerticesOffset, &hierarchy.pTransformArray, sizeof(uint64_t)))
-                {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
-                }
-
-                if (!mem.AddScatterReadRequest( scatter.handle, access.pTransformData + UnityOffsets::Hierarchy_IndicesOffset, &hierarchy.pTransformIndices, sizeof(uint64_t)))
-                {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
-                }
-
-                hasRequests = true;
-            }
-        }
-
-        if (hasRequests && !mem.ExecuteReadScatter(scatter.handle))
-        {
-            for (auto& snapshot : snapshots)
-                snapshot.invalidBones = true;
-        }
-
-        hasRequests = false;
-
-        for (auto& snapshot : snapshots)
-        {
-            if (snapshot.invalidBones)
-                continue;
-
-            for (size_t i = 0; i < snapshot.bonePtrs.size(); ++i)
-            {
-                const TransformAccessReadOnly& access = snapshot.transforms[i];
-
-                const HierarchySnapshot& hierarchy = snapshot.hierarchy[i];
-
-                if (!Utils::valid_pointer(hierarchy.pTransformArray) || !Utils::valid_pointer(hierarchy.pTransformIndices))
-                {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
-                }
-
-                const size_t transformCount = static_cast<size_t>(access.index) + 1;
-
-                if (transformCount == 0 || transformCount > static_cast<size_t>(MAX_TRANSFORM_CHAIN))
-                {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
-                }
-
-                std::vector<Matrix34>& matrices = snapshot.matrices[i];
-
-                std::vector<int32_t>& indices = snapshot.indices[i];
-
-                matrices.assign(transformCount, Matrix34{});
-                indices.assign(transformCount, 0);
-
-                const SIZE_T matrixBytes = static_cast<SIZE_T>( transformCount * sizeof(Matrix34));
-
-                const SIZE_T indexBytes = static_cast<SIZE_T>( transformCount * sizeof(int32_t));
-
-                if (!mem.AddScatterReadRequest(scatter.handle, hierarchy.pTransformArray, matrices.data(), matrixBytes))
-                {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
-                }
-
-                if (!mem.AddScatterReadRequest(scatter.handle, hierarchy.pTransformIndices, indices.data(), indexBytes))
-                {
-                    snapshot.invalidBones = true;
-                    snapshot.refreshBonePtrs = true;
-                    break;
-                }
-
-                hasRequests = true;
-            }
-        }
-
-        if (hasRequests && !mem.ExecuteReadScatter(scatter.handle))
-        {
-            for (auto& snapshot : snapshots)
-                snapshot.invalidBones = true;
-        }
-
-        std::lock_guard<std::mutex> lock(playerMutex);
-
-        std::vector<PlayerCache>& cache = players.getCache();
-
-        static std::unordered_map<uint64_t, std::chrono::steady_clock::time_point > nextBonePtrRefresh;
-
-        const auto now = std::chrono::steady_clock::now();
-
-        auto ensureBuffer = [](void*& buffer, SIZE_T& capacity, SIZE_T requiredBytes) -> bool
-            {
-                if (buffer && capacity >= requiredBytes)
-                    return true;
-
-                void* resized = realloc(buffer, requiredBytes);
-
-                if (!resized)
-                    return false;
-
-                buffer = resized;
-                capacity = requiredBytes;
-
-                return true;
             };
 
-        for (auto& snapshot : snapshots)
-        {
-            auto playerIt = std::find_if(
-                cache.begin(),
-                cache.end(),
-                [&snapshot](const PlayerCache& player)
-                {
-                    return player.instance == snapshot.instance;
-                });
+        size_t refreshed = 0;
+        refreshBonePtrs(urgentRefresh, refreshed);
+        refreshBonePtrs(slowRefresh, refreshed);
 
-            if (playerIt == cache.end())
-                continue;
-
-            PlayerCache& player = *playerIt;
-
-            if (!Utils::valid_pointer(player.instance))
-                continue;
-
-            if (player.isBTR || player.isDead || player.hasExfiled)
-                continue;
-
-            const size_t boneCount = snapshot.bonePtrs.size();
-
-            if (player.bonePtrs.size() != boneCount ||
-                player.boneTransforms.size() != boneCount ||
-                player.boneTransformsData.size() != boneCount ||
-                player.bonePtrs != snapshot.bonePtrs)
-            {
-                continue;
-            }
-
-            if (snapshot.invalidBones)
-            {
-                player.invalidBones = true;
-
-                if (snapshot.refreshBonePtrs)
-                {
-                    auto& nextAllowed = nextBonePtrRefresh[player.instance];
-
-                    if (now >= nextAllowed)
-                    {
-                        getBonePtrs(player);
-
-                        nextAllowed = now + BONE_PTR_REFRESH_INTERVAL;
-                    }
-                }
-
-                continue;
-            }
-
-            if (player.pMatriciesBuffers.size() < boneCount)
-                player.pMatriciesBuffers.resize(boneCount, nullptr);
-
-            if (player.pIndicesBuffers.size() < boneCount)
-                player.pIndicesBuffers.resize(boneCount, nullptr);
-
-            if (player.matCap.size() < boneCount)
-                player.matCap.resize(boneCount, 0);
-
-            if (player.idxCap.size() < boneCount)
-                player.idxCap.resize(boneCount, 0);
-
-            bool buffersReady = true;
-
-            for (size_t i = 0; i < boneCount; ++i)
-            {
-                const SIZE_T matrixBytes = static_cast<SIZE_T>( snapshot.matrices[i].size() * sizeof(Matrix34));
-
-                const SIZE_T indexBytes = static_cast<SIZE_T>( snapshot.indices[i].size() * sizeof(int32_t));
-
-                if (!ensureBuffer(player.pMatriciesBuffers[i], player.matCap[i], matrixBytes) ||
-                    !ensureBuffer(player.pIndicesBuffers[i], player.idxCap[i], indexBytes))
-                {
-                    buffersReady = false;
-                    break;
-                }
-            }
-
-            if (!buffersReady)
-            {
-                player.invalidBones = true;
-                continue;
-            }
-
-            for (size_t i = 0; i < boneCount; ++i)
-            {
-                player.boneTransforms[i] = snapshot.transforms[i];
-
-                player.boneTransformsData[i].pTransformArray = snapshot.hierarchy[i].pTransformArray;
-
-                player.boneTransformsData[i].pTransformIndices = snapshot.hierarchy[i].pTransformIndices;
-
-                const SIZE_T matrixBytes = static_cast<SIZE_T>(snapshot.matrices[i].size() * sizeof(Matrix34));
-
-                const SIZE_T indexBytes = static_cast<SIZE_T>(snapshot.indices[i].size() * sizeof(int32_t));
-
-                memcpy(
-                    player.pMatriciesBuffers[i],
-                    snapshot.matrices[i].data(),
-                    matrixBytes);
-
-                memcpy(
-                    player.pIndicesBuffers[i],
-                    snapshot.indices[i].data(),
-                    indexBytes);
-            }
-
-            player.invalidBones = false;
-            nextBonePtrRefresh.erase(player.instance);
-
-            player.UpdateBonePositions();
-        }
+        if (!reads.empty())
+            batchReadBoneWorldPositions(mem, reads);
     }
     catch (const std::exception& e)
     {
@@ -766,100 +910,25 @@ glm::vec3 PlayerCache::GetTransformPosition(int boneIndex)
     if (!matrices || !indices)
         return glm::vec3(0.0f);
 
-    // count = index + 1 (same logic as your GetTransformPosition3)
-    int index = pTransformAccessReadOnly.index;
+    const int index = pTransformAccessReadOnly.index;
     if (index < 0)
         return glm::vec3(0.0f);
 
-    int count = index + 1; // how many elements we expect to be valid
-    if (count <= 0)
+    const int count = index + 1;
+    if (count <= 0 || count > kMaxTransformChain)
         return glm::vec3(0.0f);
 
-    // Simple upper cap in case something goes crazy
-    constexpr int MAX_TRANSFORM_CHAIN = 512;
-    if (count > MAX_TRANSFORM_CHAIN)
-        return glm::vec3(0.0f);
-
-    // Bounds check against our buffer size: boneTask allocated exactly count elements
-    // so we only allow transformIndex in [0, count)
-    const SIZE_T sizeMatriciesBuf = sizeof(Matrix34) * count;
-
-    if (index >= count)
-        return glm::vec3(0.0f);
-
-    // Initial value from matrices[index]
-    __m128 result = *(__m128*)((uint8_t*)matrices + sizeof(Matrix34) * index);
-
-    // Same constants as before
-    const __m128 mulVec0 = { -2.0f,  2.0f, -2.0f, 0.0f };
-    const __m128 mulVec1 = { 2.0f, -2.0f, -2.0f, 0.0f };
-    const __m128 mulVec2 = { -2.0f, -2.0f,  2.0f, 0.0f };
-
-    int transformIndex = indices[index];
-
-    int safety = 0;
-    while (transformIndex >= 0 && safety++ < 1000)
-    {
-        if (transformIndex < 0 || transformIndex >= count)
-        {
-            // out of range: bail out with current accumulated result
-            // (no free() here, buffers are owned by PlayerCache)
-            break;
-        }
-
-        const Matrix34& matrix34 = matrices[transformIndex];
-
-        __m128 xxxx = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x00)); // xxxx
-        __m128 yyyy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x55)); // yyyy
-        __m128 zwxy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x8E)); // zwxy
-        __m128 wzyw = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0xDB)); // wzyw
-        __m128 zzzz = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0xAA)); // zzzz
-        __m128 yxwy = _mm_castsi128_ps(_mm_shuffle_epi32(*(__m128i*)(&matrix34.vec1), 0x71)); // yxwy
-
-        __m128 tmp7 = _mm_mul_ps(*(__m128*)(&matrix34.vec2), result);
-
-        result = _mm_add_ps(
-            _mm_add_ps(
-                _mm_add_ps(
-                    _mm_mul_ps(
-                        _mm_sub_ps(
-                            _mm_mul_ps(_mm_mul_ps(xxxx, mulVec1), zwxy),
-                            _mm_mul_ps(_mm_mul_ps(yyyy, mulVec2), wzyw)),
-                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0xAA))),
-                    _mm_mul_ps(
-                        _mm_sub_ps(
-                            _mm_mul_ps(_mm_mul_ps(zzzz, mulVec2), wzyw),
-                            _mm_mul_ps(_mm_mul_ps(xxxx, mulVec0), yxwy)),
-                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0x55)))),
-                _mm_add_ps(
-                    _mm_mul_ps(
-                        _mm_sub_ps(
-                            _mm_mul_ps(_mm_mul_ps(yyyy, mulVec0), yxwy),
-                            _mm_mul_ps(_mm_mul_ps(zzzz, mulVec1), zwxy)),
-                        _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(tmp7), 0x00))),
-                    tmp7)),
-            *(__m128*)(&matrix34.vec0));
-
-        int oldTransformIndex = transformIndex;
-        transformIndex = indices[transformIndex];
-
-        if (oldTransformIndex == transformIndex && transformIndex == 0)
-        {
-            // protection from infinite loops
-            break;
-        }
-    }
-
-    return glm::vec3(result.m128_f32[0], result.m128_f32[1], result.m128_f32[2]);
+    return computeTransformPosition(matrices, indices, index, count);
 }
 
 void Players::playersTask()
 {
     static int failedPlayerListFrames = 0;
+    static auto lastCacheClear = std::chrono::steady_clock::time_point{};
 
     try
     {
-        if (!mem.vHandle)
+        if (!mem.IsDmaOperational())
             return;
 
         const bool playerListUpdated = mainGame.updatePlayerList();
@@ -868,22 +937,33 @@ void Players::playersTask()
         {
             failedPlayerListFrames++;
 
-            if (failedPlayerListFrames > 60)
+            // Light TLB/mem refresh after sustained read failures (stale CR3/cache).
+            if (failedPlayerListFrames == 50 || failedPlayerListFrames == 200)
+                mem.RefreshLight();
+
+            constexpr int kFailureThreshold = 200;
+            constexpr auto kClearCooldown = std::chrono::seconds(15);
+
+            const auto now = std::chrono::steady_clock::now();
+            const bool cooldownElapsed =
+                lastCacheClear == std::chrono::steady_clock::time_point{} ||
+                (now - lastCacheClear) >= kClearCooldown;
+
+            if (failedPlayerListFrames > kFailureThreshold && cooldownElapsed)
             {
-                std::lock_guard<std::mutex> lock(playerMutex);
-
-                playerCache.clear();
-
-                mainGame.localPlayerPtr = 0;
-                mainGame.localPlayerHands = 0;
-                mainGame.localplayerProfile = 0;
-                mainGame.localGroupId.clear();
-                mainGame.localIsScoped = false;
+                {
+                    std::lock_guard<std::mutex> lock(playerMutex);
+                    playerCache.clear();
+                }
 
                 groupIDSet = false;
                 failedPlayerListFrames = 0;
+                lastCacheClear = now;
 
-                LOGS.logInfo("[PLAYERS] Cleared player cache after repeated player-list failures");
+                LOGS.logInfo(
+                    "[PLAYERS] Cleared player cache after sustained list-read failures "
+                    "(local player state kept)"
+                );
             }
 
             return;
@@ -921,12 +1001,17 @@ void Players::playersTask()
             }
         }
 
-        // Build new entities OUTSIDE the lock
-        // This prevents boneTask from being blocked by addEntity.
+        // Build new entities OUTSIDE the lock (cap per tick to avoid multi-hundred-ms DMA spikes).
         std::vector<PlayerCache> pendingNewEntities;
+        pendingNewEntities.reserve(kMaxNewPlayersPerTick);
+
+        size_t builtThisTick = 0;
 
         for (const uint64_t currentPlayer : registeredPlayers)
         {
+            if (builtThisTick >= kMaxNewPlayersPerTick)
+                break;
+
             if (existingInstances.find(currentPlayer) != existingInstances.end())
                 continue;
 
@@ -937,6 +1022,7 @@ void Players::playersTask()
             if (builtEntity.has_value())
             {
                 pendingNewEntities.emplace_back(std::move(*builtEntity));
+                ++builtThisTick;
             }
         }
 
@@ -971,12 +1057,17 @@ void Players::playersTask()
             }
         }
 
-        // Normal update pass
+        quickRefreshEspBones();
+
         {
             std::lock_guard<std::mutex> lock(playerMutex);
-
             tryFindBTR();
-            updateEntity();
+        }
+
+        updateEntity();
+
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
             checkExfil();
             checkGroupIDs();
         }
@@ -1419,74 +1510,50 @@ std::optional<PlayerCache> Players::buildEntity(const uint64_t instance, bool is
 
 glm::vec3 GetBestPlayerBasePosition(const PlayerCache& cachePlayer)
 {
-    const glm::vec3 zero(0.0f);
-
-    const glm::vec3 root = cachePlayer.bonePositions[boneListIndexes::Base];
-    const glm::vec3 lFoot = cachePlayer.bonePositions[boneListIndexes::LFoot];
-    const glm::vec3 rFoot = cachePlayer.bonePositions[boneListIndexes::RFoot];
-
-    auto isNearlyZeroVec = [](const glm::vec3& v) -> bool
-        {
-            constexpr float eps = 0.001f;
-            return std::fabs(v.x) < eps &&
-                std::fabs(v.y) < eps &&
-                std::fabs(v.z) < eps;
-        };
-
-    auto isValidVec = [&](const glm::vec3& v) -> bool
+    auto isGoodVec = [](const glm::vec3& v) -> bool
         {
             if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z))
                 return false;
 
-            if (isNearlyZeroVec(v))
-                return false;
-
-            return true;
+            constexpr float eps = 0.001f;
+            return std::fabs(v.x) >= eps || std::fabs(v.y) >= eps || std::fabs(v.z) >= eps;
         };
 
-    auto distanceXZ = [](const glm::vec3& a, const glm::vec3& b) -> float
+    auto safeBone = [&](boneListIndexes idx) -> glm::vec3
         {
-            const float dx = a.x - b.x;
-            const float dz = a.z - b.z;
-            return std::sqrt((dx * dx) + (dz * dz));
+            const int slot = static_cast<int>(idx);
+            if (slot < 0 || static_cast<size_t>(slot) >= cachePlayer.bonePositions.size())
+                return glm::vec3(0.0f);
+
+            return cachePlayer.bonePositions[static_cast<size_t>(slot)];
         };
 
-    const bool rootValid = isValidVec(root);
-    const bool lFootValid = isValidVec(lFoot);
-    const bool rFootValid = isValidVec(rFoot);
+    // Pelvis is always in the ESP bone set; Base is only refreshed in full-skeleton mode.
+    const glm::vec3 pelvis = safeBone(boneListIndexes::Pelvis);
+    const glm::vec3 base = safeBone(boneListIndexes::Base);
+    const glm::vec3 lFoot = safeBone(boneListIndexes::LFoot);
+    const glm::vec3 rFoot = safeBone(boneListIndexes::RFoot);
 
-    glm::vec3 feetMid = zero;
-    bool feetValid = false;
+    if (isGoodVec(pelvis))
+        return pelvis;
 
-    if (lFootValid && rFootValid)
+    if (isGoodVec(base))
+        return base;
+
+    if (isGoodVec(lFoot) && isGoodVec(rFoot))
     {
-        //Feet should not be miles apart
         const float footSeparation = glm::distance(lFoot, rFoot);
         if (footSeparation > 0.01f && footSeparation <= 5.5f)
-        {
-            feetMid = (lFoot + rFoot) * 0.5f;
-            feetValid = true;
-        }
+            return (lFoot + rFoot) * 0.5f;
     }
 
-    if (!rootValid && !feetValid)
-        return zero;
+    if (isGoodVec(lFoot))
+        return lFoot;
 
-    if (!rootValid && feetValid)
-        return feetMid;
+    if (isGoodVec(rFoot))
+        return rFoot;
 
-    if (rootValid && !feetValid)
-        return root;
-
-    //Compare horizontal distance only
-    const float rootToFeetXZ = distanceXZ(root, feetMid);
-
-    //If root is close horizontally, trust it
-    if (rootToFeetXZ <= 5.0f)
-        return root;
-
-    //Otherwise root is probably stale/broken
-    return feetMid;
+    return isGoodVec(cachePlayer.location) ? cachePlayer.location : glm::vec3(0.0f);
 }
 
 void Players::tryFindBTR()
@@ -1638,32 +1705,7 @@ void Players::updateEntity()
     if (!mem.vHandle)
         return;
 
-    std::vector<PlayerCache>& cache = players.getCache();
-
-    if (cache.empty())
-        return;
-
-    // Safer memory helpers
-    auto TryReadValue = [&](uint64_t address, auto& out) -> bool
-        {
-            using T = std::decay_t<decltype(out)>;
-
-            out = {};
-
-            if (!Utils::valid_pointer(address))
-                return false;
-
-            try
-            {
-                return mem.Read(address, &out, sizeof(T));
-            }
-            catch (...)
-            {
-                return false;
-            }
-        };
-
-    auto AddSafeScatter = [&](auto handle, uint64_t address, void* out, size_t size) -> bool
+    auto AddSafeScatter = [](auto handle, uint64_t address, void* out, size_t size) -> bool
         {
             if (!handle)
                 return false;
@@ -1685,7 +1727,7 @@ void Players::updateEntity()
             }
         };
 
-    auto ExecuteAndClose = [&](auto& handle, const char* name)
+    auto ExecuteAndClose = [](auto& handle, const char* name)
         {
             if (!handle)
                 return;
@@ -1710,6 +1752,114 @@ void Players::updateEntity()
 
             handle = {};
         };
+
+    auto handleRotation = mem.CreateScatterHandle();
+    auto handleCorpse = mem.CreateScatterHandle();
+    auto handleHealth = mem.CreateScatterHandle();
+    auto handleHands = mem.CreateScatterHandle();
+    auto handleIsAiming = mem.CreateScatterHandle();
+    auto handleBtr = mem.CreateScatterHandle();
+
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+
+        std::vector<PlayerCache>& cache = players.getCache();
+
+        if (cache.empty())
+        {
+            ExecuteAndClose(handleBtr, "BTR");
+            ExecuteAndClose(handleRotation, "Rotation");
+            ExecuteAndClose(handleCorpse, "Corpse");
+            ExecuteAndClose(handleHealth, "Health");
+            ExecuteAndClose(handleHands, "Hands");
+            ExecuteAndClose(handleIsAiming, "IsAiming");
+            return;
+        }
+
+        for (auto& cachePlayer : cache)
+        {
+            if (cachePlayer.isBTR)
+            {
+                if (Utils::valid_pointer(cachePlayer.btrView))
+                {
+                    AddSafeScatter(
+                        handleBtr,
+                        cachePlayer.btrView + sdk::BTRView::previousPosition,
+                        &cachePlayer.location,
+                        sizeof(glm::vec3));
+                }
+
+                continue;
+            }
+
+            if (cachePlayer.isDead || cachePlayer.hasExfiled)
+                continue;
+
+            if (!Utils::valid_pointer(cachePlayer.instance))
+                continue;
+
+            cachePlayer.P_CorpseClass = 0;
+
+            if (cachePlayer.isLocal)
+            {
+                mainGame.localGroupId = cachePlayer.groupId;
+                mainGame.localPlayerHands = cachePlayer.P_HandsController;
+                mainGame.localplayerProfile = cachePlayer.P_Profile;
+                mainGame.localPlayerPWA = cachePlayer.P_PWA;
+            }
+
+            const bool isOfflinePlayer =
+                cachePlayer.className == "LocalPlayer" ||
+                cachePlayer.className == "ClientPlayer";
+
+            AddSafeScatter(
+                handleRotation,
+                cachePlayer.P_RotationAddress,
+                &cachePlayer.rotationRAW,
+                sizeof(glm::vec2));
+
+            AddSafeScatter(
+                handleCorpse,
+                cachePlayer.P_CorpseAddr,
+                &cachePlayer.P_CorpseClass,
+                sizeof(uint64_t));
+
+            AddSafeScatter(
+                handleHands,
+                cachePlayer.P_HandsControllerAddr,
+                &cachePlayer.P_HandsController,
+                sizeof(uint64_t));
+
+            if (isOfflinePlayer)
+            {
+                cachePlayer.isAiming = false;
+
+                if (Utils::valid_pointer(cachePlayer.P_PWA))
+                {
+                    AddSafeScatter(
+                        handleIsAiming,
+                        cachePlayer.P_PWA + sdk::ProceduralWeaponAnimation::_isAiming,
+                        &cachePlayer.isAiming,
+                        sizeof(bool));
+                }
+            }
+            else if (Utils::valid_pointer(cachePlayer.P_ObservedHealthController))
+            {
+                AddSafeScatter(
+                    handleHealth,
+                    cachePlayer.P_ObservedHealthController + sdk::ObservedHealthController::HealthStatus,
+                    &cachePlayer.healthETAG,
+                    sizeof(ETagStatus));
+            }
+        }
+    }
+
+    ExecuteAndClose(handleBtr, "BTR");
+    ExecuteAndClose(handleRotation, "Rotation");
+    ExecuteAndClose(handleCorpse, "Corpse");
+    ExecuteAndClose(handleHealth, "Health");
+    ExecuteAndClose(handleHands, "Hands");
+    ExecuteAndClose(handleIsAiming, "IsAiming");
 
     auto ApplyPlayerColour = [&](PlayerCache& cachePlayer)
         {
@@ -1760,263 +1910,165 @@ void Players::updateEntity()
             }
         };
 
-    // Create scatter handles
-    auto handleRotation = mem.CreateScatterHandle();
-    auto handleCorpse = mem.CreateScatterHandle();
-    auto handleHealth = mem.CreateScatterHandle();
-    auto handleHands = mem.CreateScatterHandle();
-    auto handleIsAiming = mem.CreateScatterHandle();
-
-    //queue memory reads
-    for (auto& cachePlayer : cache)
     {
-        if (cachePlayer.isBTR)
-        {
-            if (Utils::valid_pointer(cachePlayer.btrView))
-            {
-                glm::vec3 btrPos{};
+        std::lock_guard<std::mutex> lock(playerMutex);
 
-                if (TryReadValue(cachePlayer.btrView + sdk::BTRView::previousPosition, btrPos))
+        std::vector<PlayerCache>& cache = players.getCache();
+
+        if (cache.empty())
+            return;
+
+        for (auto& cachePlayer : cache)
+        {
+            // BTR only
+            if (cachePlayer.isBTR)
+            {
+                cachePlayer.colour = coloursGlobals::aiBTR;
+                cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+                continue;
+            }
+
+            // Already dead / exfiled
+            if (cachePlayer.isDead || cachePlayer.hasExfiled)
+            {
+                cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+                ApplyPlayerColour(cachePlayer);
+                continue;
+            }
+
+            // Corpse check early
+            if (Utils::valid_pointer(cachePlayer.P_CorpseClass))
+            {
+                cachePlayer.isDead = true;
+                cachePlayer.instance = 0x0;
+
+                cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+                ApplyPlayerColour(cachePlayer);
+                continue;
+            }
+
+            if (!Utils::valid_pointer(cachePlayer.instance))
+                continue;
+
+            // Position (keep last good location when bones are briefly stale)
+            {
+                const glm::vec3 newLocation = GetBestPlayerBasePosition(cachePlayer);
+                if (newLocation.x != 0.0f || newLocation.y != 0.0f || newLocation.z != 0.0f)
+                    cachePlayer.location = newLocation;
+            }
+
+            if (cachePlayer.isLocal)
+                mainGame.localLocation = cachePlayer.location;
+
+            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
+
+            // Held item
+            try
+            {
+                if (Utils::valid_pointer(cachePlayer.P_HandsController))
                 {
-                    cachePlayer.location = btrPos;
+                    cachePlayer.observedHandsInfo.update(cachePlayer);
+                }
+                else
+                {
+                    cachePlayer.itemInHand.clear();
                 }
             }
-
-            continue;
-        }
-
-        if (cachePlayer.isDead || cachePlayer.hasExfiled)
-            continue;
-
-        if (!Utils::valid_pointer(cachePlayer.instance))
-            continue;
-
-        cachePlayer.P_CorpseClass = 0;
-
-        if (cachePlayer.isLocal)
-        {
-            mainGame.localGroupId = cachePlayer.groupId;
-            mainGame.localPlayerHands = cachePlayer.P_HandsController;
-            mainGame.localplayerProfile = cachePlayer.P_Profile;
-            mainGame.localPlayerPWA = cachePlayer.P_PWA;
-        }
-
-        const bool isOfflinePlayer =
-            cachePlayer.className == "LocalPlayer" ||
-            cachePlayer.className == "ClientPlayer";
-
-        AddSafeScatter(
-            handleRotation,
-            cachePlayer.P_RotationAddress,
-            &cachePlayer.rotationRAW,
-            sizeof(glm::vec2)
-        );
-
-        AddSafeScatter(
-            handleCorpse,
-            cachePlayer.P_CorpseAddr,
-            &cachePlayer.P_CorpseClass,
-            sizeof(uint64_t)
-        );
-
-        AddSafeScatter(
-            handleHands,
-            cachePlayer.P_HandsControllerAddr,
-            &cachePlayer.P_HandsController,
-            sizeof(uint64_t)
-        );
-
-        if (isOfflinePlayer)
-        {
-            cachePlayer.isAiming = false;
-
-            if (Utils::valid_pointer(cachePlayer.P_PWA))
-            {
-                AddSafeScatter(
-                    handleIsAiming,
-                    cachePlayer.P_PWA + sdk::ProceduralWeaponAnimation::_isAiming,
-                    &cachePlayer.isAiming,
-                    sizeof(bool)
-                );
-            }
-        }
-        else
-        {
-            if (Utils::valid_pointer(cachePlayer.P_ObservedHealthController))
-            {
-                AddSafeScatter(
-                    handleHealth,
-                    cachePlayer.P_ObservedHealthController + sdk::ObservedHealthController::HealthStatus,
-                    &cachePlayer.healthETAG,
-                    sizeof(ETagStatus)
-                );
-            }
-        }
-    }
-
-    // Execute scatters
-    ExecuteAndClose(handleRotation, "Rotation");
-    ExecuteAndClose(handleCorpse, "Corpse");
-    ExecuteAndClose(handleHealth, "Health");
-    ExecuteAndClose(handleHands, "Hands");
-    ExecuteAndClose(handleIsAiming, "IsAiming");
-
-    //process updated values
-    for (auto& cachePlayer : cache)
-    {
-        // BTR only
-        if (cachePlayer.isBTR)
-        {
-            cachePlayer.colour = coloursGlobals::aiBTR;
-            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
-            continue;
-        }
-
-        // Already dead / exfiled
-        if (cachePlayer.isDead || cachePlayer.hasExfiled)
-        {
-            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
-            ApplyPlayerColour(cachePlayer);
-            continue;
-        }
-
-        // Corpse check early
-        if (Utils::valid_pointer(cachePlayer.P_CorpseClass))
-        {
-            cachePlayer.isDead = true;
-            cachePlayer.instance = 0x0;
-
-            cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
-            ApplyPlayerColour(cachePlayer);
-            continue;
-        }
-
-        if (!Utils::valid_pointer(cachePlayer.instance))
-            continue;
-
-        // Position
-        try
-        {
-            cachePlayer.location = GetBestPlayerBasePosition(cachePlayer);
-        }
-        catch (...)
-        {
-            LOGS.logError("[PLAYERS][UPDATE] GetBestPlayerBasePosition failed");
-        }
-
-        if (cachePlayer.isLocal)
-            mainGame.localLocation = cachePlayer.location;
-
-        cachePlayer.distance = getDistance(cachePlayer.location, mainGame.localLocation);
-
-        // Held item
-        try
-        {
-            
-
-            if (Utils::valid_pointer(cachePlayer.P_HandsController))
-            {
-                cachePlayer.observedHandsInfo.update(cachePlayer);
-            }
-            else
+            catch (...)
             {
                 cachePlayer.itemInHand.clear();
+                LOGS.logError("[PLAYERS][UPDATE] heldItemName failed");
             }
-        }
-        catch (...)
-        {
-            cachePlayer.itemInHand.clear();
-            LOGS.logError("[PLAYERS][UPDATE] heldItemName failed");
-        }
 
-        // Rotation
-        try
-        {
-            cachePlayer.rotation =
-                Utils::Player::Rotation::correctRotation2d(cachePlayer.rotationRAW);
-        }
-        catch (...)
-        {
-            cachePlayer.rotation = {};
-            LOGS.logError("[PLAYERS][UPDATE] Rotation correction failed");
-        }
-
-        // Dogtag cache / profile data
-        if (cachePlayer.isPlayer && !cachePlayer.profileId.empty())
-        {
-            auto now = std::chrono::steady_clock::now();
-
-            if (!cachePlayer.foundDogTagCache &&
-                cachePlayer.name.contains("PMC") &&
-                now - cachePlayer.lastDogTagLookup > std::chrono::seconds(5))
+            // Rotation
+            try
             {
-                cachePlayer.lastDogTagLookup = now;
+                cachePlayer.rotation =
+                    Utils::Player::Rotation::correctRotation2d(cachePlayer.rotationRAW);
+            }
+            catch (...)
+            {
+                cachePlayer.rotation = {};
+                LOGS.logError("[PLAYERS][UPDATE] Rotation correction failed");
+            }
 
-                try
+            // Dogtag cache / profile data
+            if (cachePlayer.isPlayer && !cachePlayer.profileId.empty())
+            {
+                auto now = std::chrono::steady_clock::now();
+
+                if (!cachePlayer.foundDogTagCache &&
+                    cachePlayer.name.contains("PMC") &&
+                    now - cachePlayer.lastDogTagLookup > std::chrono::seconds(5))
                 {
-                    auto result = g_dogTagCache.GetByProfileId(cachePlayer.profileId);
+                    cachePlayer.lastDogTagLookup = now;
 
-                    if (result.has_value())
+                    try
                     {
-                        if (!result->nickname.empty())
-                            cachePlayer.name = result->nickname;
+                        auto result = g_dogTagCache.GetByProfileId(cachePlayer.profileId);
 
-                        cachePlayer.accountId = result->accountId;
-                        cachePlayer.foundDogTagCache = true;
+                        if (result.has_value())
+                        {
+                            if (!result->nickname.empty())
+                                cachePlayer.name = result->nickname;
+
+                            cachePlayer.accountId = result->accountId;
+                            cachePlayer.foundDogTagCache = true;
+                        }
+                    }
+                    catch (...)
+                    {
+                        LOGS.logError("[PLAYERS][UPDATE] Dogtag cache lookup failed");
                     }
                 }
-                catch (...)
+
+                if (!cachePlayer.hasProfileData &&
+                    !cachePlayer.accountId.empty() &&
+                    radarGlobals::getPlayerStats == TRUE &&
+                    !cachePlayer.triedprofileonce)
                 {
-                    LOGS.logError("[PLAYERS][UPDATE] Dogtag cache lookup failed");
-                }
-            }
+                    cachePlayer.triedprofileonce = true;
 
-            if (!cachePlayer.hasProfileData &&
-                !cachePlayer.accountId.empty() &&
-                radarGlobals::getPlayerStats == TRUE &&
-                !cachePlayer.triedprofileonce)
-            {
-                cachePlayer.triedprofileonce = true;
-
-                try
-                {
-                    auto profile =
-                        TarkovDevProfileClient::GetProfileForAccountId(cachePlayer.accountId);
-
-                    if (profile)
+                    try
                     {
-                        cachePlayer.profileStats = *profile;
-                        cachePlayer.hasProfileData = true;
+                        auto profile =
+                            TarkovDevProfileClient::GetProfileForAccountId(cachePlayer.accountId);
 
-                        cachePlayer.DT_lvl = ConvertXpToLevel(profile->experience);
-                        cachePlayer.kd = CalculateKD(profile->Kills, profile->deathsPMC);
-                        cachePlayer.pkd = CalculatePKD(profile->killedPMC, profile->deathsPMC);
-                        cachePlayer.hours = profile->hoursPlayed;
+                        if (profile)
+                        {
+                            cachePlayer.profileStats = *profile;
+                            cachePlayer.hasProfileData = true;
+
+                            cachePlayer.DT_lvl = ConvertXpToLevel(profile->experience);
+                            cachePlayer.kd = CalculateKD(profile->Kills, profile->deathsPMC);
+                            cachePlayer.pkd = CalculatePKD(profile->killedPMC, profile->deathsPMC);
+                            cachePlayer.hours = profile->hoursPlayed;
+                        }
+                    }
+                    catch (...)
+                    {
+                        LOGS.logError("[PLAYERS][UPDATE] Tarkov profile lookup failed");
                     }
                 }
-                catch (...)
-                {
-                    LOGS.logError("[PLAYERS][UPDATE] Tarkov profile lookup failed");
-                }
             }
-        }
 
-        // Colours
-        ApplyPlayerColour(cachePlayer);
+            // Colours
+            ApplyPlayerColour(cachePlayer);
 
-        // Local player final update
-        if (cachePlayer.isLocal &&
-            Utils::valid_pointer(cachePlayer.instance) &&
-            mainGame.localPlayerPtr == cachePlayer.instance)
-        {
-            mainGame.localLocation = cachePlayer.location;
-            mainGame.localRotation = cachePlayer.rotation;
-            mainGame.localGroupId = cachePlayer.groupId;
-            mainGame.localPlayerHands = cachePlayer.P_HandsController;
-            mainGame.localIsScoped = cachePlayer.isAiming;
-            mainGame.localPlayerPWA = cachePlayer.P_PWA;
+            // Local player final update
+            if (cachePlayer.isLocal &&
+                Utils::valid_pointer(cachePlayer.instance) &&
+                mainGame.localPlayerPtr == cachePlayer.instance)
+            {
+                mainGame.localLocation = cachePlayer.location;
+                mainGame.localRotation = cachePlayer.rotation;
+                mainGame.localGroupId = cachePlayer.groupId;
+                mainGame.localPlayerHands = cachePlayer.P_HandsController;
+                mainGame.localIsScoped = cachePlayer.isAiming;
+                mainGame.localPlayerPWA = cachePlayer.P_PWA;
 
-            cachePlayer.colour = coloursGlobals::playerLocal;
+                cachePlayer.colour = coloursGlobals::playerLocal;
+            }
         }
     }
 }
@@ -2440,6 +2492,9 @@ void Players::playerEquipment()
 
                 initJobs.push_back(job);
             }
+
+            if (initJobs.size() > 2)
+                initJobs.resize(2);
         }
 
         // ------------------------------------------------------------
@@ -2648,6 +2703,9 @@ void Players::playerEquipment()
 
                 scanJobs.push_back(std::move(job));
             }
+
+            if (scanJobs.size() > 1)
+                scanJobs.resize(1);
         }
 
         if (scanJobs.empty())

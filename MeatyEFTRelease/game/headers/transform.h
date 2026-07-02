@@ -43,6 +43,8 @@ public:
     glm::vec3 TransformPoint(glm::vec3 localPoint, std::span<TrsX> vertices = {});
     glm::vec3 InverseTransformPoint(glm::vec3 worldPoint, std::span<TrsX> vertices = {});
 
+    bool IsValid() const { return _valid; }
+
 public:
     uint64_t TransformInternal = 0;
     uint64_t VerticesAddr = 0;
