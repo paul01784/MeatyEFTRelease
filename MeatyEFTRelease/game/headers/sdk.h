@@ -74,15 +74,15 @@ namespace sdk
 	namespace Player
 	{
 		constexpr uint64_t MovementContext = 0x60; // EFT.MovementContext
-		constexpr uint64_t _playerBody = 0x190; // EFT.PlayerBody
-		constexpr uint64_t Physical = 0x9C8; // -.\uE399 <Physical> Physical
-		constexpr uint64_t Corpse = 0x718; // EFT.Interactive.Corpse
-		constexpr uint64_t Location = 0x918; // String
-		constexpr uint64_t Profile = 0x9B0; // EFT.Profile
-		constexpr uint64_t ProceduralWeaponAnimation = 0x3B0; // EFT.Animations.ProceduralWeaponAnimation
-		constexpr uint64_t _inventoryController = 0xA28; // EFT.PlayerInventoryController update
-		constexpr uint64_t _handsController = 0xA30; // EFT.PlayerHands update
-		constexpr uint64_t _playerLookRaycastTransform = 0xAC0; // UnityEngine.Transform
+		constexpr uint64_t _playerBody = 0x198; // EFT.PlayerBody
+		constexpr uint64_t Physical = 0x9D0; // -.\uE399 <Physical> Physical
+		constexpr uint64_t Corpse = 0x720; // EFT.Interactive.Corpse
+		constexpr uint64_t Location = 0x920; // String
+		constexpr uint64_t Profile = 0x9B8; // EFT.Profile
+		constexpr uint64_t ProceduralWeaponAnimation = 0x3B8; // EFT.Animations.ProceduralWeaponAnimation
+		constexpr uint64_t _inventoryController = 0xA30; // EFT.PlayerInventoryController update
+		constexpr uint64_t _handsController = 0xA38; // EFT.PlayerHands update
+		constexpr uint64_t _playerLookRaycastTransform = 0xAC8; // UnityEngine.Transform
 	}
 
 	namespace ObservedPlayerView
