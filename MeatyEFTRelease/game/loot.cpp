@@ -338,10 +338,110 @@ bool loot::tryUpdateLootPosition(
     LootList& item,
     bool markAsFailedOnError)
 {
-    item.lastPositionUpdate = std::chrono::steady_clock::now();
+    item.lastPositionUpdate =
+        std::chrono::steady_clock::now();
+
+    auto LogTransformDebug = [&](const char* stage,
+        const char* reason,
+        const glm::vec3* position = nullptr)
+        {
+            const uint64_t transformPtr =
+                item.m_pointerToTransform1;
+
+            int transformIndex = -999999;
+            int parentIndex = -999999;
+
+            uint64_t hierarchyPtr = 0;
+            uint64_t verticesPtr = 0;
+            uint64_t indicesPtr = 0;
+
+            try
+            {
+                if (Utils::valid_pointer(transformPtr))
+                {
+                    transformIndex = mem.Read<int>(
+                        transformPtr +
+                        UnityOffsets::TransformAccess_IndexOffset
+                    );
+
+                    hierarchyPtr = mem.Read<uint64_t>(
+                        transformPtr +
+                        UnityOffsets::TransformAccess_HierarchyOffset
+                    );
+
+                    if (Utils::valid_pointer(hierarchyPtr))
+                    {
+                        verticesPtr = mem.Read<uint64_t>(
+                            hierarchyPtr +
+                            UnityOffsets::Hierarchy_VerticesOffset
+                        );
+
+                        indicesPtr = mem.Read<uint64_t>(
+                            hierarchyPtr +
+                            UnityOffsets::Hierarchy_IndicesOffset
+                        );
+
+                        if (Utils::valid_pointer(indicesPtr) &&
+                            transformIndex >= 0 &&
+                            transformIndex < 1'000'000)
+                        {
+                            parentIndex = mem.Read<int>(
+                                indicesPtr +
+                                static_cast<uint64_t>(
+                                    transformIndex
+                                    ) * sizeof(int)
+                            );
+                        }
+                    }
+                }
+            }
+            catch (...)
+            {
+            }
+
+            std::ostringstream ss;
+
+            ss << "[LOOT][TRANSFORM] "
+                << stage
+                << " | "
+                << reason
+                << " | instance=0x"
+                << std::hex << item.instance
+                << " | transform=0x"
+                << transformPtr
+                << " | hierarchy=0x"
+                << hierarchyPtr
+                << " | vertices=0x"
+                << verticesPtr
+                << " | indices=0x"
+                << indicesPtr
+                << std::dec
+                << " | index="
+                << transformIndex
+                << " | parent="
+                << parentIndex
+                << " | name='"
+                << item.gameObjectName
+                << "'";
+
+            if (position)
+            {
+                ss << " | position=("
+                    << position->x << ", "
+                    << position->y << ", "
+                    << position->z << ")";
+            }
+
+            LOGS.logError(ss.str());
+        };
 
     if (!Utils::valid_pointer(item.m_pointerToTransform1))
     {
+        LogTransformDebug(
+            "PreCheck",
+            "Invalid transform pointer"
+        );
+
         if (markAsFailedOnError)
             markFailed(item, "Invalid transform pointer");
 
@@ -350,21 +450,60 @@ bool loot::tryUpdateLootPosition(
 
     try
     {
-        UnityTransform transform(item.m_pointerToTransform1, false);
+        UnityTransform transform(
+            item.m_pointerToTransform1
+        );
+
         if (!transform.IsValid())
         {
+            LogTransformDebug(
+                "Construct",
+                "Invalid transform hierarchy"
+            );
+
             if (markAsFailedOnError)
                 markFailed(item, "Invalid transform hierarchy");
 
             return false;
         }
 
-        const glm::vec3 newPosition = transform.UpdatePosition();
+        const glm::vec3 newPosition =
+            transform.UpdatePosition();
 
-        if (!transform.IsValid() || !isValidLootPosition(newPosition))
+        if (!transform.IsValid())
         {
+            LogTransformDebug(
+                "UpdatePosition",
+                "Transform became invalid while resolving parent chain",
+                &newPosition
+            );
+
             if (markAsFailedOnError)
-                markFailed(item, "Transform returned an invalid position");
+            {
+                markFailed(
+                    item,
+                    "Transform invalid during position update"
+                );
+            }
+
+            return false;
+        }
+
+        if (!isValidLootPosition(newPosition))
+        {
+            LogTransformDebug(
+                "UpdatePosition",
+                "Transform returned invalid world position",
+                &newPosition
+            );
+
+            if (markAsFailedOnError)
+            {
+                markFailed(
+                    item,
+                    "Transform returned invalid position"
+                );
+            }
 
             return false;
         }
@@ -376,24 +515,27 @@ bool loot::tryUpdateLootPosition(
     }
     catch (const std::exception& e)
     {
-        LOGS.logError(
-            "[LOOT] Transform failed for instance 0x" +
-            std::to_string(item.instance) +
-            " (" + item.gameObjectName + "): " +
+        LogTransformDebug(
+            "Exception",
             e.what()
         );
 
         if (markAsFailedOnError)
-            markFailed(item, "Transform exception: " + std::string(e.what()));
+        {
+            markFailed(
+                item,
+                "Transform exception: " +
+                std::string(e.what())
+            );
+        }
 
         return false;
     }
     catch (...)
     {
-        LOGS.logError(
-            "[LOOT] Unknown transform failure for instance 0x" +
-            std::to_string(item.instance) +
-            " (" + item.gameObjectName + ")"
+        LogTransformDebug(
+            "Exception",
+            "Unknown transform exception"
         );
 
         if (markAsFailedOnError)

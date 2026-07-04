@@ -30,7 +30,6 @@ public:
 
     const glm::vec3& Position() const;
 
-    int Count() const;
 
     glm::vec3& UpdatePosition(std::span<TrsX> vertices = {});
     glm::quat  GetRotation(std::span<TrsX> vertices = {});
@@ -45,13 +44,15 @@ public:
 
     bool IsValid() const { return _valid; }
 
+    bool BuildParentChain();
+    bool ReadTransformAt(int transformIndex, TrsX& out) const;
+
+
 public:
     uint64_t TransformInternal = 0;
     uint64_t VerticesAddr = 0;
 
 private:
-    std::vector<int>  ReadIndices();
-    std::vector<TrsX> ReadVertices();
 
     static bool IsAbnormal(const glm::vec3& v);
     static bool IsAbnormal(const glm::quat& q);
@@ -64,7 +65,8 @@ private:
     uint64_t _hierarchyAddr = 0;
     uint64_t _indicesAddr = 0;
 
-    std::vector<int> _indices;
+    std::vector<int> _parentChain;
+
     glm::vec3 _position{ 0.0f };
 };
 

@@ -3059,9 +3059,1081 @@ static void renderDebugWindow()
                     }
                     if (ImGui::BeginTabItem("player"))
                     {
-                        const std::vector<PlayerCache>& cache = players.getCacheSnapshot();
-                        ImGui::Text("Player Cache Count: %zu", cache.size());
-                        
+                        const std::vector<PlayerCache> cache =
+                            players.getCacheSnapshot();
+
+                        static ImGuiTextFilter playerFilter;
+                        static bool showDead = true;
+                        static bool showAi = true;
+                        static bool showPlayers = true;
+                        static bool showBtr = true;
+                        static bool onlyMissingBones = false;
+                        static uint64_t selectedInstance = 0;
+
+                        auto IsValidPtr = [](uint64_t value) -> bool
+                            {
+                                return Utils::valid_pointer(value);
+                            };
+
+                        auto GetPlayerType = [](const PlayerCache& player) -> const char*
+                            {
+                                if (player.isBTR)
+                                    return "BTR";
+
+                                if (player.isLocal)
+                                    return "LOCAL";
+
+                                if (player.isBoss)
+                                    return "BOSS";
+
+                                if (player.isPlayerScav)
+                                    return "P-SCAV";
+
+                                if (player.isAi)
+                                    return "AI";
+
+                                if (player.isPlayer)
+                                    return "PMC";
+
+                                return "UNKNOWN";
+                            };
+
+                        auto GetStateText = [](const PlayerCache& player) -> const char*
+                            {
+                                if (!Utils::valid_pointer(player.instance))
+                                    return "INVALID";
+
+                                if (player.hasExfiled)
+                                    return "EXFIL";
+
+                                if (player.isDead)
+                                    return "DEAD";
+
+                                return "LIVE";
+                            };
+
+                        auto GetStateColour = [](const PlayerCache& player) -> ImVec4
+                            {
+                                if (!Utils::valid_pointer(player.instance))
+                                    return ImVec4(0.85f, 0.25f, 0.25f, 1.0f);
+
+                                if (player.hasExfiled)
+                                    return ImVec4(0.85f, 0.65f, 0.20f, 1.0f);
+
+                                if (player.isDead)
+                                    return ImVec4(0.75f, 0.30f, 0.30f, 1.0f);
+
+                                if (player.isLocal)
+                                    return ImVec4(0.25f, 0.75f, 1.0f, 1.0f);
+
+                                if (player.isBTR)
+                                    return ImVec4(1.0f, 0.55f, 0.15f, 1.0f);
+
+                                return ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+                            };
+
+                        auto BonePtrAt = [&](const PlayerCache& player,
+                            boneListIndexes index) -> uint64_t
+                            {
+                                const size_t slot =
+                                    static_cast<size_t>(index);
+
+                                if (slot >= player.bonePtrs.size())
+                                    return 0;
+
+                                return player.bonePtrs[slot];
+                            };
+
+                        auto BonePositionAt = [&](const PlayerCache& player,
+                            boneListIndexes index) -> glm::vec3
+                            {
+                                const size_t slot =
+                                    static_cast<size_t>(index);
+
+                                if (slot >= player.bonePositions.size())
+                                    return glm::vec3(0.0f);
+
+                                return player.bonePositions[slot];
+                            };
+
+                        auto CountValidBonePtrs = [&](const PlayerCache& player) -> size_t
+                            {
+                                size_t count = 0;
+
+                                for (const uint64_t ptr : player.bonePtrs)
+                                {
+                                    if (IsValidPtr(ptr))
+                                        ++count;
+                                }
+
+                                return count;
+                            };
+
+                        auto HasMinimalBones = [&](const PlayerCache& player) -> bool
+                            {
+                                return IsValidPtr(
+                                    BonePtrAt(player, boneListIndexes::Base)
+                                ) &&
+                                    IsValidPtr(
+                                        BonePtrAt(player, boneListIndexes::LFoot)
+                                    ) &&
+                                    IsValidPtr(
+                                        BonePtrAt(player, boneListIndexes::RFoot)
+                                    );
+                            };
+
+                        auto DrawPointerLine = [&](const char* label,
+                            uint64_t pointer)
+                            {
+                                const bool valid = IsValidPtr(pointer);
+
+                                ImGui::TextUnformatted(label);
+                                ImGui::SameLine(210.0f);
+
+                                ImGui::TextColored(
+                                    valid
+                                    ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                                    : ImVec4(0.95f, 0.30f, 0.30f, 1.0f),
+                                    "0x%016llX",
+                                    static_cast<unsigned long long>(pointer)
+                                );
+                            };
+
+                        auto DrawPlayerTooltip = [&](const PlayerCache& player)
+                            {
+                                ImGui::BeginTooltip();
+
+                                ImGui::Text(
+                                    "%s | %s",
+                                    player.name.empty()
+                                    ? "Unnamed"
+                                    : player.name.c_str(),
+                                    GetPlayerType(player)
+                                );
+
+                                ImGui::Separator();
+
+                                ImGui::Text(
+                                    "Instance: 0x%016llX",
+                                    static_cast<unsigned long long>(
+                                        player.instance
+                                        )
+                                );
+
+                                ImGui::Text(
+                                    "Distance: %dm",
+                                    player.distance
+                                );
+
+                                ImGui::Text(
+                                    "Location: %.2f, %.2f, %.2f",
+                                    player.location.x,
+                                    player.location.y,
+                                    player.location.z
+                                );
+
+                                ImGui::Text(
+                                    "Rotation Raw: %.2f, %.2f",
+                                    player.rotationRAW.x,
+                                    player.rotationRAW.y
+                                );
+
+                                ImGui::Text(
+                                    "Rotation Fixed: %.2f, %.2f",
+                                    player.rotation.x,
+                                    player.rotation.y
+                                );
+
+                                ImGui::Separator();
+                                ImGui::TextUnformatted("Pointers");
+
+                                DrawPointerLine(
+                                    "Bone Matrix",
+                                    player.playerBoneMatrixPtr
+                                );
+
+                                DrawPointerLine(
+                                    "Observed Controller",
+                                    player.P_ObservedPlayerController
+                                );
+
+                                DrawPointerLine(
+                                    "Observed Health",
+                                    player.P_ObservedHealthController
+                                );
+
+                                DrawPointerLine(
+                                    "Movement Context",
+                                    player.P_MovementContext
+                                );
+
+                                DrawPointerLine(
+                                    "Rotation Address",
+                                    player.P_RotationAddress
+                                );
+
+                                DrawPointerLine(
+                                    "Inventory Controller Addr",
+                                    player.P_InventoryControllerAddr
+                                );
+
+                                DrawPointerLine(
+                                    "Hands Controller Addr",
+                                    player.P_HandsControllerAddr
+                                );
+
+                                DrawPointerLine(
+                                    "Hands Controller",
+                                    player.P_HandsController
+                                );
+
+                                DrawPointerLine(
+                                    "Profile",
+                                    player.P_Profile
+                                );
+
+                                DrawPointerLine(
+                                    "PWA",
+                                    player.P_PWA
+                                );
+
+                                DrawPointerLine(
+                                    "Corpse Address",
+                                    player.P_CorpseAddr
+                                );
+
+                                DrawPointerLine(
+                                    "Corpse Class",
+                                    player.P_CorpseClass
+                                );
+
+                                ImGui::Separator();
+                                ImGui::TextUnformatted("Bone Cache");
+
+                                ImGui::Text(
+                                    "Pointers: %zu / %zu",
+                                    CountValidBonePtrs(player),
+                                    player.bonePtrs.size()
+                                );
+
+                                ImGui::Text(
+                                    "Need Resolve: %s",
+                                    player.bonePointersNeedResolve
+                                    ? "YES"
+                                    : "NO"
+                                );
+
+                                ImGui::Text(
+                                    "Minimal Bones: %s",
+                                    HasMinimalBones(player)
+                                    ? "READY"
+                                    : "MISSING"
+                                );
+
+                                DrawPointerLine(
+                                    "Base",
+                                    BonePtrAt(
+                                        player,
+                                        boneListIndexes::Base
+                                    )
+                                );
+
+                                DrawPointerLine(
+                                    "LFoot",
+                                    BonePtrAt(
+                                        player,
+                                        boneListIndexes::LFoot
+                                    )
+                                );
+
+                                DrawPointerLine(
+                                    "RFoot",
+                                    BonePtrAt(
+                                        player,
+                                        boneListIndexes::RFoot
+                                    )
+                                );
+
+                                ImGui::EndTooltip();
+                            };
+
+                        size_t localCount = 0;
+                        size_t pmcCount = 0;
+                        size_t aiCount = 0;
+                        size_t bossCount = 0;
+                        size_t scavCount = 0;
+                        size_t deadCount = 0;
+                        size_t btrCount = 0;
+                        size_t missingBonesCount = 0;
+                        size_t equipmentReadyCount = 0;
+
+                        for (const PlayerCache& player : cache)
+                        {
+                            if (player.isLocal)
+                                ++localCount;
+
+                            if (player.isPlayer &&
+                                !player.isPlayerScav &&
+                                !player.isAi)
+                            {
+                                ++pmcCount;
+                            }
+
+                            if (player.isAi)
+                                ++aiCount;
+
+                            if (player.isBoss)
+                                ++bossCount;
+
+                            if (player.isPlayerScav)
+                                ++scavCount;
+
+                            if (player.isDead)
+                                ++deadCount;
+
+                            if (player.isBTR)
+                                ++btrCount;
+
+                            if (!player.isBTR &&
+                                !HasMinimalBones(player))
+                            {
+                                ++missingBonesCount;
+                            }
+
+                            if (player.equipInited)
+                                ++equipmentReadyCount;
+                        }
+
+                        ImGui::Text(
+                            "Cached Players: %zu",
+                            cache.size()
+                        );
+
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("|");
+
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "Local: %zu",
+                            localCount
+                        );
+
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "PMC: %zu",
+                            pmcCount
+                        );
+
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "AI: %zu",
+                            aiCount
+                        );
+
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "Boss: %zu",
+                            bossCount
+                        );
+
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "PScav: %zu",
+                            scavCount
+                        );
+
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "Dead: %zu",
+                            deadCount
+                        );
+
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "BTR: %zu",
+                            btrCount
+                        );
+
+                        ImGui::Separator();
+
+                        playerFilter.Draw("Search", 260.0f);
+
+                        ImGui::SameLine();
+                        ImGui::Checkbox("Show Dead", &showDead);
+
+                        ImGui::SameLine();
+                        ImGui::Checkbox("Show AI", &showAi);
+
+                        ImGui::SameLine();
+                        ImGui::Checkbox("Show PMC/PScav", &showPlayers);
+
+                        ImGui::SameLine();
+                        ImGui::Checkbox("Show BTR", &showBtr);
+
+                        ImGui::SameLine();
+                        ImGui::Checkbox(
+                            "Only Missing Bones",
+                            &onlyMissingBones
+                        );
+
+                        ImGui::TextDisabled(
+                            "Equipment Ready: %zu | Missing Base/LFoot/RFoot: %zu",
+                            equipmentReadyCount,
+                            missingBonesCount
+                        );
+
+                        ImGui::Separator();
+
+                        const ImGuiTableFlags tableFlags =
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_Resizable |
+                            ImGuiTableFlags_Reorderable |
+                            ImGuiTableFlags_Hideable |
+                            ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_SizingStretchProp;
+
+                        if (ImGui::BeginTable(
+                            "##PlayerCacheTable",
+                            10,
+                            tableFlags,
+                            ImVec2(0.0f, 390.0f)))
+                        {
+                            ImGui::TableSetupScrollFreeze(0, 1);
+
+                            ImGui::TableSetupColumn(
+                                "State",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                70.0f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Type",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                62.0f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Name",
+                                ImGuiTableColumnFlags_WidthStretch,
+                                1.40f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Distance",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                70.0f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Position",
+                                ImGuiTableColumnFlags_WidthStretch,
+                                1.20f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Rotation",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                95.0f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Health",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                62.0f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Equipment",
+                                ImGuiTableColumnFlags_WidthStretch,
+                                1.00f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Bones",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                88.0f
+                            );
+
+                            ImGui::TableSetupColumn(
+                                "Group",
+                                ImGuiTableColumnFlags_WidthStretch,
+                                0.90f
+                            );
+
+                            ImGui::TableHeadersRow();
+
+                            ImGuiListClipper clipper;
+                            clipper.Begin(
+                                static_cast<int>(cache.size())
+                            );
+
+                            while (clipper.Step())
+                            {
+                                for (int i = clipper.DisplayStart;
+                                    i < clipper.DisplayEnd;
+                                    ++i)
+                                {
+                                    const PlayerCache& player =
+                                        cache[static_cast<size_t>(i)];
+
+                                    if (!showDead &&
+                                        (player.isDead || player.hasExfiled))
+                                    {
+                                        continue;
+                                    }
+
+                                    if (!showAi &&
+                                        player.isAi &&
+                                        !player.isBTR)
+                                    {
+                                        continue;
+                                    }
+
+                                    if (!showPlayers &&
+                                        (player.isPlayer ||
+                                            player.isPlayerScav ||
+                                            player.isLocal))
+                                    {
+                                        continue;
+                                    }
+
+                                    if (!showBtr && player.isBTR)
+                                        continue;
+
+                                    if (onlyMissingBones &&
+                                        HasMinimalBones(player))
+                                    {
+                                        continue;
+                                    }
+
+                                    std::string searchText;
+
+                                    searchText.reserve(
+                                        player.name.size() +
+                                        player.className.size() +
+                                        player.groupId.size() +
+                                        64
+                                    );
+
+                                    searchText += player.name;
+                                    searchText += " ";
+                                    searchText += player.className;
+                                    searchText += " ";
+                                    searchText += player.groupId;
+                                    searchText += " ";
+                                    searchText += GetPlayerType(player);
+
+                                    if (!playerFilter.PassFilter(
+                                        searchText.c_str()))
+                                    {
+                                        continue;
+                                    }
+
+                                    ImGui::PushID(
+                                        static_cast<int>(
+                                            player.instance & 0x7FFFFFFF
+                                            )
+                                    );
+
+                                    ImGui::TableNextRow(
+                                        ImGuiTableRowFlags_None,
+                                        24.0f
+                                    );
+
+                                    ImGui::TableSetColumnIndex(0);
+
+                                    const bool isSelected =
+                                        selectedInstance ==
+                                        player.instance;
+
+                                    ImGui::PushStyleColor(
+                                        ImGuiCol_Text,
+                                        GetStateColour(player)
+                                    );
+
+                                    if (ImGui::Selectable(
+                                        GetStateText(player),
+                                        isSelected,
+                                        ImGuiSelectableFlags_None,
+                                        ImVec2(0.0f, 0.0f)))
+                                    {
+                                        selectedInstance =
+                                            player.instance;
+                                    }
+
+                                    ImGui::PopStyleColor();
+
+                                    if (ImGui::IsItemHovered(
+                                        ImGuiHoveredFlags_DelayShort))
+                                    {
+                                        DrawPlayerTooltip(player);
+                                    }
+
+                                    ImGui::TableSetColumnIndex(1);
+
+                                    ImGui::TextUnformatted(
+                                        GetPlayerType(player)
+                                    );
+
+                                    ImGui::TableSetColumnIndex(2);
+
+                                    const char* displayName =
+                                        player.name.empty()
+                                        ? "<unnamed>"
+                                        : player.name.c_str();
+
+                                    ImGui::TextUnformatted(displayName);
+
+                                    if (ImGui::IsItemHovered(
+                                        ImGuiHoveredFlags_DelayShort))
+                                    {
+                                        DrawPlayerTooltip(player);
+                                    }
+
+                                    ImGui::TableSetColumnIndex(3);
+
+                                    ImGui::Text(
+                                        "%dm",
+                                        player.distance
+                                    );
+
+                                    ImGui::TableSetColumnIndex(4);
+
+                                    ImGui::Text(
+                                        "%.1f / %.1f / %.1f",
+                                        player.location.x,
+                                        player.location.y,
+                                        player.location.z
+                                    );
+
+                                    ImGui::TableSetColumnIndex(5);
+
+                                    ImGui::Text(
+                                        "%.1f / %.1f",
+                                        player.rotation.x,
+                                        player.rotation.y
+                                    );
+
+                                    ImGui::TableSetColumnIndex(6);
+
+                                    ImGui::Text(
+                                        "%d",
+                                        player.healthETAG
+                                    );
+
+                                    ImGui::TableSetColumnIndex(7);
+
+                                    if (!player.equipInited)
+                                    {
+                                        ImGui::TextColored(
+                                            ImVec4(
+                                                1.0f,
+                                                0.75f,
+                                                0.20f,
+                                                1.0f
+                                            ),
+                                            "INIT"
+                                        );
+                                    }
+                                    else
+                                    {
+                                        ImGui::Text(
+                                            "%zu slots | %d",
+                                            player._slots.size(),
+                                            player.playerValue
+                                        );
+                                    }
+
+                                    ImGui::TableSetColumnIndex(8);
+
+                                    const size_t validBones =
+                                        CountValidBonePtrs(player);
+
+                                    const bool minimalBones =
+                                        HasMinimalBones(player);
+
+                                    ImGui::TextColored(
+                                        minimalBones
+                                        ? ImVec4(
+                                            0.35f,
+                                            0.90f,
+                                            0.45f,
+                                            1.0f
+                                        )
+                                        : ImVec4(
+                                            0.95f,
+                                            0.35f,
+                                            0.35f,
+                                            1.0f
+                                        ),
+                                        "%zu/%zu%s",
+                                        validBones,
+                                        player.bonePtrs.size(),
+                                        player.bonePointersNeedResolve
+                                        ? " *"
+                                        : ""
+                                    );
+
+                                    ImGui::TableSetColumnIndex(9);
+
+                                    if (player.groupId.empty())
+                                    {
+                                        ImGui::TextDisabled("-");
+                                    }
+                                    else
+                                    {
+                                        ImGui::TextUnformatted(
+                                            player.groupId.c_str()
+                                        );
+                                    }
+
+                                    ImGui::PopID();
+                                }
+                            }
+
+                            ImGui::EndTable();
+                        }
+
+                        const PlayerCache* selectedPlayer = nullptr;
+
+                        for (const PlayerCache& player : cache)
+                        {
+                            if (player.instance == selectedInstance)
+                            {
+                                selectedPlayer = &player;
+                                break;
+                            }
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        ImGui::TextUnformatted("Selected Player Inspector");
+
+                        ImGui::BeginChild(
+                            "##PlayerInspector",
+                            ImVec2(0.0f, 260.0f),
+                            true
+                        );
+
+                        if (!selectedPlayer)
+                        {
+                            ImGui::TextDisabled(
+                                "Select a player row to inspect its cached state."
+                            );
+                        }
+                        else
+                        {
+                            const PlayerCache& player =
+                                *selectedPlayer;
+
+                            ImGui::TextColored(
+                                GetStateColour(player),
+                                "%s | %s | %s",
+                                player.name.empty()
+                                ? "<unnamed>"
+                                : player.name.c_str(),
+                                GetPlayerType(player),
+                                GetStateText(player)
+                            );
+
+                            ImGui::Text(
+                                "Class: %s",
+                                player.className.c_str()
+                            );
+
+                            ImGui::Text(
+                                "Instance: 0x%016llX",
+                                static_cast<unsigned long long>(
+                                    player.instance
+                                    )
+                            );
+
+                            ImGui::Separator();
+
+                            if (ImGui::CollapsingHeader(
+                                "Runtime Cache",
+                                ImGuiTreeNodeFlags_DefaultOpen))
+                            {
+                                ImGui::Text(
+                                    "Location: %.3f, %.3f, %.3f",
+                                    player.location.x,
+                                    player.location.y,
+                                    player.location.z
+                                );
+
+                                ImGui::Text(
+                                    "Distance: %dm",
+                                    player.distance
+                                );
+
+                                ImGui::Text(
+                                    "Rotation Raw: %.3f, %.3f",
+                                    player.rotationRAW.x,
+                                    player.rotationRAW.y
+                                );
+
+                                ImGui::Text(
+                                    "Rotation Corrected: %.3f, %.3f",
+                                    player.rotation.x,
+                                    player.rotation.y
+                                );
+
+                                ImGui::Text(
+                                    "Health ETag: %d",
+                                    player.healthETAG
+                                );
+
+                                ImGui::Text(
+                                    "Aiming: %s",
+                                    player.isAiming ? "YES" : "NO"
+                                );
+
+                                ImGui::Text(
+                                    "Dead: %s | Exfil: %s",
+                                    player.isDead ? "YES" : "NO",
+                                    player.hasExfiled ? "YES" : "NO"
+                                );
+                            }
+
+                            if (ImGui::CollapsingHeader(
+                                "Equipment Cache",
+                                ImGuiTreeNodeFlags_DefaultOpen))
+                            {
+                                ImGui::Text(
+                                    "Initialised: %s",
+                                    player.equipInited ? "YES" : "NO"
+                                );
+
+                                ImGui::Text(
+                                    "Slot Count: %zu",
+                                    player._slots.size()
+                                );
+
+                                ImGui::Text(
+                                    "Value: %d",
+                                    player.playerValue
+                                );
+
+                                ImGui::Text(
+                                    "Item In Hand: %s",
+                                    player.itemInHand.empty()
+                                    ? "-"
+                                    : player.itemInHand.c_str()
+                                );
+
+                                ImGui::Text(
+                                    "Hands Controller: 0x%016llX",
+                                    static_cast<unsigned long long>(
+                                        player.P_HandsController
+                                        )
+                                );
+
+                                if (!player._slots.empty() &&
+                                    ImGui::TreeNode("Cached Slots"))
+                                {
+                                    for (const auto& slot : player._slots)
+                                    {
+                                        ImGui::BulletText(
+                                            "%s | %s | %d | %s",
+                                            slot.name.c_str(),
+                                            slot.equipName.empty()
+                                            ? "-"
+                                            : slot.equipName.c_str(),
+                                            slot.price,
+                                            slot.wanted
+                                            ? "WANTED"
+                                            : ""
+                                        );
+                                    }
+
+                                    ImGui::TreePop();
+                                }
+                            }
+
+                            if (ImGui::CollapsingHeader(
+                                "Pointers",
+                                ImGuiTreeNodeFlags_DefaultOpen))
+                            {
+                                DrawPointerLine(
+                                    "Bone Matrix",
+                                    player.playerBoneMatrixPtr
+                                );
+
+                                DrawPointerLine(
+                                    "Observed Controller",
+                                    player.P_ObservedPlayerController
+                                );
+
+                                DrawPointerLine(
+                                    "Observed Health",
+                                    player.P_ObservedHealthController
+                                );
+
+                                DrawPointerLine(
+                                    "Movement Context",
+                                    player.P_MovementContext
+                                );
+
+                                DrawPointerLine(
+                                    "Rotation Address",
+                                    player.P_RotationAddress
+                                );
+
+                                DrawPointerLine(
+                                    "Inventory Controller Address",
+                                    player.P_InventoryControllerAddr
+                                );
+
+                                DrawPointerLine(
+                                    "Hands Controller Address",
+                                    player.P_HandsControllerAddr
+                                );
+
+                                DrawPointerLine(
+                                    "Hands Controller",
+                                    player.P_HandsController
+                                );
+
+                                DrawPointerLine(
+                                    "Profile",
+                                    player.P_Profile
+                                );
+
+                                DrawPointerLine(
+                                    "Profile Info",
+                                    player.P_Info
+                                );
+
+                                DrawPointerLine(
+                                    "Player Body",
+                                    player.P_Body
+                                );
+
+                                DrawPointerLine(
+                                    "PWA",
+                                    player.P_PWA
+                                );
+
+                                DrawPointerLine(
+                                    "Corpse Address",
+                                    player.P_CorpseAddr
+                                );
+
+                                DrawPointerLine(
+                                    "Corpse Class",
+                                    player.P_CorpseClass
+                                );
+                            }
+
+                            if (ImGui::CollapsingHeader(
+                                "Bones",
+                                ImGuiTreeNodeFlags_DefaultOpen))
+                            {
+                                ImGui::Text(
+                                    "Bone Pointers: %zu / %zu",
+                                    CountValidBonePtrs(player),
+                                    player.bonePtrs.size()
+                                );
+
+                                ImGui::Text(
+                                    "Need Pointer Resolve: %s",
+                                    player.bonePointersNeedResolve
+                                    ? "YES"
+                                    : "NO"
+                                );
+
+                                ImGui::Text(
+                                    "Base/LFoot/RFoot Ready: %s",
+                                    HasMinimalBones(player)
+                                    ? "YES"
+                                    : "NO"
+                                );
+
+                                const glm::vec3 base =
+                                    BonePositionAt(
+                                        player,
+                                        boneListIndexes::Base
+                                    );
+
+                                const glm::vec3 lFoot =
+                                    BonePositionAt(
+                                        player,
+                                        boneListIndexes::LFoot
+                                    );
+
+                                const glm::vec3 rFoot =
+                                    BonePositionAt(
+                                        player,
+                                        boneListIndexes::RFoot
+                                    );
+
+                                ImGui::Text(
+                                    "Base:  %.2f, %.2f, %.2f",
+                                    base.x,
+                                    base.y,
+                                    base.z
+                                );
+
+                                ImGui::Text(
+                                    "LFoot: %.2f, %.2f, %.2f",
+                                    lFoot.x,
+                                    lFoot.y,
+                                    lFoot.z
+                                );
+
+                                ImGui::Text(
+                                    "RFoot: %.2f, %.2f, %.2f",
+                                    rFoot.x,
+                                    rFoot.y,
+                                    rFoot.z
+                                );
+
+                                if (ImGui::TreeNode("All Bone Pointers"))
+                                {
+                                    for (size_t i = 0;
+                                        i < player.bonePtrs.size();
+                                        ++i)
+                                    {
+                                        const uint64_t ptr =
+                                            player.bonePtrs[i];
+
+                                        const bool valid =
+                                            IsValidPtr(ptr);
+
+                                        ImGui::TextColored(
+                                            valid
+                                            ? ImVec4(
+                                                0.35f,
+                                                0.90f,
+                                                0.45f,
+                                                1.0f
+                                            )
+                                            : ImVec4(
+                                                0.95f,
+                                                0.30f,
+                                                0.30f,
+                                                1.0f
+                                            ),
+                                            "[%02zu] BoneId %d | 0x%016llX",
+                                            i,
+                                            i < player.boneList.size()
+                                            ? static_cast<int>(
+                                                player.boneList[i]
+                                                )
+                                            : -1,
+                                            static_cast<unsigned long long>(
+                                                ptr
+                                                )
+                                        );
+                                    }
+
+                                    ImGui::TreePop();
+                                }
+                            }
+                        }
+
+                        ImGui::EndChild();
 
                         ImGui::EndTabItem();
                     }

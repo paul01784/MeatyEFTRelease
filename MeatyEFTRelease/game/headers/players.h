@@ -214,15 +214,8 @@ struct PlayerCache {
 
 	std::vector<BoneTransformCacheEntry> boneTransformCache;
 
-	std::chrono::steady_clock::time_point nextBonePtrRefresh{};
-	std::chrono::steady_clock::time_point nextQuickBoneRead{};
-	std::chrono::steady_clock::time_point nextBoneRead{};
-
-	std::chrono::steady_clock::time_point lastQuickBoneUpdate{};
-	std::chrono::steady_clock::time_point lastBoneUpdate{};
-
-	std::chrono::steady_clock::time_point lastWeaponUpdate{};
-	std::chrono::milliseconds weaponUpdateInterval{};
+	std::chrono::steady_clock::time_point lastHandsUpdate{};
+	std::chrono::milliseconds handsUpdateInterval{2000};
 	std::string itemInHand;
 	uint64_t _lastObservedHands;
 
@@ -230,7 +223,7 @@ struct PlayerCache {
 
 
 	std::chrono::steady_clock::time_point lastEquipmentUpdate{};
-	std::chrono::milliseconds equipmentUpdateInterval{};
+	std::chrono::milliseconds equipmentUpdateInterval{5000};
 	bool equipInited;
 	std::vector<slots> _slots;
 	int playerValue;
@@ -276,6 +269,8 @@ struct PlayerCache {
 	std::vector<size_t> idxCap;
 	
 	void UpdateBonePositions();
+
+	bool bonePointersNeedResolve;
 
 	glm::vec3 GetTransformPosition(int boneIndex);
 
@@ -325,8 +320,8 @@ struct PlayerCache {
 		btrView(0),
 		isDead(false),
 		hasExfiled(false),
-		weaponUpdateInterval{ 600 },
-		equipmentUpdateInterval{ 2000 },
+		handsUpdateInterval{ 2000 },
+		equipmentUpdateInterval{ 5000 },
 		P_Profile(0),
 		P_Info(0),
 		P_PWA(0),
@@ -338,7 +333,8 @@ struct PlayerCache {
 		P_ObservedPlayerController(0),
 		P_ObservedHealthController(0),
 		P_MovementContext(0),
-		P_RotationAddress(0)
+		P_RotationAddress(0),
+		bonePointersNeedResolve(true)
 		{
 	}
 
@@ -364,7 +360,7 @@ public:
 
 	static bool groupIDSet;
 
-	static bool getBonePtrs(PlayerCache& players);
+	bool getBonePtrs(PlayerCache& player, bool forceResolve = false);
 	
 
 private:

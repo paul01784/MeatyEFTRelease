@@ -7,10 +7,13 @@
 #include <unordered_map>
 #include "../memory/Memory.h"
 #include "headers/unitysdk.h"
+#include "headers/utils.h"
+#include <unordered_set>
 
 namespace {
 
-constexpr int kMaxHierarchyCount = 512;
+constexpr int kMaxParentDepth = 512;
+constexpr int kMaxTransformIndex = 1'000'000;
 
 bool ValidateIndices(const std::vector<int>& indices, int count)
 {
@@ -54,51 +57,59 @@ void LogTransformIssueThrottled(const char* key, const std::string& message)
 
 } // namespace
 
-UnityTransform::UnityTransform(uint64_t transformInternal, bool useCache)
-    : TransformInternal(transformInternal), _useCache(useCache)
+UnityTransform::UnityTransform(
+    uint64_t transformInternal,
+    bool useCache)
+    : TransformInternal(transformInternal),
+    _useCache(useCache)
 {
     _position = glm::vec3(0.0f);
+    _valid = false;
 
-    if (TransformInternal == 0)
-    {
-        _valid = false;
+    if (!Utils::valid_pointer(TransformInternal))
         return;
-    }
 
-    const int index = mem.Read<int>(TransformInternal + UnityOffsets::TransformAccess_IndexOffset);
-    if (index < 0 || index >= kMaxHierarchyCount)
-    {
-        _valid = false;
+    const int index = mem.Read<int>(
+        TransformInternal +
+        UnityOffsets::TransformAccess_IndexOffset
+    );
+
+    if (index < 0 || index >= kMaxTransformIndex)
         return;
-    }
+
     _index = index;
 
-    const uint64_t hierarchy = mem.Read<uint64_t>(TransformInternal + UnityOffsets::TransformAccess_HierarchyOffset);
-    if (hierarchy == 0)
-    {
-        _valid = false;
+    const uint64_t hierarchy = mem.Read<uint64_t>(
+        TransformInternal +
+        UnityOffsets::TransformAccess_HierarchyOffset
+    );
+
+    if (!Utils::valid_pointer(hierarchy))
         return;
-    }
+
     _hierarchyAddr = hierarchy;
 
-    const uint64_t vertices = mem.Read<uint64_t>(_hierarchyAddr + UnityOffsets::Hierarchy_VerticesOffset);
-    const uint64_t indices = mem.Read<uint64_t>(_hierarchyAddr + UnityOffsets::Hierarchy_IndicesOffset);
+    const uint64_t vertices = mem.Read<uint64_t>(
+        _hierarchyAddr +
+        UnityOffsets::Hierarchy_VerticesOffset
+    );
 
-    if (vertices == 0 || indices == 0)
+    const uint64_t indices = mem.Read<uint64_t>(
+        _hierarchyAddr +
+        UnityOffsets::Hierarchy_IndicesOffset
+    );
+
+    if (!Utils::valid_pointer(vertices) ||
+        !Utils::valid_pointer(indices))
     {
-        _valid = false;
         return;
     }
 
     VerticesAddr = vertices;
     _indicesAddr = indices;
 
-    _indices = ReadIndices();
-    if (_indices.empty() || !ValidateIndices(_indices, Count()))
-    {
-        _valid = false;
+    if (!BuildParentChain())
         return;
-    }
 
     _valid = true;
 }
@@ -108,66 +119,154 @@ const glm::vec3& UnityTransform::Position() const
     return _position;
 }
 
-int UnityTransform::Count() const
+bool UnityTransform::BuildParentChain()
 {
-    if (_index < 0) return 0;
-    return _index + 1;
+    _parentChain.clear();
+
+    if (_index < 0 || _index >= kMaxTransformIndex)
+        return false;
+
+    if (!Utils::valid_pointer(_indicesAddr))
+        return false;
+
+    std::unordered_set<int> visited;
+    visited.reserve(32);
+
+    int currentIndex = _index;
+
+    for (int depth = 0; depth < kMaxParentDepth; ++depth)
+    {
+        if (currentIndex < 0 ||
+            currentIndex >= kMaxTransformIndex)
+        {
+            _parentChain.clear();
+            return false;
+        }
+
+        if (!visited.insert(currentIndex).second)
+        {
+            // Circular hierarchy.
+            _parentChain.clear();
+            return false;
+        }
+
+        _parentChain.push_back(currentIndex);
+
+        int parentIndex = -1;
+
+        const uint64_t parentAddress =
+            _indicesAddr +
+            static_cast<uint64_t>(currentIndex) *
+            sizeof(int);
+
+        if (!mem.Read(
+            parentAddress,
+            &parentIndex,
+            sizeof(parentIndex),
+            _useCache))
+        {
+            _parentChain.clear();
+            return false;
+        }
+
+        if (parentIndex == -1)
+            return true;
+
+        if (parentIndex < 0 ||
+            parentIndex >= kMaxTransformIndex)
+        {
+            _parentChain.clear();
+            return false;
+        }
+
+        currentIndex = parentIndex;
+    }
+
+    _parentChain.clear();
+    return false;
 }
 
-glm::vec3& UnityTransform::UpdatePosition(std::span<TrsX> vertices)
+bool UnityTransform::ReadTransformAt(
+    int transformIndex,
+    TrsX& out) const
 {
-    if (!_valid)
-        return _position;
+    out = {};
 
-    std::vector<TrsX> standaloneVertices;
-    if (vertices.empty())
+    if (transformIndex < 0 ||
+        transformIndex >= kMaxTransformIndex)
     {
-        standaloneVertices = ReadVertices();
-        vertices = standaloneVertices;
-        if (vertices.empty())
-        {
-            _valid = false;
-            return _position;
-        }
+        return false;
     }
 
-    const int count = Count();
-    if (count <= 0 || _index < 0 || _index >= count)
+    if (!Utils::valid_pointer(VerticesAddr))
+        return false;
+
+    const uint64_t address =
+        VerticesAddr +
+        static_cast<uint64_t>(transformIndex) *
+        sizeof(TrsX);
+
+    return mem.Read(
+        address,
+        &out,
+        sizeof(TrsX),
+        _useCache
+    );
+}
+
+glm::vec3& UnityTransform::UpdatePosition(
+    std::span<TrsX> vertices)
+{
+    if (!_valid || _parentChain.empty())
+        return _position;
+
+    auto GetTransform = [&](int transformIndex,
+        TrsX& out) -> bool
+        {
+            if (!vertices.empty())
+            {
+                if (transformIndex < 0 ||
+                    static_cast<size_t>(transformIndex) >=
+                    vertices.size())
+                {
+                    return false;
+                }
+
+                out = vertices[
+                    static_cast<size_t>(transformIndex)
+                ];
+
+                return true;
+            }
+
+            return ReadTransformAt(transformIndex, out);
+        };
+
+    TrsX localTransform{};
+
+    if (!GetTransform(_parentChain.front(), localTransform))
     {
         _valid = false;
         return _position;
     }
 
-    if (static_cast<int>(vertices.size()) < count || static_cast<int>(_indices.size()) < count)
+    glm::vec3 worldPos = localTransform.t;
+
+    for (size_t i = 1;
+        i < _parentChain.size();
+        ++i)
     {
-        _valid = false;
-        return _position;
-    }
+        TrsX parent{};
 
-    glm::vec3 worldPos = vertices[static_cast<size_t>(_index)].t;
-
-    int index = _indices[static_cast<size_t>(_index)];
-    int iterations = 0;
-
-    while (index >= 0)
-    {
-        if (iterations++ > MAX_ITERATIONS || index >= count)
+        if (!GetTransform(_parentChain[i], parent))
         {
             _valid = false;
-            LogTransformIssueThrottled(
-                "update_position_chain",
-                "[UnityTransform] UpdatePosition: invalid parent chain (index=" + std::to_string(index) +
-                ", count=" + std::to_string(count) + ")");
             return _position;
         }
-
-        const TrsX& parent = vertices[static_cast<size_t>(index)];
 
         worldPos = parent.q * worldPos;
         worldPos *= parent.s;
         worldPos += parent.t;
-
-        index = _indices[static_cast<size_t>(index)];
     }
 
     if (IsAbnormal(worldPos))
@@ -180,50 +279,66 @@ glm::vec3& UnityTransform::UpdatePosition(std::span<TrsX> vertices)
     return _position;
 }
 
-glm::quat UnityTransform::GetRotation(std::span<TrsX> vertices)
+glm::quat UnityTransform::GetRotation(
+    std::span<TrsX> vertices)
 {
-    if (!_valid)
+    if (!_valid || _parentChain.empty())
         return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 
-    std::vector<TrsX> standaloneVertices;
-    if (vertices.empty())
+    auto GetTransform = [&](int transformIndex,
+        TrsX& out) -> bool
+        {
+            if (!vertices.empty())
+            {
+                if (transformIndex < 0 ||
+                    static_cast<size_t>(transformIndex) >=
+                    vertices.size())
+                {
+                    return false;
+                }
+
+                out = vertices[
+                    static_cast<size_t>(transformIndex)
+                ];
+
+                return true;
+            }
+
+            return ReadTransformAt(transformIndex, out);
+        };
+
+    TrsX localTransform{};
+
+    if (!GetTransform(_parentChain.front(), localTransform))
     {
-        standaloneVertices = ReadVertices();
-        vertices = standaloneVertices;
-        if (vertices.empty())
-            return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        _valid = false;
+        return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     }
 
-    const int count = Count();
-    if (count <= 0 || _index < 0 || _index >= count)
-        return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::quat worldRotation = localTransform.q;
 
-    if (static_cast<int>(vertices.size()) < count || static_cast<int>(_indices.size()) < count)
-        return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-
-    glm::quat worldRot = vertices[static_cast<size_t>(_index)].q;
-
-    int index = _indices[static_cast<size_t>(_index)];
-    int iterations = 0;
-
-    while (index >= 0)
+    for (size_t i = 1;
+        i < _parentChain.size();
+        ++i)
     {
-        if (iterations++ > MAX_ITERATIONS || index >= count)
+        TrsX parent{};
+
+        if (!GetTransform(_parentChain[i], parent))
         {
             _valid = false;
             return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         }
 
-        const TrsX& parent = vertices[static_cast<size_t>(index)];
-        worldRot = parent.q * worldRot;
-
-        index = _indices[static_cast<size_t>(index)];
+        worldRotation = parent.q * worldRotation;
     }
 
-    if (IsAbnormal(worldRot))
+    if (IsAbnormal(worldRotation))
+    {
+        _valid = false;
         return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    }
 
-    return worldRot;
+    return worldRotation;
 }
 
 glm::vec3 UnityTransform::GetRootPosition()
@@ -233,159 +348,180 @@ glm::vec3 UnityTransform::GetRootPosition()
 
 glm::vec3 UnityTransform::GetLocalPosition()
 {
-    if (!_valid) return glm::vec3(0.0f);
-    const uint64_t addr = VerticesAddr + static_cast<uint64_t>(_index) * static_cast<uint64_t>(sizeof(TrsX));
-    return mem.Read<TrsX>(addr).t;
+    if (!_valid)
+        return glm::vec3(0.0f);
+
+    TrsX local{};
+
+    if (!ReadTransformAt(_index, local))
+        return glm::vec3(0.0f);
+
+    return local.t;
 }
 
 glm::vec3 UnityTransform::GetLocalScale()
 {
-    if (!_valid) return glm::vec3(0.0f);
-    const uint64_t addr = VerticesAddr + static_cast<uint64_t>(_index) * static_cast<uint64_t>(sizeof(TrsX));
-    return mem.Read<TrsX>(addr).s;
+    if (!_valid)
+        return glm::vec3(0.0f);
+
+    TrsX local{};
+
+    if (!ReadTransformAt(_index, local))
+        return glm::vec3(0.0f);
+
+    return local.s;
 }
 
 glm::quat UnityTransform::GetLocalRotation()
 {
-    if (!_valid) return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-    const uint64_t addr = VerticesAddr + static_cast<uint64_t>(_index) * static_cast<uint64_t>(sizeof(TrsX));
-    return mem.Read<TrsX>(addr).q;
+    if (!_valid)
+        return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    TrsX local{};
+
+    if (!ReadTransformAt(_index, local))
+        return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    return local.q;
 }
 
-glm::vec3 UnityTransform::TransformPoint(glm::vec3 localPoint, std::span<TrsX> vertices)
+glm::vec3 UnityTransform::TransformPoint(
+    glm::vec3 localPoint,
+    std::span<TrsX> vertices)
 {
-    if (!_valid) return glm::vec3(0.0f);
-
-    std::vector<TrsX> standaloneVertices;
-    if (vertices.empty())
-    {
-        standaloneVertices = ReadVertices();
-        vertices = standaloneVertices;
-        if (vertices.empty())
-            return glm::vec3(0.0f);
-    }
-
-    const int count = Count();
-    if (count <= 0 || _index < 0 || _index >= count)
+    if (!_valid || _parentChain.empty())
         return glm::vec3(0.0f);
 
-    if (static_cast<int>(vertices.size()) < count || static_cast<int>(_indices.size()) < count)
-        return glm::vec3(0.0f);
+    auto GetTransform = [&](int transformIndex,
+        TrsX& out) -> bool
+        {
+            if (!vertices.empty())
+            {
+                if (transformIndex < 0 ||
+                    static_cast<size_t>(transformIndex) >=
+                    vertices.size())
+                {
+                    return false;
+                }
+
+                out = vertices[
+                    static_cast<size_t>(transformIndex)
+                ];
+
+                return true;
+            }
+
+            return ReadTransformAt(transformIndex, out);
+        };
 
     glm::vec3 worldPos = localPoint;
-    int index = _index;
-    int iterations = 0;
 
-    while (index >= 0)
+    for (const int transformIndex : _parentChain)
     {
-        if (iterations++ > MAX_ITERATIONS || index >= count)
+        TrsX transform{};
+
+        if (!GetTransform(transformIndex, transform))
         {
             _valid = false;
             return glm::vec3(0.0f);
         }
 
-        const TrsX& parent = vertices[static_cast<size_t>(index)];
-
-        worldPos *= parent.s;
-        worldPos = parent.q * worldPos;
-        worldPos += parent.t;
-
-        index = _indices[static_cast<size_t>(index)];
+        worldPos *= transform.s;
+        worldPos = transform.q * worldPos;
+        worldPos += transform.t;
     }
 
     if (IsAbnormal(worldPos))
+    {
+        _valid = false;
         return glm::vec3(0.0f);
+    }
 
     return worldPos;
 }
 
-glm::vec3 UnityTransform::InverseTransformPoint(glm::vec3 worldPoint, std::span<TrsX> vertices)
+glm::vec3 UnityTransform::InverseTransformPoint(
+    glm::vec3 worldPoint,
+    std::span<TrsX> vertices)
 {
-    if (!_valid) return glm::vec3(0.0f);
+    if (!_valid || _parentChain.empty())
+        return glm::vec3(0.0f);
 
-    std::vector<TrsX> standaloneVertices;
-    if (vertices.empty())
+    auto GetTransform = [&](int transformIndex,
+        TrsX& out) -> bool
+        {
+            if (!vertices.empty())
+            {
+                if (transformIndex < 0 ||
+                    static_cast<size_t>(transformIndex) >=
+                    vertices.size())
+                {
+                    return false;
+                }
+
+                out = vertices[
+                    static_cast<size_t>(transformIndex)
+                ];
+
+                return true;
+            }
+
+            return ReadTransformAt(transformIndex, out);
+        };
+
+    TrsX localTransform{};
+
+    if (!GetTransform(_parentChain.front(), localTransform))
     {
-        standaloneVertices = ReadVertices();
-        vertices = standaloneVertices;
-        if (vertices.empty())
-            return glm::vec3(0.0f);
+        _valid = false;
+        return glm::vec3(0.0f);
     }
 
-    const int count = Count();
-    if (count <= 0 || _index < 0 || _index >= count)
-        return glm::vec3(0.0f);
+    glm::vec3 worldPosition = localTransform.t;
+    glm::quat worldRotation = localTransform.q;
+    glm::vec3 localScale = localTransform.s;
 
-    if (static_cast<int>(vertices.size()) < count || static_cast<int>(_indices.size()) < count)
-        return glm::vec3(0.0f);
-
-    glm::vec3 worldPos = vertices[static_cast<size_t>(_index)].t;
-    glm::quat worldRot = vertices[static_cast<size_t>(_index)].q;
-    glm::vec3 localScale = vertices[static_cast<size_t>(_index)].s;
-
-    int index = _indices[static_cast<size_t>(_index)];
-    int iterations = 0;
-
-    while (index >= 0)
+    for (size_t i = 1;
+        i < _parentChain.size();
+        ++i)
     {
-        if (iterations++ > MAX_ITERATIONS || index >= count)
+        TrsX parent{};
+
+        if (!GetTransform(_parentChain[i], parent))
         {
             _valid = false;
             return glm::vec3(0.0f);
         }
 
-        const TrsX& parent = vertices[static_cast<size_t>(index)];
+        worldPosition = parent.q * worldPosition;
+        worldPosition *= parent.s;
+        worldPosition += parent.t;
 
-        worldPos = parent.q * worldPos;
-        worldPos *= parent.s;
-        worldPos += parent.t;
-
-        worldRot = parent.q * worldRot;
-
-        index = _indices[static_cast<size_t>(index)];
+        worldRotation = parent.q * worldRotation;
     }
 
-    const glm::vec3 local = glm::conjugate(worldRot) * (worldPoint - worldPos);
+    const glm::vec3 local =
+        glm::conjugate(worldRotation) *
+        (worldPoint - worldPosition);
 
     const glm::vec3 safeScale(
-        localScale.x == 0.0f ? 1.0f : localScale.x,
-        localScale.y == 0.0f ? 1.0f : localScale.y,
-        localScale.z == 0.0f ? 1.0f : localScale.z
+        localScale.x == 0.0f
+        ? 1.0f
+        : localScale.x,
+
+        localScale.y == 0.0f
+        ? 1.0f
+        : localScale.y,
+
+        localScale.z == 0.0f
+        ? 1.0f
+        : localScale.z
     );
+
     return local / safeScale;
 }
 
-std::vector<int> UnityTransform::ReadIndices()
-{
-    const int count = Count();
-    if (count <= 0 || count > kMaxHierarchyCount)
-        return {};
 
-    if (_indicesAddr == 0)
-        return {};
-
-    std::vector<int> out(static_cast<size_t>(count));
-    if (!mem.Read(_indicesAddr, out.data(), out.size() * sizeof(int), _useCache))
-        return {};
-
-    return out;
-}
-
-std::vector<UnityTransform::TrsX> UnityTransform::ReadVertices()
-{
-    const int count = Count();
-    if (count <= 0 || count > kMaxHierarchyCount)
-        return {};
-
-    if (VerticesAddr == 0)
-        return {};
-
-    std::vector<TrsX> out(static_cast<size_t>(count));
-    if (!mem.Read(VerticesAddr, out.data(), out.size() * sizeof(TrsX), _useCache))
-        return {};
-
-    return out;
-}
 
 bool UnityTransform::IsAbnormal(const glm::vec3& v)
 {

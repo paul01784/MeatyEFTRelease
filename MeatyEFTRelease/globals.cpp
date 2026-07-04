@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.20";
+std::string globals::appVersion = "1.0.21";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -13,7 +13,7 @@ std::string globals::radarSubText = "";
 
 double globals::taskMainPlayers = 3000;
 double globals::taskPlayers = 33;
-double globals::taskPlayersBones = 15;
+double globals::taskPlayersBones = 30;
 double globals::taskPlayersLocal = 22;
 double globals::taskGrenades = 200;
 double globals::taskPlayersEquipment = 2000;
