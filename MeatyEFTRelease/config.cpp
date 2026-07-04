@@ -411,7 +411,8 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"skeletonsOnlyClosest", e.skeletonsOnlyClosest},
         {"drawCrosshair", e.drawCrosshair},
         {"headDotSize", e.headDotSize},
-        {"drawHeadDot", e.drawHeadDot}
+        {"drawHeadDot", e.drawHeadDot},
+        {"drawFireportLine", e.drawFireportLine}
     };
 }
 
@@ -435,6 +436,7 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
     e.drawCrosshair = j.value("drawCrosshair", e.drawCrosshair);
     e.drawHeadDot = j.value("drawHeadDot", e.drawHeadDot);
     e.headDotSize = j.value("headDotSize", e.headDotSize);
+    e.drawFireportLine = j.value("drawFireportLine", e.drawFireportLine);
 }
 
 // Custom serialization for aimGlobals
@@ -446,7 +448,11 @@ void to_json(nlohmann::json& j, const aimGlobals& a) {
         {"aiBone", a.aiBone},
         {"pmcBone", a.pmcBone},
         {"targetLock", a.targetLock},
-        {"targetMode", a.targetMode}
+        {"targetMode", a.targetMode},
+        {"aimSmooth", a.aimSmooth},
+        {"aimReference", a.aimReference},
+        {"showAimFovRing", a.showAimFovRing},
+        {"fireportLineLengthM", a.fireportLineLengthM}
     };
 }
 
@@ -458,6 +464,10 @@ void from_json(const nlohmann::json& j, aimGlobals& a) {
     a.pmcBone = j.value("pmcBone", a.pmcBone);
     a.targetLock = j.value("targetLock", a.targetLock);
     a.targetMode = j.value("targetMode", a.targetMode);
+    a.aimSmooth = j.value("aimSmooth", a.aimSmooth);
+    a.aimReference = j.value("aimReference", a.aimReference);
+    a.showAimFovRing = j.value("showAimFovRing", a.showAimFovRing);
+    a.fireportLineLengthM = j.value("fireportLineLengthM", a.fireportLineLengthM);
 }
 
 

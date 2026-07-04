@@ -16,7 +16,10 @@
 #include "game/headers/loot.h"
 #include "game/headers/explosives.h"
 #include "game/headers/questManager.h"
-#include "../game/headers/players.h"
+#include "game/headers/camera.h"
+#include "game/headers/fireport.h"
+#include "game/headers/readOnlyAim.h"
+#include "../app/globals.h"
 
 namespace fuserRender
 {
@@ -541,6 +544,54 @@ namespace fuserRender
         );
     }
 
+    static inline void RenderFireportVisual()
+    {
+        if (!camera.fpsCamera || !espGlobals::drawFireportLine)
+            return;
+
+        if (!Utils::valid_pointer(mainGame.localPlayerPtr))
+            return;
+
+        g_fireport.update(mainGame.localPlayerPtr);
+        const FireportPose pose = g_fireport.snapshot();
+        if (!pose.valid || !pose.screenStartOk)
+            return;
+
+        static const glm::vec4 kFireportLine{1.0f, 0.86f, 0.24f, 0.95f};
+        if (pose.screenEndOk) {
+            g_DxWindow.DrawLine(
+                pose.screenStart.x,
+                pose.screenStart.y,
+                pose.screenEnd.x,
+                pose.screenEnd.y,
+                kFireportLine,
+                2.0f
+            );
+        } else {
+            g_DxWindow.DrawFilledCircle(pose.screenStart.x, pose.screenStart.y, 3.0f, kFireportLine);
+        }
+    }
+
+    static inline void RenderAimFovRing()
+    {
+        if (!aimGlobals::showAimFovRing || !aimGlobals::aimEnabled)
+            return;
+        if (aimGlobals::aimFOV <= 0.f)
+            return;
+
+        const AimReferencePoint ref = readOnlyAim.resolveAimReference();
+        if (aimGlobals::aimReference == AimReference::Fireport && !ref.valid)
+            return;
+
+        g_DxWindow.DrawCircle(
+            ref.pos.x,
+            ref.pos.y,
+            aimGlobals::aimFOV,
+            coloursGlobals::fovCircle,
+            1.5f
+        );
+    }
+
     static inline void RenderTasks()
     {
         if (!espGlobals::drawQuestHelper)
@@ -1053,6 +1104,16 @@ namespace fuserRender
         SafeRenderStage("RenderCrosshair", []()
             {
                 RenderCrosshair();
+            });
+
+        SafeRenderStage("RenderFireportVisual", []()
+            {
+                RenderFireportVisual();
+            });
+
+        SafeRenderStage("RenderAimFovRing", []()
+            {
+                RenderAimFovRing();
             });
 
         SafeRenderStage("RenderPlayers", []()
