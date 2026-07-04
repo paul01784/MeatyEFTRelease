@@ -83,6 +83,34 @@ namespace sdk
 		constexpr uint64_t _inventoryController = 0xA30; // EFT.PlayerInventoryController update
 		constexpr uint64_t _handsController = 0xA38; // EFT.PlayerHands update
 		constexpr uint64_t _playerLookRaycastTransform = 0xAC8; // UnityEngine.Transform
+		constexpr uint64_t PlayerBones = 0xB30; // EFT.PlayerBones
+	}
+
+	namespace FirearmController
+	{
+		constexpr uint64_t Firearms = 0xD0;
+		constexpr uint64_t GunBaseTransform = 0x148;
+		constexpr uint64_t Fireport = 0x150;
+	}
+
+	namespace Firearms
+	{
+		constexpr uint64_t Fireport = 0xD0;
+	}
+
+	namespace BifacialTransform
+	{
+		constexpr uint64_t Original = 0x10;
+	}
+
+	namespace PlayerBones
+	{
+		constexpr uint64_t Fireport = 0x1C8;
+	}
+
+	namespace PlayerSpring
+	{
+		constexpr uint64_t Fireport = 0x88;
 	}
 
 	namespace ObservedPlayerView
@@ -248,6 +276,7 @@ namespace sdk
 	{
 		constexpr uint64_t _isAiming = 0x14D; // Bool
 		constexpr uint64_t _optics = 0x1A8; //class ptr
+		constexpr uint64_t HandsContainer = 0x20;
 	}
 	namespace SightNBone
 	{

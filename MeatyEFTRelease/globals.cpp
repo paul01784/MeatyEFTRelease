@@ -98,6 +98,7 @@ bool espGlobals::drawCrosshair = false;
 bool espGlobals::drawHeadDot = false;
 float espGlobals::headDotSize = 1.5f;
 bool espGlobals::runEsp = false;
+bool espGlobals::drawFireportLine = true;
 
 bool aimGlobals::aimEnabled = false;
 float aimGlobals::aimFOV = 50.f;
@@ -107,6 +108,9 @@ boneListIndexes aimGlobals::pmcBone = boneListIndexes::Head;
 TargetMode aimGlobals::targetMode = TargetMode::FOV;
 bool aimGlobals::targetLock = false;
 float aimGlobals::aimSmooth = 4.f;
+AimReference aimGlobals::aimReference = AimReference::Crosshair;
+bool aimGlobals::showAimFovRing = true;
+float aimGlobals::fireportLineLengthM = 120.f;
 
 
 glm::vec4 coloursGlobals::playerPMC = { 1,1,1,1 };

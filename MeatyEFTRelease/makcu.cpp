@@ -23,6 +23,7 @@
 #include <utility>
 #include "app/render.h"
 #include "game/headers/readOnlyAim.h"
+#include "game/headers/fireport.h"
 
 #pragma comment(lib, "setupapi.lib")
 
@@ -1111,13 +1112,10 @@ namespace
             return;
         }
 
-        const glm::vec2 screenCentre(
-            espGlobals::gameRes.x * 0.5f,
-            espGlobals::gameRes.y * 0.5f
-        );
+        const glm::vec2 aimRef = readOnlyAim.resolveAimReference().pos;
 
-        const float errorX = target->screenPos.x - screenCentre.x;
-        const float errorY = target->screenPos.y - screenCentre.y;
+        const float errorX = target->screenPos.x - aimRef.x;
+        const float errorY = target->screenPos.y - aimRef.y;
 
         ImGui::Text(
             "Instance: 0x%llX",
@@ -1454,6 +1452,39 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 200.0f,
                 "%.0f px"
             );
+
+            static constexpr const char* aimReferenceOptions[] = {
+                "Crosshair (screen centre)",
+                "Fireport (barrel ray end)",
+            };
+            int aimReferenceIndex = static_cast<int>(aimGlobals::aimReference);
+            aimReferenceIndex = std::clamp(aimReferenceIndex, 0, IM_ARRAYSIZE(aimReferenceOptions) - 1);
+            if (ImGui::Combo("Aim reference", &aimReferenceIndex, aimReferenceOptions, IM_ARRAYSIZE(aimReferenceOptions))) {
+                aimGlobals::aimReference = static_cast<AimReference>(aimReferenceIndex);
+                configChanged = true;
+            }
+
+            configChanged |= ImGui::Checkbox("Show aim FOV ring", &aimGlobals::showAimFovRing);
+
+            configChanged |= ImGui::DragFloat(
+                "Fireport line length (m)",
+                &aimGlobals::fireportLineLengthM,
+                1.0f,
+                25.0f,
+                300.0f,
+                "%.0f m"
+            );
+
+            configChanged |= ImGui::Checkbox("Draw fireport line (ESP)", &espGlobals::drawFireportLine);
+
+            if (aimGlobals::aimReference == AimReference::Fireport) {
+                ImGui::TextDisabled("FOV + aim move from barrel ray endpoint.");
+                const FireportPose pose = g_fireport.snapshot();
+                if (pose.valid && pose.pathUsed)
+                    ImGui::TextDisabled("Fireport path: %s", pose.pathUsed);
+                else
+                    ImGui::TextColored(ImVec4(1.f, 0.55f, 0.31f, 1.f), "Fireport not resolved");
+            }
 
             configChanged |= ImGui::DragInt(
                 "Aim distance",

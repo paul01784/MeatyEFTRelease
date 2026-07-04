@@ -1,22 +1,34 @@
 #include "headers/readOnlyAim.h"
 #include "headers/camera.h"
+#include "headers/fireport.h"
+#include "../app/globals.h"
 #include <limits>
 #include <cmath>
 #include "../app/makcu.h"
 
 ReadOnlyAim readOnlyAim;
 
-std::optional<TargetResult> ReadOnlyAim::BuildTargetResult(const PlayerCache& entity, float maxDistance, float fovRadiusPx) const
+AimReferencePoint ReadOnlyAim::resolveAimReference() const
+{
+    const glm::vec2 screenCentre(espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
+    if (aimGlobals::aimReference != AimReference::Fireport)
+        return {screenCentre, true, false};
+
+    const FireportPose pose = g_fireport.snapshot();
+    if (pose.aimRefOk)
+        return {pose.screenEnd, true, true};
+
+    return {screenCentre, false, true};
+}
+
+std::optional<TargetResult> ReadOnlyAim::BuildTargetResult(const PlayerCache& entity, float maxDistance,
+                                                             float fovRadiusPx, const glm::vec2& aimRef) const
 {
     if (entity.isDead || entity.hasExfiled)
         return std::nullopt;
 
-    // Skip localplayer groupId matching players :(
-    if (!mainGame.localGroupId.empty() &&
-        entity.groupId == mainGame.localGroupId)
-    {
+    if (!mainGame.localGroupId.empty() && entity.groupId == mainGame.localGroupId)
         return std::nullopt;
-    }
 
     const glm::vec3 worldDelta = entity.location - mainGame.localLocation;
 
@@ -24,60 +36,40 @@ std::optional<TargetResult> ReadOnlyAim::BuildTargetResult(const PlayerCache& en
     const float maxDistanceSq = maxDistance * maxDistance;
 
     if (!std::isfinite(worldDistanceSq) || worldDistanceSq > maxDistanceSq)
-    {
         return std::nullopt;
-    }
 
-    const boneListIndexes selectedBone =
-        entity.isAi
-        ? aimGlobals::aiBone
-        : aimGlobals::pmcBone;
+    const boneListIndexes selectedBone = entity.isAi ? aimGlobals::aiBone : aimGlobals::pmcBone;
 
     glm::vec3 selectedBoneWorldPos{};
-
     if (!GetSelectedBonePosition(entity, selectedBone, selectedBoneWorldPos))
-    {
         return std::nullopt;
-    }
 
     glm::vec2 selectedBoneScreenPos{};
-
     if (!Utils::Camera::world_to_screen(selectedBoneWorldPos, &selectedBoneScreenPos))
-    {
         return std::nullopt;
-    }
 
     if (!std::isfinite(selectedBoneScreenPos.x) || !std::isfinite(selectedBoneScreenPos.y))
-    {
         return std::nullopt;
-    }
 
-    const glm::vec2 screenCentre( espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
-
-    const glm::vec2 screenDelta = selectedBoneScreenPos - screenCentre;
-
+    const glm::vec2 screenDelta = selectedBoneScreenPos - aimRef;
     const float screenDistanceSq = glm::dot(screenDelta, screenDelta);
-
     const float fovRadiusSq = fovRadiusPx * fovRadiusPx;
 
     if (!std::isfinite(screenDistanceSq) || screenDistanceSq > fovRadiusSq)
-    {
         return std::nullopt;
-    }
 
     TargetResult result{};
-
     result.player = entity;
     result.selectedBone = selectedBone;
     result.boneWorldPos = selectedBoneWorldPos;
     result.screenPos = selectedBoneScreenPos;
     result.worldDistanceSq = worldDistanceSq;
     result.screenDistanceSq = screenDistanceSq;
-
     return result;
 }
 
-bool ReadOnlyAim::GetSelectedBonePosition(const PlayerCache& entity, boneListIndexes selectedBone, glm::vec3& outPosition) const
+bool ReadOnlyAim::GetSelectedBonePosition(const PlayerCache& entity, boneListIndexes selectedBone,
+                                          glm::vec3& outPosition) const
 {
     const size_t boneIndex = static_cast<size_t>(selectedBone);
 
@@ -86,12 +78,8 @@ bool ReadOnlyAim::GetSelectedBonePosition(const PlayerCache& entity, boneListInd
 
     const glm::vec3& position = entity.bonePositions[boneIndex];
 
-    if (!std::isfinite(position.x) ||
-        !std::isfinite(position.y) ||
-        !std::isfinite(position.z))
-    {
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z))
         return false;
-    }
 
     if (position == glm::vec3{})
         return false;
@@ -100,47 +88,35 @@ bool ReadOnlyAim::GetSelectedBonePosition(const PlayerCache& entity, boneListInd
     return true;
 }
 
-std::optional<TargetResult> ReadOnlyAim::FindBestTarget(const std::vector<PlayerCache>& snapshot, TargetMode mode, float maxDistance, float fovRadiusPx) const
+std::optional<TargetResult> ReadOnlyAim::FindBestTarget(const std::vector<PlayerCache>& snapshot, TargetMode mode,
+                                                        float maxDistance, float fovRadiusPx,
+                                                        const glm::vec2& aimRef) const
 {
     std::optional<TargetResult> bestTarget;
 
-    for (const PlayerCache& entity : snapshot)
-    {
-        const auto candidate = BuildTargetResult(entity, maxDistance, fovRadiusPx);
-
+    for (const PlayerCache& entity : snapshot) {
+        const auto candidate = BuildTargetResult(entity, maxDistance, fovRadiusPx, aimRef);
         if (!candidate.has_value())
             continue;
 
-        if (!bestTarget.has_value())
-        {
+        if (!bestTarget.has_value()) {
             bestTarget = candidate;
             continue;
         }
 
         bool replace = false;
-
-        switch (mode)
-        {
+        switch (mode) {
         case TargetMode::FOV:
             replace = candidate->screenDistanceSq < bestTarget->screenDistanceSq;
             break;
-
-        case TargetMode::CQB:
-        {
+        case TargetMode::CQB: {
             constexpr float distanceTieThresholdSq = 0.01f;
-
             if (candidate->worldDistanceSq < bestTarget->worldDistanceSq)
-            {
                 replace = true;
-            }
             else if (std::fabs(candidate->worldDistanceSq - bestTarget->worldDistanceSq) < distanceTieThresholdSq)
-            {
                 replace = candidate->screenDistanceSq < bestTarget->screenDistanceSq;
-            }
-
             break;
         }
-
         default:
             break;
         }
@@ -152,18 +128,17 @@ std::optional<TargetResult> ReadOnlyAim::FindBestTarget(const std::vector<Player
     return bestTarget;
 }
 
-
-std::optional<TargetResult> ReadOnlyAim::RefreshTargetByInstance(const std::vector<PlayerCache>& snapshot, uint64_t instance, float maxDistance, float fovRadiusPx) const
+std::optional<TargetResult> ReadOnlyAim::RefreshTargetByInstance(const std::vector<PlayerCache>& snapshot,
+                                                                 uint64_t instance, float maxDistance,
+                                                                 float fovRadiusPx, const glm::vec2& aimRef) const
 {
     if (!instance)
         return std::nullopt;
 
-    for (const PlayerCache& entity : snapshot)
-    {
+    for (const PlayerCache& entity : snapshot) {
         if (entity.instance != instance)
             continue;
-
-        return BuildTargetResult(entity, maxDistance, fovRadiusPx);
+        return BuildTargetResult(entity, maxDistance, fovRadiusPx, aimRef);
     }
 
     return std::nullopt;
@@ -172,7 +147,6 @@ std::optional<TargetResult> ReadOnlyAim::RefreshTargetByInstance(const std::vect
 void ReadOnlyAim::ClearTargetState(bool keyIsHeld)
 {
     std::unique_lock lock(m_targetMutex);
-
     m_liveTarget.reset();
     m_activeTarget.reset();
     m_wasKeyHeld = keyIsHeld;
@@ -180,120 +154,89 @@ void ReadOnlyAim::ClearTargetState(bool keyIsHeld)
 
 void ReadOnlyAim::aimTask()
 {
-    // Get current aim-key state
     const bool keyIsHeld = mem.GetKeyboard()->IsKeyDown(static_cast<int>(keyGlobals::aimKey));
 
-    if (!camera.cameraPointersReady())
-    {
+    if (!camera.cameraPointersReady()) {
         ClearTargetState(keyIsHeld);
         return;
     }
+
+    g_fireport.update(mainGame.localPlayerPtr);
+    const AimReferencePoint aimRefPoint = resolveAimReference();
+    const glm::vec2 aimRef = aimRefPoint.valid ? aimRefPoint.pos
+                                               : glm::vec2(espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
+    const bool fireportReady = aimRefPoint.valid || aimGlobals::aimReference != AimReference::Fireport;
 
     const std::vector<PlayerCache> snapshot = players.getCacheSnapshot();
-
-    if (snapshot.empty())
-    {
+    if (snapshot.empty()) {
         ClearTargetState(keyIsHeld);
         return;
     }
 
-    const float maxDistance = aimGlobals::aimDistance;
+    const float maxDistance = static_cast<float>(aimGlobals::aimDistance);
     const float fovRadius = aimGlobals::aimFOV;
     const bool targetLockEnabled = aimGlobals::targetLock;
 
-    // Best current target, used for nonlock mode
-    const auto liveTarget = FindBestTarget(snapshot, aimGlobals::targetMode, maxDistance, fovRadius);
+    const auto liveTarget =
+        fireportReady ? FindBestTarget(snapshot, aimGlobals::targetMode, maxDistance, fovRadius, aimRef) : std::nullopt;
 
     std::optional<TargetResult> previousActiveTarget;
     bool wasKeyHeld = false;
-
     {
         std::shared_lock lock(m_targetMutex);
-
         previousActiveTarget = m_activeTarget;
         wasKeyHeld = m_wasKeyHeld;
     }
 
     const bool keyJustPressed = keyIsHeld && !wasKeyHeld;
-
     std::optional<TargetResult> newActiveTarget;
 
-    if (!keyIsHeld)
-    {
-        // Aim key released: remove the active target
+    if (!keyIsHeld) {
         newActiveTarget.reset();
-    }
-    else if (!targetLockEnabled)
-    {
-        // No target lock: always follow the best current target
+    } else if (!targetLockEnabled) {
         newActiveTarget = liveTarget;
-    }
-    else
-    {
-        // Target lock enabled.
+    } else {
         if (keyJustPressed || !previousActiveTarget.has_value())
-        {
-            // First press: lock the current best candidate
             newActiveTarget = liveTarget;
-        }
         else
-        {
-            // Keep the same player instance, but update bone/screen data
-            newActiveTarget = RefreshTargetByInstance(snapshot, previousActiveTarget->player.instance, maxDistance, fovRadius);
-        }
+            newActiveTarget =
+                RefreshTargetByInstance(snapshot, previousActiveTarget->player.instance, maxDistance, fovRadius, aimRef);
     }
 
     std::optional<TargetResult> targetToMove;
     {
         std::unique_lock lock(m_targetMutex);
-
         m_liveTarget = liveTarget;
         m_activeTarget = newActiveTarget;
         m_wasKeyHeld = keyIsHeld;
-
         targetToMove = m_activeTarget;
     }
 
-    if (keyIsHeld && targetToMove.has_value())
-    {
-        MoveToTargetBone(*targetToMove);
-    }
+    if (keyIsHeld && fireportReady && targetToMove.has_value())
+        MoveToTargetBone(*targetToMove, aimRef);
 }
 
-bool ReadOnlyAim::MoveToTargetBone(const TargetResult& target)
+bool ReadOnlyAim::MoveToTargetBone(const TargetResult& target, const glm::vec2& aimRef)
 {
     if (!aimGlobals::aimEnabled || !makcu.IsConnected())
         return false;
 
-    const glm::vec2 screenCentre(espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
-
-    const float errorX = target.screenPos.x - screenCentre.x;
-    const float errorY = target.screenPos.y - screenCentre.y;
+    const float errorX = target.screenPos.x - aimRef.x;
+    const float errorY = target.screenPos.y - aimRef.y;
 
     if (!std::isfinite(errorX) || !std::isfinite(errorY))
         return false;
 
     constexpr float deadZonePixels = 1.0f;
-
-    if ((errorX * errorX) + (errorY * errorY) <=
-        (deadZonePixels * deadZonePixels))
-    {
+    if ((errorX * errorX) + (errorY * errorY) <= (deadZonePixels * deadZonePixels))
         return false;
-    }
 
     const float smooth = std::max(1.0f, aimGlobals::aimSmooth);
 
-    float moveX =
-        (errorX / smooth) *
-        makcu.mouseUnitsPerScreenPixelX;
+    float moveX = (errorX / smooth) * makcu.mouseUnitsPerScreenPixelX;
+    float moveY = (errorY / smooth) * makcu.mouseUnitsPerScreenPixelY;
 
-    float moveY =
-        (errorY / smooth) *
-        makcu.mouseUnitsPerScreenPixelY;
-
-    // Protection against stale W2S
     constexpr float maxMovePerTick = 127.0f;
-
     moveX = std::clamp(moveX, -maxMovePerTick, maxMovePerTick);
     moveY = std::clamp(moveY, -maxMovePerTick, maxMovePerTick);
 
@@ -317,4 +260,3 @@ std::optional<TargetResult> ReadOnlyAim::GetActiveTarget() const
     std::shared_lock lock(m_targetMutex);
     return m_activeTarget;
 }
-

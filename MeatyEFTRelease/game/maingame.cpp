@@ -16,6 +16,7 @@
 #include <atomic>
 #include "headers/unitysdk.h"
 #include "unity/gameObjectManager.h"
+#include "headers/game_world.h"
 #include "headers/players.h"
 #include "headers/camera.h"
 #include "headers/exfil.h"
@@ -370,7 +371,7 @@ void MainGame::getPlayerListDetails()
                     ++validCount;
             }
 
-            if (validCount > 1)
+            if (validCount >= 1)
                 break;
         }
 
@@ -393,66 +394,60 @@ void MainGame::getGameWorldDetails() {
 
         globals::radarSubText = "Trying to resolve game world details";
 
+        int waitAttempts = 0;
+        std::uint64_t pending_local_gw = 0;
+        std::uint64_t pending_gw_object = 0;
+
         while (true)
         {
-            // Small sleep while we wait for gameworld to resolve
+            ++waitAttempts;
             Sleep(2500);
 
-            // Make sure our cache is refreshed
-            //mem.RefreshLight();
-
-            GameObjectManager gom;
-
-            this->gameWorld = gom.GetGameWorldFromListFAST("GameWorld", false);
-
-            if (!Utils::valid_pointer(this->gameWorld))
-                continue;
-
-            // Update registered players pointer
-            mainGame.registeredPlayers = mem.Read<uint64_t>(
-                mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers);
-
-            if (!Utils::valid_pointer(mainGame.registeredPlayers))
-                continue;
-
-            mainGame.registeredPlayersList = mem.Read<uint64_t>(mainGame.registeredPlayers + 0x10);
-            if (!Utils::valid_pointer(mainGame.registeredPlayersList))
-                continue;
-
-            mainGame.registeredPlayersCount = mem.Read<int>(mainGame.registeredPlayers + 0x18);
-            if (mainGame.registeredPlayersCount <= 0)
+            if (!Utils::valid_pointer(this->gameObjectManager))
             {
-                mainGame.registeredPlayers = 0;
-                mainGame.registeredPlayersList = 0;
-                mainGame.registeredPlayersCount = 0;
+                if ((waitAttempts % 4) == 0)
+                    LOGS.logInfo("[Main] Still waiting: GOM invalid");
                 continue;
             }
 
-            if (mainGame.registeredPlayersCount > std::size(mainGame.player_buffer))
+            RaidState raid{};
+            std::string probe;
+            bool resolved = false;
+
+            if (Utils::valid_pointer(pending_local_gw))
             {
-                mainGame.registeredPlayersCount = std::size(mainGame.player_buffer);
+                resolved = tryPromotePendingRaid(
+                    this->gameObjectManager, pending_local_gw, pending_gw_object, raid, probe);
+            }
+            else
+            {
+                RaidPendingState pending{};
+                resolved = tryResolveRaid(this->gameObjectManager, raid, probe, &pending);
+                if (!resolved && pending.active && Utils::valid_pointer(pending.local_game_world))
+                {
+                    pending_local_gw = pending.local_game_world;
+                    pending_gw_object = pending.game_world_object;
+                }
             }
 
-            std::fill(std::begin(mainGame.player_buffer),
-                std::end(mainGame.player_buffer),
-                0);
-
-            mem.Read(
-                mainGame.registeredPlayersList + 0x20,
-                mainGame.player_buffer,
-                sizeof(uint64_t) * mainGame.registeredPlayersCount);
-
-            size_t validCount = 0;
-            for (size_t i = 0; i < mainGame.registeredPlayersCount; ++i)
+            if (!resolved)
             {
-                if (Utils::valid_pointer(mainGame.player_buffer[i]))
-                    ++validCount;
+                if ((waitAttempts % 4) == 0)
+                {
+                    LOGS.logInfo(
+                        "[Main] Still waiting: ",
+                        probe.empty() ? "raid not ready" : probe
+                    );
+                }
+                continue;
             }
 
-            if (validCount > 1)
-                break;
+            applyRaidStateToMainGame(raid);
+            this->gameWorld = raid.game_world_object;
+            this->localGameWorld = raid.local_game_world;
 
-            
+            LOGS.logInfo("[Main] ", probe);
+            break;
         }
     }
     catch (const std::exception& e) {
