@@ -399,7 +399,7 @@ void MainGame::getGameWorldDetails()
     std::uint64_t pending_gw_object = 0;
 
     constexpr int kLogEveryAttempts = 4;
-    constexpr int kMaxPendingPromoteAttempts = 12;
+    constexpr int kMaxPendingPromoteAttempts = 6;
     constexpr DWORD kRetryDelayMs = 2500;
 
     while (true)
