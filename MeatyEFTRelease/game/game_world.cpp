@@ -13,6 +13,7 @@
 #include <cstring>
 #include <format>
 #include <vector>
+#include <unordered_set>
 
 extern Memory mem;
 
@@ -155,119 +156,193 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     raid = {};
     debug_out.clear();
 
-    if (!Utils::valid_pointer(gom)) {
+    if (!Utils::valid_pointer(gom))
+    {
         debug_out = "gom=0";
         return false;
     }
 
-    const std::uint64_t active_list_ptr = readGomListPtr(gom, kGomActiveNodes);
-    const std::uint64_t last_list_ptr = readGomListPtr(gom, kGomLastActiveNode);
-    if (!active_list_ptr || !last_list_ptr) {
-        debug_out = std::format("gom=0x{:X} list ptr missing", gom);
+    const std::uint64_t active_list_ptr =
+        readGomListPtr(gom, kGomActiveNodes);
+
+    const std::uint64_t last_list_ptr =
+        readGomListPtr(gom, kGomLastActiveNode);
+
+    if (!Utils::valid_pointer(active_list_ptr) ||
+        !Utils::valid_pointer(last_list_ptr))
+    {
+        debug_out = std::format(
+            "gom=0x{:X} list ptr missing",
+            gom
+        );
         return false;
     }
 
+    constexpr std::size_t kMaxGomNodes = 8192;
+
     std::vector<std::uint64_t> node_addrs;
-    node_addrs.reserve(512);
+    node_addrs.reserve(4096);
+
+    std::unordered_set<std::uint64_t> visited_nodes;
+    visited_nodes.reserve(4096);
 
     std::uint64_t curr = active_list_ptr;
 
-    for (std::size_t walk = 0;
-        Utils::valid_pointer(curr) && walk < 10000;
-        ++walk)
+    bool reached_sampled_tail = false;
+    bool detected_cycle = false;
+    bool hit_walk_cap = false;
+    bool ended_on_invalid_next = false;
+
+    while (Utils::valid_pointer(curr) &&
+        node_addrs.size() < kMaxGomNodes)
     {
+        
+        if (!visited_nodes.emplace(curr).second)
+        {
+            detected_cycle = true;
+            break;
+        }
+
         node_addrs.push_back(curr);
 
-        // last_list_ptr is the node address, so include it and stop here.
         if (curr == last_list_ptr)
+        {
+            reached_sampled_tail = true;
             break;
+        }
 
         curr = mem.Read<std::uint64_t>(
             curr + offsetof(LinkedListObject, next)
         );
     }
 
-    if (node_addrs.empty()) {
-        debug_out = std::format("gom=0x{:X} nodes=0 (menu?)", gom);
+    if (!reached_sampled_tail)
+    {
+        if (!Utils::valid_pointer(curr))
+            ended_on_invalid_next = true;
+        else if (node_addrs.size() >= kMaxGomNodes)
+            hit_walk_cap = true;
+    }
+
+    if (node_addrs.empty())
+    {
+        debug_out = std::format(
+            "gom=0x{:X} nodes=0 (menu/loading?)",
+            gom
+        );
         return false;
     }
 
-    if (node_addrs.back() != last_list_ptr) {
+    std::string walk_status;
+
+    if (!reached_sampled_tail)
+    {
         std::ostringstream ss;
 
-        ss << std::uppercase << std::hex
-            << "gom=0x" << gom
-            << " active-list walk did not reach tail"
-            << " (first=0x" << active_list_ptr
-            << ", last=0x" << last_list_ptr
-            << ", walked=" << std::dec << node_addrs.size()
-            << ")";
+        ss << " | active-list partial"
+            << " nodes=" << node_addrs.size();
 
-        debug_out = ss.str();
-        return false;
+        if (detected_cycle)
+            ss << " cycle";
+
+        if (hit_walk_cap)
+            ss << " cap";
+
+        if (ended_on_invalid_next)
+            ss << " invalid-next";
+
+        walk_status = ss.str();
     }
-
 
     const std::size_t count = node_addrs.size();
     std::vector<LinkedListObject> nodes(count);
 
     {
         auto scatter = mem.CreateScatterHandle();
-        if (!scatter) {
+
+        if (!scatter)
+        {
             debug_out = "scatter open failed (nodes)";
             return false;
         }
 
         for (std::size_t i = 0; i < count; ++i)
-            mem.AddScatterReadRequest(scatter, node_addrs[i], &nodes[i], sizeof(LinkedListObject));
+        {
+            mem.AddScatterReadRequest(
+                scatter,
+                node_addrs[i],
+                &nodes[i],
+                sizeof(LinkedListObject)
+            );
+        }
 
-        if (!mem.ExecuteReadScatter(scatter)) {
+        if (!mem.ExecuteReadScatter(scatter))
+        {
             mem.CloseScatterHandle(scatter);
             debug_out = "scatter read failed (nodes)";
             return false;
         }
+
         mem.CloseScatterHandle(scatter);
     }
 
     std::vector<std::uint64_t> name_ptrs(count, 0);
+
     {
         auto scatter = mem.CreateScatterHandle();
-        if (!scatter) {
+
+        if (!scatter)
+        {
             debug_out = "scatter open failed (names)";
             return false;
         }
 
-        bool any = false;
-        for (std::size_t i = 0; i < count; ++i) {
+        bool has_name_requests = false;
+
+        for (std::size_t i = 0; i < count; ++i)
+        {
             if (!Utils::valid_pointer(nodes[i].this_object))
                 continue;
-            any = true;
+
+            has_name_requests = true;
+
             mem.AddScatterReadRequest(
                 scatter,
                 nodes[i].this_object + UnityOffsets::GameObject_NameOffset,
                 &name_ptrs[i],
-                sizeof(std::uint64_t));
+                sizeof(std::uint64_t)
+            );
         }
 
-        if (any && !mem.ExecuteReadScatter(scatter)) {
+        if (has_name_requests && !mem.ExecuteReadScatter(scatter))
+        {
             mem.CloseScatterHandle(scatter);
             debug_out = "scatter read failed (names)";
             return false;
         }
+
         mem.CloseScatterHandle(scatter);
     }
 
     bool saw_game_world = false;
+
     std::string last_reject;
-    std::uint64_t pending_gw{};
-    std::uint64_t pending_gw_object{};
+
+    std::uint64_t pending_gw = 0;
+    std::uint64_t pending_gw_object = 0;
     std::string pending_map;
 
-    for (std::size_t i = 0; i < count; ++i) {
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        if (!Utils::valid_pointer(nodes[i].this_object))
+            continue;
+
         if (!Utils::valid_pointer(name_ptrs[i]))
             continue;
 
-        const std::string name = mem.readUTF8String(name_ptrs[i], 64);
+        const std::string name =
+            mem.readUTF8String(name_ptrs[i], 64);
+
         if (_stricmp(name.c_str(), "GameWorld") != 0)
             continue;
 
@@ -275,53 +350,106 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
 
         const std::uint64_t local_gw = mem.ReadChain(
             nodes[i].this_object,
-            {UnityOffsets::GameObject_ComponentsOffset, 0x18, UnityOffsets::Component_ObjectClassOffset});
+            {
+                UnityOffsets::GameObject_ComponentsOffset,
+                0x18,
+                UnityOffsets::Component_ObjectClassOffset
+            }
+        );
 
-        if (!Utils::valid_pointer(local_gw)) {
+        if (!Utils::valid_pointer(local_gw))
+        {
             last_reject = "GameWorld component chain failed";
             continue;
         }
 
-        const std::uint64_t local_player =
-            mem.Read<std::uint64_t>(local_gw + sdk::ClientLocalGameWorld::MainPlayer);
+        const std::uint64_t local_player = mem.Read<std::uint64_t>(
+            local_gw + sdk::ClientLocalGameWorld::MainPlayer
+        );
 
         RaidState attempt{};
         std::string reject;
-        if (fillRaidFromLocalGameWorld(gom, local_gw, local_player, nodes[i].this_object, attempt, reject)) {
+
+        if (fillRaidFromLocalGameWorld(
+            gom,
+            local_gw,
+            local_player,
+            nodes[i].this_object,
+            attempt,
+            reject))
+        {
             raid = attempt;
             debug_out = reject;
             return true;
         }
 
         last_reject = reject;
+
         pending_gw = local_gw;
         pending_gw_object = nodes[i].this_object;
 
-        std::uint64_t map_ptr = mem.Read<std::uint64_t>(local_gw + sdk::GameWorld::Location);
-        if (!Utils::valid_pointer(map_ptr) && Utils::valid_pointer(local_player))
-            map_ptr = mem.Read<std::uint64_t>(local_player + sdk::Player::Location);
+        std::uint64_t map_ptr = mem.Read<std::uint64_t>(
+            local_gw + sdk::GameWorld::Location
+        );
 
-        if (Utils::valid_pointer(map_ptr)) {
+        if (!Utils::valid_pointer(map_ptr) &&
+            Utils::valid_pointer(local_player))
+        {
+            map_ptr = mem.Read<std::uint64_t>(
+                local_player + sdk::Player::Location
+            );
+        }
+
+        if (Utils::valid_pointer(map_ptr))
+        {
             const int len = mem.Read<int>(map_ptr + 0x10);
+
             if (len > 0 && len <= 64)
-                pending_map = mem.readUnicodeString(map_ptr + 0x14, static_cast<SIZE_T>(len));
+            {
+                pending_map = mem.readUnicodeString(
+                    map_ptr + 0x14,
+                    static_cast<SIZE_T>(len)
+                );
+            }
         }
     }
 
-    if (pending_out && Utils::valid_pointer(pending_gw)) {
+    if (pending_out && Utils::valid_pointer(pending_gw))
+    {
         pending_out->active = true;
         pending_out->game_world_object = pending_gw_object;
         pending_out->local_game_world = pending_gw;
         pending_out->map_name = pending_map;
     }
 
-    if (!saw_game_world) {
-        debug_out = std::format("gom=0x{:X} nodes={} no GameWorld (menu/hideout?)", gom, count);
-    } else if (!last_reject.empty()) {
-        debug_out = std::format("gom=0x{:X} GameWorld pending: {}", gom, last_reject);
-    } else {
-        debug_out = std::format("gom=0x{:X} nodes={} GameWorld reject", gom, count);
+    if (!saw_game_world)
+    {
+        debug_out = std::format(
+            "gom=0x{:X} nodes={} no GameWorld (menu/hideout/loading?){}",
+            gom,
+            count,
+            walk_status
+        );
     }
+    else if (!last_reject.empty())
+    {
+        debug_out = std::format(
+            "gom=0x{:X} GameWorld pending: {}{}",
+            gom,
+            last_reject,
+            walk_status
+        );
+    }
+    else
+    {
+        debug_out = std::format(
+            "gom=0x{:X} nodes={} GameWorld reject{}",
+            gom,
+            count,
+            walk_status
+        );
+    }
+
     return false;
 }
 
