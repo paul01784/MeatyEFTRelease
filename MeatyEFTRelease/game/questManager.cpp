@@ -380,6 +380,9 @@ void QuestManager::updateAndPruneActiveQuests()
 {
     try
     {
+        if (!espGlobals::drawQuestHelper && !radarGlobals::drawQuestHelper)
+            return;
+
         std::vector<QuestData> activeSnapshot;
 
         {
