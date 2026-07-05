@@ -167,27 +167,46 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
         return false;
     }
 
-    LinkedListObject head = mem.Read<LinkedListObject>(active_list_ptr);
-    LinkedListObject tail = mem.Read<LinkedListObject>(last_list_ptr);
-
-    if (!Utils::valid_pointer(head.this_object)) {
-        debug_out = std::format("gom=0x{:X} head invalid", gom);
-        return false;
-    }
-
     std::vector<std::uint64_t> node_addrs;
     node_addrs.reserve(512);
 
-    std::uint64_t curr = head.next;
-    for (std::size_t walk = 0; Utils::valid_pointer(curr) && curr != tail.this_object && walk < 10000; ++walk) {
+    std::uint64_t curr = active_list_ptr;
+
+    for (std::size_t walk = 0;
+        Utils::valid_pointer(curr) && walk < 10000;
+        ++walk)
+    {
         node_addrs.push_back(curr);
-        curr = mem.Read<std::uint64_t>(curr + offsetof(LinkedListObject, next));
+
+        // last_list_ptr is the node address, so include it and stop here.
+        if (curr == last_list_ptr)
+            break;
+
+        curr = mem.Read<std::uint64_t>(
+            curr + offsetof(LinkedListObject, next)
+        );
     }
 
     if (node_addrs.empty()) {
         debug_out = std::format("gom=0x{:X} nodes=0 (menu?)", gom);
         return false;
     }
+
+    if (node_addrs.back() != last_list_ptr) {
+        std::ostringstream ss;
+
+        ss << std::uppercase << std::hex
+            << "gom=0x" << gom
+            << " active-list walk did not reach tail"
+            << " (first=0x" << active_list_ptr
+            << ", last=0x" << last_list_ptr
+            << ", walked=" << std::dec << node_addrs.size()
+            << ")";
+
+        debug_out = ss.str();
+        return false;
+    }
+
 
     const std::size_t count = node_addrs.size();
     std::vector<LinkedListObject> nodes(count);

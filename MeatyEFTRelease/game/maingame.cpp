@@ -386,29 +386,27 @@ void MainGame::getPlayerListDetails()
     }
 }
 
-void MainGame::getGameWorldDetails() {
+void MainGame::getGameWorldDetails()
+{
+    LOGS.logInfo("[Main] Waiting for raid start!");
 
-    try {
+    globals::radarSubText = "Trying to resolve game world details";
 
-        LOGS.logInfo("[Main] Waiting for raid start!");
+    int waitAttempts = 0;
+    int pendingAttempts = 0;
 
-        globals::radarSubText = "Trying to resolve game world details";
+    std::uint64_t pending_local_gw = 0;
+    std::uint64_t pending_gw_object = 0;
 
-        int waitAttempts = 0;
-        std::uint64_t pending_local_gw = 0;
-        std::uint64_t pending_gw_object = 0;
+    constexpr int kLogEveryAttempts = 4;
+    constexpr int kMaxPendingPromoteAttempts = 12;
+    constexpr DWORD kRetryDelayMs = 2500;
 
-        while (true)
+    while (true)
+    {
+        try
         {
             ++waitAttempts;
-            Sleep(2500);
-
-            if (!Utils::valid_pointer(this->gameObjectManager))
-            {
-                if ((waitAttempts % 4) == 0)
-                    LOGS.logInfo("[Main] Still waiting: GOM invalid");
-                continue;
-            }
 
             RaidState raid{};
             std::string probe;
@@ -416,47 +414,74 @@ void MainGame::getGameWorldDetails() {
 
             if (Utils::valid_pointer(pending_local_gw))
             {
-                resolved = tryPromotePendingRaid(
-                    this->gameObjectManager, pending_local_gw, pending_gw_object, raid, probe);
+                resolved = tryPromotePendingRaid(this->gameObjectManager, pending_local_gw, pending_gw_object, raid, probe);
+
+                if (!resolved)
+                {
+                    ++pendingAttempts;
+
+                    if (pendingAttempts >= kMaxPendingPromoteAttempts)
+                    {
+                        LOGS.logInfo("[Main] Pending GameWorld did not become ready; rescanning GOM");
+
+                        pending_local_gw = 0;
+                        pending_gw_object = 0;
+                        pendingAttempts = 0;
+                    }
+                }
             }
             else
             {
                 RaidPendingState pending{};
+
                 resolved = tryResolveRaid(this->gameObjectManager, raid, probe, &pending);
-                if (!resolved && pending.active && Utils::valid_pointer(pending.local_game_world))
+
+                if (!resolved &&
+                    pending.active &&
+                    Utils::valid_pointer(pending.local_game_world))
                 {
                     pending_local_gw = pending.local_game_world;
                     pending_gw_object = pending.game_world_object;
+                    pendingAttempts = 0;
+
+                    LOGS.logInfo("[Main] GameWorld found; waiting for raid data");
                 }
             }
 
-            if (!resolved)
+            if (resolved)
             {
-                if ((waitAttempts % 4) == 0)
-                {
-                    LOGS.logInfo(
-                        "[Main] Still waiting: ",
-                        probe.empty() ? "raid not ready" : probe
-                    );
-                }
-                continue;
+                applyRaidStateToMainGame(raid);
+
+                this->gameWorld = raid.game_world_object;
+                this->localGameWorld = raid.local_game_world;
+
+                LOGS.logInfo("[Main] ", probe);
+                break;
             }
 
-            applyRaidStateToMainGame(raid);
-            this->gameWorld = raid.game_world_object;
-            this->localGameWorld = raid.local_game_world;
-
-            LOGS.logInfo("[Main] ", probe);
-            break;
+            if ((waitAttempts % kLogEveryAttempts) == 0)
+            {
+                LOGS.logInfo("[Main] Still waiting: ", probe.empty() ? "raid not ready" : probe);
+            }
         }
-    }
-    catch (const std::exception& e) {
-        LOGS.logError("Exception caught in getGameWorldDetails: " + std::string(e.what()) + ". Retrying...");
-       
-    }
-    catch (...) {
-        LOGS.logError("Unknown exception caught in getGameWorldDetails. Retrying...");
-       
+        catch (const std::exception& e)
+        {
+            LOGS.logError("Exception in getGameWorldDetails: " + std::string(e.what()));
+
+            pending_local_gw = 0;
+            pending_gw_object = 0;
+            pendingAttempts = 0;
+        }
+        catch (...)
+        {
+            LOGS.logError("Unknown exception in getGameWorldDetails");
+
+            pending_local_gw = 0;
+            pending_gw_object = 0;
+            pendingAttempts = 0;
+        }
+
+        Sleep(kRetryDelayMs);
     }
 }
 
