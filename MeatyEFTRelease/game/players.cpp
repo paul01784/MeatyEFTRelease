@@ -1362,14 +1362,12 @@ namespace
                 if (slot < 0)
                     return;
 
-                const size_t boneIndex =
-                    static_cast<size_t>(slot);
+                const size_t boneIndex = static_cast<size_t>(slot);
 
                 if (boneIndex >= player.bonePtrs.size())
                     return;
 
-                const uint64_t bonePtr =
-                    player.bonePtrs[boneIndex];
+                const uint64_t bonePtr = player.bonePtrs[boneIndex];
 
                 // One bad optional bone must never stop Base/LFoot/RFoot,
                 // or other valid bones, from being read.
@@ -1385,8 +1383,7 @@ namespace
 
                 if (boneIndex < player.transformCache.size())
                 {
-                    read.cache =
-                        player.transformCache[boneIndex];
+                    read.cache = player.transformCache[boneIndex];
                 }
 
                 reads.emplace_back(std::move(read));
@@ -1458,8 +1455,7 @@ void Players::boneTask()
                     continue;
                 }
 
-                const bool minimalPointersMissing =
-                    !HasMinimalBonePointers(player);
+                const bool minimalPointersMissing = !HasMinimalBonePointers(player);
 
                 // setup after adding a player
                 // or recovery after all Base/LFoot/RFoot positions failed
@@ -1493,8 +1489,7 @@ void Players::boneTask()
                 pending.snapshot.distance = player.distance;
                 pending.snapshot.isLocal = player.isLocal;
                 pending.snapshot.bonePtrs = player.bonePtrs;
-                pending.snapshot.transformCache =
-                    player.boneTransformCache;
+                pending.snapshot.transformCache = player.boneTransformCache;
 
                 // Initial distance is 0 until Base/LFoot/RFoot is done
                 pending.readFullBoneList = !player.isLocal && player.distance > 0 && player.distance <= drawPlayerDistance;
