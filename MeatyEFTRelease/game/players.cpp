@@ -1716,13 +1716,9 @@ void Players::playersTask()
         }
 
         updateEntity();
+        checkGroupIDs();
+        checkExfil();
 
-        {
-            std::lock_guard<std::mutex> lock(playerMutex);
-
-            checkExfil();
-            checkGroupIDs();
-        }
     }
     catch (const std::exception& e)
     {
@@ -2992,37 +2988,26 @@ void Players::updateEntity()
 
 void Players::checkGroupIDs()
 {
-
     if (groupIDSet)
         return;
 
     if (!mem.vHandle)
         return;
 
-    // Do not group until local has actually spawned in.
-    // localPlayerHands must not be ClientEmptyHandsController.
     if (!mainGame.checkIfRaidStarted())
         return;
 
-    auto& cache = players.getCache();
+    constexpr std::size_t MinimumCacheEntries = 5; // More than 4.
+    constexpr float GroupDistanceMeters = 30.0f; // max distance between players
 
-    if (cache.empty())
-        return;
+    struct GroupSnapshot
+    {
+        std::uint64_t instance = 0;
+        glm::vec3 worldLocation{};
+        bool isLocal = false;
+    };
 
-    constexpr float GROUP_DISTANCE_METERS = 15.0f;
-
-    auto hasValidBone = [&](const PlayerCache& player) -> bool
-        {
-            return isValidBoneVector(player.bonePositions[allPlayerBones::HumanBase]);
-        };
-
-    auto isValidGroupId = [](const std::string& groupId) -> bool
-        {
-            // Treat blank and 0 as unassigned.
-            return !groupId.empty() && groupId != "0";
-        };
-
-    auto isValidGroupingTarget = [&](const PlayerCache& player) -> bool
+    auto isGroupingTarget = [](const PlayerCache& player) -> bool
         {
             if (player.isBTR)
                 return false;
@@ -3036,249 +3021,211 @@ void Players::checkGroupIDs()
             if (!(player.isPlayer || player.isPlayerScav))
                 return false;
 
-            if (!hasValidBone(player))
-                return false;
-
             return true;
         };
 
-    // Build list of valid player indexes
-    std::vector<size_t> targets;
-    targets.reserve(cache.size());
-
-    int localTargetIndex = -1;
-
-    for (size_t i = 0; i < cache.size(); ++i)
-    {
-        PlayerCache& player = cache[i];
-
-        if (!isValidGroupingTarget(player))
-            continue;
-
-        const int targetIndex = static_cast<int>(targets.size());
-        targets.emplace_back(i);
-
-        if (player.isLocal && player.instance == mainGame.localPlayerPtr)
-            localTargetIndex = targetIndex;
-    }
-
-    // Need local to be fully valid before doing the one-time spawn grouping.
-    if (localTargetIndex < 0)
-        return;
-
-    // Need at least 2 valid players to create any group.
-    if (targets.size() < 2)
-        return;
-
-    // Unionfind setup
-    std::vector<int> parent(targets.size());
-
-    for (int i = 0; i < static_cast<int>(parent.size()); ++i)
-        parent[i] = i;
-
-    auto Find = [&](int x) -> int
+    auto hasValidWorldLocation = [](const glm::vec3& position) -> bool
         {
-            while (parent[x] != x)
+            if (!std::isfinite(position.x) ||
+                !std::isfinite(position.y) ||
+                !std::isfinite(position.z))
             {
-                parent[x] = parent[parent[x]];
-                x = parent[x];
+                return false;
             }
 
-            return x;
+            return position.x != 0.0f ||
+                position.y != 0.0f ||
+                position.z != 0.0f;
         };
 
-    auto Union = [&](int a, int b)
-        {
-            int rootA = Find(a);
-            int rootB = Find(b);
+    std::vector<GroupSnapshot> snapshot;
+    int localSnapshotIndex = -1;
 
-            if (rootA == rootB)
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+
+        auto& cache = players.getCache();
+
+        if (cache.size() < MinimumCacheEntries)
+            return;
+
+        snapshot.reserve(cache.size());
+
+        for (const PlayerCache& player : cache)
+        {
+            if (!isGroupingTarget(player))
+                continue;
+
+            if (!hasValidWorldLocation(player.location))
                 return;
 
-            const int localRoot = Find(localTargetIndex);
+            GroupSnapshot entry{};
+            entry.instance = player.instance;
+            entry.worldLocation = player.location;
+            entry.isLocal =
+                player.isLocal &&
+                player.instance == mainGame.localPlayerPtr;
 
-            // If one side is locals component, keep local as the root.
-            if (rootA == localRoot)
-            {
-                parent[rootB] = rootA;
-            }
-            else if (rootB == localRoot)
-            {
-                parent[rootA] = rootB;
-            }
-            else
-            {
-                parent[rootB] = rootA;
-            }
-        };
+            const int snapshotIndex = static_cast<int>(snapshot.size());
+            snapshot.emplace_back(entry);
 
-    // ---------------------------------------------------------
-    // Join players that are within group distance
-    // This groups local and non-local teams.
-    // It also handles chained grouping:
-    // A close to B, B close to C => A/B/C same group.
-    // ---------------------------------------------------------
-    bool foundAnyPair = false;
-
-    for (int a = 0; a < static_cast<int>(targets.size()); ++a)
-    {
-        PlayerCache& playerA = cache[targets[a]];
-
-        const glm::vec3 posA =
-            playerA.bonePositions[allPlayerBones::HumanBase];
-
-        for (int b = a + 1; b < static_cast<int>(targets.size()); ++b)
-        {
-            PlayerCache& playerB = cache[targets[b]];
-
-            if (playerA.instance == playerB.instance)
-                continue;
-
-            const glm::vec3 posB =
-                playerB.bonePositions[allPlayerBones::HumanBase];
-
-            const float dist = players.getDistance(posA, posB);
-
-            if (!std::isfinite(dist))
-                continue;
-
-            if (dist > GROUP_DISTANCE_METERS)
-                continue;
-
-            Union(a, b);
-            foundAnyPair = true;
+            if (entry.isLocal)
+                localSnapshotIndex = snapshotIndex;
         }
     }
 
-    if (!foundAnyPair)
+    //local player is included
+    if (localSnapshotIndex < 0)
         return;
 
-    // Count how many players are in each connected component
-    std::unordered_map<int, int> componentCounts;
+    const int targetCount = static_cast<int>(snapshot.size());
 
-    for (int i = 0; i < static_cast<int>(targets.size()); ++i)
-    {
-        const int root = Find(i);
-        componentCounts[root]++;
-    }
+    std::vector<int> parent(targetCount);
+    for (int i = 0; i < targetCount; ++i)
+        parent[i] = i;
 
-    const int localRoot = Find(localTargetIndex);
-
-    // Build component -> group id map
-    std::unordered_map<int, std::string> componentGroupIds;
-
-    int nextGroupId = 1;
-
-    auto getNextGroupId = [&]() -> std::string
+    auto Find = [&](int value) -> int
         {
-            return std::to_string(nextGroupId++);
+            while (parent[value] != value)
+            {
+                parent[value] = parent[parent[value]];
+                value = parent[value];
+            }
+
+            return value;
         };
 
-    PlayerCache& localPlayer = cache[targets[localTargetIndex]];
-
-    if (componentCounts[localRoot] >= 2)
-    {
-        if (!isValidGroupId(mainGame.localGroupId))
+    auto Union = [&](int left, int right)
         {
-            if (isValidGroupId(localPlayer.groupId))
-                mainGame.localGroupId = localPlayer.groupId;
-            else
-                mainGame.localGroupId = getNextGroupId();
-        }
+            const int leftRoot = Find(left);
+            const int rightRoot = Find(right);
 
-        componentGroupIds[localRoot] = mainGame.localGroupId;
+            if (leftRoot != rightRoot)
+                parent[rightRoot] = leftRoot;
+        };
+
+    // Connected proximity grouping:
+    // A <-> B within 30m and B <-> C within 30m makes A/B/C one group.
+    for (int a = 0; a < targetCount; ++a)
+    {
+        for (int b = a + 1; b < targetCount; ++b)
+        {
+            const float distance = players.getDistance(
+                snapshot[a].worldLocation,
+                snapshot[b].worldLocation
+            );
+
+            if (!std::isfinite(distance))
+                continue;
+
+            if (distance <= GroupDistanceMeters)
+                Union(a, b);
+        }
     }
 
-    // Preserve valid existing group IDs for non-local grouped components.
-    for (int i = 0; i < static_cast<int>(targets.size()); ++i)
+    std::unordered_map<int, int> componentCounts;
+    componentCounts.reserve(snapshot.size());
+
+    for (int i = 0; i < targetCount; ++i)
+        ++componentCounts[Find(i)];
+
+    std::unordered_map<int, std::string> componentGroupIds;
+    componentGroupIds.reserve(componentCounts.size());
+
+    int nextGroupNumber = 1;
+    int groupedComponents = 0;
+    int groupedPlayers = 0;
+
+    for (int i = 0; i < targetCount; ++i)
     {
         const int root = Find(i);
 
-        // Do not assign group ids to solo players.
         if (componentCounts[root] < 2)
             continue;
 
-        if (root == localRoot)
+        if (componentGroupIds.find(root) != componentGroupIds.end())
             continue;
 
-        PlayerCache& player = cache[targets[i]];
+        componentGroupIds.emplace(
+            root,
+            "proximity_" + std::to_string(nextGroupNumber++)
+        );
 
-        if (isValidGroupId(player.groupId))
-        {
-            if (componentGroupIds.find(root) == componentGroupIds.end())
-                componentGroupIds[root] = player.groupId;
-        }
+        ++groupedComponents;
     }
 
-    // Assign new group IDs to grouped components that do not have one.
-    for (int i = 0; i < static_cast<int>(targets.size()); ++i)
+    std::unordered_map<std::uint64_t, std::string> assignments;
+    assignments.reserve(snapshot.size());
+
+    std::string resolvedLocalGroupId;
+
+    for (int i = 0; i < targetCount; ++i)
     {
         const int root = Find(i);
+        std::string groupId;
 
-        // Do not assign group ids to solo players.
-        if (componentCounts[root] < 2)
-            continue;
+        const auto groupIt = componentGroupIds.find(root);
+        if (groupIt != componentGroupIds.end())
+        {
+            groupId = groupIt->second;
+            ++groupedPlayers;
+        }
 
-        if (componentGroupIds.find(root) == componentGroupIds.end())
-            componentGroupIds[root] = getNextGroupId();
+        // Solo players deliberately receive an empty ID.
+        assignments.emplace(snapshot[i].instance, groupId);
+
+        if (i == localSnapshotIndex)
+            resolvedLocalGroupId = groupId;
     }
 
-    // Apply group IDs
-    bool assignedAnyGroup = false;
-
-    for (int i = 0; i < static_cast<int>(targets.size()); ++i)
     {
-        const int root = Find(i);
+        std::lock_guard<std::mutex> lock(playerMutex);
 
-        // Do not assign fake group ids to solo players.
-        if (componentCounts[root] < 2)
-            continue;
+        auto& cache = players.getCache();
 
-        PlayerCache& player = cache[targets[i]];
+        // If the player list changed between snapshot and commit, do not
+        // finalise a partial/incorrect one-time grouping pass.
+        std::unordered_map<std::uint64_t, PlayerCache*> currentPlayers;
+        currentPlayers.reserve(cache.size());
 
-        auto groupIt = componentGroupIds.find(root);
-        if (groupIt == componentGroupIds.end())
-            continue;
-
-        const std::string& newGroupId = groupIt->second;
-
-        if (player.groupId != newGroupId)
+        for (PlayerCache& player : cache)
         {
-            player.groupId = newGroupId;
-            assignedAnyGroup = true;
+            if (Utils::valid_pointer(player.instance))
+                currentPlayers.emplace(player.instance, &player);
+        }
+
+        for (const GroupSnapshot& entry : snapshot)
+        {
+            if (currentPlayers.find(entry.instance) == currentPlayers.end())
+                return;
+        }
+
+        for (const auto& [instance, groupId] : assignments)
+        {
+            const auto playerIt = currentPlayers.find(instance);
+            if (playerIt != currentPlayers.end())
+                playerIt->second->groupId = groupId;
         }
     }
 
-    // Final sync for local player if local has a real group
-    if (componentCounts[localRoot] >= 2)
-    {
-        auto localGroupIt = componentGroupIds.find(localRoot);
+    // Empty means local player is solo.
+    mainGame.localGroupId = resolvedLocalGroupId;
 
-        if (localGroupIt != componentGroupIds.end())
-        {
-            mainGame.localGroupId = localGroupIt->second;
+    // Scan is complete even if every player is solo.
+    groupIDSet = true;
 
-            if (localPlayer.groupId != mainGame.localGroupId)
-            {
-                localPlayer.groupId = mainGame.localGroupId;
-                assignedAnyGroup = true;
-            }
-        }
-    }
+    std::ostringstream ss;
+    ss << "[PLAYERS][GROUP] One-time grouping complete"
+        << " | cache=" << snapshot.size()
+        << " | groups=" << groupedComponents
+        << " | groupedPlayers=" << groupedPlayers
+        << " | solos=" << (targetCount - groupedPlayers)
+        << " | localGroupId="
+        << (mainGame.localGroupId.empty()
+            ? "none"
+            : mainGame.localGroupId);
 
-    if (assignedAnyGroup)
-    {
-        groupIDSet = true;
-
-        std::ostringstream ss;
-        ss << "[PLAYERS][GROUP] Group IDs assigned. "
-            << "LocalGroupId: "
-            << (mainGame.localGroupId.empty() ? "none" : mainGame.localGroupId)
-            << " | validTargets: "
-            << targets.size();
-
-        LOGS.logInfo(ss.str());
-    }
+    LOGS.logInfo(ss.str());
 }
 
 static const std::unordered_set<std::string> skipNames =
@@ -4734,20 +4681,17 @@ inline bool HandsInfo::update(const PlayerCache& playerCache)
 
 void Players::checkExfil()
 {
-    // IMPORTANT:
-    // This function assumes playerMutex is already locked by playersTask().
-    // Do not lock playerMutex again in here.
 
     if (!mem.vHandle)
         return;
+
+    std::lock_guard<std::mutex> lock(playerMutex);
 
     std::vector<PlayerCache>& cache = players.getCache();
 
     if (cache.empty())
         return;
 
-    // If updatePlayerList failed or returned a bad count, do not mark everyone exfiled.
-    // Adjust this max if your registered player buffer supports more.
     constexpr int MAX_REGISTERED_PLAYERS_SAFE = 512;
 
     const int registeredCount = mainGame.registeredPlayersCount;
@@ -4758,7 +4702,6 @@ void Players::checkExfil()
         return;
     }
 
-    // Build a fast lookup of currently registered player instances.
     std::unordered_set<uint64_t> alivePlayers;
     alivePlayers.reserve(static_cast<size_t>(registeredCount));
 
@@ -4772,8 +4715,6 @@ void Players::checkExfil()
         alivePlayers.insert(playerInstance);
     }
 
-    // If the buffer had no valid player pointers, skip.
-    // This avoids falsely marking everyone exfiled during a bad read/frame.
     if (alivePlayers.empty())
     {
         LOGS.logError("[PLAYERS][EXFIL] No valid registered players found, skipping exfil check");
