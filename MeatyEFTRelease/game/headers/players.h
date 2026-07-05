@@ -223,7 +223,7 @@ struct PlayerCache {
 
 
 	std::chrono::steady_clock::time_point lastEquipmentUpdate{};
-	std::chrono::milliseconds equipmentUpdateInterval{5000};
+	std::chrono::milliseconds equipmentUpdateInterval{20000};
 	bool equipInited;
 	std::vector<slots> _slots;
 	int playerValue;

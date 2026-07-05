@@ -3307,8 +3307,8 @@ void Players::playerEquipment()
         decltype(std::declval<PlayerCache&>().playerValue)
         >;
 
-    static constexpr size_t kMaxEquipmentInitPerPass = 3;
-    static constexpr size_t kMaxEquipmentScanPerPass = 5;
+    static constexpr size_t kMaxEquipmentInitPerPass = 2;
+    static constexpr size_t kMaxEquipmentScanPerPass = 2;
 
     static size_t initRoundRobinCursor = 0;
     static size_t scanRoundRobinCursor = 0;
@@ -3569,8 +3569,7 @@ void Players::playerEquipment()
 
                             if (mem.AddScatterReadRequest(
                                 handle,
-                                job.inventoryController +
-                                sdk::InventoryController::Inventory,
+                                job.inventoryController + sdk::InventoryController::Inventory,
                                 &job.inventory,
                                 sizeof(job.inventory)))
                             {
@@ -3596,8 +3595,7 @@ void Players::playerEquipment()
 
                             if (mem.AddScatterReadRequest(
                                 handle,
-                                job.inventory +
-                                sdk::Inventory::Equipment,
+                                job.inventory + sdk::Inventory::Equipment,
                                 &job.equipment,
                                 sizeof(job.equipment)))
                             {
@@ -3623,8 +3621,7 @@ void Players::playerEquipment()
 
                             if (mem.AddScatterReadRequest(
                                 handle,
-                                job.equipment +
-                                sdk::InventoryEquipment::_cachedSlots,
+                                job.equipment + sdk::InventoryEquipment::_cachedSlots,
                                 &job.slotsPtr,
                                 sizeof(job.slotsPtr)))
                             {
