@@ -59,41 +59,70 @@ void TaskManager::run() {
     }
 }
 
-void TaskManager::updateTasks(double deltaTime) {
-    std::string heaviestTask;
-    double heaviestOverdue = 0.0;
+void TaskManager::updateTasks(double deltaTime)
+{
+    std::string heaviestHeavyTask;
+    double heaviestHeavyOverdue = 0.0;
 
-    for (auto& [name, task] : tasks) {
-        task.elapsedTime += deltaTime;
-        if (task.elapsedTime < *(task.interval))
+    for (auto& [name, task] : tasks)
+    {
+        if (!task.interval || !task.function)
             continue;
 
-        const double overdue = task.elapsedTime - *(task.interval);
-        if (overdue > heaviestOverdue) {
-            heaviestOverdue = overdue;
-            heaviestTask = name;
+        task.elapsedTime += deltaTime;
+
+        const double intervalMs = *task.interval;
+        if (intervalMs <= 0.0)
+            continue;
+
+        if (!IsHeavyDmaTask(name))
+            continue;
+
+        if (task.elapsedTime < intervalMs)
+            continue;
+
+        const double overdue = task.elapsedTime - intervalMs;
+
+        if (heaviestHeavyTask.empty() || overdue > heaviestHeavyOverdue)
+        {
+            heaviestHeavyOverdue = overdue;
+            heaviestHeavyTask = name;
         }
     }
 
-    for (auto& [name, task] : tasks) {
-        if (task.elapsedTime < *(task.interval))
+    for (auto& [name, task] : tasks)
+    {
+        if (!task.interval || !task.function)
             continue;
 
-        // Avoid stacking the two heaviest DMA tasks in one scheduler tick.
-        if (!heaviestTask.empty() && name != heaviestTask &&
-            IsHeavyDmaTask(name) && IsHeavyDmaTask(heaviestTask))
+        const double intervalMs = *task.interval;
+
+        if (intervalMs <= 0.0)
+            continue;
+
+        if (task.elapsedTime < intervalMs)
+            continue;
+
+        if (IsHeavyDmaTask(name) &&
+            !heaviestHeavyTask.empty() &&
+            name != heaviestHeavyTask)
         {
             continue;
         }
 
         const auto started = std::chrono::steady_clock::now();
+
         task.function();
+
         const double durationMs =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started
+            ).count();
 
         PerfMonitor::Instance().Record("task." + name, durationMs);
 
-        task.elapsedTime -= *(task.interval);
+        task.elapsedTime -= intervalMs;
+
         if (task.elapsedTime < 0.0)
             task.elapsedTime = 0.0;
     }

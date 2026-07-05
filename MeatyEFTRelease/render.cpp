@@ -2518,6 +2518,87 @@ static void renderMenuSettings()
                         ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "Error: %s", lastError.c_str());
                 }
 
+                ImGui::SeparatorText("App Timings");
+                auto DrawTaskTiming = [](const char* label, double& value, double minValue, double maxValue, double speed = 1.0)
+                    {
+                        const double oldValue = value;
+
+                        ImGui::SetNextItemWidth(200.0f);
+
+                        if (ImGui::DragScalar(
+                            label,
+                            ImGuiDataType_Double,
+                            &value,
+                            static_cast<float>(speed),
+                            &minValue,
+                            &maxValue,
+                            "%.0f ms",
+                            ImGuiSliderFlags_AlwaysClamp))
+                        {
+                            value = std::clamp(value, minValue, maxValue);
+                        }
+
+                        if (ImGui::IsItemHovered())
+                        {
+                            ImGui::SetTooltip("%s\nCurrent: %.2f ms\nApprox rate: %.1f Hz",
+                                label,
+                                value,
+                                value > 0.0 ? (1000.0 / value) : 0.0
+                            );
+                        }
+
+                        return oldValue != value;
+                    };
+
+                bool timingsChanged = false;
+
+                timingsChanged |= DrawTaskTiming(
+                    "Camera",
+                    globals::taskCamera,
+                    1.0,
+                    100.0,
+                    0.5
+                );
+
+                timingsChanged |= DrawTaskTiming(
+                    "Players",
+                    globals::taskPlayers,
+                    5.0,
+                    500.0,
+                    1.0
+                );
+
+                timingsChanged |= DrawTaskTiming(
+                    "Player Bones",
+                    globals::taskPlayersBones,
+                    5.0,
+                    500.0,
+                    1.0
+                );
+
+                timingsChanged |= DrawTaskTiming(
+                    "Loot",
+                    globals::taskLoot,
+                    100.0,
+                    30000.0,
+                    100.0
+                );
+
+                timingsChanged |= DrawTaskTiming(
+                    "Player Equipment",
+                    globals::taskPlayersEquipment,
+                    100.0,
+                    30000.0,
+                    100.0
+                );
+
+                timingsChanged |= DrawTaskTiming(
+                    "Grenades",
+                    globals::taskGrenades,
+                    10.0,
+                    5000.0,
+                    10.0
+                );
 
                 ImGui::EndTabItem();
             }

@@ -12,10 +12,8 @@ struct globals {
 
     static std::string radarSubText;
 
-    static double taskMainPlayers;
     static double taskPlayers;
     static double taskPlayersBones;
-    static double taskPlayersLocal;
     static double taskGrenades;
     static double taskPlayersEquipment;
     static double taskExfil;
@@ -26,7 +24,6 @@ struct globals {
     static double taskKeyManager;
     static double taskCamera;
     static double taskRaidMonitor;
-    static double taskWrites;
     static double taskAim;
 
 };
