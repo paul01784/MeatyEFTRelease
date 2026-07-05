@@ -154,6 +154,9 @@ void ReadOnlyAim::ClearTargetState(bool keyIsHeld)
 
 void ReadOnlyAim::aimTask()
 {
+    if (!makcu.IsConnected())
+        return;
+
     const bool keyIsHeld = mem.GetKeyboard()->IsKeyDown(static_cast<int>(keyGlobals::aimKey));
 
     if (!camera.cameraPointersReady()) {

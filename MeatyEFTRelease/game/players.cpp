@@ -3250,7 +3250,7 @@ void Players::playerEquipment()
         >;
 
     static constexpr size_t kMaxEquipmentInitPerPass = 2;
-    static constexpr size_t kMaxEquipmentScanPerPass = 2;
+    static constexpr size_t kMaxEquipmentScanPerPass = 1;
 
     static size_t initRoundRobinCursor = 0;
     static size_t scanRoundRobinCursor = 0;

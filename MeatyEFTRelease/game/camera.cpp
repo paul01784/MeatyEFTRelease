@@ -457,16 +457,48 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
 
 void Camera::cameraTask()
 {
-    static int matrixFailStreak = 0;
+    static auto lastCameraPointerRefresh = std::chrono::steady_clock::time_point{};
+    static auto lastOpticProbe = std::chrono::steady_clock::time_point{};
+    static auto matrixInvalidSince = std::chrono::steady_clock::time_point{};
+    static auto lastMatrixFailureLog = std::chrono::steady_clock::time_point{};
+    static bool wasScoped = false;
+
+    constexpr auto kCameraPointerRetryInterval = std::chrono::milliseconds(250);
+    constexpr auto kScopedOpticProbeInterval = std::chrono::milliseconds(250);
+    constexpr auto kMatrixInvalidResetDelay = std::chrono::milliseconds(750);
+    constexpr auto kMatrixFailureLogCooldown = std::chrono::seconds(5);
 
     try
     {
         if (!mem.IsDmaOperational())
             return;
 
+        const auto now = std::chrono::steady_clock::now();
+        const bool scoped = mainGame.localIsScoped;
+        const bool scopeJustStarted = scoped && !wasScoped;
+
+        wasScoped = scoped;
+
+        m_matrixDebug.localScoped = scoped;
+
+        // Normal operation should never come here.
+        // If pointers are stale, do not run a strict camera scan every 3ms.
         if (!cameraPointersReady())
         {
-            if (!refreshCameraPointersStrict())
+            const bool refreshDue =
+                lastCameraPointerRefresh == std::chrono::steady_clock::time_point{} ||
+                (now - lastCameraPointerRefresh) >= kCameraPointerRetryInterval;
+
+            if (!refreshDue)
+            {
+                localmpCamera = false;
+                m_matrixDebug.usingOpticMatrix = false;
+                return;
+            }
+
+            lastCameraPointerRefresh = now;
+
+            if (!refreshCameraPointersStrict() || !cameraPointersReady())
             {
                 localmpCamera = false;
                 m_matrixDebug.usingOpticMatrix = false;
@@ -474,14 +506,20 @@ void Camera::cameraTask()
             }
         }
 
-        // Optic camera spawns lazily; probe infrequently to avoid scanning all cameras every 16ms.
-        if (!opticPointersReady())
-        {
-            static auto lastOpticProbe = std::chrono::steady_clock::time_point{};
-            const auto now = std::chrono::steady_clock::now();
+        /*
+            Do not scan all cameras every two seconds while unscoped.
 
-            if (lastOpticProbe == std::chrono::steady_clock::time_point{} ||
-                (now - lastOpticProbe) >= std::chrono::seconds(2))
+            When the player first scopes, probe immediately. If the optic camera
+            has not spawned yet, retry at a controlled interval while scoped.
+        */
+        if (scoped && !opticPointersReady())
+        {
+            const bool opticProbeDue =
+                scopeJustStarted ||
+                lastOpticProbe == std::chrono::steady_clock::time_point{} ||
+                (now - lastOpticProbe) >= kScopedOpticProbeInterval;
+
+            if (opticProbeDue)
             {
                 lastOpticProbe = now;
 
@@ -489,10 +527,13 @@ void Camera::cameraTask()
                 const uint64_t prevOpticMatrix = opticMatrixAddr;
 
                 getCameraPtrs();
+
                 if (Utils::valid_pointer(opticCamera))
                     getMatrixPtrs();
 
-                if (!Utils::valid_pointer(opticCamera))
+                // Reject partially resolved optic data and retain the previous
+                // valid pair where possible.
+                if (!opticPointersReady())
                 {
                     opticCamera = prevOpticCam;
                     opticMatrixAddr = prevOpticMatrix;
@@ -502,35 +543,58 @@ void Camera::cameraTask()
 
         FrameData frame{};
 
+        // This remains your normal fast path and still runs every camera task.
         if (!readFrameData(frame))
         {
             localmpCamera = false;
             m_matrixDebug.usingOpticMatrix = false;
 
-            matrixFailStreak++;
+            if (matrixInvalidSince == std::chrono::steady_clock::time_point{})
+                matrixInvalidSince = now;
 
-            if (matrixFailStreak < 30)
-                return;
+            
+            if ((now - matrixInvalidSince) >= kMatrixInvalidResetDelay)
+            {
+                clearCameraPointerCacheOnly();
 
-            matrixFailStreak = 0;
-            clearCameraPointerCacheOnly();
+                lastCameraPointerRefresh = now;
+                matrixInvalidSince = std::chrono::steady_clock::time_point{};
 
-            LOGS.logWarn("[CAMERA] Matrix read invalid. Cleared camera pointer cache for retry.");
+                const bool canLog =
+                    lastMatrixFailureLog == std::chrono::steady_clock::time_point{} ||
+                    (now - lastMatrixFailureLog) >= kMatrixFailureLogCooldown;
+
+                if (canLog)
+                {
+                    lastMatrixFailureLog = now;
+
+                    LOGS.logWarn(
+                        "[CAMERA] Matrix reads remained invalid for 750ms. "
+                        "Cleared camera pointer cache for controlled retry."
+                    );
+                }
+            }
+
             return;
         }
 
-        matrixFailStreak = 0;
+        matrixInvalidSince = std::chrono::steady_clock::time_point{};
 
-        // Always update both matrix caches
+        // FPS matrix should always be fresh.
         applyFpsFrame(frame);
-        applyOpticFrame(frame);
 
-        const bool opticActive = updateOpticMatrixActivity(frame);
+        bool opticActive = false;
 
-        // Final active camera choice.
-        localmpCamera = mainGame.localIsScoped && opticActive;
+        // Do not apply an empty / stale optic frame when there is no valid optic.
+        if (opticPointersReady())
+        {
+            applyOpticFrame(frame);
+            opticActive = updateOpticMatrixActivity(frame);
+        }
 
-        m_matrixDebug.localScoped = mainGame.localIsScoped;
+        // Only use optic projection if scope is active and its matrix is updating.
+        localmpCamera = scoped && opticActive;
+
         m_matrixDebug.usingOpticMatrix = localmpCamera;
     }
     catch (const std::exception& e)
@@ -540,7 +604,9 @@ void Camera::cameraTask()
 
         clearCameraPointerCacheOnly();
 
-        LOGS.logError("Exception caught in cameraTask: " + std::string(e.what()));
+        LOGS.logError(
+            "Exception caught in cameraTask: " + std::string(e.what())
+        );
     }
     catch (...)
     {
