@@ -1328,7 +1328,6 @@ bool Memory::Init(bool memMap, bool debug)
 
 		memoryGlobals::dmaConnected.store(true, std::memory_order_release);
 
-		setCustomRefreshData();
 
 		MemoryLogInfo("DMA connected successfully");
 	}

@@ -11,9 +11,9 @@ std::string globals::dogTagAPIKey = "";
 
 std::string globals::radarSubText = "";
 
-double globals::taskPlayers = 33;
-double globals::taskPlayersBones = 30;
-double globals::taskGrenades = 200;
+double globals::taskPlayers =20;
+double globals::taskPlayersBones = 20;
+double globals::taskGrenades = 100;
 double globals::taskPlayersEquipment = 2000;
 double globals::taskExfil = 5000;
 double globals::taskLoot = 8000;
@@ -21,7 +21,7 @@ double globals::taskQuest = 7000;
 double globals::taskWishManager = 1000;
 double globals::taskTripWire = 20;
 double globals::taskKeyManager = 25;
-double globals::taskCamera = 3;
+double globals::taskCamera = 1;
 double globals::taskRaidMonitor = 800;
 double globals::taskAim = 1;
 
@@ -43,7 +43,7 @@ bool appMenu::widgetDebug = false;
 bool appMenu::minView = false;
 
 // mapGlobals struct defaults/current values
-bool mapGlobals::followLocal = true; //follow local as default, maybe reset this when need to avoid offmap display on new maps
+bool mapGlobals::followLocal = true; 
 glm::vec3 mapGlobals::focusPoint = glm::vec3(0, 0, 0);
 
 // gameGlobals struct
