@@ -552,7 +552,8 @@ namespace fuserRender
         if (!Utils::valid_pointer(mainGame.localPlayerPtr))
             return;
 
-        g_fireport.update(mainGame.localPlayerPtr);
+        // We shouldnt read memory in rendering operations, causes fps lag
+        //g_fireport.update(mainGame.localPlayerPtr);
         const FireportPose pose = g_fireport.snapshot();
         if (!pose.valid || !pose.screenStartOk)
             return;

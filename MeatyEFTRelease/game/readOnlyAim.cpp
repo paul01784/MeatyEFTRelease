@@ -157,6 +157,13 @@ void ReadOnlyAim::aimTask()
     if (!makcu.IsConnected())
         return;
 
+    // Small sleep for moment testing
+    if (espGlobals::drawFireportLine)
+    {
+        Sleep(20);
+        g_fireport.update(mainGame.localPlayerPtr);
+    }
+
     const bool keyIsHeld = mem.GetKeyboard()->IsKeyDown(static_cast<int>(keyGlobals::aimKey));
 
     if (!camera.cameraPointersReady()) {
@@ -164,7 +171,7 @@ void ReadOnlyAim::aimTask()
         return;
     }
 
-    g_fireport.update(mainGame.localPlayerPtr);
+    //g_fireport.update(mainGame.localPlayerPtr);
     const AimReferencePoint aimRefPoint = resolveAimReference();
     const glm::vec2 aimRef = aimRefPoint.valid ? aimRefPoint.pos
                                                : glm::vec2(espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
