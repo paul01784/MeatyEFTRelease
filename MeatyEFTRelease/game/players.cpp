@@ -3099,8 +3099,6 @@ void Players::checkGroupIDs()
                 parent[rightRoot] = leftRoot;
         };
 
-    // Connected proximity grouping:
-    // A <-> B within 30m and B <-> C within 30m makes A/B/C one group.
     for (int a = 0; a < targetCount; ++a)
     {
         for (int b = a + 1; b < targetCount; ++b)
@@ -3143,7 +3141,7 @@ void Players::checkGroupIDs()
 
         componentGroupIds.emplace(
             root,
-            "proximity_" + std::to_string(nextGroupNumber++)
+            std::to_string(nextGroupNumber++)
         );
 
         ++groupedComponents;
@@ -3166,7 +3164,7 @@ void Players::checkGroupIDs()
             ++groupedPlayers;
         }
 
-        // Solo players deliberately receive an empty ID.
+        // Solo players
         assignments.emplace(snapshot[i].instance, groupId);
 
         if (i == localSnapshotIndex)
@@ -3178,8 +3176,7 @@ void Players::checkGroupIDs()
 
         auto& cache = players.getCache();
 
-        // If the player list changed between snapshot and commit, do not
-        // finalise a partial/incorrect one-time grouping pass.
+        // If the player list changed between snapshot and commit, do not finalise a partial/incorrect one-time grouping pass
         std::unordered_map<std::uint64_t, PlayerCache*> currentPlayers;
         currentPlayers.reserve(cache.size());
 
@@ -3206,7 +3203,7 @@ void Players::checkGroupIDs()
     // Empty means local player is solo.
     mainGame.localGroupId = resolvedLocalGroupId;
 
-    // Scan is complete even if every player is solo.
+    // Scan is complete even if every player is solo
     groupIDSet = true;
 
     std::ostringstream ss;
