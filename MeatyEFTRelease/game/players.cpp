@@ -1424,8 +1424,43 @@ void Players::boneTask()
         if (!Utils::valid_pointer(mainGame.localPlayerPtr))
             return;
 
-        const float drawPlayerDistance =
-            static_cast<float>(espGlobals::drawPlayerDist);
+        constexpr float kNearOriginLimit = 2.0f;
+        constexpr float kMaxFootDistanceFromBase = 5.0f;
+        constexpr float kMaxBoneDistanceFromBase = 10.0f;
+
+        constexpr float kMaxFootDistanceSq =
+            kMaxFootDistanceFromBase * kMaxFootDistanceFromBase;
+
+        constexpr float kMaxBoneDistanceSq =
+            kMaxBoneDistanceFromBase * kMaxBoneDistanceFromBase;
+
+        const float drawPlayerDistance = static_cast<float>(espGlobals::drawPlayerDist);
+
+        const auto IsFiniteVector = [](const glm::vec3& value) -> bool
+            {
+                return std::isfinite(value.x) &&
+                    std::isfinite(value.y) &&
+                    std::isfinite(value.z);
+            };
+
+        const auto IsNearWorldOrigin =
+            [&](const glm::vec3& value) -> bool
+            {
+                return std::fabs(value.x) < kNearOriginLimit &&
+                    std::fabs(value.y) < kNearOriginLimit &&
+                    std::fabs(value.z) < kNearOriginLimit;
+            };
+
+        const auto DistanceSquared =
+            [](const glm::vec3& a, const glm::vec3& b) -> float
+            {
+                const glm::vec3 delta = a - b;
+
+                return
+                    (delta.x * delta.x) +
+                    (delta.y * delta.y) +
+                    (delta.z * delta.z);
+            };
 
         struct PendingBoneScan
         {
@@ -1438,8 +1473,7 @@ void Players::boneTask()
         {
             std::lock_guard<std::mutex> lock(playerMutex);
 
-            std::vector<PlayerCache>& cache =
-                players.getCache();
+            std::vector<PlayerCache>& cache = players.getCache();
 
             pendingScans.reserve(cache.size());
 
@@ -1457,8 +1491,7 @@ void Players::boneTask()
 
                 const bool minimalPointersMissing = !HasMinimalBonePointers(player);
 
-                // setup after adding a player
-                // or recovery after all Base/LFoot/RFoot positions failed
+                // Fresh resolve after player creation, failed setup or an invalid skeleton result from the previous bone tick
                 if (player.bonePointersNeedResolve ||
                     minimalPointersMissing)
                 {
@@ -1491,8 +1524,8 @@ void Players::boneTask()
                 pending.snapshot.bonePtrs = player.bonePtrs;
                 pending.snapshot.transformCache = player.boneTransformCache;
 
-                // Initial distance is 0 until Base/LFoot/RFoot is done
-                pending.readFullBoneList = !player.isLocal && player.distance > 0 && player.distance <= drawPlayerDistance;
+                // Base / LFoot / RFoot are always read
+                pending.readFullBoneList = !player.isLocal && player.distance > 0.0f && player.distance <= drawPlayerDistance;
 
                 pendingScans.emplace_back(std::move(pending));
             }
@@ -1503,14 +1536,31 @@ void Players::boneTask()
 
         std::vector<LiveBoneRead> reads;
 
+        std::unordered_set<uint64_t> scannedInstances;
+        std::unordered_set<uint64_t> fullBoneScanInstances;
+
+        scannedInstances.reserve(pendingScans.size());
+        fullBoneScanInstances.reserve(pendingScans.size());
+
         for (const PendingBoneScan& pending : pendingScans)
         {
+            const size_t readsBefore = reads.size();
+
             AppendPlayerBoneReads(
                 pending.snapshot,
                 BoneReadKind::Normal,
                 pending.readFullBoneList,
                 reads
             );
+
+            // Only validate players for which this task actually submitted reads.
+            if (reads.size() == readsBefore)
+                continue;
+
+            scannedInstances.insert(pending.snapshot.instance);
+
+            if (pending.readFullBoneList)
+                fullBoneScanInstances.insert(pending.snapshot.instance);
         }
 
         if (reads.empty())
@@ -1519,6 +1569,148 @@ void Players::boneTask()
         BatchReadBoneWorldPositions(mem, reads);
 
         ApplyBoneResults(reads);
+
+        // Validate the newly applied skeleton data
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+
+            std::vector<PlayerCache>& cache = players.getCache();
+
+            for (PlayerCache& player : cache)
+            {
+                if (!Utils::valid_pointer(player.instance))
+                    continue;
+
+                if (player.isBTR ||
+                    player.isDead ||
+                    player.hasExfiled)
+                {
+                    continue;
+                }
+
+                if (scannedInstances.find(player.instance) ==
+                    scannedInstances.end())
+                {
+                    continue;
+                }
+
+                const size_t baseIndex = static_cast<size_t>(boneListIndexes::Base);
+                const size_t leftFootIndex = static_cast<size_t>(boneListIndexes::LFoot);
+                const size_t rightFootIndex = static_cast<size_t>(boneListIndexes::RFoot);
+
+                bool needsPointerRefresh = false;
+                std::string invalidReason;
+
+                if (baseIndex >= player.bonePositions.size() ||
+                    leftFootIndex >= player.bonePositions.size() ||
+                    rightFootIndex >= player.bonePositions.size())
+                {
+                    needsPointerRefresh = true;
+                    invalidReason = "required bone index outside bonePositions";
+                }
+                else
+                {
+                    const glm::vec3& base = player.bonePositions[baseIndex];
+                    const glm::vec3& leftFoot = player.bonePositions[leftFootIndex];
+                    const glm::vec3& rightFoot = player.bonePositions[rightFootIndex];
+
+                    // Reject NaN, infinity, and 0,0,0-style results.
+                    if (!IsFiniteVector(base) || !IsFiniteVector(leftFoot) || !IsFiniteVector(rightFoot))
+                    {
+                        needsPointerRefresh = true;
+                        invalidReason = "non-finite Base/LFoot/RFoot position";
+                    }
+                    else if (IsNearWorldOrigin(base) || IsNearWorldOrigin(leftFoot) || IsNearWorldOrigin(rightFoot))
+                    {
+                        needsPointerRefresh = true;
+                        invalidReason = "Base/LFoot/RFoot near world origin";
+                    }
+                    else if (DistanceSquared(base, leftFoot) > kMaxFootDistanceSq)
+                    {
+                        needsPointerRefresh = true;
+                        invalidReason = "LFoot too far from Base";
+                    }
+                    else if (DistanceSquared(base, rightFoot) >
+                        kMaxFootDistanceSq)
+                    {
+                        needsPointerRefresh = true;
+                        invalidReason = "RFoot too far from Base";
+                    }
+
+                    // Only inspect every bone when this player received a full read
+                    if (!needsPointerRefresh && fullBoneScanInstances.find(player.instance) != fullBoneScanInstances.end())
+                    {
+                        const size_t boneCount = (std::min)(player.bonePtrs.size(), player.bonePositions.size());
+
+                        for (size_t boneIndex = 0; boneIndex < boneCount; ++boneIndex)
+                        {
+                            // Do not validate a slot that has no active transform pointer
+                            if (!Utils::valid_pointer(player.bonePtrs[boneIndex]))
+                                continue;
+
+                            if (boneIndex >= player.bonePositions.size())
+                                continue;
+
+                            if (boneIndex == baseIndex ||
+                                boneIndex == leftFootIndex ||
+                                boneIndex == rightFootIndex)
+                            {
+                                continue;
+                            }
+
+                            const glm::vec3& bonePosition =
+                                player.bonePositions[boneIndex];
+
+                            if (!IsFiniteVector(bonePosition))
+                            {
+                                needsPointerRefresh = true;
+                                invalidReason = "non-finite full bone position";
+                                break;
+                            }
+
+                            if (IsNearWorldOrigin(bonePosition))
+                            {
+                                needsPointerRefresh = true;
+                                invalidReason = "full bone near world origin";
+                                break;
+                            }
+
+                            if (DistanceSquared(base, bonePosition) >
+                                kMaxBoneDistanceSq)
+                            {
+                                needsPointerRefresh = true;
+                                invalidReason = "bone more than 10m from Base";
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!needsPointerRefresh)
+                    continue;
+
+                if (!player.bonePointersNeedResolve)
+                {
+                    LOGS.logError(
+                        "[PLAYERS][BONES] Invalid skeleton for player 0x" +
+                        std::to_string(player.instance) +
+                        " - " + invalidReason +
+                        ". Scheduling bone pointer refresh."
+                    );
+                }
+
+                // Do not keep reading known-bad transforms
+                player.bonePointersNeedResolve = true;
+
+                std::fill(
+                    player.bonePtrs.begin(),
+                    player.bonePtrs.end(),
+                    0ULL
+                );
+
+                player.boneTransformCache.clear();
+            }
+        }
     }
     catch (const std::exception& e)
     {
