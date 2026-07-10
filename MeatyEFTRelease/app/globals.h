@@ -111,6 +111,8 @@ struct espGlobals {
     static float headDotSize;
     static bool runEsp;
     static bool drawFireportLine;
+    static int drawExfilDist;
+    static bool drawExfil;
 };
 
 struct aimGlobals {
@@ -152,7 +154,7 @@ struct coloursGlobals {
 struct keyGlobals {
     static WindowsKey aimKey;
     static WindowsKey toggleFollow;
-    static WindowsKey espToggle;
+    static WindowsKey battleMode;
 
 
 };

@@ -5,9 +5,7 @@
 
 bool IsHeavyDmaTask(const std::string& name)
 {
-    return name == "playersTask" ||
-        name == "playersBoneTask" ||
-        name == "lootTask" ||
+    return name == "lootTask" ||
         name == "questTask" ||
         name == "ExplosiveManagerTask" ||
         name == "PlayerEquipmentTask";

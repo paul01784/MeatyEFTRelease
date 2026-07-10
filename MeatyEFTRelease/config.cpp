@@ -412,7 +412,9 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"drawCrosshair", e.drawCrosshair},
         {"headDotSize", e.headDotSize},
         {"drawHeadDot", e.drawHeadDot},
-        {"drawFireportLine", e.drawFireportLine}
+        {"drawFireportLine", e.drawFireportLine},
+        {"drawExfilDist", e.drawExfilDist},
+        {"drawExfil", e.drawExfil}
     };
 }
 
@@ -437,6 +439,8 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
     e.drawHeadDot = j.value("drawHeadDot", e.drawHeadDot);
     e.headDotSize = j.value("headDotSize", e.headDotSize);
     e.drawFireportLine = j.value("drawFireportLine", e.drawFireportLine);
+    e.drawExfilDist = j.value("drawExfilDist", e.drawExfilDist);
+    e.drawExfil = j.value("drawExfil", e.drawExfil);
 }
 
 // Custom serialization for aimGlobals
@@ -477,14 +481,14 @@ void to_json(nlohmann::json& j, const keyGlobals& k) {
     j = nlohmann::json{
         {"aimKey", k.aimKey},
         {"toggleFollow", k.toggleFollow},
-        {"toggleEsp", k.espToggle}
+        {"battleMode", k.battleMode}
     };
 }
 
 void from_json(const nlohmann::json& j, keyGlobals& k) {
     k.aimKey = j.value("aimKey", k.aimKey);
     k.toggleFollow = j.value("toggleFollow", k.toggleFollow);
-    k.espToggle = j.value("toggleEsp", k.toggleFollow);
+    k.battleMode = j.value("battleMode", k.battleMode);
 }
 
 //custom serialization for Loot Filters

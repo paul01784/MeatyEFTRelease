@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.22";
+std::string globals::appVersion = "1.0.23";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -11,7 +11,7 @@ std::string globals::dogTagAPIKey = "";
 
 std::string globals::radarSubText = "";
 
-double globals::taskPlayers =20;
+double globals::taskPlayers = 20;
 double globals::taskPlayersBones = 20;
 double globals::taskGrenades = 100;
 double globals::taskPlayersEquipment = 2000;
@@ -96,6 +96,8 @@ bool espGlobals::drawHeadDot = false;
 float espGlobals::headDotSize = 1.5f;
 bool espGlobals::runEsp = false;
 bool espGlobals::drawFireportLine = true;
+int espGlobals::drawExfilDist = 1000;
+bool espGlobals::drawExfil = true;
 
 bool aimGlobals::aimEnabled = false;
 float aimGlobals::aimFOV = 50.f;
@@ -132,7 +134,7 @@ glm::vec4 coloursGlobals::valueLootColour = glm::vec4(1, 1, 1, 1);
 
 WindowsKey keyGlobals::aimKey = WindowsKey::LeftControl;
 WindowsKey keyGlobals::toggleFollow = WindowsKey::Enter;
-WindowsKey keyGlobals::espToggle = WindowsKey::F12;
+WindowsKey keyGlobals::battleMode = WindowsKey::F12;
 
 bool lootGlobals::enableQuestLoot = false;
 bool lootGlobals::enableWishListLoot = false;

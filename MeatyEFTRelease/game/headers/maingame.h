@@ -57,7 +57,26 @@ public:
 
 	void clearCache();
 
+private:
+	struct BattleModeSavedState
+	{
+		bool radarDrawLoot = false;
+		bool radarDrawQuestHelper = false;
+		bool radarDrawGrenades = false;
+		bool radarDrawExfils = false;
 
+		bool espDrawLoot = false;
+		bool espDrawCorpse = false;
+		bool espDrawQuestHelper = false;
+		bool espDrawExfil = false;
+
+		bool valid = false;
+	};
+
+	BattleModeSavedState battleModeSavedState{};
+	bool battleModeEnabled = false;
+
+	void SetBattleMode(bool enabled);
 };
 
 extern MainGame mainGame;

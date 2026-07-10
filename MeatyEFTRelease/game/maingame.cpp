@@ -96,6 +96,62 @@ void MainGame::clearCache() {
     LOGS.logInfo("[MAIN][CACHE] Data cleared");
 }
 
+void MainGame::SetBattleMode(bool enabled)
+{
+    // Do nothing if the requested state is already active.
+    if (battleModeEnabled == enabled)
+        return;
+
+    if (enabled)
+    {
+        // Save the user's current settings before disabling them.
+        battleModeSavedState.radarDrawLoot = radarGlobals::drawLoot;
+        battleModeSavedState.radarDrawQuestHelper = radarGlobals::drawQuestHelper;
+        battleModeSavedState.radarDrawGrenades = radarGlobals::drawGrenades;
+        battleModeSavedState.radarDrawExfils = radarGlobals::drawExfils;
+        battleModeSavedState.espDrawLoot = espGlobals::drawLoot;
+        battleModeSavedState.espDrawCorpse = espGlobals::drawCorpse;
+        battleModeSavedState.espDrawQuestHelper = espGlobals::drawQuestHelper;
+        battleModeSavedState.espDrawExfil = espGlobals::drawExfil;
+        battleModeSavedState.valid = true;
+
+        // Disable everything hidden by battle mode.
+        radarGlobals::drawLoot = false;
+        radarGlobals::drawQuestHelper = false;
+        radarGlobals::drawGrenades = false;
+        radarGlobals::drawExfils = false;
+
+        espGlobals::drawLoot = false;
+        espGlobals::drawCorpse = false;
+        espGlobals::drawQuestHelper = false;
+        espGlobals::drawExfil = false;
+
+        battleModeEnabled = true;
+
+        LOGS.logInfo("[KEYS] Battle mode enabled");
+    }
+    else
+    {
+        // Restore the exact settings that were active before battle mode
+        if (battleModeSavedState.valid)
+        {
+            radarGlobals::drawLoot = battleModeSavedState.radarDrawLoot;
+            radarGlobals::drawQuestHelper = battleModeSavedState.radarDrawQuestHelper;
+            radarGlobals::drawGrenades = battleModeSavedState.radarDrawGrenades;
+            radarGlobals::drawExfils = battleModeSavedState.radarDrawExfils;
+            espGlobals::drawLoot = battleModeSavedState.espDrawLoot;
+            espGlobals::drawCorpse = battleModeSavedState.espDrawCorpse;
+            espGlobals::drawQuestHelper = battleModeSavedState.espDrawQuestHelper;
+            espGlobals::drawExfil = battleModeSavedState.espDrawExfil;
+        }
+
+        battleModeSavedState.valid = false;
+        battleModeEnabled = false;
+
+        LOGS.logInfo("[KEYS] Battle mode disabled");
+    }
+}
+
 static std::string read_widecharr(const std::uintptr_t address, const std::size_t size) {
     const auto buffer = std::make_unique<char[]>(size);
     mem.Read(address, buffer.get(), size);
@@ -499,6 +555,7 @@ void MainGame::cameraAndAimWorker()
             //Task List
             cameraAndAimTask.addTask("cameraTask", std::bind(&Camera::cameraTask, &camera), &globals::taskCamera);
             cameraAndAimTask.addTask("readOnlyAim", std::bind(&ReadOnlyAim::aimTask, &readOnlyAim), &globals::taskAim);
+            cameraAndAimTask.addTask("keyManager", std::bind(&MainGame::keyManagerTask, &mainGame), &globals::taskKeyManager);
 
             //run the tasks
             cameraAndAimTask.run();
@@ -674,20 +731,76 @@ void MainGame::mainThread()
 
 void MainGame::keyManagerTask()
 {
+    static bool previousFollowKeyState = false;
+    static bool previousBattleModeKeyState = false;
+
     try
     {
-       
+        if (!mem.IsDmaOperational())
+        {
+            previousFollowKeyState = false;
+            previousBattleModeKeyState = false;
+            return;
+        }
 
+        auto* keyboard = mem.GetKeyboard();
+
+        if (!keyboard)
+        {
+            previousFollowKeyState = false;
+            previousBattleModeKeyState = false;
+            return;
+        }
+
+        const bool followKeyIsHeld = keyboard->IsKeyDown(static_cast<int>(keyGlobals::toggleFollow));
+        const bool battleModeKeyIsHeld = keyboard->IsKeyDown(static_cast<int>(keyGlobals::battleMode));
+
+        //the follow key has just been pressed
+        const bool followKeyPressed = followKeyIsHeld && !previousFollowKeyState;
+
+        //the battle-mode key has just been pressed
+        const bool battleModeKeyPressed = battleModeKeyIsHeld && !previousBattleModeKeyState;
+
+        if (followKeyPressed)
+        {
+            mapGlobals::followLocal = !mapGlobals::followLocal;
+
+            LOGS.logInfo(
+                std::string("[KEYS] Map follow ") +
+                (mapGlobals::followLocal
+                    ? "enabled"
+                    : "disabled")
+            );
+        }
+
+        if (battleModeKeyPressed)
+        {
+            SetBattleMode(!battleModeEnabled);
+        }
+
+        previousFollowKeyState = followKeyIsHeld;
+        previousBattleModeKeyState = battleModeKeyIsHeld;
     }
-    catch (const std::exception& e) {
-        LOGS.logError("Exception caught in keyManagerTask: " + std::string(e.what()) + ". Retrying...");
+    catch (const std::exception& e)
+    {
+        LOGS.logError(
+            "Exception caught in keyManagerTask: " +
+            std::string(e.what()) +
+            ". Retrying..."
+        );
 
+        previousFollowKeyState = false;
+        previousBattleModeKeyState = false;
     }
-    catch (...) {
-        LOGS.logError("Unknown exception caught in keyManagerTask. Retrying...");
+    catch (...)
+    {
+        LOGS.logError(
+            "Unknown exception caught in keyManagerTask. Retrying..."
+        );
 
+        previousFollowKeyState = false;
+        previousBattleModeKeyState = false;
     }
-
 }
 
 void MainGame::raidMonitorTask()

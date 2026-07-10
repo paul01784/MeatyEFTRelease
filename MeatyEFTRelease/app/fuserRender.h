@@ -20,6 +20,7 @@
 #include "game/headers/fireport.h"
 #include "game/headers/readOnlyAim.h"
 #include "../app/globals.h"
+#include "../game/headers/exfil.h"
 
 namespace fuserRender
 {
@@ -654,6 +655,53 @@ namespace fuserRender
         }
     }
 
+    static inline void RenderExfil()
+    {
+        const std::vector<exfilsMemory> exfilCache = exfil.getCacheExfil();
+
+        if (exfilCache.empty() || !espGlobals::drawExfil)
+            return;
+
+        const float screenW = ScreenWidth();
+        const float screenH = ScreenHeight();
+
+
+        for (const exfilsMemory& exfil : exfilCache)
+        {
+            if (!Utils::valid_pointer(exfil.instance))
+                continue;
+
+            if (!Utils::isGoodVec3(exfil.locationWorld))
+                continue;
+
+            const int distance = glm::distance(mainGame.localLocation, exfil.locationWorld);
+
+            if (distance > espGlobals::drawExfilDist)
+                continue;
+
+            glm::vec2 screenPos{};
+
+            if (!Utils::Camera::world_to_screen(
+                exfil.locationWorld,
+                &screenPos))
+            {
+                continue;
+            }
+
+            std::string exfilText = exfil.extractName + " (" + std::to_string(distance) + "m)";
+
+            g_DxWindow.DrawString(
+                exfilText.c_str(),
+                screenPos.x,
+                screenPos.y + 3.0f,
+                14.0f,
+                coloursGlobals::exfils,
+                true,
+                true);
+        }
+
+    }
+
     static inline void RenderNades()
     {
         const std::vector<GrenadeList> nadeCache = explosiveManager.getGrenades();
@@ -1135,6 +1183,11 @@ namespace fuserRender
         SafeRenderStage("RenderTasks", []()
             {
                 RenderTasks();
+            });
+
+        SafeRenderStage("RenderExfils", []()
+            {
+                RenderExfil();
             });
     }
 

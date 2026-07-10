@@ -2627,12 +2627,8 @@ static void renderMenuSettings()
                 if (ImGui::Checkbox(" Draw Head Dot", &espGlobals::drawHeadDot)) configManager.SaveConfig();ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderFloat("##headdotSize", &espGlobals::headDotSize, 0.5, 10, "%.0f", ImGuiSliderFlags_AlwaysClamp)) espGlobals::headDotSize = std::round(espGlobals::headDotSize * 10.0f) / 10.0f; configManager.SaveConfig(); ImGui::PopItemWidth();
                 if (ImGui::Checkbox(" Draw Crosshair", &espGlobals::drawCrosshair)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Fireport line", &espGlobals::drawFireportLine)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Exfils             ", &espGlobals::drawExfil)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##exfildist", &espGlobals::drawExfilDist, 5, 1000, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
 
-                //ImGui::SeparatorText("Aim & RCS Settings");
-                //ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Aim FOV", &aimGlobals::aimFOV, 1.f, 300.f, "%.f")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                //ImGui::PushItemWidth(150); if (ImGui::SliderInt(" Aim Distance", &aimGlobals::aimDistance, 1, 1000, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                //ImGui::PushItemWidth(100); if (showBoneSelectionBox(aimGlobals::aiBone, " Ai Bone")) configManager.SaveConfig(); ImGui::PopItemWidth(); ImGui::SameLine();
-                //ImGui::PushItemWidth(100); if (showBoneSelectionBox(aimGlobals::pmcBone, " PMC Bone")) configManager.SaveConfig(); ImGui::PopItemWidth();
 
                 ImGui::EndTabItem();
             }
@@ -2641,7 +2637,6 @@ static void renderMenuSettings()
                 ImGui::SeparatorText("Safe Features");
                 if (ImGui::Checkbox(" Get Equipment Info", &radarGlobals::getPlayerEquip)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Get TarkovDev Info", &radarGlobals::getPlayerStats)) configManager.SaveConfig();
-                //if (ImGui::Checkbox(" Enable Aimbot", &aimGlobals::aimEnabled)) configManager.SaveConfig();
 
 
                 ImGui::SeparatorText("Risky Features");
