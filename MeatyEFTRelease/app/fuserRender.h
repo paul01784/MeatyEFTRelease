@@ -655,26 +655,30 @@ namespace fuserRender
         }
     }
 
+   
+
     static inline void RenderExfil()
     {
-        const std::vector<exfilsMemory> exfilCache = exfil.getCacheExfil();
+        const std::vector<exfilsMemory> exfilCache =
+            exfil.getCacheExfil();
 
         if (exfilCache.empty() || !espGlobals::drawExfil)
             return;
 
-        const float screenW = ScreenWidth();
-        const float screenH = ScreenHeight();
-
-
-        for (const exfilsMemory& exfil : exfilCache)
+        for (const exfilsMemory& currentExfil : exfilCache)
         {
-            if (!Utils::valid_pointer(exfil.instance))
+            if (!Utils::valid_pointer(currentExfil.instance))
                 continue;
 
-            if (!Utils::isGoodVec3(exfil.locationWorld))
+            if (!Utils::isGoodVec3(currentExfil.locationWorld))
                 continue;
 
-            const int distance = glm::distance(mainGame.localLocation, exfil.locationWorld);
+            const int distance = static_cast<int>(
+                glm::distance(
+                    mainGame.localLocation,
+                    currentExfil.locationWorld
+                )
+                );
 
             if (distance > espGlobals::drawExfilDist)
                 continue;
@@ -682,24 +686,64 @@ namespace fuserRender
             glm::vec2 screenPos{};
 
             if (!Utils::Camera::world_to_screen(
-                exfil.locationWorld,
+                currentExfil.locationWorld,
                 &screenPos))
             {
                 continue;
             }
 
-            std::string exfilText = exfil.extractName + " (" + std::to_string(distance) + "m)";
+            const std::string statusText = exfil.getExfilStatusText(currentExfil.statusRaw);
+
+            glm::vec4 statusColour = coloursGlobals::exfils;
+
+            switch (currentExfil.statusRaw)
+            {
+            case 1: // Closed
+                statusColour = glm::vec4(
+                    1.0f,
+                    0.2f,
+                    0.2f,
+                    1.0f
+                );
+                break;
+
+            case 4: // Open
+                statusColour = glm::vec4(
+                    0.2f,
+                    1.0f,
+                    0.2f,
+                    1.0f
+                );
+                break;
+
+            case 2: // Req
+            case 3: // Countdown
+            case 5: // Pending
+            case 6: // Await. Manual
+                statusColour = glm::vec4(
+                    1.0f,
+                    0.65f,
+                    0.0f,
+                    1.0f
+                );
+                break;
+
+            default:
+                break;
+            }
+
+            const std::string exfilText = currentExfil.extractName + " [" + statusText + "]" + " " + std::to_string(distance) + "m";
 
             g_DxWindow.DrawString(
                 exfilText.c_str(),
                 screenPos.x,
                 screenPos.y + 3.0f,
                 14.0f,
-                coloursGlobals::exfils,
+                statusColour,
                 true,
-                true);
+                true
+            );
         }
-
     }
 
     static inline void RenderNades()

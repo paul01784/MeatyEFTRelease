@@ -72,6 +72,9 @@ public:
 
 	void clearCache();
 
+
+	std::string getExfilStatusText(int statusInt);
+
 private:
 
 	std::vector<exfilsMemory> exfilList;
@@ -84,7 +87,7 @@ private:
 	std::chrono::steady_clock::time_point lastExfilStatusUpdate;
 
 	void tryLoadMemoryExfils();
-	std::string getExfilStatusText(int statusInt);
+	
 	int getDistance(glm::vec3 point1, glm::vec3 point2);
 	void updateStatus();
 

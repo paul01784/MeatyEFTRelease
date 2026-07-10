@@ -173,7 +173,8 @@ std::string Exfil::getExfilStatusText(int statusInt)
 		return "Pending";
 	case 6:
 		return "Await. Manual";
-
+	default:
+		return "Unknown";
 	}
 
 }
