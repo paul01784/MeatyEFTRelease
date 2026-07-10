@@ -2673,6 +2673,7 @@ static void renderMenuSettings()
                 ImGui::SeparatorText("Keybind Settings");
                 if (ShowKeySelectionBox(keyGlobals::aimKey, " Aim Key")) configManager.SaveConfig();
                 if (ShowKeySelectionBox(keyGlobals::toggleFollow, " Toggle Follow")) configManager.SaveConfig();
+                if (ShowKeySelectionBox(keyGlobals::battleMode, " Battle Mode")) configManager.SaveConfig();
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
