@@ -37,7 +37,7 @@ bool mapKnown(const std::string& map)
     static const char* kMaps[] = {
         "default", "Labyrinth", "woods", "shoreline", "rezervbase", "laboratory", "interchange",
         "factory4_day", "factory4_night", "bigmap", "lighthouse", "tarkovstreets", "Sandbox",
-        "Sandbox_high", "Sandbox_start", "Icebreaker",
+        "Sandbox_high", "Sandbox_start", "Icebreaker", "laboratory_dark"
     };
     for (const char* m : kMaps) {
         if (_stricmp(map.c_str(), m) == 0)
