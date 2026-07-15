@@ -27,6 +27,7 @@
 #include "headers/explosives.h"
 #include "headers/dogtag.h"
 #include "headers/readOnlyAim.h"
+#include "headers/watchList.h"
 
 
 
@@ -709,9 +710,14 @@ void MainGame::mainThread()
             manager.addTask("playersTask", std::bind(&Players::playersTask, &players), &globals::taskPlayers);
             manager.addTask("playersBoneTask", std::bind(&Players::boneTask, &players), &globals::taskPlayersBones, 16.0);
             
+            LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log Start");
+            watchListManager.logRaidStart(this->selectedLocation.c_str());
             
             manager.run(); // wont return from here till end of raid
             LOGS.logInfo("[MAIN][MANAGER] Stopping Manager");
+
+            watchListManager.logRaidEnd();
+            LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log End");
 
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }

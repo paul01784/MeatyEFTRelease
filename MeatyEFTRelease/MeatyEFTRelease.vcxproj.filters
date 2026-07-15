@@ -417,6 +417,9 @@
     <ClInclude Include="app\globals.h" />
     <ClInclude Include="game\headers\readOnlyAim.h" />
     <ClInclude Include="app\perfMonitor.h" />
+    <ClInclude Include="game\headers\fireport.h" />
+    <ClInclude Include="game\headers\game_world.h" />
+    <ClInclude Include="game\headers\watchList.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="debug.cpp" />
@@ -457,6 +460,9 @@
     <ClCompile Include="DxRenderWindow.cpp" />
     <ClCompile Include="makcu.cpp" />
     <ClCompile Include="game\readOnlyAim.cpp" />
+    <ClCompile Include="game\fireport.cpp" />
+    <ClCompile Include="game\game_world.cpp" />
+    <ClCompile Include="game\watchlist.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Font Include="app\fonts\forkawesome-webfont.ttf" />

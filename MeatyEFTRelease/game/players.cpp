@@ -19,6 +19,7 @@
 #include "../app/DogTagAPI.h"
 #include <chrono>
 #include <algorithm>
+#include "headers/watchList.h"
 
 std::mutex playerMutex;
 Players players;
@@ -1842,6 +1843,9 @@ void Players::playersTask()
             pendingNewEntities.emplace_back(
                 std::move(*builtEntity)
             );
+
+            //add player to raid list
+            watchListManager.logAddPlayer(*builtEntity);
         }
 
         std::vector<uint64_t> addedPlayerInstances;
@@ -3049,6 +3053,12 @@ void Players::updateEntity()
                 LOGS.logError(
                     "[PLAYERS][UPDATE] heldItemName failed"
                 );
+            }
+
+            //update out watch status if changes
+            if (cachePlayer.isPlayer)
+            {
+                watchListManager.UpdateWatchStatus(cachePlayer);
             }
 
             if (cachePlayer.isPlayer &&
@@ -4356,6 +4366,9 @@ void Players::playerEquipment()
                         player->name =
                             result.nickname;
                     }
+
+                    //update watchlist raid list pid
+                    watchListManager.logUpdatePlayerPID(*player);
                 }
             }
         }

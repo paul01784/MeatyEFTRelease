@@ -21,6 +21,7 @@
 #include "game/headers/wishlist.h"
 #include "app/DogTagAPI.h"
 #include "app/makcu.h"
+#include "game/headers/watchList.h"
 
 
 ConfigManager configManager("config.json", "lootFilters.json");
@@ -39,6 +40,8 @@ void closeSettingWindows(std::string dontClose)
         appMenu::appFuser = false;
     if (dontClose != "makcu")
         appMenu::appMakcu = false;
+    if (dontClose != "watchlist")
+        appMenu::appWatchList = false;
 }
 
 // Function to convert enum to string for display purposes
@@ -5157,7 +5160,8 @@ static void renderMenuIcons()
     std::string fuserIcon = ICON_FK_TELEVISION;
     std::string filterIcon = ICON_FK_FILTER;
     std::string makcuIcon = ICON_FK_CROSSHAIRS;
-    std::string questsIcon = ICON_FK_USER;
+    std::string questsIcon = ICON_FK_FILES_O;
+    std::string watchlistIcon = ICON_FK_USERS;
 
 
     std::string widgetExitIcon = ICON_FK_SIGN_OUT;
@@ -5218,7 +5222,7 @@ static void renderMenuIcons()
     }
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 145.f });
-    if (ImGui::ButtonMenu(filterIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) {
+    if (ImGui::ButtonMenu(filterIcon.c_str(), ImVec2(40, 40), ImVec2(17, 10))) {
         appMenu::appLootFilters = !appMenu::appLootFilters;
         closeSettingWindows("lootfilters");
     }
@@ -5233,7 +5237,7 @@ static void renderMenuIcons()
     }
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 190.f });
-    if (ImGui::ButtonMenu(questsIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) {
+    if (ImGui::ButtonMenu(questsIcon.c_str(), ImVec2(40, 40), ImVec2(20, 10))) {
         appMenu::appQuests = !appMenu::appQuests;
         closeSettingWindows("quests");
     }
@@ -5247,12 +5251,27 @@ static void renderMenuIcons()
         }
     }
 
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 235.f });
+    if (ImGui::ButtonMenu(watchlistIcon.c_str(), ImVec2(40, 40), ImVec2(20, 10))) {
+        appMenu::appWatchList = !appMenu::appWatchList;
+        closeSettingWindows("watchlist");
+    }
+    else
+    {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("WatchList");
+            ImGui::EndTooltip();
+        }
+    }
+
 
 
     //widgets
 
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 250.f });
+    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 300.f });
     if (ImGui::ButtonMenu(widgetDebugIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) { appMenu::widgetDebug = !appMenu::widgetDebug; }
 
 
@@ -5261,13 +5280,13 @@ static void renderMenuIcons()
     if (mainGame.localPlayerPtr)
     {
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 300.f });
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 350.f });
         if (ImGui::ButtonMenu(widgetExitIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) { appMenu::widgetExfil = !appMenu::widgetExfil; }
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 350.f });
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 400.f });
         if (ImGui::ButtonMenu(widgetLootIcon.c_str(), ImVec2(40, 40), ImVec2(30, 10))) { appMenu::widgetTopLoot = !appMenu::widgetTopLoot; }
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 400.f });
+        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 450.f });
         if (ImGui::ButtonMenu(widgetPlayersIcon.c_str(), ImVec2(40, 40), ImVec2(30, 10))) { appMenu::widgetPlayers = !appMenu::widgetPlayers; }
 
 
@@ -5286,6 +5305,9 @@ static void renderMenuIcons()
 
     if (appMenu::appQuests)
         renderQuestsWindow();
+
+    if (appMenu::appWatchList)
+        watchListManager.RenderWindow();
 
     if (appMenu::appMakcu)
     {

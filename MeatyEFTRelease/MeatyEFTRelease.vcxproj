@@ -543,6 +543,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="game\headers\unityHelper.h" />
     <ClInclude Include="game\headers\unitysdk.h" />
     <ClInclude Include="game\headers\utils.h" />
+    <ClInclude Include="game\headers\watchList.h" />
     <ClInclude Include="game\headers\wishlist.h" />
     <ClInclude Include="game\modules\HandsManager.h" />
     <ClInclude Include="game\unity\gameObjectManager.h" />
@@ -587,6 +588,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="game\tarkovdevquery.cpp" />
     <ClCompile Include="game\transform.cpp" />
     <ClCompile Include="game\utils.cpp" />
+    <ClCompile Include="game\watchlist.cpp" />
     <ClCompile Include="game\wishlist.cpp" />
     <ClCompile Include="globals.cpp" />
     <ClCompile Include="main.cpp" />

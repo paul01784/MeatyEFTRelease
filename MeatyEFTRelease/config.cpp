@@ -545,6 +545,18 @@ void from_json(const nlohmann::json& j, lootGlobals& k) {
     j.at("valueLootFrom").get_to(k.valueLootFrom);
 }
 
+void to_json(nlohmann::json& j, const MakcuConfig& k) {
+    j = nlohmann::json{
+        {"comPort", k.comPort},
+        {"connectOnStartup", k.connectOnStartup}
+    };
+}
+
+void from_json(const nlohmann::json& j, MakcuConfig& k) {
+    j.at("comPort").get_to(k.comPort);
+    j.at("connectOnStartup").get_to(k.connectOnStartup);
+}
+
 // ConfigManager methods
 ConfigManager::ConfigManager(const std::string& configFilename, const std::string& lootFilterFilename)
     : filename_(configFilename), filename_lootFilter(lootFilterFilename) {
@@ -639,6 +651,10 @@ bool ConfigManager::LoadConfig()
             loot_ = j.at("lootGlobals").get<lootGlobals>();
         }
 
+        if (j.contains("makcu")) {
+            makcu_ = j.at("makcu").get<MakcuConfig>();
+        }
+
         return true;
     }
     catch (const nlohmann::json::exception& e)
@@ -671,6 +687,7 @@ bool ConfigManager::SaveConfig()
     j["coloursGlobals"] = colours_;
     j["keyGlobals"] = keys_;
     j["lootGlobals"] = loot_;
+    j["makcu"] = makcu_;
 
     std::ofstream file(configFile);
     if (!file.is_open())

@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.23.1";
+std::string globals::appVersion = "1.0.24";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -30,8 +30,8 @@ bool appMenu::appSettings = false;
 bool appMenu::appLootFilters = false;
 bool appMenu::appFuser = false;
 bool appMenu::appMakcu = false;
-
 bool appMenu::appQuests = false;
+bool appMenu::appWatchList = false;
 
 bool appMenu::widgetPlayers = true;
 bool appMenu::widgetTopLoot = false;

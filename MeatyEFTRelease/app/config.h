@@ -8,6 +8,7 @@
 #include "../game/headers/utils.h"
 #include "../game/headers/loot.h"
 #include "DxRenderWindow.h"
+#include "makcu.h"
 
 
 void to_json(nlohmann::json& j, const WindowsKey& k);
@@ -62,5 +63,6 @@ private:
     coloursGlobals colours_;
     keyGlobals keys_;
     lootGlobals loot_;
+    MakcuConfig makcu_;
 
 };
