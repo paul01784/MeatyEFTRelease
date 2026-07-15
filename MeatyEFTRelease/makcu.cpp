@@ -1842,3 +1842,30 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
     ImGui::End();
 }
+
+void ConnectMakcuOnStartup()
+{
+    
+    static bool startupConnectionAttempted = false;
+
+    if (startupConnectionAttempted)
+        return;
+
+    if (!makcuConfig.connectOnStartup)
+        return;
+
+    if (makcu.IsConnected())
+    {
+        startupConnectionAttempted = true;
+        return;
+    }
+
+    const std::string selectedPort = NormalizeComPort(makcuConfig.comPort);
+
+    if (selectedPort.empty())
+        return;
+
+    startupConnectionAttempted = true;
+
+    makcu.Connect(makcuConfig);
+}
