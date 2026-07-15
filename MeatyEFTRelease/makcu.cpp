@@ -1283,10 +1283,15 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
             ImGui::SeparatorText("Serial Port");
 
-            const std::string selectedPreview = GetSelectedPortPreview(
-                serialPorts,
-                makcuConfig.comPort
-            );
+            const std::string selectedPreview =
+                GetSelectedPortPreview(
+                    serialPorts,
+                    makcuConfig.comPort
+                );
+
+            const std::string selectedPort = NormalizeComPort(makcuConfig.comPort);
+
+            const bool hasSelectedPort = !selectedPort.empty();
 
             ImGui::SetNextItemWidth(310.0f);
 
@@ -1297,9 +1302,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             {
                 for (const MakcuSerialPort& port : serialPorts)
                 {
-                    const bool selected =
-                        port.portName ==
-                        NormalizeComPort(makcuConfig.comPort);
+                    const bool selected = port.portName == selectedPort;
 
                     const std::string label = BuildPortLabel(port);
 
@@ -1311,8 +1314,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                             port.portName
                         );
 
-                        if (onConfigChanged)
-                            onConfigChanged();
+                        configChanged = true;
                     }
 
                     if (selected)
@@ -1320,24 +1322,9 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 }
 
                 ImGui::EndCombo();
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Connection Preferences");
-
-                configChanged |= ImGui::Checkbox(
-                    "Connect on startup",
-                    &makcuConfig.connectOnStartup
-                );
-
-                ImGui::TextDisabled(
-                    "Attempts to connect to the selected COM port on startup."
-                );
-
-                if (configChanged && onConfigChanged)
-                    onConfigChanged();
-
-
             }
+
+            ImGui::Spacing();
 
             if (ImGui::Button("Scan Ports"))
             {
@@ -1374,6 +1361,32 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 }
             }
 
+            if (hasSelectedPort)
+            {
+                ImGui::Spacing();
+                ImGui::SeparatorText("Connection Preferences");
+
+                configChanged |= ImGui::Checkbox(
+                    "Connect on startup",
+                    &makcuConfig.connectOnStartup
+                );
+
+                ImGui::TextDisabled(
+                    "Attempts to connect to %s when the application starts.",
+                    selectedPort.c_str()
+                );
+            }
+            else
+            {
+                ImGui::Spacing();
+                ImGui::TextDisabled(
+                    "Select a COM port to configure automatic connection."
+                );
+            }
+
+            if (configChanged && onConfigChanged)
+                onConfigChanged();
+
             ImGui::Spacing();
             ImGui::SeparatorText("Native Connection");
 
@@ -1391,6 +1404,8 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
             if (!connected)
             {
+                ImGui::BeginDisabled(!hasSelectedPort);
+
                 if (ImGui::Button(
                     "Connect",
                     ImVec2(150.0f, 30.0f)
@@ -1398,6 +1413,8 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 {
                     makcu.Connect(makcuConfig);
                 }
+
+                ImGui::EndDisabled();
             }
             else
             {
@@ -1417,6 +1434,12 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 ImGui::TextColored(
                     ImVec4(0.20f, 1.00f, 0.20f, 1.00f),
                     "Connected"
+                );
+            }
+            else if (!hasSelectedPort)
+            {
+                ImGui::TextDisabled(
+                    "Select a COM port"
                 );
             }
             else
@@ -1453,18 +1476,42 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 "%.0f px"
             );
 
-            static constexpr const char* aimReferenceOptions[] = {
+            static constexpr const char* aimReferenceOptions[] =
+            {
                 "Crosshair (screen centre)",
-                "Fireport (barrel ray end)",
+                "Fireport (barrel ray end)"
             };
-            int aimReferenceIndex = static_cast<int>(aimGlobals::aimReference);
-            aimReferenceIndex = std::clamp(aimReferenceIndex, 0, IM_ARRAYSIZE(aimReferenceOptions) - 1);
-            if (ImGui::Combo("Aim reference", &aimReferenceIndex, aimReferenceOptions, IM_ARRAYSIZE(aimReferenceOptions))) {
-                aimGlobals::aimReference = static_cast<AimReference>(aimReferenceIndex);
+
+            int aimReferenceIndex =
+                static_cast<int>(
+                    aimGlobals::aimReference
+                    );
+
+            aimReferenceIndex = std::clamp(
+                aimReferenceIndex,
+                0,
+                IM_ARRAYSIZE(aimReferenceOptions) - 1
+            );
+
+            if (ImGui::Combo(
+                "Aim reference",
+                &aimReferenceIndex,
+                aimReferenceOptions,
+                IM_ARRAYSIZE(aimReferenceOptions)
+            ))
+            {
+                aimGlobals::aimReference =
+                    static_cast<AimReference>(
+                        aimReferenceIndex
+                        );
+
                 configChanged = true;
             }
 
-            configChanged |= ImGui::Checkbox("Show aim FOV ring", &aimGlobals::showAimFovRing);
+            configChanged |= ImGui::Checkbox(
+                "Show aim FOV ring",
+                &aimGlobals::showAimFovRing
+            );
 
             configChanged |= ImGui::DragFloat(
                 "Fireport line length (m)",
@@ -1475,15 +1522,35 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 "%.0f m"
             );
 
-            configChanged |= ImGui::Checkbox("Draw fireport line (ESP)", &espGlobals::drawFireportLine);
+            configChanged |= ImGui::Checkbox(
+                "Draw fireport line (ESP)",
+                &espGlobals::drawFireportLine
+            );
 
-            if (aimGlobals::aimReference == AimReference::Fireport) {
-                ImGui::TextDisabled("FOV + aim move from barrel ray endpoint.");
-                const FireportPose pose = g_fireport.snapshot();
+            if (aimGlobals::aimReference ==
+                AimReference::Fireport)
+            {
+                ImGui::TextDisabled(
+                    "FOV + aim move from barrel ray endpoint."
+                );
+
+                const FireportPose pose =
+                    g_fireport.snapshot();
+
                 if (pose.valid && pose.pathUsed)
-                    ImGui::TextDisabled("Fireport path: %s", pose.pathUsed);
+                {
+                    ImGui::TextDisabled(
+                        "Fireport path: %s",
+                        pose.pathUsed
+                    );
+                }
                 else
-                    ImGui::TextColored(ImVec4(1.f, 0.55f, 0.31f, 1.f), "Fireport not resolved");
+                {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.55f, 0.31f, 1.0f),
+                        "Fireport not resolved"
+                    );
+                }
             }
 
             configChanged |= ImGui::DragInt(
@@ -1553,9 +1620,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 "CQB - closest to local player"
             };
 
-            int targetModeIndex = static_cast<int>(
-                aimGlobals::targetMode
-                );
+            int targetModeIndex = static_cast<int>(aimGlobals::targetMode);
 
             targetModeIndex = std::clamp(
                 targetModeIndex,
@@ -1571,7 +1636,9 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             ))
             {
                 aimGlobals::targetMode =
-                    static_cast<TargetMode>(targetModeIndex);
+                    static_cast<TargetMode>(
+                        targetModeIndex
+                        );
 
                 configChanged = true;
             }
@@ -1605,7 +1672,6 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
             ImGui::EndDisabled();
 
-            // Your original Settings tab did not call this at the end.
             if (configChanged && onConfigChanged)
                 onConfigChanged();
 
@@ -1615,7 +1681,8 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
         // Debug
         if (ImGui::BeginTabItem("Debug"))
         {
-            const bool connected = makcu.IsConnected();
+            const bool connected =
+                makcu.IsConnected();
 
             const MakcuDiagnostics diagnostics =
                 makcu.GetDiagnostics();
@@ -1630,12 +1697,16 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
             ImGui::Text(
                 "Aim enabled: %s",
-                aimGlobals::aimEnabled ? "true" : "false"
+                aimGlobals::aimEnabled
+                ? "true"
+                : "false"
             );
 
             ImGui::Text(
                 "Target lock: %s",
-                aimGlobals::targetLock ? "true" : "false"
+                aimGlobals::targetLock
+                ? "true"
+                : "false"
             );
 
             ImGui::Text(
@@ -1669,13 +1740,17 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             ImGui::Text(
                 "AI bone: %s (%d)",
                 BoneToString(aimGlobals::aiBone),
-                static_cast<int>(aimGlobals::aiBone)
+                static_cast<int>(
+                    aimGlobals::aiBone
+                    )
             );
 
             ImGui::Text(
                 "PMC bone: %s (%d)",
                 BoneToString(aimGlobals::pmcBone),
-                static_cast<int>(aimGlobals::pmcBone)
+                static_cast<int>(
+                    aimGlobals::pmcBone
+                    )
             );
 
             ImGui::Spacing();
@@ -1697,7 +1772,9 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
             ImGui::Text(
                 "Connection state: %s",
-                connected ? "Connected" : "Disconnected"
+                connected
+                ? "Connected"
+                : "Disconnected"
             );
 
             if (diagnostics.connected)
