@@ -7,6 +7,8 @@
 #include "game/headers/tarkovdevquery.h"
 #include "app/DogTagAPI.h"
 
+
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevIntance, PSTR pCmdLine, int nShowCmd)
 {
 	//Remove to get console debug
@@ -42,9 +44,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevIntance, PSTR pCmdLine, i
 	tarkovDev.buildTasksList();
 
 	Sleep(1000);
-
-
-	
 
 	//start threads
 	std::thread main(&MainGame::mainThread, &mainGame);

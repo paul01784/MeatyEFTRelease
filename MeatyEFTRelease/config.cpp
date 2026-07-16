@@ -11,6 +11,9 @@
 #include "game/headers/utils.h"
 #include "app/DxRenderWindow.h"
 
+#include "app/makcu.h"
+void ConnectMakcuOnStartup();
+
 
 namespace fs = std::filesystem;
 
@@ -617,14 +620,15 @@ bool ConfigManager::LoadLootFilterConfig() {
 
 bool ConfigManager::LoadConfig()
 {
-    fs::path exeDir = fs::current_path();
-    fs::path configDir = exeDir / "configs";
-    fs::path configFile = configDir / filename_;
+    const fs::path exeDir = fs::current_path();
+    const fs::path configDir = exeDir / "configs";
+    const fs::path configFile = configDir / filename_;
 
     if (!fs::exists(configDir))
         return false;
 
     std::ifstream file(configFile);
+
     if (!file.is_open())
         return false;
 
@@ -633,11 +637,13 @@ bool ConfigManager::LoadConfig()
         nlohmann::json j;
         file >> j;
 
-        if (j.contains("app")) {
+        if (j.contains("app") && j["app"].is_object())
+        {
             app_ = j.at("app").get<globals>();
         }
 
-        if (j.contains("fuser")) {
+        if (j.contains("fuser") && j["fuser"].is_object())
+        {
             fuser_ = j.at("fuser").get<DxWindowConfig>();
 
             g_DxWindow.SetConfig(fuser_);
@@ -649,37 +655,71 @@ bool ConfigManager::LoadConfig()
             }
         }
 
-        if (j.contains("radarGlobals")) {
-            radar_ = j.at("radarGlobals").get<radarGlobals>();
+        if (j.contains("radarGlobals") &&
+            j["radarGlobals"].is_object())
+        {
+            radar_ =
+                j.at("radarGlobals").get<radarGlobals>();
         }
 
-        if (j.contains("espGlobals")) {
-            esp_ = j.at("espGlobals").get<espGlobals>();
+        if (j.contains("espGlobals") &&
+            j["espGlobals"].is_object())
+        {
+            esp_ =
+                j.at("espGlobals").get<espGlobals>();
         }
 
-        if (j.contains("aimGlobals")) {
-            aim_ = j.at("aimGlobals").get<aimGlobals>();
+        if (j.contains("aimGlobals") &&
+            j["aimGlobals"].is_object())
+        {
+            aim_ =
+                j.at("aimGlobals").get<aimGlobals>();
         }
 
-        if (j.contains("coloursGlobals")) {
-            colours_ = j.at("coloursGlobals").get<coloursGlobals>();
+        if (j.contains("coloursGlobals") &&
+            j["coloursGlobals"].is_object())
+        {
+            colours_ =
+                j.at("coloursGlobals").get<coloursGlobals>();
         }
 
-        if (j.contains("keyGlobals")) {
-            keys_ = j.at("keyGlobals").get<keyGlobals>();
+        if (j.contains("keyGlobals") &&
+            j["keyGlobals"].is_object())
+        {
+            keys_ =
+                j.at("keyGlobals").get<keyGlobals>();
         }
 
-        if (j.contains("lootGlobals")) {
-            loot_ = j.at("lootGlobals").get<lootGlobals>();
+        if (j.contains("lootGlobals") &&
+            j["lootGlobals"].is_object())
+        {
+            loot_ =
+                j.at("lootGlobals").get<lootGlobals>();
         }
 
-        if (j.contains("makcu")) {
-            makcu_ = j.at("makcu").get<MakcuConfig>();
+        if (j.contains("makcu") &&
+            j["makcu"].is_object())
+        {
+            makcu_ =
+                j.at("makcu").get<MakcuConfig>();
+
+            makcuConfig = makcu_;
         }
+        else
+        {
+            makcu_ = MakcuConfig{};
+            makcuConfig = makcu_;
+        }
+
+        ConnectMakcuOnStartup();
 
         return true;
     }
-    catch (const nlohmann::json::exception& e)
+    catch (const nlohmann::json::exception&)
+    {
+        return false;
+    }
+    catch (const std::exception&)
     {
         return false;
     }

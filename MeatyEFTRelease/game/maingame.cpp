@@ -10,8 +10,6 @@
 #include "../app/maps.h"
 #include "../app/taskManager.h"
 
-#include "../app/makcu.h"
-void ConnectMakcuOnStartup();
 
 
 #include <cstdint>
@@ -674,8 +672,7 @@ void MainGame::mainThread()
 
             LOGS.logInfo("GOM Located @ 0x", std::hex, this->gameObjectManager);
 
-            //run makcu startup onces if config says
-            ConnectMakcuOnStartup();
+            
             
         }
 
