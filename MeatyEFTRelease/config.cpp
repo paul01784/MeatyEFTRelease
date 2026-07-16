@@ -545,16 +545,38 @@ void from_json(const nlohmann::json& j, lootGlobals& k) {
     j.at("valueLootFrom").get_to(k.valueLootFrom);
 }
 
-void to_json(nlohmann::json& j, const MakcuConfig& k) {
+void to_json(nlohmann::json& j, const MakcuConfig& k)
+{
     j = nlohmann::json{
-        {"comPort", k.comPort},
-        {"connectOnStartup", k.connectOnStartup}
+        { "comPort", std::string(k.comPort) },
+        { "connectOnStartup", k.connectOnStartup }
     };
 }
 
-void from_json(const nlohmann::json& j, MakcuConfig& k) {
-    j.at("comPort").get_to(k.comPort);
-    j.at("connectOnStartup").get_to(k.connectOnStartup);
+void from_json(const nlohmann::json& j, MakcuConfig& k)
+{
+    
+    k.comPort[0] = '\0';
+    k.connectOnStartup = false;
+
+    if (const auto it = j.find("comPort");
+        it != j.end() && it->is_string())
+    {
+        const std::string port = it->get<std::string>();
+
+        std::snprintf(
+            k.comPort,
+            sizeof(k.comPort),
+            "%s",
+            port.c_str()
+        );
+    }
+
+    if (const auto it = j.find("connectOnStartup");
+        it != j.end() && it->is_boolean())
+    {
+        k.connectOnStartup = it->get<bool>();
+    }
 }
 
 // ConfigManager methods
@@ -676,6 +698,7 @@ bool ConfigManager::SaveConfig()
     }
 
     fuser_ = g_DxWindow.GetConfig();
+    makcu_ = makcuConfig;
 
     nlohmann::json j;
 
