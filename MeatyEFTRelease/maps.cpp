@@ -259,7 +259,7 @@ bool loadMaps(std::string mapToLoad)
         IM_ASSERT(interchange_2);
     }
 
-    if (mapToLoad == "laboratory")
+    if (mapToLoad == "laboratory" || mapToLoad == "laboratory_dark")
     {
         //labs
         //ground floor
