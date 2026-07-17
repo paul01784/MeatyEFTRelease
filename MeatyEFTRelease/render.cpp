@@ -284,7 +284,7 @@ static void renderMapDetails()
         else
             texture = interchange_texture2;
     }
-    else if (mainGame.selectedLocation == "laboratory")
+    else if (mainGame.selectedLocation == "laboratory" || mainGame.selectedLocation == "laboratory_dark")
     {
         if (!setCurrentMapSpecs)
         {

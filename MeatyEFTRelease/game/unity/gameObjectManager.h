@@ -16,6 +16,7 @@ static const std::vector<std::string> MapNames =
     "shoreline",
     "rezervbase",
     "laboratory",
+    "laboratory_dark",
     "interchange",
     "factory4_day",
     "factory4_night",
