@@ -12,6 +12,7 @@
 #include "app/DxRenderWindow.h"
 
 #include "app/makcu.h"
+#include "memory/Memory.h"
 void ConnectMakcuOnStartup();
 
 
@@ -582,6 +583,18 @@ void from_json(const nlohmann::json& j, MakcuConfig& k)
     }
 }
 
+void to_json(nlohmann::json& j, const memoryGlobals& k) {
+    j = nlohmann::json{
+        {"dmaAutoConnect", k.dmaAutoConnect},
+        {"dmaCloseAll", k.dmaCloseAll}
+    };
+}
+
+void from_json(const nlohmann::json& j, memoryGlobals& k) {
+    j.at("dmaAutoConnect").get_to(k.dmaAutoConnect);
+    j.at("dmaCloseAll").get_to(k.dmaCloseAll);
+}
+
 // ConfigManager methods
 ConfigManager::ConfigManager(const std::string& configFilename, const std::string& lootFilterFilename)
     : filename_(configFilename), filename_lootFilter(lootFilterFilename) {
@@ -711,7 +724,19 @@ bool ConfigManager::LoadConfig()
             makcuConfig = makcu_;
         }
 
+        if (j.contains("memoryGlobals") &&
+            j["memoryGlobals"].is_object())
+        {
+            memoryGlobals_ =
+                j.at("memoryGlobals").get<memoryGlobals>();
+        }
+
+
+        //startups
         ConnectMakcuOnStartup();
+
+        if (memoryGlobals::dmaAutoConnect)
+            mem.doDMAConnect();
 
         return true;
     }
@@ -751,6 +776,7 @@ bool ConfigManager::SaveConfig()
     j["keyGlobals"] = keys_;
     j["lootGlobals"] = loot_;
     j["makcu"] = makcu_;
+    j["memoryGlobals"] = memoryGlobals_;
 
     std::ofstream file(configFile);
     if (!file.is_open())

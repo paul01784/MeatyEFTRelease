@@ -64,5 +64,6 @@ private:
     keyGlobals keys_;
     lootGlobals loot_;
     MakcuConfig makcu_;
+    memoryGlobals memoryGlobals_;
 
 };

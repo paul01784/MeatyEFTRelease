@@ -222,6 +222,7 @@ Memory::Memory()
 	key = std::make_shared<c_keys>();
 
 	MemoryLogInfo("Successfully loaded libraries");
+
 }
 
 Memory::~Memory()
