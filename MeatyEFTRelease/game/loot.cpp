@@ -7,7 +7,7 @@
 #include "../game/headers/maingame.h"
 #include "../game/headers/sdk.h"
 #include "../game/headers/unityHelper.h"
-#include "../app/market.h"
+#include "../game/headers/tarkovdevquery.h"
 #include <map>
 #include "headers/unitysdk.h"
 #include "headers/transform.h"

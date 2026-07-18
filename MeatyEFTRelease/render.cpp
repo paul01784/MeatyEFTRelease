@@ -9,7 +9,7 @@
 #include "app/maps.h"
 #include "game/headers/maingame.h"
 #include "game/headers/loot.h"
-#include "app/market.h"
+#include "game/headers/tarkovdevquery.h"
 #include "game/headers/players.h"
 #include "app/draw.h"
 #include "app/config.h"

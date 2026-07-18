@@ -2,7 +2,7 @@
 #include "app/globals.h"
 #include "app/render.h"
 #include "app/config.h"
-#include "app/market.h"
+#include "game/headers/tarkovdevquery.h"
 #include "game/headers/maingame.h"
 #include "game/headers/tarkovdevquery.h"
 #include "app/DogTagAPI.h"

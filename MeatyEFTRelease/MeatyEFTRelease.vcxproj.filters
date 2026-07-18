@@ -374,7 +374,6 @@
     <ClInclude Include="memory\Registry.h" />
     <ClInclude Include="memory\Shellcode.h" />
     <ClInclude Include="memory\structs.h" />
-    <ClInclude Include="app\market.h" />
     <ClInclude Include="external\curl\curl.h" />
     <ClInclude Include="external\curl\curlver.h" />
     <ClInclude Include="external\curl\easy.h" />
@@ -443,7 +442,6 @@
     <ClCompile Include="memory\Memory.cpp" />
     <ClCompile Include="memory\Registry.cpp" />
     <ClCompile Include="memory\Shellcode.cpp" />
-    <ClCompile Include="market.cpp" />
     <ClCompile Include="config.cpp" />
     <ClCompile Include="game\utils.cpp" />
     <ClCompile Include="game\players.cpp" />

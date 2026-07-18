@@ -7,7 +7,7 @@
 #include "app/globals.h"
 #include "app/config.h"
 #include "game/headers/loot.h"
-#include "app/market.h"
+#include "game/headers/tarkovdevquery.h"
 #include "game/headers/utils.h"
 #include "app/DxRenderWindow.h"
 

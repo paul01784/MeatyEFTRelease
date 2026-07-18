@@ -163,7 +163,6 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="app\includes.h" />
     <ClInclude Include="app\makcu.h" />
     <ClInclude Include="app\maps.h" />
-    <ClInclude Include="app\market.h" />
     <ClInclude Include="app\perfMonitor.h" />
     <ClInclude Include="app\render.h" />
     <ClInclude Include="app\taskManager.h" />
@@ -594,7 +593,6 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="main.cpp" />
     <ClCompile Include="makcu.cpp" />
     <ClCompile Include="maps.cpp" />
-    <ClCompile Include="market.cpp" />
     <ClCompile Include="memory\InputManager.cpp" />
     <ClCompile Include="memory\Memory.cpp" />
     <ClCompile Include="memory\Registry.cpp" />

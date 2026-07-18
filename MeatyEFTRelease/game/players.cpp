@@ -12,7 +12,7 @@
 #include "headers/tarkovdevquery.h"
 #include <cmath>
 #include "headers/questManager.h"
-#include "../app/market.h"
+#include "headers/tarkovdevquery.h"
 #include "headers/loot.h"
 #include "headers/wishlist.h"
 #include "headers/dogtag.h"

@@ -5,7 +5,7 @@
 #include "headers/unityHelper.h"
 #include "headers/maingame.h"
 #include "headers/utils.h"
-#include "../app/market.h"
+#include "headers/tarkovdevquery.h"
 
 WishListManager wishListManager;
 std::vector<wishListItems> wishListData;
