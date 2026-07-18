@@ -134,7 +134,6 @@ extern std::vector<TarkovDevTasks> tarkovDevTasksData;
 extern std::vector<gameItemList> marketList;
 extern std::vector<gameCatList> catList;
 
-// Compatibility wrappers for existing call sites. New code can use tarkovDev directly.
 std::string loadjson(bool forceRefresh = false);
 void buildCatList();
 void buildItemList();
