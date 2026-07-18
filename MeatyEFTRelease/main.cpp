@@ -29,19 +29,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevIntance, PSTR pCmdLine, i
 		LOGS.logWarn("[MAIN][CONFIG] Failed to load lootFilters.json");
 	}
 
-	//build market data
-	loadjson();
-	buildItemList();
-	//buildCatList();
-
+	
 	//set api key for dogtag api if we have one
 	g_DogTagAPI.setApiKey(globals::dogTagAPIKey);
 
 	//build exfil data
 	TarkovDev tarkovDev;
-
-	tarkovDev.loadJsonQuests();
-	tarkovDev.buildTasksList();
+	tarkovDev.Initialize();
 
 	Sleep(1000);
 
