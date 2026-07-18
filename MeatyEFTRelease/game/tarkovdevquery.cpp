@@ -20,6 +20,38 @@ std::vector<TarkovDevTransit> tarkovDevTransitData;
 
 std::vector<TarkovDevTasks> tarkovDevTasksData;
 
+namespace
+{
+    class CurlGlobalGuard final
+    {
+    public:
+        CurlGlobalGuard()
+            : result_(curl_global_init(CURL_GLOBAL_ALL))
+        {
+        }
+
+        ~CurlGlobalGuard()
+        {
+            if (result_ == CURLE_OK)
+                curl_global_cleanup();
+        }
+
+        CURLcode result() const noexcept
+        {
+            return result_;
+        }
+
+    private:
+        CURLcode result_ = CURLE_FAILED_INIT;
+    };
+
+    CurlGlobalGuard& GetCurlGlobalGuard()
+    {
+        static CurlGlobalGuard guard;
+        return guard;
+    }
+}
+
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
 {
     size_t totalSize = size * nmemb;
@@ -205,181 +237,413 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
 
 std::string TarkovDev::loadJsonQuests()
 {
-    curl_global_init(CURL_GLOBAL_ALL);
-
-    std::ostringstream oss;
-    const std::string url = "https://api.tarkov.dev/graphql?query=%7Btasks%28gameMode%3Aregular%29%7Bid%20name%20objectives%7Bid%20type%20...%20on%20TaskObjectiveBasic%7Bzones%7Bposition%7Bx%20y%20z%7Dmap%7BnameId%7D%7D%7D...%20on%20TaskObjectiveItem%7Bitem%7Bid%7Dzones%7Bmap%7BnameId%7Dposition%7Bx%20y%20z%7D%7D%7D...%20on%20TaskObjectiveMark%7Bzones%7Bposition%7Bx%20y%20z%7Dmap%7BnameId%7D%7D%7D...%20on%20TaskObjectiveQuestItem%7BquestItem%7Bid%7Dmaps%7BnameId%7D%7D%7D%7D%7D";
-
-    try
-    {
-        CURLcode res = curl_read(url, oss, 3);
-
-        if (res == CURLE_OK)
+    const auto loadFromCache = [&]() -> std::string
         {
-            const std::string response = oss.str();
+            std::ifstream in(TDEV_CACHE_FILE_TASK, std::ios::binary);
 
-            auto json = nlohmann::json::parse(response);
-
-            if (!json.contains("data") || !json["data"].contains("tasks"))
+            if (!in.is_open())
             {
-                LOGS.logError("[TDEV][JSON] API response missing data.tasks");
-                throw std::runtime_error("Invalid API JSON");
+                LOGS.logError("[TDEV][JSON] No cached task JSON available");
+
+                return "";
             }
 
-            tarkovDevDataTasks = json["data"]["tasks"];
+            std::stringstream fileBuffer;
+            fileBuffer << in.rdbuf();
+            in.close();
 
-            /* Save to cache file */
-            std::ofstream out(TDEV_CACHE_FILE_TASK, std::ios::binary);
-            if (out.is_open())
+            const std::string cachedResponse = fileBuffer.str();
+
+            auto cachedJson = nlohmann::json::parse(cachedResponse, nullptr, false);
+
+            if (cachedJson.is_discarded())
             {
-                out << response;
-                out.close();
-                LOGS.logInfo("[TDEV][JSON] API data cached to file");
-            }
-            else
-            {
-                LOGS.logError("[TDEV][JSON] Failed to write cache file");
+                LOGS.logError("[TDEV][JSON] Cached task JSON could not be parsed");
+
+                return "";
             }
 
-            curl_global_cleanup();
-            return response;
+            if (!cachedJson.is_object() ||
+                !cachedJson.contains("data") ||
+                !cachedJson["data"].is_object() ||
+                !cachedJson["data"].contains("tasks") ||
+                !cachedJson["data"]["tasks"].is_array())
+            {
+                LOGS.logError("[TDEV][JSON] Cached task JSON is invalid or corrupt");
+
+                return "";
+            }
+
+            tarkovDevDataTasks = cachedJson["data"]["tasks"];
+
+            LOGS.logInfo("[TDEV][JSON] Tasks loaded from local cache");
+
+            return cachedResponse;
+        };
+
+    CurlGlobalGuard& curlGlobal = GetCurlGlobalGuard();
+
+    if (curlGlobal.result() != CURLE_OK)
+    {
+        LOGS.logError("[TDEV][CURL] curl_global_init failed: " + std::string(curl_easy_strerror(curlGlobal.result())));
+
+        return loadFromCache();
+    }
+
+    static constexpr const char* apiUrl = "https://api.tarkov.dev/graphql";
+
+    static constexpr const char* query = R"graphql(
+query Tasks {
+    tasks(gameMode: regular) {
+        id
+        name
+
+        objectives {
+            id
+            type
+
+            ... on TaskObjectiveBasic {
+                zones {
+                    position {
+                        x
+                        y
+                        z
+                    }
+
+                    map {
+                        nameId
+                    }
+                }
+            }
+
+            ... on TaskObjectiveItem {
+                item {
+                    id
+                }
+
+                items {
+                    id
+                }
+
+                zones {
+                    map {
+                        nameId
+                    }
+
+                    position {
+                        x
+                        y
+                        z
+                    }
+                }
+            }
+
+            ... on TaskObjectiveMark {
+                zones {
+                    position {
+                        x
+                        y
+                        z
+                    }
+
+                    map {
+                        nameId
+                    }
+                }
+            }
+
+            ... on TaskObjectiveQuestItem {
+                questItem {
+                    id
+                }
+
+                maps {
+                    nameId
+                }
+            }
         }
+    }
+}
+)graphql";
 
-        LOGS.logError(
-            "[TDEV][JSON] API request failed Tasks: " +
-            std::string(curl_easy_strerror(res)) +
-            " — attempting cache load"
+    nlohmann::json requestBody;
+
+    requestBody["operationName"] = "Tasks";
+    requestBody["query"] = query;
+    requestBody["variables"] = nlohmann::json::object();
+
+    const std::string postData = requestBody.dump();
+
+    std::ostringstream responseStream;
+
+    long httpStatus = 0;
+
+    const CURLcode curlResult = curl_read(apiUrl, responseStream, 30, postData, &httpStatus);
+
+    const std::string response = responseStream.str();
+
+    const auto saveErrorResponse = [&]()
+        {
+            if (response.empty())
+                return;
+
+            std::ofstream errorFile("logs\\tarkov_tasks_api_error.txt", std::ios::binary | std::ios::trunc);
+
+            if (errorFile.is_open())
+                errorFile << response;
+        };
+
+    if (curlResult != CURLE_OK)
+    {
+        LOGS.logError("[TDEV][JSON] Task API transport failed: " + std::string(curl_easy_strerror(curlResult)) + " — attempting cache load");
+
+        saveErrorResponse();
+        return loadFromCache();
+    }
+
+    if (httpStatus < 200 || httpStatus >= 300)
+    {
+        LOGS.logError("[TDEV][JSON] Task API returned HTTP " + std::to_string(httpStatus) + " — attempting cache load"
         );
 
-        std::ifstream in(TDEV_CACHE_FILE_TASK, std::ios::binary);
-        if (!in.is_open())
+        if (httpStatus == 403)
         {
-            LOGS.logError("[TDEV][JSON] No cached JSON file Tasks available");
-            curl_global_cleanup();
-            return "";
+            LOGS.logError("[TDEV][JSON] HTTP 403: request blocked by server/Cloudflare");
+        }
+        else if (httpStatus == 429)
+        {
+            LOGS.logError("[TDEV][JSON] HTTP 429: too many requests");
         }
 
-        std::stringstream fileBuffer;
-        fileBuffer << in.rdbuf();
-        in.close();
+        saveErrorResponse();
+        return loadFromCache();
+    }
 
-        auto json = nlohmann::json::parse(fileBuffer.str());
+    if (response.empty())
+    {
+        LOGS.logError("[TDEV][JSON] Task API returned an empty response");
 
-        if (!json.contains("data") || !json["data"].contains("tasks"))
+        return loadFromCache();
+    }
+
+    auto json = nlohmann::json::parse(response, nullptr, false);
+
+    if (json.is_discarded())
+    {
+        LOGS.logError("[TDEV][JSON] Task API returned non-JSON data");
+
+        saveErrorResponse();
+        return loadFromCache();
+    }
+
+    if (json.contains("errors") &&
+        json["errors"].is_array() &&
+        !json["errors"].empty())
+    {
+        std::string errorText = json["errors"].dump();
+
+        if (errorText.size() > 1500)
         {
-            LOGS.logError("[TDEV][JSON] Task Cached JSON invalid or corrupt");
-            curl_global_cleanup();
-            return "";
+            errorText.resize(1500);
+            errorText += "...";
         }
 
-        tarkovDevDataTasks = json["data"]["tasks"];
-        LOGS.logInfo("[TDEV][JSON] Tasks Loaded data from local cache");
-
-        curl_global_cleanup();
-        return fileBuffer.str();
-    }
-    catch (const std::exception& e)
-    {
-        LOGS.logError(std::string("[TDEV][JSON] Tasks Exception: ") + e.what());
-    }
-    catch (...)
-    {
-        LOGS.logError("[TDEV][JSON] Tasks Unknown exception");
+        LOGS.logError("[TDEV][JSON] GraphQL errors: " + errorText);
     }
 
-    curl_global_cleanup();
-    return "";
+    if (!json.is_object() ||
+        !json.contains("data") ||
+        !json["data"].is_object() ||
+        !json["data"].contains("tasks") ||
+        !json["data"]["tasks"].is_array())
+    {
+        LOGS.logError("[TDEV][JSON] API response missing a valid data.tasks array");
+
+        saveErrorResponse();
+        return loadFromCache();
+    }
+
+    tarkovDevDataTasks = json["data"]["tasks"];
+
+    std::ofstream out(TDEV_CACHE_FILE_TASK, std::ios::binary | std::ios::trunc);
+
+    if (out.is_open())
+    {
+        out << response;
+        out.close();
+
+        LOGS.logInfo("[TDEV][JSON] Task API data cached to file");
+    }
+    else
+    {
+        LOGS.logError("[TDEV][JSON] Failed to write task cache file");
+    }
+
+    LOGS.logInfo("[TDEV][JSON] Task API request completed with HTTP " + std::to_string(httpStatus));
+
+    return response;
 }
 
 void TarkovDev::buildTasksList()
 {
     tarkovDevTasksData.clear();
 
-    //tasks are at [data][tasks] in the response
-    const auto* tasksPtr = &tarkovDevDataTasks;
+    const nlohmann::json* tasksPtr = &tarkovDevDataTasks;
 
     if (tarkovDevDataTasks.is_object() &&
         tarkovDevDataTasks.contains("data") &&
         tarkovDevDataTasks["data"].is_object() &&
         tarkovDevDataTasks["data"].contains("tasks"))
     {
-        tasksPtr = &tarkovDevDataTasks["data"]["tasks"];
+        tasksPtr =
+            &tarkovDevDataTasks["data"]["tasks"];
     }
 
     if (!tasksPtr->is_array())
     {
-        LOGS.logError("[TASKS][BUILD] JSON not in expected array format at [data][tasks]");
+        LOGS.logError("[TASKS][BUILD] Task JSON is not an array");
+
         return;
     }
 
-    for (const auto& t : *tasksPtr)
-    {
-        TarkovDevTasks task;
-
-        task.qID = t.value("id", "");
-        task.qName = t.value("name", "");
-
-        // objectives
-        if (t.contains("objectives") && t["objectives"].is_array())
+    const auto readString = [](const nlohmann::json& object, const char* key) -> std::string
         {
-            for (const auto& o : t["objectives"])
+            if (!object.is_object())
+                return "";
+
+            const auto it = object.find(key);
+
+            if (it == object.end() || !it->is_string())
+                return "";
+
+            return it->get<std::string>();
+        };
+
+    const auto readFloat = [](const nlohmann::json& object, const char* key) -> float
+        {
+            if (!object.is_object())
+                return 0.0f;
+
+            const auto it = object.find(key);
+
+            if (it == object.end() || !it->is_number())
+                return 0.0f;
+
+            return it->get<float>();
+        };
+
+    tarkovDevTasksData.reserve(tasksPtr->size());
+
+    for (const auto& taskJson : *tasksPtr)
+    {
+        if (!taskJson.is_object())
+            continue;
+
+        TarkovDevTasks task{};
+
+        task.qID = readString(taskJson, "id");
+
+        task.qName = readString(taskJson, "name");
+
+        const auto objectivesIt = taskJson.find("objectives");
+
+        if (objectivesIt != taskJson.end() && objectivesIt->is_array())
+        {
+            task.objectives.reserve(objectivesIt->size());
+
+            for (const auto& objectiveJson : *objectivesIt)
             {
-                TarkovObjective obj;
+                if (!objectiveJson.is_object())
+                    continue;
 
-                obj.type = o.value("type", "");
-                obj.id = o.value("id", "");
+                TarkovObjective objective{};
 
-                // item { id }
-                if (o.contains("item") && o["item"].is_object())
+                objective.type = readString(objectiveJson, "type");
+
+                objective.id = readString(objectiveJson, "id");
+
+                const auto itemIt = objectiveJson.find("item");
+
+                if (itemIt != objectiveJson.end() && itemIt->is_object())
                 {
-                    obj.itemId = o["item"].value("id", "");
+                    objective.itemId = readString(*itemIt, "id");
                 }
 
-                // questItem { id }
-                if (o.contains("questItem") && o["questItem"].is_object())
+                if (objective.itemId.empty())
                 {
-                    obj.questItemId = o["questItem"].value("id", "");
-                }
+                    const auto itemsIt = objectiveJson.find("items");
 
-                // maps: [ { nameId }, ... ]
-                if (o.contains("maps") && o["maps"].is_array())
-                {
-                    obj.maps.reserve(o["maps"].size());
-                    for (const auto& m : o["maps"])
+                    if (itemsIt != objectiveJson.end() && itemsIt->is_array() && !itemsIt->empty())
                     {
-                        obj.maps.emplace_back(m.value("nameId", ""));
+                        const auto& firstItem = itemsIt->front();
+
+                        if (firstItem.is_object())
+                        {
+                            objective.itemId = readString(firstItem, "id");
+                        }
                     }
                 }
 
-                // zones: [ { position {x,y,z}, map {nameId} }, ... ]
-                if (o.contains("zones") && o["zones"].is_array())
-                {
-                    obj.zones.reserve(o["zones"].size());
-                    for (const auto& z : o["zones"])
-                    {
-                        TarkovZone zone;
+                const auto questItemIt = objectiveJson.find("questItem");
 
-                        // position
-                        if (z.contains("position") && z["position"].is_object())
+                if (questItemIt != objectiveJson.end() && questItemIt->is_object())
+                {
+                    objective.questItemId = readString(*questItemIt, "id");
+                }
+
+                const auto mapsIt = objectiveJson.find("maps");
+
+                if (mapsIt != objectiveJson.end() && mapsIt->is_array())
+                {
+                    objective.maps.reserve(mapsIt->size());
+
+                    for (const auto& mapJson : *mapsIt)
+                    {
+                        const std::string mapNameId = readString(mapJson, "nameId");
+
+                        if (!mapNameId.empty())
+                        {
+                            objective.maps.emplace_back(mapNameId);
+                        }
+                    }
+                }
+
+                const auto zonesIt = objectiveJson.find("zones");
+
+                if (zonesIt != objectiveJson.end() && zonesIt->is_array())
+                {
+                    objective.zones.reserve(zonesIt->size());
+
+                    for (const auto& zoneJson : *zonesIt)
+                    {
+                        if (!zoneJson.is_object())
+                            continue;
+
+                        TarkovZone zone{};
+
+                        const auto positionIt = zoneJson.find("position");
+
+                        if (positionIt != zoneJson.end() && positionIt->is_object())
                         {
                             zone.position = glm::vec3{
-                                z["position"].value("x", 0.f),
-                                z["position"].value("y", 0.f),
-                                z["position"].value("z", 0.f)
+                                readFloat(*positionIt, "x"),
+                                readFloat(*positionIt, "y"),
+                                readFloat(*positionIt, "z")
                             };
                         }
 
-                        // map { nameId }
-                        if (z.contains("map") && z["map"].is_object())
+                        const auto mapIt = zoneJson.find("map");
+
+                        if (mapIt != zoneJson.end() && mapIt->is_object())
                         {
-                            zone.mapNameId = z["map"].value("nameId", "");
+                            zone.mapNameId = readString(*mapIt, "nameId");
                         }
 
-                        obj.zones.emplace_back(std::move(zone));
+                        objective.zones.emplace_back(std::move(zone));
                     }
                 }
 
-                task.objectives.emplace_back(std::move(obj));
+                task.objectives.emplace_back(std::move(objective));
             }
         }
 
@@ -387,9 +651,13 @@ void TarkovDev::buildTasksList()
     }
 
     if (!tarkovDevTasksData.empty())
-        LOGS.logInfo("[TASKS][BUILD] info updated (" + std::to_string(tarkovDevTasksData.size()) + ")");
+    {
+        LOGS.logInfo("[TASKS][BUILD] Task data updated (" + std::to_string(tarkovDevTasksData.size()) + ")");
+    }
     else
-        LOGS.logError("[TASKS][BUILD] No data parsed");
+    {
+        LOGS.logError("[TASKS][BUILD] No task data parsed");
+    }
 }
 
 std::string TarkovDev::loadJsonExfils()
@@ -496,23 +764,143 @@ size_t TarkovDev::data_write(void* buf, size_t size, size_t nmemb, void* userp)
     return 0;
 }
 
-CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long timeout = 30)
+CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long timeout, const std::string& postData, long* httpStatus)
 {
-    CURLcode code(CURLE_FAILED_INIT);
+    if (httpStatus)
+        *httpStatus = 0;
+
     CURL* curl = curl_easy_init();
 
-    if (curl)
-    {
-        if (CURLE_OK == (code = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, TarkovDev::data_write))
-            && CURLE_OK == (code = curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L))
-            && CURLE_OK == (code = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L))
-            && CURLE_OK == (code = curl_easy_setopt(curl, CURLOPT_FILE, &os))
-            && CURLE_OK == (code = curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout))
-            && CURLE_OK == (code = curl_easy_setopt(curl, CURLOPT_URL, url.c_str())))
+    if (!curl)
+        return CURLE_FAILED_INIT;
+
+    CURLcode code = CURLE_OK;
+    curl_slist* headers = nullptr;
+
+    char errorBuffer[CURL_ERROR_SIZE]{};
+
+    const auto appendHeader = [&](const char* value) -> bool
         {
-            code = curl_easy_perform(curl);
+            curl_slist* updatedHeaders = curl_slist_append(headers, value);
+
+            if (!updatedHeaders)
+                return false;
+
+            headers = updatedHeaders;
+            return true;
+        };
+
+    do
+    {
+        if (!appendHeader("Accept: application/json"))
+        {
+            code = CURLE_OUT_OF_MEMORY;
+            break;
         }
-        curl_easy_cleanup(curl);
-    }
+
+        if (!postData.empty())
+        {
+            if (!appendHeader("Content-Type: application/json"))
+            {
+                code = CURLE_OUT_OF_MEMORY;
+                break;
+            }
+        }
+
+        code = curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, TarkovDev::data_write);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &os);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_USERAGENT, "Meaty/1.0");
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_FAILONERROR, 0L);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        if (code != CURLE_OK)
+            break;
+
+        code = curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errorBuffer);
+        if (code != CURLE_OK)
+            break;
+
+        if (!postData.empty())
+        {
+            code = curl_easy_setopt(curl, CURLOPT_POST, 1L);
+            if (code != CURLE_OK)
+                break;
+
+            code = curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
+            if (code != CURLE_OK)
+                break;
+
+            code = curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(postData.size()));
+            if (code != CURLE_OK)
+                break;
+        }
+
+        code = curl_easy_perform(curl);
+
+        long responseCode = 0;
+
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &responseCode);
+
+        if (httpStatus)
+            *httpStatus = responseCode;
+
+        if (code != CURLE_OK && errorBuffer[0] != '\0')
+        {
+            LOGS.logError(std::string("[TDEV][CURL] ") + errorBuffer);
+        }
+    } while (false);
+
+    if (headers)
+        curl_slist_free_all(headers);
+
+    curl_easy_cleanup(curl);
+
     return code;
 }
