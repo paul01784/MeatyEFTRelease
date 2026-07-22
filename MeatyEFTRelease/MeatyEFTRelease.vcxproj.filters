@@ -419,6 +419,9 @@
     <ClInclude Include="game\headers\fireport.h" />
     <ClInclude Include="game\headers\game_world.h" />
     <ClInclude Include="game\headers\watchList.h" />
+    <ClInclude Include="app\resource.h" />
+    <ClInclude Include="app\SplashWindow.h" />
+    <ClInclude Include="app\FileUpdater.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="debug.cpp" />
@@ -461,6 +464,7 @@
     <ClCompile Include="game\fireport.cpp" />
     <ClCompile Include="game\game_world.cpp" />
     <ClCompile Include="game\watchlist.cpp" />
+    <ClCompile Include="FileUpdater.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Font Include="app\fonts\forkawesome-webfont.ttf" />
@@ -616,5 +620,10 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="MeatyEFTRelease.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="bitmap1.bmp" />
+    <Image Include="resources\MeatyEFT.png" />
+    <Image Include="app\resources\MeatyEFT.png" />
   </ItemGroup>
 </Project>

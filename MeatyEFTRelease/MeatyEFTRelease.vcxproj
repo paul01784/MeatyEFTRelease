@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -157,6 +157,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="app\DogTagAPI.h" />
     <ClInclude Include="app\draw.h" />
     <ClInclude Include="app\DxRenderWindow.h" />
+    <ClInclude Include="app\FileUpdater.h" />
     <ClInclude Include="app\fuserRender.h" />
     <ClInclude Include="app\globals.h" />
     <ClInclude Include="app\IconsForkAwesome.h" />
@@ -165,6 +166,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="app\maps.h" />
     <ClInclude Include="app\perfMonitor.h" />
     <ClInclude Include="app\render.h" />
+    <ClInclude Include="app\resource.h" />
+    <ClInclude Include="app\SplashWindow.h" />
     <ClInclude Include="app\taskManager.h" />
     <ClInclude Include="app\text.h" />
     <ClInclude Include="external\curl\curl.h" />
@@ -573,6 +576,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="external\imgui\imgui_tables.cpp" />
     <ClCompile Include="external\imgui\imgui_widgets.cpp" />
     <ClCompile Include="external\imgui\misc\cpp\imgui_stdlib.cpp" />
+    <ClCompile Include="FileUpdater.cpp" />
     <ClCompile Include="game\camera.cpp" />
     <ClCompile Include="game\dogtag.cpp" />
     <ClCompile Include="game\exfil.cpp" />
@@ -754,6 +758,11 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="MeatyEFTRelease.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="app\resources\MeatyEFT.png" />
+    <Image Include="bitmap1.bmp" />
+    <Image Include="resources\MeatyEFT.png" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
