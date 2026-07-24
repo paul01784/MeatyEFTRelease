@@ -43,7 +43,7 @@ namespace
     constexpr const char* TASKS_CACHE_FILE = "tarkovdev_tasks_cache.json";
     constexpr const char* ITEMS_CACHE_FILE = "market_items_cache.json";
 
-    constexpr auto CACHE_MAX_AGE = std::chrono::hours(48);
+    constexpr auto CACHE_MAX_AGE = std::chrono::hours(24);
 
     json tarkovDevDataTasks = json::array();
     json tarkovDevDataItems = json::array();
@@ -545,7 +545,7 @@ std::string TarkovDevProfileClient::HttpGet(const std::string& url, long& httpCo
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Meaty/1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "WindowsDesktopClient/1.0");
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -1231,6 +1231,12 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
             break;
         }
 
+        if (!appendHeader("Cache-Control: no-cache"))
+        {
+            code = CURLE_OUT_OF_MEMORY;
+            break;
+        }
+
         code = curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         if (code != CURLE_OK) break;
 
@@ -1243,10 +1249,13 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
         code = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         if (code != CURLE_OK) break;
 
-        code = curl_easy_setopt(curl, CURLOPT_USERAGENT, "Meaty/1.0");
+        code = curl_easy_setopt(curl, CURLOPT_USERAGENT, "WindowsDesktopClient/1.0");
         if (code != CURLE_OK) break;
 
         code = curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+        if (code != CURLE_OK) break;
+
+        code = curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
         if (code != CURLE_OK) break;
 
         code = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -1279,13 +1288,35 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
         code = curl_easy_perform(curl);
 
         long responseCode = 0;
+        char* effectiveUrl = nullptr;
+        char* contentType = nullptr;
+
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &responseCode);
+        curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effectiveUrl);
+        curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &contentType);
 
         if (httpStatus)
             *httpStatus = responseCode;
 
-        if (code != CURLE_OK && errorBuffer[0] != '\0')
-            LOGS.logError(std::string("[TDEV][CURL] ") + errorBuffer);
+        if (code != CURLE_OK)
+        {
+            std::string error = errorBuffer[0] != '\0'
+                ? errorBuffer
+                : curl_easy_strerror(code);
+
+            LOGS.logError("[TDEV][CURL] " + error);
+            break;
+        }
+
+        if (responseCode < 200 || responseCode >= 300)
+        {
+            std::string message =
+                "[TDEV][CURL] HTTP status=" + std::to_string(responseCode) +
+                " URL=" + (effectiveUrl ? std::string(effectiveUrl) : url) +
+                " Content-Type=" + (contentType ? std::string(contentType) : "unknown");
+
+            LOGS.logError(message);
+        }
     } while (false);
 
     if (headers)
