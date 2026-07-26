@@ -323,7 +323,7 @@ bool Camera::readFrameData(FrameData& out)
         );
     }
 
-    mem.ExecuteReadScatter(handle);
+    mem.ExecuteReadScatter(handle, false, "Camera Update");
     mem.CloseScatterHandle(handle);
 
     out.fpsMatrixValid = matrixLooksValid(out.fpsRaw);

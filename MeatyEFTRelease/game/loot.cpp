@@ -97,7 +97,7 @@ namespace
             if (!ok_)
                 return false;
 
-            return mem.ExecuteReadScatter(handle_, 0, useCache_);
+            return mem.ExecuteReadScatter(handle_, useCache_, "Loot Exec");
         }
 
     private:

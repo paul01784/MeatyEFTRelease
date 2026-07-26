@@ -200,7 +200,8 @@ void Exfil::updateStatus()
 			mem.AddScatterReadRequest(handle, exfilCache.instance + sdk::ExfiltrationPoint::Status, &exfilCache.statusRaw, sizeof(int));
 		}
 
-		mem.ExecuteReadScatter(handle); mem.CloseScatterHandle(handle);
+		mem.ExecuteReadScatter(handle, true, "Exfil update");
+		mem.CloseScatterHandle(handle);
 
 		for (auto& exfilCache : exfilList)
 		{

@@ -172,7 +172,6 @@ DWORD Memory::BuildReadFlags(bool useCache)
 	if (!useCache)
 	{
 		flags |= VMMDLL_FLAG_NOCACHE;
-		flags |= VMMDLL_FLAG_NOCACHEPUT;
 	}
 
 	return flags;
@@ -183,14 +182,10 @@ DWORD Memory::BuildScatterFlags(bool useCache)
 	DWORD flags =
 		VMMDLL_FLAG_ZEROPAD_ON_FAIL |
 		VMMDLL_FLAG_NOPAGING |
-		VMMDLL_FLAG_NOPAGING_IO |
 		VMMDLL_FLAG_SCATTER_PREPAREEX_NOMEMZERO;
 
 	if (!useCache)
-	{
 		flags |= VMMDLL_FLAG_NOCACHE;
-		flags |= VMMDLL_FLAG_NOCACHEPUT;
-	}
 
 	return flags;
 }
@@ -2767,15 +2762,14 @@ bool Memory::AddScatterWriteRequest(
 	return true;
 }
 
-bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool useCache)
+bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, bool useCache, std::string callingFunc)
 {
 	if (!handle)
 	{
 		MemoryLogError("ExecuteReadScatter failed: handle is null");
 		return false;
 	}
-
-	if (pid == 0)
+	int pid = 0;
 		pid = current_process.PID;
 
 	if (!pid)
@@ -2802,7 +2796,7 @@ bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool useC
 	if (scatterMs >= PerfMonitor::kSlowScatterMs)
 	{
 		PerfMonitor::Instance().Record(
-			"dma.scatter",
+			"dma.scatter(" + callingFunc + ")",
 			scatterMs,
 			std::to_string(queuedReads) + " reads");
 	}

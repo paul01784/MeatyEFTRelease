@@ -457,7 +457,7 @@ public:
         size_t size
     );
 
-    bool ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, int pid = 0, bool useCache = false);
+    bool ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, bool useCache = false, std::string callingFunc = "");
     bool ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid = 0, bool useCache = false);
 
     [[nodiscard]] static bool IsValidPointer(uintptr_t pointer)
