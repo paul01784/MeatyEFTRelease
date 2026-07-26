@@ -601,12 +601,17 @@ namespace fuserRender
 
         const std::string currentMapId = TrimEFT(mainGame.selectedLocation);
 
+        
+
         std::vector<QuestLocation> locations = GetMasterLocationsSnapshot();
 
         for (const auto& loc : locations)
         {
-            if (!(Utils::Text::containsIgnoreCase(loc.mapNameId, currentMapId) ||
-                Utils::Text::containsIgnoreCase(currentMapId, loc.mapNameId)))
+            // Convert id to name
+            std::string mapName(MapNames::GetNameFromId(loc.mapNameId));
+
+            if (!(Utils::Text::containsIgnoreCase(mapName, currentMapId) ||
+                Utils::Text::containsIgnoreCase(currentMapId, mapName)))
             {
                 continue;
             }

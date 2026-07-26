@@ -5,7 +5,39 @@
 #include "../game/headers/players.h"
 #include "../game/headers/explosives.h"
 
+namespace MapNames
+{
+    inline const std::unordered_map<std::string_view, std::string_view> idToNameId =
+    {
+        { "55f2d3fd4bdc2d5f408b4567", "factory4_day" },
+        { "56f40101d2720b2a4d8b45d6", "bigmap" },
+        { "5704e3c2d2720bac5b8b4567", "Woods" },
+        { "5704e4dad2720bb55b8b4567", "Lighthouse" },
+        { "5704e554d2720bac5b8b456e", "Shoreline" },
+        { "5704e5fad2720bc05b8b4567", "RezervBase" },
+        { "5714dbc024597771384a510d", "Interchange" },
+        { "5714dc692459777137212e12", "TarkovStreets" },
+        { "59fc81d786f774390775787e", "factory4_night" },
+        { "5b0fc42d86f7744a585f9105", "laboratory" },
+        { "653e6760052c01c1c805532f", "Sandbox" },
+        { "65b8d6f5cdde2479cb2a3125", "Sandbox_high" },
+        { "65cc8f81a9aac3e77d0cfd3e", "Terminal" },
+        { "6733700029c367a3d40b02af", "Labyrinth" },
+        { "68236e8153654e8c1200798a", "Sandbox_start" },
+        { "69af492a4819ea4ba10a69c5", "Icebreaker" },
+        { "6a294a5b5eb5f9a1700417b7", "laboratory_dark" }
+    };
 
+    inline std::string_view GetNameFromId(std::string_view id)
+    {
+        const auto it = idToNameId.find(id);
+
+        if (it == idToNameId.end())
+            return "Unknown";
+
+        return it->second;
+    }
+}
 
 void DrawRadarMainText(int x, int y, ImVec4 color, const char* str)
 {
@@ -674,9 +706,12 @@ void drawQuests()
 
     for (auto& loc : masterLocations)
     {
+        // Convert id to name
+        std::string mapName(MapNames::GetNameFromId(loc.mapNameId));
+
         // Map filter
-        if (!(Utils::Text::containsIgnoreCase(loc.mapNameId, currentMapId) ||
-            Utils::Text::containsIgnoreCase(currentMapId, loc.mapNameId)))
+        if (!(Utils::Text::containsIgnoreCase(mapName, currentMapId) ||
+            Utils::Text::containsIgnoreCase(currentMapId, mapName)))
             continue;
 
         if (loc.objectiveType == "findQuestItem")
