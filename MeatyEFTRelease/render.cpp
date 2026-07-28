@@ -5395,7 +5395,7 @@ static void renderMainScreen()
 
             setCurrentMapSpecs = false;
 
-            g_AimViewWidget.Render((ImVec2&)espGlobals::gameRes);
+            //g_AimViewWidget.Render((ImVec2&)espGlobals::gameRes);
 
         }
         else
