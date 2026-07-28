@@ -93,6 +93,7 @@ void Camera::clearCameraPointerCacheOnly()
     cameraEntity = 0;
     opticCameraMatrix = 0;
 
+    localmpCamera = false;
     initedCamera = false;
 
     resetOpticActivity();
@@ -212,8 +213,15 @@ void Camera::getCameraPtrs()
 
 void Camera::getMatrixPtrs()
 {
-    fpsMatrixAddr = resolveMatrixAddress(fpsCamera);
-    opticMatrixAddr = resolveMatrixAddress(opticCamera);
+    fpsMatrixAddr =
+        Utils::valid_pointer(fpsCamera)
+        ? resolveMatrixAddress(fpsCamera)
+        : 0;
+
+    opticMatrixAddr =
+        Utils::valid_pointer(opticCamera)
+        ? resolveMatrixAddress(opticCamera)
+        : 0;
 }
 
 uint64_t Camera::resolveMatrixAddress(uint64_t cameraPtr) const
@@ -276,65 +284,95 @@ bool Camera::refreshCameraPointersStrict()
 
 bool Camera::readFrameData(FrameData& out)
 {
-    out = {};
+    FrameData next{};
 
     if (!cameraPointersReady())
         return false;
 
-    out.fov = gameFOV;
-    out.aspect = gameAspect;
+    next.fov = gameFOV;
+    next.aspect = gameAspect;
 
-    out.queuedFps = true;
-    out.queuedOptic = opticPointersReady();
+    next.queuedFps = true;
+    next.queuedOptic =
+        mainGame.localIsScoped &&
+        opticPointersReady();
 
     auto handle = mem.CreateScatterHandle();
 
     if (!handle)
         return false;
 
-    mem.AddScatterReadRequest(
+    if (!mem.AddScatterReadRequest(
         handle,
         fpsCamera + UnityOffsets::Camera_FOVOffset,
-        &out.fov,
+        &next.fov,
         sizeof(float)
-    );
-
-    mem.AddScatterReadRequest(
-        handle,
-        fpsCamera + UnityOffsets::Camera_AspectRatioOffset,
-        &out.aspect,
-        sizeof(float)
-    );
-
-    mem.AddScatterReadRequest(
-        handle,
-        fpsMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
-        &out.fpsRaw,
-        sizeof(glm::highp_mat4)
-    );
-
-    if (out.queuedOptic)
+    ))
     {
-        mem.AddScatterReadRequest(
-            handle,
-            opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
-            &out.opticRaw,
-            sizeof(glm::highp_mat4)
-        );
+        mem.CloseScatterHandle(handle);
+        return false;
     }
 
-    mem.ExecuteReadScatter(handle, false, "Camera Update");
+    if (!mem.AddScatterReadRequest(
+        handle,
+        fpsCamera + UnityOffsets::Camera_AspectRatioOffset,
+        &next.aspect,
+        sizeof(float)
+    ))
+    {
+        mem.CloseScatterHandle(handle);
+        return false;
+    }
+
+    if (!mem.AddScatterReadRequest(
+        handle,
+        fpsMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
+        &next.fpsRaw,
+        sizeof(glm::highp_mat4)
+    ))
+    {
+        mem.CloseScatterHandle(handle);
+        return false;
+    }
+
+    if (next.queuedOptic)
+    {
+        if (!mem.AddScatterReadRequest(
+            handle,
+            opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
+            &next.opticRaw,
+            sizeof(glm::highp_mat4)
+        ))
+        {
+            mem.CloseScatterHandle(handle);
+            return false;
+        }
+    }
+
+    const bool executed =
+        mem.ExecuteReadScatter(handle, false, "Camera Update");
+
     mem.CloseScatterHandle(handle);
 
-    out.fpsMatrixValid = matrixLooksValid(out.fpsRaw);
-    out.opticMatrixValid = out.queuedOptic && matrixLooksValid(out.opticRaw);
+    if (!executed)
+        return false;
 
-    // Relizth: only FPS matrix is required; optic is optional until ADS.
-    return out.fpsMatrixValid;
+    next.fpsMatrixValid = matrixLooksValid(next.fpsRaw);
+    next.opticMatrixValid =
+        next.queuedOptic &&
+        matrixLooksValid(next.opticRaw);
+
+    if (!next.fpsMatrixValid)
+        return false;
+
+    out = next;
+    return true;
 }
 
 void Camera::applyFpsFrame(const FrameData& frame)
 {
+    const glm::highp_mat4 transposed = glm::transpose(frame.fpsRaw);
+
     if (validFov(frame.fov))
         gameFOV = frame.fov;
 
@@ -342,7 +380,7 @@ void Camera::applyFpsFrame(const FrameData& frame)
         gameAspect = frame.aspect;
 
     g_viewMatrixRAW = frame.fpsRaw;
-    g_viewMatrix = glm::transpose(frame.fpsRaw);
+    g_viewMatrix = transposed;
 }
 
 bool Camera::applyOpticFrame(const FrameData& frame)
@@ -350,8 +388,10 @@ bool Camera::applyOpticFrame(const FrameData& frame)
     if (!frame.opticMatrixValid)
         return false;
 
+    const glm::highp_mat4 transposed = glm::transpose(frame.opticRaw);
+
     g_viewMatrixOpticRAW = frame.opticRaw;
-    g_viewMatrixOptic = glm::transpose(frame.opticRaw);
+    g_viewMatrixOptic = transposed;
 
     return true;
 }
@@ -383,11 +423,13 @@ void Camera::resetOpticActivity()
 
 bool Camera::updateOpticMatrixActivity(const FrameData& frame)
 {
-    m_matrixDebug.localScoped = mainGame.localIsScoped;
+    const bool scoped = mainGame.localIsScoped;
+
+    m_matrixDebug.localScoped = scoped;
     m_matrixDebug.fpsMatrixValid = frame.fpsMatrixValid;
     m_matrixDebug.opticMatrixValid = frame.opticMatrixValid;
 
-    if (!frame.opticMatrixValid)
+    if (!scoped || !frame.opticMatrixValid)
     {
         resetOpticActivity();
         return false;
@@ -398,7 +440,7 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
         m_lastOpticRaw = frame.opticRaw;
         m_hasLastOpticMatrix = true;
 
-        m_opticMatrixActive = false;
+        m_opticMatrixActive = true;
         m_opticNoChangeSamples = 0;
         m_opticActivityTick = 0;
 
@@ -406,9 +448,9 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
         m_matrixDebug.noChangeSamples = m_opticNoChangeSamples;
         m_matrixDebug.opticMatrixDiff = 0.0f;
         m_matrixDebug.opticMatrixChanged = false;
-        m_matrixDebug.opticMatrixActive = false;
+        m_matrixDebug.opticMatrixActive = true;
 
-        return false;
+        return true;
     }
 
     ++m_opticActivityTick;
@@ -442,10 +484,9 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
     else
     {
         ++m_opticNoChangeSamples;
-
-        if (m_opticNoChangeSamples >= kOpticInactiveSampleLimit)
-            m_opticMatrixActive = false;
     }
+
+    m_opticMatrixActive = true;
 
     m_matrixDebug.noChangeSamples = m_opticNoChangeSamples;
     m_matrixDebug.opticMatrixActive = m_opticMatrixActive;
@@ -457,14 +498,18 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
 
 void Camera::cameraTask()
 {
+    static auto lastCameraRead = std::chrono::steady_clock::time_point{};
     static auto lastCameraPointerRefresh = std::chrono::steady_clock::time_point{};
     static auto lastOpticProbe = std::chrono::steady_clock::time_point{};
     static auto matrixInvalidSince = std::chrono::steady_clock::time_point{};
+    static auto opticInvalidSince = std::chrono::steady_clock::time_point{};
     static auto lastMatrixFailureLog = std::chrono::steady_clock::time_point{};
     static bool wasScoped = false;
 
+    constexpr auto kCameraReadInterval = std::chrono::milliseconds(4);
     constexpr auto kCameraPointerRetryInterval = std::chrono::milliseconds(250);
     constexpr auto kScopedOpticProbeInterval = std::chrono::milliseconds(250);
+    constexpr auto kOpticInvalidGracePeriod = std::chrono::milliseconds(250);
     constexpr auto kMatrixInvalidResetDelay = std::chrono::milliseconds(750);
     constexpr auto kMatrixFailureLogCooldown = std::chrono::seconds(5);
 
@@ -474,15 +519,34 @@ void Camera::cameraTask()
             return;
 
         const auto now = std::chrono::steady_clock::now();
+
+        if (lastCameraRead != std::chrono::steady_clock::time_point{} &&
+            (now - lastCameraRead) < kCameraReadInterval)
+        {
+            return;
+        }
+
+        lastCameraRead = now;
+
         const bool scoped = mainGame.localIsScoped;
         const bool scopeJustStarted = scoped && !wasScoped;
+        const bool scopeJustEnded = !scoped && wasScoped;
 
         wasScoped = scoped;
 
         m_matrixDebug.localScoped = scoped;
 
-        // Normal operation should never come here.
-        // If pointers are stale, do not run a strict camera scan every 3ms.
+        if (scopeJustEnded)
+        {
+            opticInvalidSince = std::chrono::steady_clock::time_point{};
+            lastOpticProbe = std::chrono::steady_clock::time_point{};
+
+            resetOpticActivity();
+
+            localmpCamera = false;
+            m_matrixDebug.usingOpticMatrix = false;
+        }
+
         if (!cameraPointersReady())
         {
             const bool refreshDue =
@@ -490,29 +554,16 @@ void Camera::cameraTask()
                 (now - lastCameraPointerRefresh) >= kCameraPointerRetryInterval;
 
             if (!refreshDue)
-            {
-                localmpCamera = false;
-                m_matrixDebug.usingOpticMatrix = false;
                 return;
-            }
 
             lastCameraPointerRefresh = now;
 
             if (!refreshCameraPointersStrict() || !cameraPointersReady())
-            {
-                localmpCamera = false;
-                m_matrixDebug.usingOpticMatrix = false;
                 return;
-            }
         }
 
-        /*
-            Do not scan all cameras every two seconds while unscoped.
-
-            When the player first scopes, probe immediately. If the optic camera
-            has not spawned yet, retry at a controlled interval while scoped.
-        */
-        if (scoped && !opticPointersReady())
+        
+        if (scoped && (scopeJustStarted || !opticPointersReady()))
         {
             const bool opticProbeDue =
                 scopeJustStarted ||
@@ -523,20 +574,46 @@ void Camera::cameraTask()
             {
                 lastOpticProbe = now;
 
+                const uint64_t prevFpsCam = fpsCamera;
+                const uint64_t prevFpsMatrix = fpsMatrixAddr;
+                const uint64_t prevCameraEntity = cameraEntity;
+
                 const uint64_t prevOpticCam = opticCamera;
                 const uint64_t prevOpticMatrix = opticMatrixAddr;
 
                 getCameraPtrs();
+                getMatrixPtrs();
 
-                if (Utils::valid_pointer(opticCamera))
-                    getMatrixPtrs();
+                const bool resolvedFps = cameraPointersReady();
+                const bool resolvedOptic = opticPointersReady();
 
-                // Reject partially resolved optic data and retain the previous
-                // valid pair where possible.
-                if (!opticPointersReady())
+                if (!resolvedFps)
                 {
-                    opticCamera = prevOpticCam;
-                    opticMatrixAddr = prevOpticMatrix;
+                    fpsCamera = prevFpsCam;
+                    fpsMatrixAddr = prevFpsMatrix;
+                    cameraEntity = prevCameraEntity;
+                }
+
+                if (!resolvedOptic)
+                {
+                    if (scopeJustStarted)
+                    {
+                        opticCamera = 0;
+                        opticMatrixAddr = 0;
+                        opticCameraMatrix = 0;
+                        resetOpticActivity();
+                    }
+                    else
+                    {
+                        opticCamera = prevOpticCam;
+                        opticMatrixAddr = prevOpticMatrix;
+                    }
+                }
+                else if (
+                    opticCamera != prevOpticCam ||
+                    opticMatrixAddr != prevOpticMatrix)
+                {
+                    resetOpticActivity();
                 }
             }
         }
@@ -546,27 +623,28 @@ void Camera::cameraTask()
         // This remains your normal fast path and still runs every camera task.
         if (!readFrameData(frame))
         {
-            localmpCamera = false;
-            m_matrixDebug.usingOpticMatrix = false;
+            const auto failedAt = std::chrono::steady_clock::now();
+
+            m_matrixDebug.fpsMatrixValid = false;
 
             if (matrixInvalidSince == std::chrono::steady_clock::time_point{})
-                matrixInvalidSince = now;
+                matrixInvalidSince = failedAt;
 
-            
-            if ((now - matrixInvalidSince) >= kMatrixInvalidResetDelay)
+            // Keep the last valid published frame through transient failures.
+            if ((failedAt - matrixInvalidSince) >= kMatrixInvalidResetDelay)
             {
                 clearCameraPointerCacheOnly();
 
-                lastCameraPointerRefresh = now;
+                lastCameraPointerRefresh = failedAt;
                 matrixInvalidSince = std::chrono::steady_clock::time_point{};
 
                 const bool canLog =
                     lastMatrixFailureLog == std::chrono::steady_clock::time_point{} ||
-                    (now - lastMatrixFailureLog) >= kMatrixFailureLogCooldown;
+                    (failedAt - lastMatrixFailureLog) >= kMatrixFailureLogCooldown;
 
                 if (canLog)
                 {
-                    lastMatrixFailureLog = now;
+                    lastMatrixFailureLog = failedAt;
 
                     LOGS.logWarn(
                         "[CAMERA] Matrix reads remained invalid for 750ms. "
@@ -585,14 +663,47 @@ void Camera::cameraTask()
 
         bool opticActive = false;
 
-        // Do not apply an empty / stale optic frame when there is no valid optic.
-        if (opticPointersReady())
+        m_matrixDebug.fpsMatrixValid = frame.fpsMatrixValid;
+        m_matrixDebug.opticMatrixValid = frame.opticMatrixValid;
+
+        if (!scoped)
+        {
+            opticInvalidSince = std::chrono::steady_clock::time_point{};
+        }
+        else if (frame.opticMatrixValid)
         {
             applyOpticFrame(frame);
+
+            opticInvalidSince = std::chrono::steady_clock::time_point{};
             opticActive = updateOpticMatrixActivity(frame);
         }
+        else
+        {
+            const auto frameTime = std::chrono::steady_clock::now();
 
-        // Only use optic projection if scope is active and its matrix is updating.
+            if (opticInvalidSince == std::chrono::steady_clock::time_point{})
+                opticInvalidSince = frameTime;
+
+            const bool withinGracePeriod =
+                (frameTime - opticInvalidSince) < kOpticInvalidGracePeriod;
+
+            opticActive = m_opticMatrixActive && withinGracePeriod;
+
+            if (!withinGracePeriod)
+            {
+                opticCamera = 0;
+                opticMatrixAddr = 0;
+                opticCameraMatrix = 0;
+
+                lastOpticProbe = std::chrono::steady_clock::time_point{};
+                opticInvalidSince = std::chrono::steady_clock::time_point{};
+
+                resetOpticActivity();
+                opticActive = false;
+            }
+        }
+
+        // A valid optic stays selected while scoped even when the view is still
         localmpCamera = scoped && opticActive;
 
         m_matrixDebug.usingOpticMatrix = localmpCamera;
