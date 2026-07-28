@@ -22,6 +22,7 @@
 #include "app/DogTagAPI.h"
 #include "app/makcu.h"
 #include "game/headers/watchList.h"
+#include "app/aimview.h"
 
 
 ConfigManager configManager("config.json", "lootFilters.json");
@@ -2613,6 +2614,10 @@ static void renderMenuSettings()
                 if (ImGui::Checkbox(" Draw Exfils", &radarGlobals::drawExfils)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Loot", &radarGlobals::drawLoot)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Quest Helper", &radarGlobals::drawQuestHelper)) configManager.SaveConfig();
+
+                auto& aimviewConfig = g_AimViewWidget.GetConfig();
+                if (ImGui::Checkbox("Draw AimView", &aimviewConfig.enabled)) configManager.SaveConfig();
+
                 ImGui::Text("Local AimLine     "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##localAimLine", &radarGlobals::localAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 ImGui::Text("Friend AimLine    "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##friendAimLine", &radarGlobals::friendAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 ImGui::Text("Enemy AimLine   "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##enemyAimLine", &radarGlobals::enemyAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
@@ -5390,6 +5395,8 @@ static void renderMainScreen()
 
             setCurrentMapSpecs = false;
 
+            g_AimViewWidget.Render((ImVec2&)espGlobals::gameRes);
+
         }
         else
         {
@@ -5411,6 +5418,8 @@ static void renderMainScreen()
 
 
             renderLeftIcons();
+
+            g_AimViewWidget.Render((ImVec2&)espGlobals::gameRes);
 
 
         }

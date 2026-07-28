@@ -422,6 +422,7 @@
     <ClInclude Include="app\resource.h" />
     <ClInclude Include="app\SplashWindow.h" />
     <ClInclude Include="app\FileUpdater.h" />
+    <ClInclude Include="app\aimview.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="debug.cpp" />
@@ -465,6 +466,7 @@
     <ClCompile Include="game\game_world.cpp" />
     <ClCompile Include="game\watchlist.cpp" />
     <ClCompile Include="FileUpdater.cpp" />
+    <ClCompile Include="aimview.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Font Include="app\fonts\forkawesome-webfont.ttf" />
