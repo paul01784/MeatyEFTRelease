@@ -1258,12 +1258,13 @@ bool Memory::Init(bool memMap, bool debug)
 		}
 
 		std::vector<LPCSTR> args;
-		args.reserve(10);
+		args.reserve(12);
 
 		args.push_back("");
 		args.push_back("-device");
 		args.push_back("fpga://algo=0");
 		args.push_back("-waitinitialize");
+		args.push_back("-norefresh");
 
 		if (debug)
 		{
