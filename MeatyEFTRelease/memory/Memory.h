@@ -120,7 +120,6 @@ private:
 
     bool DumpMemoryMap(bool debug = false);
     bool SetFPGA();
-    void setCustomRefreshData();
 
     std::thread dmaThread;
 
@@ -282,7 +281,14 @@ public:
     bool FixCr3();
     bool DumpMemory(uintptr_t address, std::string path);
 
-    void RefreshLight();
+    bool RefreshMemoryPartial();
+    bool RefreshTlbPartial();
+    bool RefreshProcessFast();
+
+    bool RefreshForPointerRecovery();
+    bool RefreshForReconnect();
+
+    void RunRefreshMaintenance();
 
     MemoryTrafficStats GetTrafficStats() const;
     std::string GetTrafficStatsString() const;
@@ -464,8 +470,6 @@ public:
     {
         return pointer > 0x10000 && pointer < 0x0000800000000000;
     }
-
-    bool fullRefresh();
 
     void doDMADisconnect();
 

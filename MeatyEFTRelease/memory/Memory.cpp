@@ -919,54 +919,152 @@ uint64_t Memory::FindSignature(
 
 	return 0;
 }
-
-// ------------------------------------------------------------
-// Config
-// ------------------------------------------------------------
-
-void Memory::setCustomRefreshData()
-{
-	if (!vHandle)
-	{
-		MemoryLogError("setCustomRefreshData failed: vHandle is null");
-		return;
-	}
-
-	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_PARTIAL, 200);
-	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_TOTAL, 2000);
-	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_READCACHE_TICKS, 50);
-	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_CONFIG_TLBCACHE_TICKS, 100);
-}
-
 // ------------------------------------------------------------
 // Refresh
 // ------------------------------------------------------------
 
-void Memory::RefreshLight()
+bool Memory::RefreshMemoryPartial()
 {
-	if (!vHandle)
-		return;
+	bool ok = false;
 
-	// Light-ish refresh: memory/read cache + TLB.
-	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_FREQ_MEM, 1);
-	VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_FREQ_TLB, 1);
+	{
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+		if (!vHandle)
+			return false;
+
+		ok = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_MEM_PARTIAL,
+			1
+		);
+	}
+
+	if (!ok)
+		MemoryLogError("Partial memory-cache refresh failed");
+
+	return ok;
 }
 
-bool Memory::fullRefresh()
+bool Memory::RefreshTlbPartial()
 {
-	if (!vHandle)
+	bool ok = false;
+
 	{
-		MemoryLogError("quickRefresh failed: vHandle is null");
-		return false;
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+		if (!vHandle)
+			return false;
+
+		ok = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_TLB_PARTIAL,
+			1
+		);
 	}
 
-	if (!VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_ALL, 1))
+	if (!ok)
+		MemoryLogError("Partial TLB refresh failed");
+
+	return ok;
+}
+
+bool Memory::RefreshProcessFast()
+{
+	bool ok = false;
+
 	{
-		MemoryLogError("quickRefresh failed");
-		return false;
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+		if (!vHandle)
+			return false;
+
+		ok = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_FAST,
+			1
+		);
 	}
 
-	return true;
+	if (!ok)
+		MemoryLogError("FAST process refresh failed");
+
+	return ok;
+}
+
+bool Memory::RefreshForPointerRecovery()
+{
+	bool ok = false;
+
+	{
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+		if (!vHandle)
+			return false;
+
+		ok = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_TLB,
+			1
+		);
+	}
+
+	if (!ok)
+		MemoryLogError("Pointer-recovery TLB refresh failed");
+
+	return ok;
+}
+
+void Memory::RunRefreshMaintenance()
+{
+	//needs moving somewhere to work this shit out
+	bool safeForProcessRefresh = true;
+
+	using Clock = std::chrono::steady_clock;
+
+	static auto nextMaintenance =
+		Clock::now() + std::chrono::seconds(1);
+
+	static auto nextProcessRefresh =
+		Clock::now() + std::chrono::seconds(60);
+
+	static unsigned int phase = 0;
+
+	if (!IsDmaOperational())
+		return;
+
+	const auto now = Clock::now();
+
+	if (safeForProcessRefresh && now >= nextProcessRefresh)
+	{
+		nextProcessRefresh = now + std::chrono::seconds(60);
+		RefreshProcessFast();
+		return;
+	}
+
+	if (now < nextMaintenance)
+		return;
+
+	
+	nextMaintenance = now + std::chrono::seconds(1);
+
+	switch (phase++ % 5)
+	{
+	case 0:
+		RefreshTlbPartial();
+		break;
+
+	case 2:
+		RefreshTlbPartial();
+		break;
+
+	case 4:
+		RefreshMemoryPartial();
+		break;
+
+	default:
+		break;
+	}
 }
 
 // ------------------------------------------------------------

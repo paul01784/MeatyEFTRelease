@@ -21,7 +21,8 @@ double globals::taskQuest = 7000;
 double globals::taskWishManager = 1000;
 double globals::taskTripWire = 20;
 double globals::taskKeyManager = 25;
-double globals::taskCamera = 1;
+double globals::taskCamera = 5;
+double globals::taskMemoryManager = 1000;
 double globals::taskRaidMonitor = 800;
 double globals::taskAim = 1;
 

@@ -23,6 +23,7 @@ struct globals {
     static double taskTripWire;
     static double taskKeyManager;
     static double taskCamera;
+    static double taskMemoryManager;
     static double taskRaidMonitor;
     static double taskAim;
 
