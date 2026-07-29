@@ -296,9 +296,6 @@ public:
         bool useCache = false
     );
 
-    bool RefreshForProcessAttach();
-    bool RefreshForPointerRebuild();
-    void RunLiveMemoryMaintenance();
 
     bool WriteBufferEnsure(
         uintptr_t address,

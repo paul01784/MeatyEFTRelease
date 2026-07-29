@@ -923,130 +923,6 @@ uint64_t Memory::FindSignature(
 // Refresh
 // ------------------------------------------------------------
 
-bool Memory::RefreshForProcessAttach()
-{
-	bool memoryOk = false;
-	bool tlbOk = false;
-	bool processOk = false;
-
-	{
-		std::lock_guard<std::mutex> lock(dmaOpsMutex);
-
-		if (!vHandle)
-			return false;
-
-		// Discard cached physical data
-		memoryOk = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_MEM,
-			1
-		);
-
-		// Discard cached virtual-to-physical translations
-		tlbOk = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_TLB,
-			1
-		);
-
-		// Rebuild the process list and invalidate process-related maps
-		processOk = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_MEDIUM,
-			1
-		);
-	}
-
-	const bool ok = memoryOk && tlbOk && processOk;
-
-	if (!ok)
-		MemoryLogError("Process-attach refresh failed");
-
-	return ok;
-}
-
-bool Memory::RefreshForPointerRebuild()
-{
-	bool memoryOk = false;
-	bool tlbOk = false;
-
-	{
-		std::lock_guard<std::mutex> lock(dmaOpsMutex);
-
-		if (!vHandle)
-			return false;
-
-		memoryOk = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_MEM,
-			1
-		);
-
-		tlbOk = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_TLB,
-			1
-		);
-	}
-
-	const bool ok = memoryOk && tlbOk;
-
-	if (!ok)
-		MemoryLogError("Pointer-rebuild refresh failed");
-
-	return ok;
-}
-
-void Memory::RunLiveMemoryMaintenance()
-{
-	using Clock = std::chrono::steady_clock;
-
-	static auto nextTlbRefresh =
-		Clock::now() + std::chrono::seconds(5);
-
-	static bool wasOperational = false;
-
-	const auto now = Clock::now();
-
-	if (!IsDmaOperational())
-	{
-		wasOperational = false;
-		return;
-	}
-
-	// Don't refresh immediately after initialization/reconnection.
-	if (!wasOperational)
-	{
-		wasOperational = true;
-		nextTlbRefresh = now + std::chrono::seconds(5);
-		return;
-	}
-
-	if (now < nextTlbRefresh)
-		return;
-
-	// Don't replay missed refreshes after a stall.
-	nextTlbRefresh = now + std::chrono::seconds(5);
-
-	bool ok = false;
-
-	{
-		std::lock_guard<std::mutex> lock(dmaOpsMutex);
-
-		if (!vHandle)
-			return;
-
-		// Clears only one-third of cached address translations.
-		ok = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_TLB_PARTIAL,
-			1
-		);
-	}
-
-	if (!ok)
-		MemoryLogError("Live partial TLB refresh failed");
-}
 
 // ------------------------------------------------------------
 // Disconnect from dma device
@@ -1245,7 +1121,6 @@ bool Memory::Init(bool memMap, bool debug)
 		args.push_back("-device");
 		args.push_back("fpga://algo=0");
 		args.push_back("-waitinitialize");
-		args.push_back("-norefresh");
 
 		if (debug)
 		{
@@ -1469,13 +1344,6 @@ bool Memory::Init(bool memMap, bool debug)
 
 			handleValid = (vHandle != nullptr);
 
-			if (!mem.RefreshForProcessAttach())
-			{
-				MemoryLogError("Unable to refresh process information");
-				return false;
-			}
-
-
 			if (handleValid)
 				foundPid = GetPidFromName(processName);
 		}
@@ -1517,13 +1385,6 @@ bool Memory::Init(bool memMap, bool debug)
 				std::lock_guard<std::mutex> lock(handleMutex);
 
 				innerHandleValid = (vHandle != nullptr);
-
-				if (!mem.RefreshForProcessAttach())
-				{
-					MemoryLogError("Unable to refresh process information");
-					return false;
-				}
-
 
 				if (innerHandleValid)
 				{

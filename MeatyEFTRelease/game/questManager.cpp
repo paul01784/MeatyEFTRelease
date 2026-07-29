@@ -7,6 +7,10 @@
 #include "headers/utils.h"
 #include "headers/tarkovdevquery.h"
 
+#include <array>
+#include <limits>
+#include <unordered_map>
+
 QuestManager questManager;
 std::vector<QuestData> questDataActive;
 std::vector<std::string> masterItems;
@@ -234,6 +238,316 @@ static bool ContainsExact(const std::vector<std::string>& v, const std::string& 
     return false;
 }
 
+namespace
+{
+    constexpr std::int32_t kMaxCompletedConditionEntries = 2048;
+    constexpr int kMaxConditionIdChars = 128;
+
+    using CompletedConditionEntry = UnityHashSet<MongoID>::MemHashEntry;
+
+    class QuestScatterBatch
+    {
+    public:
+        QuestScatterBatch()
+            : handle_(mem.CreateScatterHandle(false))
+        {
+        }
+
+        ~QuestScatterBatch()
+        {
+            if (handle_)
+                mem.CloseScatterHandle(handle_);
+        }
+
+        QuestScatterBatch(const QuestScatterBatch&) = delete;
+        QuestScatterBatch& operator=(const QuestScatterBatch&) = delete;
+
+        bool valid() const
+        {
+            return handle_ != nullptr;
+        }
+
+        template <typename T>
+        bool Queue(std::uint64_t address, T& destination)
+        {
+            static_assert(
+                std::is_trivially_copyable_v<T>,
+                "Quest scatter destinations must be trivially copyable"
+            );
+
+            return QueueBytes(address, &destination, sizeof(T));
+        }
+
+        bool QueueBytes(
+            std::uint64_t address,
+            void* destination,
+            std::size_t size)
+        {
+            if (!handle_ || !Utils::valid_pointer(address) ||
+                !destination || size == 0)
+            {
+                return false;
+            }
+
+            if (!mem.AddScatterReadRequest(
+                handle_,
+                address,
+                destination,
+                size))
+            {
+                return false;
+            }
+
+            ++queuedReads_;
+            return true;
+        }
+
+        bool Execute(const char* label)
+        {
+            if (!handle_)
+                return false;
+
+            if (queuedReads_ == 0)
+                return true;
+
+            const bool ok =
+                mem.ExecuteReadScatter(handle_, false, label);
+
+            queuedReads_ = 0;
+            return ok;
+        }
+
+    private:
+        VMMDLL_SCATTER_HANDLE handle_ = nullptr;
+        std::size_t queuedReads_ = 0;
+    };
+
+    struct LiveQuestRead
+    {
+        std::size_t snapshotIndex = 0;
+        std::uint64_t questPtr = 0;
+        int status = 0;
+        std::uint64_t completedPtr = 0;
+        std::vector<std::string> completedConditions;
+    };
+
+    struct CompletedSetRead
+    {
+        std::size_t liveQuestIndex = 0;
+        std::int32_t count = 0;
+        std::uint64_t entriesArray = 0;
+        std::vector<CompletedConditionEntry> entries;
+    };
+
+    struct ConditionStringRead
+    {
+        std::size_t liveQuestIndex = 0;
+        std::uint64_t stringPtr = 0;
+        int charCount = 0;
+        std::array<wchar_t, kMaxConditionIdChars + 1> chars{};
+    };
+
+    std::string WideCharsToUtf8(
+        const wchar_t* chars,
+        std::size_t maxChars)
+    {
+        if (!chars || maxChars == 0)
+            return {};
+
+        std::size_t actualChars = 0;
+
+        while (actualChars < maxChars && chars[actualChars] != L'\0')
+            ++actualChars;
+
+        if (actualChars == 0 ||
+            actualChars > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
+        {
+            return {};
+        }
+
+        const int sourceChars = static_cast<int>(actualChars);
+        const int utf8Size = WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            chars,
+            sourceChars,
+            nullptr,
+            0,
+            nullptr,
+            nullptr
+        );
+
+        if (utf8Size <= 0)
+            return {};
+
+        std::string result(static_cast<std::size_t>(utf8Size), '\0');
+
+        WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            chars,
+            sourceChars,
+            result.data(),
+            utf8Size,
+            nullptr,
+            nullptr
+        );
+
+        return result;
+    }
+
+    bool ReadCompletedConditions(
+        QuestScatterBatch& scatter,
+        std::vector<LiveQuestRead>& liveQuests)
+    {
+        std::vector<CompletedSetRead> sets;
+        sets.reserve(liveQuests.size());
+
+        for (std::size_t i = 0; i < liveQuests.size(); ++i)
+        {
+            const auto& live = liveQuests[i];
+
+            if (live.status != 2 ||
+                !Utils::valid_pointer(live.completedPtr))
+            {
+                continue;
+            }
+
+            CompletedSetRead set{};
+            set.liveQuestIndex = i;
+            sets.emplace_back(std::move(set));
+        }
+
+        for (auto& set : sets)
+        {
+            const std::uint64_t completedPtr =
+                liveQuests[set.liveQuestIndex].completedPtr;
+
+            if (!scatter.Queue(
+                completedPtr + UnityHashSet<MongoID>::CountOffset,
+                set.count))
+            {
+                return false;
+            }
+
+            if (!scatter.Queue(
+                completedPtr + UnityHashSet<MongoID>::ArrOffset,
+                set.entriesArray))
+            {
+                return false;
+            }
+        }
+
+        if (!scatter.Execute("Quest completed headers"))
+            return false;
+
+        std::size_t totalEntryCount = 0;
+
+        for (auto& set : sets)
+        {
+            if (set.count < 0 ||
+                set.count > kMaxCompletedConditionEntries)
+            {
+                return false;
+            }
+
+            if (set.count == 0)
+                continue;
+
+            if (!Utils::valid_pointer(set.entriesArray))
+                return false;
+
+            const std::size_t entryCount =
+                static_cast<std::size_t>(set.count);
+
+            set.entries.resize(entryCount);
+            totalEntryCount += entryCount;
+
+            if (!scatter.QueueBytes(
+                set.entriesArray + UnityHashSet<MongoID>::ArrStartOffset,
+                set.entries.data(),
+                entryCount * sizeof(CompletedConditionEntry)))
+            {
+                return false;
+            }
+        }
+
+        if (!scatter.Execute("Quest completed entries"))
+            return false;
+
+        std::vector<ConditionStringRead> conditionStrings;
+        conditionStrings.reserve(totalEntryCount);
+
+        for (const auto& set : sets)
+        {
+            for (const auto& entry : set.entries)
+            {
+                if (entry.hashCode < 0 ||
+                    !Utils::valid_pointer(entry.value._stringId))
+                {
+                    continue;
+                }
+
+                ConditionStringRead read{};
+                read.liveQuestIndex = set.liveQuestIndex;
+                read.stringPtr = entry.value._stringId;
+                conditionStrings.emplace_back(std::move(read));
+            }
+        }
+
+        for (auto& read : conditionStrings)
+        {
+            if (!scatter.Queue(read.stringPtr + 0x10, read.charCount))
+                return false;
+        }
+
+        if (!scatter.Execute("Quest condition lengths"))
+            return false;
+
+        for (auto& read : conditionStrings)
+        {
+            if (read.charCount <= 0)
+                continue;
+
+            const int charsToRead =
+                (std::min)(read.charCount, kMaxConditionIdChars);
+
+            if (!scatter.QueueBytes(
+                read.stringPtr + 0x14,
+                read.chars.data(),
+                static_cast<std::size_t>(charsToRead) * sizeof(wchar_t)))
+            {
+                return false;
+            }
+        }
+
+        if (!scatter.Execute("Quest condition strings"))
+            return false;
+
+        for (const auto& read : conditionStrings)
+        {
+            if (read.charCount <= 0)
+                continue;
+
+            const std::size_t charsRead = static_cast<std::size_t>(
+                (std::min)(read.charCount, kMaxConditionIdChars)
+            );
+
+            std::string condition =
+                TrimEFT(WideCharsToUtf8(read.chars.data(), charsRead));
+
+            if (!condition.empty())
+            {
+                liveQuests[read.liveQuestIndex]
+                    .completedConditions
+                    .emplace_back(std::move(condition));
+            }
+        }
+
+        return true;
+    }
+}
+
 void QuestManager::initQuestManager()
 {
     ClearPublishedQuestState();
@@ -406,76 +720,80 @@ void QuestManager::updateAndPruneActiveQuests()
         std::vector<std::string> newMasterItems;
         std::vector<QuestLocation> newMasterLocations;
 
-        for (auto& q : activeSnapshot)
+        QuestScatterBatch scatter;
+
+        if (!scatter.valid())
+            return;
+
+        std::vector<LiveQuestRead> liveQuests;
+        liveQuests.reserve(activeSnapshot.size());
+
+        for (std::size_t i = 0; i < activeSnapshot.size(); ++i)
         {
-            if (q.questId.empty())
-                continue;
+            const auto& quest = activeSnapshot[i];
 
-            const uint64_t liveQuestPtr = findLiveQuestPtrById(q.questId);
-
-            if (!Utils::valid_pointer(liveQuestPtr))
-                continue;
-
-            const int qStatus = mem.Read<int>(
-                liveQuestPtr + sdk::QuestsData::Status
-            );
-
-            if (qStatus != 2)
-                continue;
-
-            std::vector<std::string> completedConditions;
-
-            const uint64_t completedPtr = mem.Read<uint64_t>(
-                liveQuestPtr + sdk::QuestsData::CompletedConditions
-            );
-
-            if (Utils::valid_pointer(completedPtr))
+            if (quest.questId.empty() ||
+                !Utils::valid_pointer(quest.questPtr))
             {
-                auto completedHS = UnityHashSet<MongoID>::Create(completedPtr, mem);
-
-                const size_t reserveCount = std::min<size_t>(
-                    static_cast<size_t>(completedHS.size()),
-                    512
-                );
-
-                completedConditions.reserve(reserveCount);
-
-                for (const auto& e : completedHS.entries)
-                {
-                    if (e.hashCode < 0)
-                        continue;
-
-                    std::string cond = e.value.ReadString(mem);
-                    cond = TrimEFT(std::move(cond));
-
-                    if (!cond.empty())
-                        completedConditions.emplace_back(std::move(cond));
-                }
+                continue;
             }
 
-            const TarkovDevTasks* task = nullptr;
+            LiveQuestRead live{};
+            live.snapshotIndex = i;
+            live.questPtr = quest.questPtr;
+            liveQuests.emplace_back(std::move(live));
+        }
 
-            for (const auto& t : tarkovDevTasksData)
+        for (auto& live : liveQuests)
+        {
+            if (!scatter.Queue(
+                live.questPtr + sdk::QuestsData::Status,
+                live.status))
             {
-                if (t.qID == q.questId)
-                {
-                    task = &t;
-                    break;
-                }
+                return;
             }
 
-            if (!task)
+            if (!scatter.Queue(
+                live.questPtr + sdk::QuestsData::CompletedConditions,
+                live.completedPtr))
+            {
+                return;
+            }
+        }
+
+        if (!scatter.Execute("Quest live state"))
+            return;
+
+        if (!ReadCompletedConditions(scatter, liveQuests))
+            return;
+
+        std::unordered_map<std::string, const TarkovDevTasks*> tasksById;
+        tasksById.reserve(tarkovDevTasksData.size());
+
+        for (const auto& task : tarkovDevTasksData)
+            tasksById.emplace(task.qID, &task);
+
+        for (auto& live : liveQuests)
+        {
+            if (live.status != 2)
                 continue;
 
-            QuestData fresh = q;
-            fresh.questPtr = liveQuestPtr;
-            fresh.completedConditions = std::move(completedConditions);
+            QuestData fresh = activeSnapshot[live.snapshotIndex];
+
+            const auto taskIt = tasksById.find(fresh.questId);
+
+            if (taskIt == tasksById.end())
+                continue;
+
+            fresh.questPtr = live.questPtr;
+            fresh.completedConditions =
+                std::move(live.completedConditions);
             fresh.status = QuestStatus::Started;
 
             std::vector<ActiveObjective> rebuiltObjectives;
 
             FilterConditions(
-                *task,
+                *taskIt->second,
                 fresh,
                 rebuiltObjectives,
                 newMasterItems,
