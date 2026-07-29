@@ -464,6 +464,11 @@ void MainGame::getGameWorldDetails()
     {
         try
         {
+            if (!mem.RefreshForPointerRebuild())
+            {
+                LOGS.logError("[MEM][REFRESH] Issue refreshing process DMA Cache, Restart radar!");
+            }
+
             ++waitAttempts;
 
             RaidState raid{};
@@ -555,7 +560,7 @@ void MainGame::cameraAndAimWorker()
             TaskManager cameraAndAimTask;
 
             //Task List
-            cameraAndAimTask.addTask("memoryManager", std::bind(&Memory::RunRefreshMaintenance, &mem), &globals::taskMemoryManager);
+            cameraAndAimTask.addTask("memoryManager", std::bind(&Memory::RunLiveMemoryMaintenance, &mem), &globals::taskMemoryManager);
             cameraAndAimTask.addTask("cameraTask", std::bind(&Camera::cameraTask, &camera), &globals::taskCamera);
             cameraAndAimTask.addTask("readOnlyAim", std::bind(&ReadOnlyAim::aimTask, &readOnlyAim), &globals::taskAim);
             cameraAndAimTask.addTask("keyManager", std::bind(&MainGame::keyManagerTask, &mainGame), &globals::taskKeyManager);

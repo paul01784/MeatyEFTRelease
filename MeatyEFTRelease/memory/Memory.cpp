@@ -923,9 +923,11 @@ uint64_t Memory::FindSignature(
 // Refresh
 // ------------------------------------------------------------
 
-bool Memory::RefreshMemoryPartial()
+bool Memory::RefreshForProcessAttach()
 {
-	bool ok = false;
+	bool memoryOk = false;
+	bool tlbOk = false;
+	bool processOk = false;
 
 	{
 		std::lock_guard<std::mutex> lock(dmaOpsMutex);
@@ -933,22 +935,40 @@ bool Memory::RefreshMemoryPartial()
 		if (!vHandle)
 			return false;
 
-		ok = VMMDLL_ConfigSet(
+		// Discard cached physical data
+		memoryOk = VMMDLL_ConfigSet(
 			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_MEM_PARTIAL,
+			VMMDLL_OPT_REFRESH_FREQ_MEM,
+			1
+		);
+
+		// Discard cached virtual-to-physical translations
+		tlbOk = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_TLB,
+			1
+		);
+
+		// Rebuild the process list and invalidate process-related maps
+		processOk = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_MEDIUM,
 			1
 		);
 	}
 
+	const bool ok = memoryOk && tlbOk && processOk;
+
 	if (!ok)
-		MemoryLogError("Partial memory-cache refresh failed");
+		MemoryLogError("Process-attach refresh failed");
 
 	return ok;
 }
 
-bool Memory::RefreshTlbPartial()
+bool Memory::RefreshForPointerRebuild()
 {
-	bool ok = false;
+	bool memoryOk = false;
+	bool tlbOk = false;
 
 	{
 		std::lock_guard<std::mutex> lock(dmaOpsMutex);
@@ -956,6 +976,67 @@ bool Memory::RefreshTlbPartial()
 		if (!vHandle)
 			return false;
 
+		memoryOk = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_MEM,
+			1
+		);
+
+		tlbOk = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_TLB,
+			1
+		);
+	}
+
+	const bool ok = memoryOk && tlbOk;
+
+	if (!ok)
+		MemoryLogError("Pointer-rebuild refresh failed");
+
+	return ok;
+}
+
+void Memory::RunLiveMemoryMaintenance()
+{
+	using Clock = std::chrono::steady_clock;
+
+	static auto nextTlbRefresh =
+		Clock::now() + std::chrono::seconds(5);
+
+	static bool wasOperational = false;
+
+	const auto now = Clock::now();
+
+	if (!IsDmaOperational())
+	{
+		wasOperational = false;
+		return;
+	}
+
+	// Don't refresh immediately after initialization/reconnection.
+	if (!wasOperational)
+	{
+		wasOperational = true;
+		nextTlbRefresh = now + std::chrono::seconds(5);
+		return;
+	}
+
+	if (now < nextTlbRefresh)
+		return;
+
+	// Don't replay missed refreshes after a stall.
+	nextTlbRefresh = now + std::chrono::seconds(5);
+
+	bool ok = false;
+
+	{
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+		if (!vHandle)
+			return;
+
+		// Clears only one-third of cached address translations.
 		ok = VMMDLL_ConfigSet(
 			vHandle,
 			VMMDLL_OPT_REFRESH_FREQ_TLB_PARTIAL,
@@ -964,107 +1045,7 @@ bool Memory::RefreshTlbPartial()
 	}
 
 	if (!ok)
-		MemoryLogError("Partial TLB refresh failed");
-
-	return ok;
-}
-
-bool Memory::RefreshProcessFast()
-{
-	bool ok = false;
-
-	{
-		std::lock_guard<std::mutex> lock(dmaOpsMutex);
-
-		if (!vHandle)
-			return false;
-
-		ok = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_FAST,
-			1
-		);
-	}
-
-	if (!ok)
-		MemoryLogError("FAST process refresh failed");
-
-	return ok;
-}
-
-bool Memory::RefreshForPointerRecovery()
-{
-	bool ok = false;
-
-	{
-		std::lock_guard<std::mutex> lock(dmaOpsMutex);
-
-		if (!vHandle)
-			return false;
-
-		ok = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_TLB,
-			1
-		);
-	}
-
-	if (!ok)
-		MemoryLogError("Pointer-recovery TLB refresh failed");
-
-	return ok;
-}
-
-void Memory::RunRefreshMaintenance()
-{
-	//needs moving somewhere to work this shit out
-	bool safeForProcessRefresh = true;
-
-	using Clock = std::chrono::steady_clock;
-
-	static auto nextMaintenance =
-		Clock::now() + std::chrono::seconds(1);
-
-	static auto nextProcessRefresh =
-		Clock::now() + std::chrono::seconds(60);
-
-	static unsigned int phase = 0;
-
-	if (!IsDmaOperational())
-		return;
-
-	const auto now = Clock::now();
-
-	if (safeForProcessRefresh && now >= nextProcessRefresh)
-	{
-		nextProcessRefresh = now + std::chrono::seconds(60);
-		RefreshProcessFast();
-		return;
-	}
-
-	if (now < nextMaintenance)
-		return;
-
-	
-	nextMaintenance = now + std::chrono::seconds(1);
-
-	switch (phase++ % 5)
-	{
-	case 0:
-		RefreshTlbPartial();
-		break;
-
-	case 2:
-		RefreshTlbPartial();
-		break;
-
-	case 4:
-		RefreshMemoryPartial();
-		break;
-
-	default:
-		break;
-	}
+		MemoryLogError("Live partial TLB refresh failed");
 }
 
 // ------------------------------------------------------------
@@ -1488,6 +1469,13 @@ bool Memory::Init(bool memMap, bool debug)
 
 			handleValid = (vHandle != nullptr);
 
+			if (!mem.RefreshForProcessAttach())
+			{
+				MemoryLogError("Unable to refresh process information");
+				return false;
+			}
+
+
 			if (handleValid)
 				foundPid = GetPidFromName(processName);
 		}
@@ -1529,6 +1517,13 @@ bool Memory::Init(bool memMap, bool debug)
 				std::lock_guard<std::mutex> lock(handleMutex);
 
 				innerHandleValid = (vHandle != nullptr);
+
+				if (!mem.RefreshForProcessAttach())
+				{
+					MemoryLogError("Unable to refresh process information");
+					return false;
+				}
+
 
 				if (innerHandleValid)
 				{

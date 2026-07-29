@@ -281,15 +281,6 @@ public:
     bool FixCr3();
     bool DumpMemory(uintptr_t address, std::string path);
 
-    bool RefreshMemoryPartial();
-    bool RefreshTlbPartial();
-    bool RefreshProcessFast();
-
-    bool RefreshForPointerRecovery();
-    bool RefreshForReconnect();
-
-    void RunRefreshMaintenance();
-
     MemoryTrafficStats GetTrafficStats() const;
     std::string GetTrafficStatsString() const;
     void ResetTrafficStats();
@@ -304,6 +295,10 @@ public:
         int PID = 0,
         bool useCache = false
     );
+
+    bool RefreshForProcessAttach();
+    bool RefreshForPointerRebuild();
+    void RunLiveMemoryMaintenance();
 
     bool WriteBufferEnsure(
         uintptr_t address,

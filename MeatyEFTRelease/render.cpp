@@ -2604,6 +2604,14 @@ static void renderMenuSettings()
                     10.0
                 );
 
+                timingsChanged |= DrawTaskTiming(
+                    "MemoryManager",
+                    globals::taskMemoryManager,
+                    1.0,
+                    50000.0,
+                    1.0
+                );
+
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Settings"))
