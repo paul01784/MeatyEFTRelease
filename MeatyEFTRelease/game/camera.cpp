@@ -440,7 +440,7 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
         m_lastOpticRaw = frame.opticRaw;
         m_hasLastOpticMatrix = true;
 
-        m_opticMatrixActive = true;
+        m_opticMatrixActive = false;
         m_opticNoChangeSamples = 0;
         m_opticActivityTick = 0;
 
@@ -448,9 +448,9 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
         m_matrixDebug.noChangeSamples = m_opticNoChangeSamples;
         m_matrixDebug.opticMatrixDiff = 0.0f;
         m_matrixDebug.opticMatrixChanged = false;
-        m_matrixDebug.opticMatrixActive = true;
+        m_matrixDebug.opticMatrixActive = false;
 
-        return true;
+        return false;
     }
 
     ++m_opticActivityTick;
@@ -485,8 +485,6 @@ bool Camera::updateOpticMatrixActivity(const FrameData& frame)
     {
         ++m_opticNoChangeSamples;
     }
-
-    m_opticMatrixActive = true;
 
     m_matrixDebug.noChangeSamples = m_opticNoChangeSamples;
     m_matrixDebug.opticMatrixActive = m_opticMatrixActive;
@@ -535,6 +533,13 @@ void Camera::cameraTask()
         wasScoped = scoped;
 
         m_matrixDebug.localScoped = scoped;
+
+        if (scopeJustStarted)
+        {
+            resetOpticActivity();
+            m_matrixDebug.localScoped = true;
+            localmpCamera = false;
+        }
 
         if (scopeJustEnded)
         {
