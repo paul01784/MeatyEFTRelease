@@ -72,6 +72,7 @@ struct LootList
 
     // Resolution state.
     bool failed = false;
+    bool retryableFailure = true;
     bool hasValidPosition = false;
     std::string failureReason;
     bool pendingResolve = false;
@@ -79,6 +80,7 @@ struct LootList
 
     std::chrono::steady_clock::time_point nextResolveAttempt{};
     std::chrono::steady_clock::time_point lastPositionUpdate{};
+    std::chrono::steady_clock::time_point lastCorpseEquipmentUpdate{};
 };
 
 extern std::vector<LootFilters> lootFilters;
@@ -131,7 +133,7 @@ private:
 
 private:
     bool buildPointers();
-    bool get_lootCount();
+    bool refreshLootListHeader();
     bool buildLootBuffer();
 
     bool buildNewLootItemsScatter(
@@ -157,7 +159,11 @@ private:
         const std::unordered_set<uint64_t>& livePointers
     ) const;
 
-    void markFailed(LootList& item, std::string reason) const;
+    void markFailed(
+        LootList& item,
+        std::string reason,
+        bool retryable = true
+    ) const;
 
     bool tryUpdateLootPosition(
         LootList& item,
@@ -175,9 +181,13 @@ private:
 
     std::vector<LootList> lootList;
     std::vector<uint64_t> loot_buffer;
+    std::unordered_set<uint64_t> liveLootPointers;
 
-    std::chrono::steady_clock::time_point lastCorpseEquipUpdate{};
+    std::chrono::steady_clock::time_point nextLootDiscovery{};
     std::chrono::steady_clock::time_point lastDogTagUpdate{};
+
+    size_t corpseRefreshCursor = 0;
+    size_t dogTagRefreshCursor = 0;
 };
 
 extern loot Loot;

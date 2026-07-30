@@ -71,7 +71,8 @@ UnityTransform::UnityTransform(
 
     const int index = mem.Read<int>(
         TransformInternal +
-        UnityOffsets::TransformAccess_IndexOffset
+        UnityOffsets::TransformAccess_IndexOffset,
+        _useCache
     );
 
     if (index < 0 || index >= kMaxTransformIndex)
@@ -81,7 +82,8 @@ UnityTransform::UnityTransform(
 
     const uint64_t hierarchy = mem.Read<uint64_t>(
         TransformInternal +
-        UnityOffsets::TransformAccess_HierarchyOffset
+        UnityOffsets::TransformAccess_HierarchyOffset,
+        _useCache
     );
 
     if (!Utils::valid_pointer(hierarchy))
@@ -91,12 +93,14 @@ UnityTransform::UnityTransform(
 
     const uint64_t vertices = mem.Read<uint64_t>(
         _hierarchyAddr +
-        UnityOffsets::Hierarchy_VerticesOffset
+        UnityOffsets::Hierarchy_VerticesOffset,
+        _useCache
     );
 
     const uint64_t indices = mem.Read<uint64_t>(
         _hierarchyAddr +
-        UnityOffsets::Hierarchy_IndicesOffset
+        UnityOffsets::Hierarchy_IndicesOffset,
+        _useCache
     );
 
     if (!Utils::valid_pointer(vertices) ||

@@ -1231,13 +1231,10 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
             break;
         }
 
-        if (!appendHeader("Cache-Control: no-cache"))
-        {
-            code = CURLE_OUT_OF_MEMORY;
-            break;
-        }
-
         code = curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        if (code != CURLE_OK) break;
+
+        code = curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
         if (code != CURLE_OK) break;
 
         code = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, TarkovDev::data_write);
@@ -1249,13 +1246,10 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
         code = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         if (code != CURLE_OK) break;
 
-        code = curl_easy_setopt(curl, CURLOPT_USERAGENT, "WindowsDesktopClient/1.0");
+        code = curl_easy_setopt(curl, CURLOPT_USERAGENT, "MeatyEFTRelease/1.0");
         if (code != CURLE_OK) break;
 
         code = curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
-        if (code != CURLE_OK) break;
-
-        code = curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
         if (code != CURLE_OK) break;
 
         code = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);

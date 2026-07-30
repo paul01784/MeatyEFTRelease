@@ -46,19 +46,27 @@ struct MongoID
     std::uint64_t _stringId;
 
     template <typename MemoryT>
-    std::string ReadString(MemoryT& memory, int maxChars = 128) const
+    std::string ReadString(
+        MemoryT& memory,
+        int maxChars = 128,
+        bool useCache = false
+    ) const
     {
         if (_stringId == 0)
             return {};
 
-        int charCount = memory.Read<int>(_stringId + 0x10);
+        int charCount = memory.Read<int>(_stringId + 0x10, useCache);
         if (charCount <= 0)
             return {};
 
         if (charCount > maxChars)
             charCount = maxChars;
 
-        return memory.readUnicodeString(_stringId + 0x14, charCount);
+        return memory.readUnicodeString(
+            _stringId + 0x14,
+            charCount,
+            useCache
+        );
     }
 };
 
@@ -335,12 +343,13 @@ static std::string ReadName(uint64_t objectClass, int length = 128, bool useCach
     try
     {
         uint64_t namePtr = mem.ReadChain(objectClass, { 0x0, 0x10 }, useCache);
-        return mem.readUTF8String(namePtr, length);
+        return mem.readUTF8String(namePtr, length, useCache);
     }
     catch (const std::exception& ex) {
         LOGS.logError("Exception caught in ReadName Unity Struct: " + std::string(ex.what()) + ".");
     }
 
+    return {};
 }
 
 template <typename T>

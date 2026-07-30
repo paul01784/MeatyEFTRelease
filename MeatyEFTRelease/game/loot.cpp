@@ -29,10 +29,16 @@ constexpr std::chrono::milliseconds LOOT_RESOLVE_RETRY_DELAY{
 namespace
 {
     constexpr int MAX_LOOT_COUNT = 12000;
-    constexpr int MAX_LOOT_BUFFER_ITEMS = 8000;
-    constexpr size_t MAX_LOOT_RESOLVE_PER_TICK = 32;
+    constexpr int MAX_LOOT_BUFFER_ITEMS = MAX_LOOT_COUNT;
+    constexpr size_t MAX_LOOT_RESOLVE_PER_TICK = 8;
+    constexpr size_t MAX_CORPSE_UPDATES_PER_TICK = 1;
+    constexpr bool ENABLE_LOOT_TRANSFORM_DIAGNOSTICS = false;
     constexpr size_t MAX_OBJECT_NAME_LENGTH = 64;
     constexpr size_t MAX_CLASS_NAME_LENGTH = 64;
+
+    constexpr std::chrono::milliseconds LOOT_DISCOVERY_INTERVAL{
+        1000
+    };
 
     const std::unordered_set<std::string> skipNames =
     {
@@ -177,17 +183,60 @@ namespace
         return value;
     }
 
+    struct CachedMarketItem
+    {
+        std::string name;
+        std::string shortName;
+        long traderPrice = 0;
+        long marketPrice = 0;
+    };
+
+    const CachedMarketItem* findMarketItem(const std::string& bsgid)
+    {
+        static std::unordered_map<std::string, CachedMarketItem> itemById;
+        static const gameItemList* indexedData = nullptr;
+        static size_t indexedSize = 0;
+
+        if (indexedData != marketList.data() ||
+            indexedSize != marketList.size())
+        {
+            itemById.clear();
+            itemById.reserve(marketList.size());
+
+            for (const auto& marketItem : marketList)
+            {
+                if (marketItem.bsgid.empty())
+                    continue;
+
+                itemById.insert_or_assign(
+                    marketItem.bsgid,
+                    CachedMarketItem{
+                        marketItem.name,
+                        marketItem.shortName,
+                        marketItem.traderPrice,
+                        marketItem.marketPrice
+                    }
+                );
+            }
+
+            indexedData = marketList.data();
+            indexedSize = marketList.size();
+        }
+
+        const auto it = itemById.find(bsgid);
+        return it != itemById.end() ? &it->second : nullptr;
+    }
+
     bool applyMarketDetails(const std::string& bsgid, LootList& item)
     {
-        for (const auto& ml : marketList)
+        if (const CachedMarketItem* marketItem = findMarketItem(bsgid))
         {
-            if (ml.bsgid != bsgid)
-                continue;
-
-            item.longName = ml.name;
-            item.shortName = ml.shortName;
-            item.traderPrice = static_cast<int>(ml.traderPrice);
-            item.avgMarketPrice = static_cast<int>(ml.marketPrice);
+            item.longName = marketItem->name;
+            item.shortName = marketItem->shortName;
+            item.traderPrice =
+                static_cast<int>(marketItem->traderPrice);
+            item.avgMarketPrice =
+                static_cast<int>(marketItem->marketPrice);
 
             return true;
         }
@@ -262,12 +311,21 @@ std::string GetQuestItemDisplayName(const std::string& itemId)
     if (itemId.empty())
         return "";
 
+    static std::unordered_map<std::string, std::string> questNameByItemId;
+
+    const auto cachedIt = questNameByItemId.find(itemId);
+    if (cachedIt != questNameByItemId.end())
+        return cachedIt->second;
+
     for (const auto& task : tarkovDevTasksData)
     {
         for (const auto& obj : task.objectives)
         {
             if (!obj.questItemId.empty() && obj.questItemId == itemId)
+            {
+                questNameByItemId.insert_or_assign(itemId, task.qName);
                 return task.qName;
+            }
         }
     }
 
@@ -286,15 +344,25 @@ void loot::clearCache()
 
     lootList.clear();
     loot_buffer.clear();
+    liveLootPointers.clear();
 
     lootListP = 0;
     lootListPtr = 0;
     lootCount = 0;
+
+    nextLootDiscovery = {};
+    lastDogTagUpdate = {};
+    corpseRefreshCursor = 0;
+    dogTagRefreshCursor = 0;
 }
 
-void loot::markFailed(LootList& item, std::string reason) const
+void loot::markFailed(
+    LootList& item,
+    std::string reason,
+    const bool retryable) const
 {
     item.failed = true;
+    item.retryableFailure = retryable;
     item.failureReason = std::move(reason);
     item.wanted = false;
 }
@@ -345,6 +413,9 @@ bool loot::tryUpdateLootPosition(
         const char* reason,
         const glm::vec3* position = nullptr)
         {
+            if (!ENABLE_LOOT_TRANSFORM_DIAGNOSTICS)
+                return;
+
             const uint64_t transformPtr =
                 item.m_pointerToTransform1;
 
@@ -451,7 +522,8 @@ bool loot::tryUpdateLootPosition(
     try
     {
         UnityTransform transform(
-            item.m_pointerToTransform1
+            item.m_pointerToTransform1,
+            !item.isAirdrop
         );
 
         if (!transform.IsValid())
@@ -628,6 +700,7 @@ void loot::mergeResolveResults(
         }
 
         const bool attemptFailed = result.failed;
+        const bool retryableFailure = result.retryableFailure;
 
         result.resolveAttempts = static_cast<std::uint8_t>(
             std::min<int>(
@@ -640,7 +713,8 @@ void loot::mergeResolveResults(
         {
             result.wanted = false;
 
-            if (result.resolveAttempts >= MAX_LOOT_RESOLVE_ATTEMPTS)
+            if (!retryableFailure ||
+                result.resolveAttempts >= MAX_LOOT_RESOLVE_ATTEMPTS)
             {
                 result.pendingResolve = false;
                 result.failed = true;
@@ -660,6 +734,7 @@ void loot::mergeResolveResults(
             //Success
             result.pendingResolve = false;
             result.failed = false;
+            result.retryableFailure = true;
             result.failureReason.clear();
             result.nextResolveAttempt = {};
         }
@@ -680,7 +755,7 @@ void loot::mergeResolveResults(
 
 bool loot::buildPointers()
 {
-    if (Utils::valid_pointer(lootListP) && Utils::valid_pointer(lootListPtr))
+    if (Utils::valid_pointer(lootListP))
         return true;
 
     if (!Utils::valid_pointer(mainGame.localGameWorld))
@@ -688,64 +763,54 @@ bool loot::buildPointers()
 
     for (int attempt = 0; attempt < 3; ++attempt)
     {
-        lootListP = mem.Read<uint64_t>(
-            mainGame.localGameWorld + sdk::ClientLocalGameWorld::LootList
-        );
+        uint64_t nextLootList = 0;
 
-        if (!Utils::valid_pointer(lootListP))
+        if (!mem.TryRead<uint64_t>(
+            mainGame.localGameWorld +
+                sdk::ClientLocalGameWorld::LootList,
+            nextLootList,
+            false) ||
+            !Utils::valid_pointer(nextLootList))
         {
             if (attempt < 2)
                 std::this_thread::sleep_for(std::chrono::milliseconds(25));
             continue;
         }
 
-        int count = 0;
-
-        {
-            ScatterBatch batch;
-            batch.add(lootListP + 0x10, lootListPtr);
-            batch.add(lootListP + 0x18, count);
-
-            if (!batch.execute())
-            {
-                if (attempt < 2)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(25));
-                continue;
-            }
-        }
-
-        lootCount = count;
-
-        if (!Utils::valid_pointer(lootListPtr))
-            continue;
-
-        if (lootCount <= 0 || lootCount > MAX_LOOT_COUNT)
-            return false;
-
+        lootListP = nextLootList;
         return true;
     }
 
     return false;
 }
 
-bool loot::get_lootCount()
+bool loot::refreshLootListHeader()
 {
     if (!Utils::valid_pointer(lootListP))
-        return lootCount > 0;
+        return false;
 
-    int count = 0;
+    uint64_t nextLootListPtr = 0;
+    int nextLootCount = 0;
 
-    if (!mem.TryRead<int>(lootListP + 0x18, count, true))
-        return lootCount > 0;
+    ScatterBatch batch(false);
 
-    if (count <= 0 || count > MAX_LOOT_COUNT)
+    if (!batch.add(lootListP + 0x10, nextLootListPtr) ||
+        !batch.add(lootListP + 0x18, nextLootCount) ||
+        !batch.execute())
     {
-        if (lootCount > 0)
-            return true;
         return false;
     }
 
-    lootCount = count;
+    if (!Utils::valid_pointer(nextLootListPtr))
+        return false;
+
+    if (nextLootCount <= 0 || nextLootCount > MAX_LOOT_COUNT)
+        return false;
+
+    // Publish the pair only after both values were read and validated.
+    lootListPtr = nextLootListPtr;
+    lootCount = nextLootCount;
+
     return true;
 }
 
@@ -808,7 +873,7 @@ bool loot::buildNewLootItemsScatter(
 
     // MonoBehaviour.
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& shell : shellReads)
             batch.add(shell.instance + 0x10, shell.monoBehaviour);
@@ -825,7 +890,7 @@ bool loot::buildNewLootItemsScatter(
 
     // interactive class and GameObject.
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& shell : shellReads)
         {
@@ -855,7 +920,7 @@ bool loot::buildNewLootItemsScatter(
 
     // name pointer and components.
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& shell : shellReads)
         {
@@ -885,7 +950,7 @@ bool loot::buildNewLootItemsScatter(
 
     //transform.
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& shell : shellReads)
         {
@@ -946,7 +1011,8 @@ bool loot::buildNewLootItemsScatter(
 
             item.gameObjectName = mem.readString(
                 item.m_pGameObjectName,
-                MAX_OBJECT_NAME_LENGTH
+                MAX_OBJECT_NAME_LENGTH,
+                true
             );
         }
         catch (const std::exception& e)
@@ -978,7 +1044,7 @@ bool loot::buildNewLootItemsScatter(
 
         if (Utils::Text::containsIgnoreCase(item.gameObjectName, "script"))
         {
-            markFailed(item, "Skipped script object");
+            markFailed(item, "Skipped script object", false);
             continue;
         }
     }
@@ -1001,7 +1067,8 @@ bool loot::buildNewLootItemsScatter(
             {
                 markFailed(
                     item,
-                    "Unsupported class: " + item.m_objectClassName
+                    "Unsupported class: " + item.m_objectClassName,
+                    false
                 );
             }
         }
@@ -1039,7 +1106,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
         return;
 
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& read : reads)
         {
@@ -1061,7 +1128,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& read : reads)
         {
@@ -1084,7 +1151,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& read : reads)
         {
@@ -1134,7 +1201,9 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
 
         try
         {
-            item.bsgId = TrimEFT(read.mongoId.ReadString(mem));
+            item.bsgId = TrimEFT(
+                read.mongoId.ReadString(mem, 128, true)
+            );
         }
         catch (...)
         {
@@ -1211,7 +1280,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
         return;
 
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& read : reads)
         {
@@ -1233,7 +1302,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& read : reads)
         {
@@ -1256,7 +1325,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& read : reads)
         {
@@ -1279,7 +1348,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch;
+        ScatterBatch batch(true);
 
         for (auto& read : reads)
         {
@@ -1325,7 +1394,9 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
 
         try
         {
-            item.bsgId = TrimEFT(read.mongoId.ReadString(mem));
+            item.bsgId = TrimEFT(
+                read.mongoId.ReadString(mem, 128, true)
+            );
         }
         catch (...)
         {
@@ -1415,7 +1486,13 @@ void loot::applyWantedState(LootList& lootItem, const WantedLookup& lookup) cons
     if (!lootItem.isItem && !lootItem.isQuestItem)
         return;
 
-    lootItem.wanted = lootItem.forceWanted;
+    if (lootItem.forceWanted)
+    {
+        lootItem.wanted = true;
+        return;
+    }
+
+    lootItem.wanted = false;
 
     if (lootItem.bsgId.empty())
         return;
@@ -1434,14 +1511,6 @@ void loot::applyWantedState(LootList& lootItem, const WantedLookup& lookup) cons
         return;
     }
 
-    if (lootGlobals::enableValueLoot &&
-        lootItem.avgMarketPrice > lootGlobals::valueLootFrom)
-    {
-        lootItem.wanted = true;
-        lootItem.color = coloursGlobals::valueLootColour;
-        return;
-    }
-
     const auto filterIt = lookup.activeFilterItems.find(lootItem.bsgId);
 
     if (filterIt != lookup.activeFilterItems.end())
@@ -1451,8 +1520,12 @@ void loot::applyWantedState(LootList& lootItem, const WantedLookup& lookup) cons
         return;
     }
 
-    if (!lootItem.forceWanted)
-        lootItem.wanted = false;
+    if (lootGlobals::enableValueLoot &&
+        lootItem.avgMarketPrice > lootGlobals::valueLootFrom)
+    {
+        lootItem.wanted = true;
+        lootItem.color = coloursGlobals::valueLootColour;
+    }
 }
 
 bool loot::isContainerEnabled(const std::string& name) const
@@ -1537,11 +1610,6 @@ void loot::updateExistingLootItems(
             if (item.wanted)
                 item.color = coloursGlobals::playerCorpse;
 
-            if (updateDogTags)
-                g_dogTagCache.ReadFromCorpse(
-                    item.m_interactiveClass
-                );
-
             continue;
         }
 
@@ -1557,25 +1625,59 @@ void loot::updateExistingLootItems(
             continue;
         }
     }
+
+    if (!updateDogTags || workingCache.empty())
+        return;
+
+    // A failed dog-tag read can be expensive. Try only one corpse per
+    // update so several bad corpses cannot form one large DMA burst.
+    for (size_t checked = 0;
+        checked < workingCache.size();
+        ++checked)
+    {
+        const size_t index =
+            dogTagRefreshCursor++ % workingCache.size();
+
+        const LootList& item = workingCache[index];
+
+        if (item.pendingResolve || item.failed || !item.isCorpse)
+            continue;
+
+        g_dogTagCache.ReadFromCorpse(item.m_interactiveClass);
+        break;
+    }
 }
 
 void loot::updateCorpseRequirements(
     std::vector<LootList>& workingCache)
 {
-    const auto now = std::chrono::steady_clock::now();
-
-    if (now - lastCorpseEquipUpdate <= std::chrono::seconds(20))
+    if (workingCache.empty())
         return;
 
-    lastCorpseEquipUpdate = now;
+    const auto now = std::chrono::steady_clock::now();
+    size_t updated = 0;
 
-    for (auto& item : workingCache)
+    for (size_t checked = 0;
+        checked < workingCache.size() &&
+        updated < MAX_CORPSE_UPDATES_PER_TICK;
+        ++checked)
     {
+        const size_t index =
+            corpseRefreshCursor++ % workingCache.size();
+
+        LootList& item = workingCache[index];
+
         if (item.pendingResolve || item.failed)
             continue;
 
         if (!item.isCorpse)
             continue;
+
+        if (now - item.lastCorpseEquipmentUpdate <
+            std::chrono::seconds(20))
+        {
+            continue;
+        }
 
         scanCorpseEquipment(
             item.m_interactiveClass,
@@ -1585,6 +1687,8 @@ void loot::updateCorpseRequirements(
 
         item.corpseValue =
             calculateCorpseValue(item.corpseEquip);
+
+        ++updated;
     }
 }
 
@@ -1607,6 +1711,9 @@ void loot::cleanupMissingLoot(
 
 void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool update)
 {
+    lootItem.lastCorpseEquipmentUpdate =
+        std::chrono::steady_clock::now();
+
     if (!Utils::valid_pointer(interactive))
         return;
 
@@ -1616,7 +1723,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
         uint64_t slotsPtr = 0;
 
         {
-            ScatterBatch batch;
+            ScatterBatch batch(true);
             batch.add(interactive + sdk::InteractiveLootItem::Item, itemBase);
 
             if (!batch.execute())
@@ -1627,7 +1734,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
             return;
 
         {
-            ScatterBatch batch;
+            ScatterBatch batch(true);
             batch.add(itemBase + sdk::LootItemMod::Slots, slotsPtr);
 
             if (!batch.execute())
@@ -1674,7 +1781,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
         // name template.
         {
-            ScatterBatch batch;
+            ScatterBatch batch(true);
 
             for (auto& read : slotReads)
             {
@@ -1691,7 +1798,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
         // mongo id.
         {
-            ScatterBatch batch;
+            ScatterBatch batch(true);
 
             for (auto& read : slotReads)
             {
@@ -1707,6 +1814,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
         newCorpseEquip.reserve(slotReads.size());
 
         bool isPMC = false;
+        const WantedLookup wantedLookup = buildWantedLookup();
 
         const std::vector<PlayerCache> playerCache = players.getCacheSnapshot();
 
@@ -1739,7 +1847,11 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
                 continue;
 
             const std::string slotName = TrimEFT(
-                mem.readUnicodeString(read.namePtr + 0x14, read.nameLen)
+                mem.readUnicodeString(
+                    read.namePtr + 0x14,
+                    read.nameLen,
+                    true
+                )
             );
 
             if (slotName.empty())
@@ -1751,70 +1863,28 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
             if (isPMC && slotName == "Scabbard")
                 continue;
 
-            const std::string id = TrimEFT(read.mongoId.ReadString(mem));
+            const std::string id = TrimEFT(
+                read.mongoId.ReadString(mem, 128, true)
+            );
 
             if (id.empty())
                 continue;
 
             corpseEquipment corpseEq{};
 
-            for (const auto& ml : marketList)
+            if (const CachedMarketItem* marketItem =
+                findMarketItem(id))
             {
-                if (ml.bsgid != id)
-                    continue;
-
-                corpseEq.equipmentName = ml.shortName;
-                corpseEq.value = (ml.marketPrice == 0)
-                    ? static_cast<int>(ml.traderPrice)
-                    : static_cast<int>(ml.marketPrice);
-
-                break;
+                corpseEq.equipmentName = marketItem->shortName;
+                corpseEq.value = (marketItem->marketPrice == 0)
+                    ? static_cast<int>(marketItem->traderPrice)
+                    : static_cast<int>(marketItem->marketPrice);
             }
 
-            for (const auto& filter : lootFilters)
-            {
-                if (!filter.active)
-                    continue;
-
-                bool found = false;
-
-                for (const auto& filterItem : filter.lootItems)
-                {
-                    if (id == filterItem.bsgid)
-                    {
-                        corpseEq.wanted = true;
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (found)
-                    break;
-            }
-
-            if (!corpseEq.wanted)
-            {
-                for (const auto& quest : masterItems)
-                {
-                    if (quest == id)
-                    {
-                        corpseEq.wanted = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!corpseEq.wanted)
-            {
-                for (const auto& wishlist : wishListData)
-                {
-                    if (wishlist.bsgId == id)
-                    {
-                        corpseEq.wanted = true;
-                        break;
-                    }
-                }
-            }
+            corpseEq.wanted =
+                wantedLookup.activeFilterItems.contains(id) ||
+                wantedLookup.questIds.contains(id) ||
+                wantedLookup.wishlistIds.contains(id);
 
             if (!corpseEq.wanted &&
                 lootGlobals::enableValueLoot &&
@@ -1859,64 +1929,91 @@ void loot::lootTask()
         if (now < lootBackoffUntil)
             return;
 
-        if (!buildPointers())
+        const bool discoveryDue =
+            nextLootDiscovery ==
+                std::chrono::steady_clock::time_point{} ||
+            now >= nextLootDiscovery;
+
+        if (discoveryDue)
         {
-            lootFailStreak++;
-            if (lootFailStreak == 1 || lootFailStreak % 10 == 0)
-                LOGS.logError("[LOOT] Pointer Build Error");
-
-            if (lootFailStreak >= 5)
-                lootBackoffUntil = now + std::chrono::seconds(20);
-
-            return;
-        }
-
-        lootFailStreak = 0;
-
-        if (!get_lootCount())
-        {
-            lootCountFailStreak++;
-            if (lootCountFailStreak >= 3)
+            if (!buildPointers())
             {
-                lootListP = 0;
-                lootListPtr = 0;
+                lootFailStreak++;
+                if (lootFailStreak == 1 || lootFailStreak % 10 == 0)
+                    LOGS.logError("[LOOT] Pointer Build Error");
+
+                if (lootFailStreak >= 5)
+                    lootBackoffUntil = now + std::chrono::seconds(20);
+
+                nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
+                return;
             }
-            if (lootCountFailStreak == 1 || lootCountFailStreak % 10 == 0)
-                LOGS.logError("[LOOT] Count Error");
 
-            if (lootCountFailStreak >= 5)
-                lootBackoffUntil = now + std::chrono::seconds(20);
+            lootFailStreak = 0;
 
+            if (!refreshLootListHeader())
+            {
+                lootCountFailStreak++;
+                if (lootCountFailStreak >= 3)
+                {
+                    lootListP = 0;
+                    lootListPtr = 0;
+                }
+                if (lootCountFailStreak == 1 ||
+                    lootCountFailStreak % 10 == 0)
+                {
+                    LOGS.logError("[LOOT] List Header Error");
+                }
+
+                if (lootCountFailStreak >= 5)
+                    lootBackoffUntil =
+                        now + std::chrono::seconds(20);
+
+                nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
+                return;
+            }
+
+            lootCountFailStreak = 0;
+
+            if (!buildLootBuffer())
+            {
+                lootBufferFailStreak++;
+                if (lootBufferFailStreak == 1 ||
+                    lootBufferFailStreak % 10 == 0)
+                {
+                    LOGS.logError("[LOOT] Loot Buffer Error");
+                }
+
+                if (lootBufferFailStreak >= 5)
+                    lootListPtr = 0;
+
+                if (lootBufferFailStreak >= 3)
+                    lootBackoffUntil =
+                        now + std::chrono::seconds(15);
+
+                nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
+                return;
+            }
+
+            lootBufferFailStreak = 0;
+
+            std::unordered_set<uint64_t> discoveredPointers;
+            discoveredPointers.reserve(loot_buffer.size());
+
+            for (const uint64_t pointer : loot_buffer)
+            {
+                if (Utils::valid_pointer(pointer))
+                    discoveredPointers.insert(pointer);
+            }
+
+            liveLootPointers = std::move(discoveredPointers);
+            nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
+        }
+
+        const auto& livePointers = liveLootPointers;
+
+        if (livePointers.empty())
             return;
-        }
-
-        lootCountFailStreak = 0;
-
-        if (!buildLootBuffer())
-        {
-            lootBufferFailStreak++;
-            if (lootBufferFailStreak == 1 || lootBufferFailStreak % 10 == 0)
-                LOGS.logError("[LOOT] Loot Buffer Error");
-
-            if (lootBufferFailStreak >= 5)
-                lootListPtr = 0;
-
-            if (lootBufferFailStreak >= 3)
-                lootBackoffUntil = now + std::chrono::seconds(15);
-
-            return;
-        }
-
-        lootBufferFailStreak = 0;
-
-        std::unordered_set<uint64_t> livePointers;
-        livePointers.reserve(loot_buffer.size());
-
-        for (const uint64_t pointer : loot_buffer)
-        {
-            if (Utils::valid_pointer(pointer))
-                livePointers.insert(pointer);
-        }
 
         std::vector<LootList> workingCache;
 

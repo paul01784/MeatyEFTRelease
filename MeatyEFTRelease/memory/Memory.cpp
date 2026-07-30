@@ -923,6 +923,99 @@ uint64_t Memory::FindSignature(
 // Refresh
 // ------------------------------------------------------------
 
+bool Memory::RefreshProcessInformationNow()
+{
+	bool memoryOk = false;
+	bool tlbOk = false;
+	bool processOk = false;
+
+	{
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+		if (!vHandle)
+			return false;
+
+		// Remove cached physical data.
+		memoryOk = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_MEM,
+			1
+		);
+
+		// Remove cached virtual-to-physical translations.
+		tlbOk = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_TLB,
+			1
+		);
+
+		// Fully refresh process, module and related information.
+		processOk = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_MEDIUM,
+			1
+		);
+	}
+
+	const bool ok = memoryOk && tlbOk && processOk;
+
+	if (!ok)
+		MemoryLogError("Immediate full process refresh failed");
+
+	return ok;
+}
+
+void Memory::ConfigureRefreshTimings()
+{
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+
+	if (!vHandle)
+		return;
+
+	// All other values below are multiples of this 100 ms tick
+	const bool tickOk = VMMDLL_ConfigSet(
+		vHandle,
+		VMMDLL_OPT_CONFIG_TICK_PERIOD,
+		100
+	);
+
+	// 3 ticks = 300 ms
+	const bool readCacheOk = VMMDLL_ConfigSet(
+		vHandle,
+		VMMDLL_OPT_CONFIG_READCACHE_TICKS,
+		3
+	);
+
+	// 20 ticks = 2 seconds
+	const bool tlbCacheOk = VMMDLL_ConfigSet(
+		vHandle,
+		VMMDLL_OPT_CONFIG_TLBCACHE_TICKS,
+		20
+	);
+
+	// 600 ticks = 60 seconds
+	const bool processPartialOk = VMMDLL_ConfigSet(
+		vHandle,
+		VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_PARTIAL,
+		600
+	);
+
+	// 6000 ticks = 10 minutes
+	const bool processTotalOk = VMMDLL_ConfigSet(
+		vHandle,
+		VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_TOTAL,
+		6000
+	);
+
+	if (!tickOk ||
+		!readCacheOk ||
+		!tlbCacheOk ||
+		!processPartialOk ||
+		!processTotalOk)
+	{
+		MemoryLogError("Failed to configure VMM refresh timings");
+	}
+}
 
 // ------------------------------------------------------------
 // Disconnect from dma device
@@ -1280,6 +1373,8 @@ bool Memory::Init(bool memMap, bool debug)
 		memoryGlobals::dmaConnected.store(true, std::memory_order_release);
 
 
+		ConfigureRefreshTimings();
+
 		MemoryLogInfo("DMA connected successfully");
 	}
 	else
@@ -1303,6 +1398,7 @@ bool Memory::Init(bool memMap, bool debug)
 		DWORD livePid = 0;
 		bool handleValid = false;
 
+		RefreshProcessInformationNow();
 		{
 			std::lock_guard<std::mutex> lock(handleMutex);
 
@@ -1339,8 +1435,11 @@ bool Memory::Init(bool memMap, bool debug)
 		DWORD foundPid = 0;
 		bool handleValid = false;
 
+		RefreshProcessInformationNow();
 		{
 			std::lock_guard<std::mutex> lock(handleMutex);
+
+			
 
 			handleValid = (vHandle != nullptr);
 
@@ -1381,6 +1480,7 @@ bool Memory::Init(bool memMap, bool debug)
 			DWORD livePid = 0;
 			bool innerHandleValid = false;
 
+			RefreshProcessInformationNow();
 			{
 				std::lock_guard<std::mutex> lock(handleMutex);
 

@@ -296,6 +296,9 @@ public:
         bool useCache = false
     );
 
+    bool RefreshProcessInformationNow();
+    void ConfigureRefreshTimings();
+
 
     bool WriteBufferEnsure(
         uintptr_t address,
