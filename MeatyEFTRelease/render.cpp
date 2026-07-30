@@ -5166,7 +5166,7 @@ static void renderMenuIcons()
     std::string filterIcon = ICON_FK_FILTER;
     std::string makcuIcon = ICON_FK_CROSSHAIRS;
     std::string questsIcon = ICON_FK_FILES_O;
-    std::string watchlistIcon = ICON_FK_USERS;
+    std::string watchlistIcon = ICON_FK_USER;
 
 
     std::string widgetExitIcon = ICON_FK_SIGN_OUT;
