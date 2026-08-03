@@ -14,6 +14,7 @@
 #include <format>
 #include <vector>
 #include <unordered_set>
+#include <iostream>
 
 extern Memory mem;
 
@@ -343,6 +344,8 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
         const std::string name =
             mem.readUTF8String(name_ptrs[i], 64);
 
+        //std::cout << "[" << std::to_string(i) << "] " << name.c_str() << "\n";
+
         if (_stricmp(name.c_str(), "GameWorld") != 0)
             continue;
 
@@ -449,7 +452,6 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
             walk_status
         );
     }
-
     return false;
 }
 

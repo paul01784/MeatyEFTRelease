@@ -108,14 +108,32 @@ void Camera::getCameraPtrs()
 
     constexpr bool debug = false;
 
-    const uint64_t cameraArrayPtr =
-        mem.Read<uint64_t>(mem.base + UnityOffsets::AllCamera);
+    const auto logInfo = [&](auto&&... values)
+        {
+            if (!debug)
+                return;
+
+            std::ostringstream stream;
+            (stream << ... << values);
+            LOGS.logInfo(stream.str());
+        };
+
+    const auto logWarn = [&](auto&&... values)
+        {
+            if (!debug)
+                return;
+
+            std::ostringstream stream;
+            (stream << ... << values);
+            LOGS.logWarn(stream.str());
+        };
+
+    const uint64_t cameraArrayPtr = mem.Read<uint64_t>(mem.base + UnityOffsets::AllCamera);
 
     if (!Utils::valid_pointer(cameraArrayPtr))
     {
-        if (debug)
-            std::cout << "[Camera] Invalid cameraArrayPtr" << std::endl;
-
+        logWarn("[Camera] Invalid cameraArrayPtr: 0x",
+            std::hex, cameraArrayPtr, std::dec);
         return;
     }
 
@@ -123,92 +141,154 @@ void Camera::getCameraPtrs()
 
     if (!Utils::valid_pointer(array.cameras))
     {
-        if (debug)
-            std::cout << "[Camera] Invalid array.cameras" << std::endl;
-
+        logWarn("[Camera] Invalid array.cameras: 0x",
+            std::hex, array.cameras, std::dec);
         return;
     }
 
     if (array.curCount <= 0 || array.curCount > kMaxCameraCount)
     {
-        if (debug)
-            std::cout << "[Camera] Invalid curCount: " << array.curCount << std::endl;
-
+        logWarn(
+            "[Camera] Invalid curCount: ",
+            array.curCount,
+            " | Maximum allowed: ",
+            kMaxCameraCount
+        );
         return;
     }
 
-    if (debug)
-    {
-        std::cout << "\n=== CameraArray Info ===" << std::endl;
-        std::cout << "BasePtr:     0x" << std::hex << cameraArrayPtr << std::dec << std::endl;
-        std::cout << "Cameras ptr: 0x" << std::hex << array.cameras << std::dec << std::endl;
-        std::cout << "minCount:    " << array.minCount << std::endl;
-        std::cout << "curCount:    " << array.curCount << std::endl;
-        std::cout << "maxCount:    " << array.maxCount << std::endl;
-        std::cout << "========================" << std::endl;
-    }
+    logInfo(
+        "[Camera] CameraArray Info | BasePtr: 0x",
+        std::hex,
+        cameraArrayPtr,
+        " | CamerasPtr: 0x",
+        array.cameras,
+        std::dec,
+        " | minCount: ",
+        array.minCount,
+        " | curCount: ",
+        array.curCount,
+        " | maxCount: ",
+        array.maxCount
+    );
 
     for (uint64_t i = static_cast<uint64_t>(array.curCount); i-- > 0;)
     {
-        const uint64_t cam =
-            mem.Read<uint64_t>(array.cameras + (i * sizeof(uint64_t)));
+        const uint64_t cam = mem.Read<uint64_t>(array.cameras + (i * sizeof(uint64_t)));
 
         if (!Utils::valid_pointer(cam))
+        {
+            logWarn(
+                "[Camera] Invalid camera pointer at index ",
+                i,
+                ": 0x",
+                std::hex,
+                cam,
+                std::dec
+            );
             continue;
+        }
 
-        const uint64_t go =
-            mem.Read<uint64_t>(cam + UnityOffsets::GameObject_ComponentsOffset);
+        const uint64_t go = mem.Read<uint64_t>(cam + UnityOffsets::GameObject_ObjectClassOffset);
 
         if (!Utils::valid_pointer(go))
+        {
+            logWarn(
+                "[Camera] Invalid GameObject at index ",
+                i,
+                " | Camera: 0x",
+                std::hex,
+                cam,
+                " | GameObject: 0x",
+                go,
+                std::dec
+            );
             continue;
+        }
 
-        const uint64_t namePtr =
-            mem.Read<uint64_t>(go + UnityOffsets::GameObject_NameOffset);
+        const uint64_t namePtr = mem.Read<uint64_t>(go + UnityOffsets::GameObject_NameOffset);
 
         if (!Utils::valid_pointer(namePtr))
+        {
+            logWarn(
+                "[Camera] Invalid name pointer at index ",
+                i,
+                " | Camera: 0x",
+                std::hex,
+                cam,
+                " | GameObject: 0x",
+                go,
+                " | NamePtr: 0x",
+                namePtr,
+                std::dec
+            );
             continue;
+        }
 
         const std::string name = mem.readString(namePtr, 64);
 
         if (name.empty())
-            continue;
-
-        if (debug)
         {
-            std::cout << "[" << i << "] "
-                << "cameraEntity: 0x" << std::hex << cam << std::dec
-                << "  Name: \"" << name << "\""
-                << std::endl;
+            logWarn(
+                "[Camera] Empty camera name at index ",
+                i,
+                " | Camera: 0x",
+                std::hex,
+                cam,
+                std::dec
+            );
+            continue;
         }
+
+        logInfo(
+            "[Camera] Index: ",
+            i,
+            " | CameraEntity: 0x",
+            std::hex,
+            cam,
+            std::dec,
+            " | Name: \"",
+            name,
+            "\""
+        );
 
         if (!fpsCamera && name == "FPS Camera")
         {
             fpsCamera = cam;
             cameraEntity = cam;
 
-            if (debug)
-                std::cout << " -> FPS Camera FOUND!" << std::endl;
+            logInfo(
+                "[Camera] FPS Camera found: 0x",
+                std::hex,
+                fpsCamera,
+                std::dec
+            );
         }
 
         if (!opticCamera && name == "BaseOpticCamera(Clone)")
         {
             opticCamera = cam;
 
-            if (debug)
-                std::cout << " -> Optic Camera FOUND!" << std::endl;
+            logInfo(
+                "[Camera] Optic Camera found: 0x",
+                std::hex,
+                opticCamera,
+                std::dec
+            );
         }
 
         if (fpsCamera && opticCamera)
             break;
     }
 
-    if (debug)
-    {
-        std::cout << "\n=== Camera Scan Results ===" << std::endl;
-        std::cout << "FPS Camera   : 0x" << std::hex << fpsCamera << std::dec << std::endl;
-        std::cout << "Optic Camera : 0x" << std::hex << opticCamera << std::dec << std::endl;
-        std::cout << "==========================\n" << std::endl;
-    }
+    logInfo(
+        "[Camera] Scan complete | FPS Camera: 0x",
+        std::hex,
+        fpsCamera,
+        " | Optic Camera: 0x",
+        opticCamera,
+        std::dec
+    );
 }
 
 void Camera::getMatrixPtrs()
@@ -229,12 +309,12 @@ uint64_t Camera::resolveMatrixAddress(uint64_t cameraPtr) const
     if (!Utils::valid_pointer(cameraPtr))
         return 0;
 
-    const uint64_t gameObject = mem.Read<uint64_t>(cameraPtr + 0x58);
+    const uint64_t gameObject = mem.Read<uint64_t>(cameraPtr + UnityOffsets::MonoBehaviour_GameObjectOffset);
 
     if (!Utils::valid_pointer(gameObject))
         return 0;
-
-    const uint64_t ptr1 = mem.Read<uint64_t>(gameObject + 0x58);
+    
+    const uint64_t ptr1 = mem.Read<uint64_t>(gameObject + 0x48);
 
     if (!Utils::valid_pointer(ptr1))
         return 0;

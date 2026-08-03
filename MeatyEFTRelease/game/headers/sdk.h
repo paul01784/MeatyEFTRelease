@@ -14,9 +14,9 @@ namespace sdk
 		constexpr uint64_t LootList = 0x1B0;
 		constexpr uint64_t RegisteredPlayers = 0x1D0;
 		constexpr uint64_t MainPlayer = 0x230;
-		constexpr uint64_t Grenades = 0x2B0;
+		constexpr uint64_t Grenades = 0x2B8;
 		constexpr uint64_t ExfiltrationController = 0x68;
-		constexpr uint64_t SynchronizableObjectLogicProcessor = 0x270; // object
+		constexpr uint64_t SynchronizableObjectLogicProcessor = 0x278; // object
 		constexpr uint64_t btrController = 0x28;
 	}
 
@@ -74,16 +74,16 @@ namespace sdk
 	namespace Player
 	{
 		constexpr uint64_t MovementContext = 0x60; // EFT.MovementContext
-		constexpr uint64_t _playerBody = 0x198; // EFT.PlayerBody
-		constexpr uint64_t Physical = 0x9D0; // -.\uE399 <Physical> Physical
-		constexpr uint64_t Corpse = 0x720; // EFT.Interactive.Corpse
-		constexpr uint64_t Location = 0x920; // String
-		constexpr uint64_t Profile = 0x9B8; // EFT.Profile
-		constexpr uint64_t ProceduralWeaponAnimation = 0x3B8; // EFT.Animations.ProceduralWeaponAnimation
-		constexpr uint64_t _inventoryController = 0xA30; // EFT.PlayerInventoryController update
-		constexpr uint64_t _handsController = 0xA38; // EFT.PlayerHands update
-		constexpr uint64_t _playerLookRaycastTransform = 0xAC8; // UnityEngine.Transform
-		constexpr uint64_t PlayerBones = 0xB30; // EFT.PlayerBones
+		constexpr uint64_t _playerBody = 0x1A0; // EFT.PlayerBody
+		constexpr uint64_t Physical = 0x9D8; // -.\uE399 <Physical> Physical
+		constexpr uint64_t Corpse = 0x728; // EFT.Interactive.Corpse
+		constexpr uint64_t Location = 0x928; // String
+		constexpr uint64_t Profile = 0x9C0; // EFT.Profile
+		constexpr uint64_t ProceduralWeaponAnimation = 0x3C0; // EFT.Animations.ProceduralWeaponAnimation
+		constexpr uint64_t _inventoryController = 0xA38; // EFT.PlayerInventoryController update
+		constexpr uint64_t _handsController = 0xA40; // EFT.PlayerHands update
+		constexpr uint64_t _playerLookRaycastTransform = 0xAD8; // UnityEngine.Transform
+		constexpr uint64_t PlayerBones = 0xB40; // EFT.PlayerBones
 	}
 
 	namespace FirearmController
@@ -117,25 +117,25 @@ namespace sdk
 	{
 		constexpr uint64_t ObservedPlayerController = 0x28; // EFT.NextObservedPlayer.ObservedPlayerController
 		constexpr uint64_t Voice = 0x40; // string
-		constexpr uint64_t Id = 0x7C; //int32_t
-		constexpr uint64_t Side = 0x94; // EFT.EPlayerSide
-		constexpr uint64_t AccountId = 0xC0; //_AccountId_k__BackingField
-		constexpr uint64_t IsAI = 0xA0; // bool
-		constexpr uint64_t PlayerBody = 0xD8; // EFT.PlayerBody
+		constexpr uint64_t Id = 0x90; //int32_t
+		constexpr uint64_t Side = 0xB4; // EFT.EPlayerSide
+		constexpr uint64_t AccountId = 0xE0; //_AccountId_k__BackingField
+		constexpr uint64_t IsAI = 0xC0; // bool
+		constexpr uint64_t PlayerBody = 0xF8; // EFT.PlayerBody
 	}
 
 	namespace ObservedPlayerController
 	{
 		constexpr uint64_t Player = 0x18; // EFT.NextObservedPlayer.ObservedPlayerView
-		constexpr uint64_t MovementController = 0xD8; // -.\uED4F
-		constexpr uint64_t HealthController = 0xE8; // -.\uE446
-		constexpr uint64_t InventoryController = 0x10; // -.\uED5B update
-		constexpr uint64_t HandsController = 0x120; // EFT.Animations.PlayerSpring
+		constexpr uint64_t MovementController = 0xF0; // -.\uED4F
+		constexpr uint64_t HealthController = 0x100; // -.\uE446
+		constexpr uint64_t InventoryController = 0x10; // -.\uED5B
+		constexpr uint64_t HandsController = 0x140; // EFT.Animations.PlayerSpring
 	}
 
 	namespace ObservedMovementController
 	{
-		constexpr uint64_t ObservedPlayerStateContext = 0x98;
+		constexpr uint64_t ObservedPlayerStateContext = 0xB0;
 		constexpr uint64_t Rotation = 0x1c; // UnityEngine.Vector2 <HeadRotation> HeadRotation
 		constexpr uint64_t Velocity = 0x30; // UnityEngine.Vector3 <Velocity> Velocity
 	}
@@ -231,7 +231,7 @@ namespace sdk
 		constexpr uint64_t AccountId = 0x18; // String
 		constexpr uint64_t Info = 0x48; // -.\uE9AD
 		constexpr uint64_t QuestsData = 0x98; // object
-		constexpr uint64_t WishlistManager = 0x108; // object
+		constexpr uint64_t WishlistManager = 0x130; // object
 	}
 
 	namespace WishlistManager
@@ -256,27 +256,27 @@ namespace sdk
 
 	namespace MovementContext
 	{
-		constexpr uint64_t Player = 0x48; // EFT.Player <_player> _player
-		constexpr uint64_t PlantState = 0x78; // EFT.BaseMovementState <PlantState> PlantState
-		constexpr uint64_t CurrentState = 0x1f0; // EFT.BaseMovementState <CurrentState>k__BackingField> <CurrentState>k__BackingField
-		constexpr uint64_t _states = 0x480; // System.Collections.Generic.Dictionary<Byte, BaseMovementState> <_states> _states
-		constexpr uint64_t _movementStates = 0x4b0; // -.IPlayerStateContainerBehaviour[] <_movementStates> _movementStates
-		constexpr uint64_t _tilt = 0xb0; // Single <_tilt> _tilt
-		constexpr uint64_t _rotation = 0xc8; // UnityEngine.Vector2 <_rotation> _rotation
-		constexpr uint64_t _physicalCondition = 0x198; // System.Int32 <_physicalCondition> _physicalCondition
-		constexpr uint64_t _speedLimitIsDirty = 0x1b9; // Boolean <_speedLimitIsDirty> _speedLimitIsDirty
-		constexpr uint64_t StateSpeedLimit = 0x1bc; // Single <<StateSpeedLimit>k__BackingField> <StateSpeedLimit>k__BackingField
-		constexpr uint64_t StateSprintSpeedLimit = 0x1c0; // Single <<StateSprintSpeedLimit>k__BackingField> <StateSprintSpeedLimit>k__BackingField
-		constexpr uint64_t _lookDirection = 0x3b8; // UnityEngine.Vector3  <_lookDirection> _lookDirection
-		constexpr uint64_t WalkInertia = 0x4bc; // Single <<WalkInertia>k__BackingField> <WalkInertia>k__BackingField
-		constexpr uint64_t SprintBrakeInertia = 0x4c0; // Single <<SprintBrakeInertia>k__BackingField> <SprintBrakeInertia>k__BackingField
+		constexpr uint64_t Player = 0x40; // EFT.Player <_player> _player
+		constexpr uint64_t PlantState = 0x70; // EFT.BaseMovementState <PlantState> PlantState
+		constexpr uint64_t CurrentState = 0x1e8; // EFT.BaseMovementState <CurrentState>k__BackingField> <CurrentState>k__BackingField
+		constexpr uint64_t _states = 0x498; // System.Collections.Generic.Dictionary<Byte, BaseMovementState> <_states> _states
+		constexpr uint64_t _movementStates = 0x4c8; // -.IPlayerStateContainerBehaviour[] <_movementStates> _movementStates
+		constexpr uint64_t _tilt = 0xac; // Single <_tilt> _tilt
+		constexpr uint64_t _rotation = 0xc0; // UnityEngine.Vector2 <_rotation> _rotation
+		constexpr uint64_t _physicalCondition = 0x190; // System.Int32 <_physicalCondition> _physicalCondition
+		constexpr uint64_t _speedLimitIsDirty = 0x1b1; // Boolean <_speedLimitIsDirty> _speedLimitIsDirty
+		constexpr uint64_t StateSpeedLimit = 0x1b4; // Single <<StateSpeedLimit>k__BackingField> <StateSpeedLimit>k__BackingField
+		constexpr uint64_t StateSprintSpeedLimit = 0x1b8; // Single <<StateSprintSpeedLimit>k__BackingField> <StateSprintSpeedLimit>k__BackingField
+		constexpr uint64_t _lookDirection = 0x3d0; // UnityEngine.Vector3  <_lookDirection> _lookDirection
+		constexpr uint64_t WalkInertia = 0x4d4; // Single <<WalkInertia>k__BackingField> <WalkInertia>k__BackingField
+		constexpr uint64_t SprintBrakeInertia = 0x4d8; // Single <<SprintBrakeInertia>k__BackingField> <SprintBrakeInertia>k__BackingField
 	}
 
 	namespace ProceduralWeaponAnimation
 	{
-		constexpr uint64_t _isAiming = 0x14D; // Bool
-		constexpr uint64_t _optics = 0x1A8; //class ptr
-		constexpr uint64_t HandsContainer = 0x20;
+		constexpr uint64_t _isAiming = 0x16D; // Bool
+		constexpr uint64_t _optics = 0x1C8; //class ptr
+		constexpr uint64_t HandsContainer = 0x38;
 	}
 	namespace SightNBone
 	{

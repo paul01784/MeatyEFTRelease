@@ -1831,11 +1831,9 @@ void Players::playersTask()
             if (existingInstances.contains(currentPlayer))
                 continue;
 
-            const bool isLocal =
-                currentPlayer == mainGame.localPlayerPtr;
+            const bool isLocal = currentPlayer == mainGame.localPlayerPtr;
 
-            auto builtEntity =
-                buildEntity(currentPlayer, isLocal);
+            auto builtEntity = buildEntity(currentPlayer, isLocal);
 
             if (!builtEntity.has_value())
                 continue;
@@ -2100,7 +2098,7 @@ std::optional<PlayerCache> Players::buildEntity(
 
     try
     {
-        newEntity.className = ReadName(instance, 64);
+        newEntity.className = ReadName(instance, 64, false);
     }
     catch (...)
     {
