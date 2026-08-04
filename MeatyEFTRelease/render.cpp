@@ -906,7 +906,8 @@ static void renderLootFiltersMenu()
             if (ImGui::ColorEdit4("##valuelistcolour", (float*)&coloursGlobals::valueLootColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
             ImGui::SetCursorPosX(20);
             ImGui::PushItemWidth(150);
-            if (ImGui::SliderInt("R (over)", &lootGlobals::valueLootFrom, 0, 1000000, "%d")) configManager.SaveConfig();
+            if (ImGui::SliderInt("R (over) LOOT", &lootGlobals::valueLootFrom, 0, 1000000, "%d")) configManager.SaveConfig();
+            if (ImGui::SliderInt("R (over) EQUIP", &lootGlobals::valueLootFromEquip, 0, 1000000, "%d")) configManager.SaveConfig();
             ImGui::PopItemWidth();
             
 

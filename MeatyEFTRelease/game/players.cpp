@@ -4280,7 +4280,7 @@ void Players::playerEquipment()
 
             if (!slot.wanted &&
                 lootGlobals::enableValueLoot &&
-                slot.price > lootGlobals::valueLootFrom)
+                slot.price > lootGlobals::valueLootFromEquip)
             {
                 slot.wanted = true;
             }

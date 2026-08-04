@@ -538,7 +538,8 @@ void to_json(nlohmann::json& j, const lootGlobals& k) {
         {"enableQuestLoot", k.enableQuestLoot},
         {"enableValueLoot", k.enableValueLoot},
         {"enableWishListLoot", k.enableWishListLoot},
-        {"valueLootFrom", k.valueLootFrom}
+        {"valueLootFrom", k.valueLootFrom},
+        {"valueLootFromEquip", k.valueLootFromEquip}
     };
 }
 
@@ -547,6 +548,7 @@ void from_json(const nlohmann::json& j, lootGlobals& k) {
     j.at("enableValueLoot").get_to(k.enableValueLoot);
     j.at("enableWishListLoot").get_to(k.enableWishListLoot);
     j.at("valueLootFrom").get_to(k.valueLootFrom);
+    j.at("valueLootFromEquip").get_to(k.valueLootFromEquip);
 }
 
 void to_json(nlohmann::json& j, const MakcuConfig& k)

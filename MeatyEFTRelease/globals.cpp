@@ -140,4 +140,5 @@ WindowsKey keyGlobals::battleMode = WindowsKey::F12;
 bool lootGlobals::enableQuestLoot = false;
 bool lootGlobals::enableWishListLoot = false;
 bool lootGlobals::enableValueLoot = false;
-int lootGlobals::valueLootFrom = 0;
+int lootGlobals::valueLootFrom = 500000;
+int lootGlobals::valueLootFromEquip = 500000;

@@ -163,6 +163,7 @@ struct lootGlobals {
     static bool enableWishListLoot;
     static bool enableValueLoot;
     static int valueLootFrom;
+    static int valueLootFromEquip;
 };
 
 struct writeGlobals {
