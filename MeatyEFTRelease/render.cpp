@@ -810,6 +810,7 @@ static void DrawLootListDebugTable(std::vector<LootList*>& rows, const char* tab
         bool wantedTick = (loot->wanted || loot->forceWanted);
         if (ImGui::Checkbox("##wanted", &wantedTick))
         {
+            Loot.setLootWanted(loot->instance, wantedTick, loot->color);
             loot->wanted = wantedTick;
             loot->forceWanted = wantedTick;
         }
@@ -1198,7 +1199,14 @@ static void renderLootFiltersMenu()
                                     bool wanted = loot.wanted;
                                     if (ImGui::Checkbox("##wanted", &wanted))
                                     {
+                                        Loot.setLootWanted(
+                                            loot.instance,
+                                            wanted,
+                                            coloursGlobals::questColour
+                                        );
+
                                         loot.wanted = wanted;
+                                        loot.forceWanted = wanted;
 
                                         if (loot.wanted)
                                             loot.color = coloursGlobals::questColour;

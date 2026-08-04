@@ -94,6 +94,7 @@ public:
     void clearCache();
 
     void markLootWanted(const std::vector<uint64_t>& instances, const glm::vec4& colour);
+    void setLootWanted(uint64_t instance, bool wanted, const glm::vec4& colour);
 
     [[nodiscard]] std::vector<LootList> getCacheLoot() const;
 

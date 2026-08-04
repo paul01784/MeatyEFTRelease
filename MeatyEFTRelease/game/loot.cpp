@@ -402,15 +402,58 @@ void loot::markLootWanted(
     }
 }
 
-bool loot::tryUpdateLootPosition(
-    LootList& item,
-    bool markAsFailedOnError)
+void loot::setLootWanted(const uint64_t instance, const bool wanted, const glm::vec4& colour)
 {
-    item.lastPositionUpdate =
-        std::chrono::steady_clock::now();
+    if (instance == 0)
+        return;
 
-    auto LogTransformDebug = [&](const char* stage,
-        const char* reason,
+    const WantedLookup lookup = wanted
+        ? WantedLookup{}
+        : buildWantedLookup();
+
+    std::unique_lock<std::shared_mutex> lock(lootMutex);
+
+    const auto it = std::find_if(
+        lootList.begin(),
+        lootList.end(),
+        [instance](const LootList& item)
+        {
+            return item.instance == instance;
+        }
+    );
+
+    if (it == lootList.end())
+        return;
+
+    it->forceWanted = wanted;
+
+    if (wanted)
+    {
+        it->wanted = true;
+        it->color = colour;
+        return;
+    }
+
+    if (it->pendingResolve || it->failed)
+    {
+        it->wanted = false;
+        return;
+    }
+
+    if (it->isItem || it->isQuestItem)
+    {
+        applyWantedState(*it, lookup);
+        return;
+    }
+
+    it->wanted = false;
+}
+
+bool loot::tryUpdateLootPosition(LootList& item, bool markAsFailedOnError)
+{
+    item.lastPositionUpdate = std::chrono::steady_clock::now();
+
+    auto LogTransformDebug = [&](const char* stage, const char* reason,
         const glm::vec3* position = nullptr)
         {
             if (!ENABLE_LOOT_TRANSFORM_DIAGNOSTICS)
@@ -2110,6 +2153,39 @@ void loot::lootTask()
 
         {
             std::unique_lock lock(lootMutex);
+
+            std::unordered_map<uint64_t, const LootList*> currentByInstance;
+            currentByInstance.reserve(lootList.size());
+
+            for (const LootList& current : lootList)
+            {
+                if (current.instance != 0)
+                    currentByInstance.emplace(current.instance, &current);
+            }
+
+            for (LootList& item : workingCache)
+            {
+                const auto currentIt = currentByInstance.find(item.instance);
+
+                if (currentIt == currentByInstance.end())
+                    continue;
+
+                const LootList& current = *currentIt->second;
+
+                if (current.forceWanted)
+                {
+                    item.forceWanted = true;
+                    item.wanted = true;
+                    item.color = current.color;
+                }
+                else if (item.forceWanted)
+                {
+                    item.forceWanted = false;
+                    item.wanted = current.wanted;
+                    item.color = current.color;
+                }
+            }
+
             lootList = std::move(workingCache);
         }
     }
