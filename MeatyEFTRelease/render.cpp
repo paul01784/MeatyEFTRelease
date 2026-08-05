@@ -3008,9 +3008,9 @@ static void renderDebugWindow()
                     jumpToNewest = true;
 
                 ImGui::TextWrapped(
-                    "Silent lag usually comes from DMA mutex contention: multiple threads "
-                    "(players, bones, camera, loot, grenades) waiting on scatter reads. "
-                    "Entries below are tasks/scatters slower than ~25-35ms."
+                    "DMA timing is split by cause: dma.lock_wait means a task queued behind "
+                    "another DMA operation; dma.execute means the VMM/device call itself was "
+                    "slow. Task entries include both. Slow samples appear below at ~25-35ms."
                 );
 
                 if (ImGui::BeginTable(

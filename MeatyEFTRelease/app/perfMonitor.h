@@ -21,6 +21,7 @@ class PerfMonitor
 {
 public:
     static constexpr double kSlowTaskMs = 25.0;
+    static constexpr double kSlowDmaLockWaitMs = 25.0;
     static constexpr double kSlowScatterMs = 35.0;
 
     static PerfMonitor& Instance()

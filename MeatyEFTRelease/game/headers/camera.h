@@ -73,6 +73,13 @@ public:
 
 private:
 
+    enum class FrameReadStatus : std::uint8_t
+    {
+        Success,
+        Busy,
+        Failed
+    };
+
     struct FrameData
     {
         glm::highp_mat4 fpsRaw{};
@@ -81,7 +88,7 @@ private:
         float fov = 0.0f;
         float aspect = 0.0f;
 
-        bool queuedFps = false;
+        bool lensRead = false;
         bool queuedOptic = false;
 
         bool fpsMatrixValid = false;
@@ -119,7 +126,7 @@ private:
 
     uint64_t resolveMatrixAddress(uint64_t cameraPtr) const;
 
-    bool readFrameData(FrameData& out);
+    FrameReadStatus readFrameData(FrameData& out, bool readLens);
     void applyFpsFrame(const FrameData& frame);
     bool applyOpticFrame(const FrameData& frame);
 

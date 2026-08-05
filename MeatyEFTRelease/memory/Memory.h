@@ -11,6 +11,7 @@
 #include <limits>
 #include <thread>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 
 struct MemoryTrafficStats
@@ -240,6 +241,20 @@ private:
     [[nodiscard]] static DWORD BuildScatterFlags(bool useCache);
 
 public:
+    struct ScatterReadRequest
+    {
+        uint64_t address = 0;
+        void* buffer = nullptr;
+        size_t size = 0;
+    };
+
+    enum class TryScatterReadResult : uint8_t
+    {
+        Success,
+        Busy,
+        Failed
+    };
+
     Memory();
     ~Memory();
 
@@ -321,8 +336,9 @@ public:
         return Write(address, &value, sizeof(T));
     }
 
-    bool Read(uintptr_t address, void* buffer, size_t size, bool useCache = false) const;
-    bool Read(uintptr_t address, void* buffer, size_t size, int pid, bool useCache = false) const;
+    bool Read(uintptr_t address, void* buffer, size_t size, bool useCache = false, std::string_view callingFunc = {}) const;
+
+    bool Read(uintptr_t address, void* buffer, size_t size, int pid, bool useCache = false, std::string_view callingFunc = {}) const;
 
     template <typename T>
     [[nodiscard]] bool TryRead(uint64_t address, T& out, bool useCache = false) const
@@ -458,7 +474,10 @@ public:
         size_t size
     );
 
-    bool ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, bool useCache = false, std::string callingFunc = "");
+    bool ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, bool useCache = false, std::string_view callingFunc = {});
+
+    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, bool useCache = false, std::string_view callingFunc = {});
+
     bool ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid = 0, bool useCache = false);
 
     [[nodiscard]] static bool IsValidPointer(uintptr_t pointer)

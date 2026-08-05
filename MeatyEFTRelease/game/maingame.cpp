@@ -83,6 +83,8 @@ void MainGame::clearCache() {
     this->onlineRaid = FALSE;
     this->localPlayerPtr = NULL;
     this->localPlayerHands = NULL;
+    this->localPlayerPWA = NULL;
+    this->localplayerProfile = NULL;
     this->localLocation = {};
     this->localGroupId = "";
     this->localIsScoped = false;
@@ -92,6 +94,9 @@ void MainGame::clearCache() {
     this->pmcNumber = 1;
 
     this->btrAllocated = false;
+
+    this->active_objects.fill(0);
+    this->tagged_objects.fill(0);
 
     Sleep(500);
 

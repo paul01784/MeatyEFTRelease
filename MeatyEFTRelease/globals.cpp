@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.28.2";
+std::string globals::appVersion = "1.0.28.3";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -21,7 +21,7 @@ double globals::taskQuest = 7000;
 double globals::taskWishManager = 1000;
 double globals::taskTripWire = 20;
 double globals::taskKeyManager = 25;
-double globals::taskCamera = 5;
+double globals::taskCamera = 8;
 double globals::taskMemoryManager = 1000;
 double globals::taskRaidMonitor = 800;
 double globals::taskAim = 1;

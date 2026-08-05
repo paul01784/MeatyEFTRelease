@@ -488,80 +488,66 @@ bool Camera::refreshCameraPointersStrict()
 
 // Frame read matrix application
 
-bool Camera::readFrameData(FrameData& out)
+Camera::FrameReadStatus Camera::readFrameData(FrameData& out, bool readLens)
 {
     FrameData next{};
 
     if (!cameraPointersReady())
-        return false;
+        return FrameReadStatus::Failed;
 
     next.fov = gameFOV;
     next.aspect = gameAspect;
 
-    next.queuedFps = true;
+    next.lensRead = readLens;
     next.queuedOptic =
         mainGame.localIsScoped &&
         opticPointersReady();
 
-    auto handle = mem.CreateScatterHandle();
+    Memory::ScatterReadRequest requests[4]{};
+    std::size_t requestCount = 0;
 
-    if (!handle)
-        return false;
-
-    if (!mem.AddScatterReadRequest(
-        handle,
-        fpsCamera + UnityOffsets::Camera_FOVOffset,
-        &next.fov,
-        sizeof(float)
-    ))
-    {
-        mem.CloseScatterHandle(handle);
-        return false;
-    }
-
-    if (!mem.AddScatterReadRequest(
-        handle,
-        fpsCamera + UnityOffsets::Camera_AspectRatioOffset,
-        &next.aspect,
-        sizeof(float)
-    ))
-    {
-        mem.CloseScatterHandle(handle);
-        return false;
-    }
-
-    if (!mem.AddScatterReadRequest(
-        handle,
+    requests[requestCount++] = {
         fpsMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
         &next.fpsRaw,
         sizeof(glm::highp_mat4)
-    ))
-    {
-        mem.CloseScatterHandle(handle);
-        return false;
-    }
+    };
 
     if (next.queuedOptic)
     {
-        if (!mem.AddScatterReadRequest(
-            handle,
+        requests[requestCount++] = {
             opticMatrixAddr + UnityOffsets::Camera_ViewMatrixOffset,
             &next.opticRaw,
             sizeof(glm::highp_mat4)
-        ))
-        {
-            mem.CloseScatterHandle(handle);
-            return false;
-        }
+        };
     }
 
-    const bool executed =
-        mem.ExecuteReadScatter(handle, false, "Camera Update");
+    if (readLens)
+    {
+        requests[requestCount++] = {
+            fpsCamera + UnityOffsets::Camera_FOVOffset,
+            &next.fov,
+            sizeof(float)
+        };
 
-    mem.CloseScatterHandle(handle);
+        requests[requestCount++] = {
+            fpsCamera + UnityOffsets::Camera_AspectRatioOffset,
+            &next.aspect,
+            sizeof(float)
+        };
+    }
 
-    if (!executed)
-        return false;
+    const Memory::TryScatterReadResult readResult = mem.TryReadScatter(
+        requests,
+        requestCount,
+        false,
+        "Camera Update"
+    );
+
+    if (readResult == Memory::TryScatterReadResult::Busy)
+        return FrameReadStatus::Busy;
+
+    if (readResult != Memory::TryScatterReadResult::Success)
+        return FrameReadStatus::Failed;
 
     next.fpsMatrixValid = matrixLooksValid(next.fpsRaw);
     next.opticMatrixValid =
@@ -569,21 +555,24 @@ bool Camera::readFrameData(FrameData& out)
         matrixLooksValid(next.opticRaw);
 
     if (!next.fpsMatrixValid)
-        return false;
+        return FrameReadStatus::Failed;
 
     out = next;
-    return true;
+    return FrameReadStatus::Success;
 }
 
 void Camera::applyFpsFrame(const FrameData& frame)
 {
     const glm::highp_mat4 transposed = glm::transpose(frame.fpsRaw);
 
-    if (validFov(frame.fov))
-        gameFOV = frame.fov;
+    if (frame.lensRead)
+    {
+        if (validFov(frame.fov))
+            gameFOV = frame.fov;
 
-    if (validAspect(frame.aspect))
-        gameAspect = frame.aspect;
+        if (validAspect(frame.aspect))
+            gameAspect = frame.aspect;
+    }
 
     g_viewMatrixRAW = frame.fpsRaw;
     g_viewMatrix = transposed;
@@ -704,13 +693,15 @@ void Camera::cameraTask()
 {
     static auto lastCameraRead = std::chrono::steady_clock::time_point{};
     static auto lastCameraPointerRefresh = std::chrono::steady_clock::time_point{};
+    static auto lastLensReadAttempt = std::chrono::steady_clock::time_point{};
     static auto lastOpticProbe = std::chrono::steady_clock::time_point{};
     static auto matrixInvalidSince = std::chrono::steady_clock::time_point{};
     static auto opticInvalidSince = std::chrono::steady_clock::time_point{};
     static auto lastMatrixFailureLog = std::chrono::steady_clock::time_point{};
     static bool wasScoped = false;
 
-    constexpr auto kCameraReadInterval = std::chrono::milliseconds(4);
+    constexpr auto kCameraReadInterval = std::chrono::milliseconds(8);
+    constexpr auto kLensReadInterval = std::chrono::milliseconds(100);
     constexpr auto kCameraPointerRetryInterval = std::chrono::milliseconds(250);
     constexpr auto kScopedOpticProbeInterval = std::chrono::milliseconds(250);
     constexpr auto kOpticInvalidGracePeriod = std::chrono::milliseconds(250);
@@ -771,6 +762,8 @@ void Camera::cameraTask()
 
             if (!refreshCameraPointersStrict() || !cameraPointersReady())
                 return;
+
+            lastLensReadAttempt = std::chrono::steady_clock::time_point{};
         }
 
         
@@ -811,6 +804,11 @@ void Camera::cameraTask()
                     fpsMatrixAddr = prevFpsMatrix;
                     cameraEntity = prevCameraEntity;
                 }
+                else if (fpsCamera != prevFpsCam)
+                {
+                    lastLensReadAttempt =
+                        std::chrono::steady_clock::time_point{};
+                }
 
                 if (!resolvedOptic)
                 {
@@ -839,8 +837,20 @@ void Camera::cameraTask()
 
         FrameData frame{};
 
-        // This remains your normal fast path and still runs every camera task.
-        if (!readFrameData(frame))
+        const bool lensReadDue =
+            lastLensReadAttempt == std::chrono::steady_clock::time_point{} ||
+            (now - lastLensReadAttempt) >= kLensReadInterval;
+
+        const FrameReadStatus frameReadStatus =
+            readFrameData(frame, lensReadDue);
+
+        if (frameReadStatus == FrameReadStatus::Busy)
+            return;
+
+        if (lensReadDue)
+            lastLensReadAttempt = std::chrono::steady_clock::now();
+
+        if (frameReadStatus == FrameReadStatus::Failed)
         {
             const auto failedAt = std::chrono::steady_clock::now();
 

@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -38,20 +37,6 @@ struct LinkedListObject {
 constexpr std::uint64_t kGomLastActiveNode = 0x20;
 constexpr std::uint64_t kGomActiveNodes = 0x28;
 
-std::uint64_t g_runtime_game_object_name_offset =
-    UnityOffsets::GameObject_NameOffset;
-
-std::chrono::steady_clock::time_point g_last_name_offset_discovery{};
-
-struct NameOffsetDiscoveryResult
-{
-    bool found{};
-    bool found_game_world{};
-    std::uint64_t offset{};
-    std::size_t readable_names{};
-    std::string example_name;
-};
-
 bool plausibleGameObjectName(const std::string& name)
 {
     if (name.empty() || name.size() >= 64)
@@ -69,94 +54,6 @@ bool plausibleGameObjectName(const std::string& name)
     }
 
     return has_alphanumeric;
-}
-
-NameOffsetDiscoveryResult discoverGameObjectNameOffset(
-    const std::vector<LinkedListObject>& nodes,
-    std::uint64_t preferred_offset)
-{
-    constexpr std::uint64_t kFirstCandidateOffset = 0x20;
-    constexpr std::uint64_t kLastCandidateOffset = 0x180;
-    constexpr std::uint64_t kPointerAlignment = sizeof(std::uint64_t);
-    constexpr std::size_t kMaxSampleObjects = 64;
-
-    std::vector<std::uint64_t> sample_objects;
-    sample_objects.reserve(kMaxSampleObjects);
-
-    for (const LinkedListObject& node : nodes)
-    {
-        if (!Utils::valid_pointer(node.this_object))
-            continue;
-
-        sample_objects.push_back(node.this_object);
-
-        if (sample_objects.size() >= kMaxSampleObjects)
-            break;
-    }
-
-    if (sample_objects.empty())
-        return {};
-
-    NameOffsetDiscoveryResult best{};
-
-    const auto distanceFromPreferred = [preferred_offset](std::uint64_t offset)
-        {
-            return offset > preferred_offset
-                ? offset - preferred_offset
-                : preferred_offset - offset;
-        };
-
-    for (std::uint64_t offset = kFirstCandidateOffset;
-        offset <= kLastCandidateOffset;
-        offset += kPointerAlignment)
-    {
-        NameOffsetDiscoveryResult candidate{};
-        candidate.offset = offset;
-
-        for (const std::uint64_t object : sample_objects)
-        {
-            const std::uint64_t name_pointer =
-                mem.Read<std::uint64_t>(object + offset);
-
-            if (!Utils::valid_pointer(name_pointer))
-                continue;
-
-            const std::string name =
-                mem.readUTF8String(name_pointer, 64);
-
-            if (!plausibleGameObjectName(name))
-                continue;
-
-            ++candidate.readable_names;
-
-            if (candidate.example_name.empty())
-                candidate.example_name = name;
-
-            if (_stricmp(name.c_str(), "GameWorld") == 0)
-                candidate.found_game_world = true;
-        }
-
-        const bool better_candidate =
-            (candidate.found_game_world && !best.found_game_world) ||
-            (candidate.found_game_world == best.found_game_world &&
-                candidate.readable_names > best.readable_names) ||
-            (candidate.found_game_world == best.found_game_world &&
-                candidate.readable_names == best.readable_names &&
-                distanceFromPreferred(candidate.offset) <
-                distanceFromPreferred(best.offset));
-
-        if (better_candidate)
-            best = std::move(candidate);
-    }
-
-    const std::size_t minimum_readable_names =
-        (std::min)(std::size_t{ 3 }, sample_objects.size());
-
-    best.found =
-        best.found_game_world ||
-        best.readable_names >= minimum_readable_names;
-
-    return best;
 }
 
 void saveGameWorldObjectDump(const std::string& contents)
@@ -571,8 +468,7 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
             return readable_name_count;
         };
 
-    std::uint64_t name_offset =
-        g_runtime_game_object_name_offset;
+    constexpr std::uint64_t name_offset = UnityOffsets::GameObject_NameOffset;
 
     if (!readNamePointers(name_offset))
     {
@@ -583,109 +479,7 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
         return false;
     }
 
-    std::size_t valid_object_count = 0;
-    std::size_t unusable_name_pointer_count = 0;
-
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        if (!Utils::valid_pointer(nodes[i].this_object))
-            continue;
-
-        ++valid_object_count;
-
-        if (!Utils::valid_pointer(name_ptrs[i]))
-            ++unusable_name_pointer_count;
-    }
-
-    std::size_t readable_name_count = readObjectNames();
-
-    bool game_world_name_found = false;
-
-    for (const std::string& name : object_names)
-    {
-        if (_stricmp(name.c_str(), "GameWorld") == 0)
-        {
-            game_world_name_found = true;
-            break;
-        }
-    }
-
-    const auto discovery_now = std::chrono::steady_clock::now();
-    constexpr auto kNameOffsetDiscoveryCooldown =
-        std::chrono::seconds(30);
-
-    const bool discovery_due =
-        g_last_name_offset_discovery ==
-            std::chrono::steady_clock::time_point{} ||
-        (discovery_now - g_last_name_offset_discovery) >=
-            kNameOffsetDiscoveryCooldown;
-
-    if (valid_object_count > 0 &&
-        unusable_name_pointer_count > 0 &&
-        !game_world_name_found &&
-        discovery_due)
-    {
-        g_last_name_offset_discovery = discovery_now;
-
-        const NameOffsetDiscoveryResult discovered =
-            discoverGameObjectNameOffset(nodes, name_offset);
-
-        if (discovered.found)
-        {
-            const bool discovered_new_offset =
-                discovered.offset != name_offset;
-
-            name_offset = discovered.offset;
-            g_runtime_game_object_name_offset = name_offset;
-
-            std::ostringstream announcement;
-            announcement
-                << "[GameWorld] "
-                << (discovered_new_offset
-                    ? "Discovered"
-                    : "Verified")
-                << " GameObject_NameOffset = 0x"
-                << std::hex << name_offset << std::dec
-                << " | Readable sample names: "
-                << discovered.readable_names;
-
-            if (!discovered.example_name.empty())
-            {
-                announcement
-                    << " | Example: \""
-                    << discovered.example_name
-                    << '"';
-            }
-
-            if (discovered.found_game_world)
-                announcement << " | GameWorld name confirmed";
-
-            std::cout << announcement.str() << std::endl;
-            LOGS.logInfo(announcement.str());
-
-            if (!readNamePointers(name_offset))
-            {
-                debug_out =
-                    "Game World scan failed after name-offset discovery: " +
-                    name_read_error;
-
-                object_dump << "Status: " << debug_out << '\n';
-                saveGameWorldObjectDump(object_dump.str());
-                return false;
-            }
-
-            readable_name_count = readObjectNames();
-        }
-        else
-        {
-            const std::string announcement =
-                "[GameWorld] GameObject_NameOffset discovery did not find "
-                "a reliable candidate between 0x20 and 0x180";
-
-            std::cout << announcement << std::endl;
-            LOGS.logWarn(announcement);
-        }
-    }
+    const std::size_t readable_name_count = readObjectNames();
 
     object_dump
         << "GameObject name offset used: 0x"
