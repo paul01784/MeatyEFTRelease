@@ -1,3 +1,6 @@
+# NOTICE
+
+I will be away on a break till 16th Aug. Updates will be led by the community on the discord. 
 
 # MeatyEFTRelease
 
