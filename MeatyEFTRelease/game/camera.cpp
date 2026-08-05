@@ -8,8 +8,11 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <string>
 
 Camera camera;
@@ -172,12 +175,28 @@ void Camera::getCameraPtrs()
         array.maxCount
     );
 
+    std::ostringstream cameraDump;
+    cameraDump
+        << "Camera object scan\n"
+        << "Scan order: highest index to lowest index\n"
+        << "Camera array pointer: 0x" << std::hex << cameraArrayPtr << '\n'
+        << "Camera entries pointer: 0x" << array.cameras << std::dec << '\n'
+        << "Minimum count: " << array.minCount << '\n'
+        << "Current count: " << array.curCount << '\n'
+        << "Maximum count: " << array.maxCount << "\n\n"
+        << "Entries:\n";
+
     for (uint64_t i = static_cast<uint64_t>(array.curCount); i-- > 0;)
     {
         const uint64_t cam = mem.Read<uint64_t>(array.cameras + (i * sizeof(uint64_t)));
 
         if (!Utils::valid_pointer(cam))
         {
+            cameraDump
+                << '[' << std::dec << i << "]"
+                << " | Camera: 0x" << std::hex << cam << std::dec
+                << " | Status: invalid camera pointer\n";
+
             logWarn(
                 "[Camera] Invalid camera pointer at index ",
                 i,
@@ -193,6 +212,12 @@ void Camera::getCameraPtrs()
 
         if (!Utils::valid_pointer(go))
         {
+            cameraDump
+                << '[' << std::dec << i << "]"
+                << " | Camera: 0x" << std::hex << cam
+                << " | GameObject: 0x" << go << std::dec
+                << " | Status: invalid GameObject pointer\n";
+
             logWarn(
                 "[Camera] Invalid GameObject at index ",
                 i,
@@ -210,6 +235,13 @@ void Camera::getCameraPtrs()
 
         if (!Utils::valid_pointer(namePtr))
         {
+            cameraDump
+                << '[' << std::dec << i << "]"
+                << " | Camera: 0x" << std::hex << cam
+                << " | GameObject: 0x" << go
+                << " | NamePtr: 0x" << namePtr << std::dec
+                << " | Status: invalid name pointer\n";
+
             logWarn(
                 "[Camera] Invalid name pointer at index ",
                 i,
@@ -229,6 +261,14 @@ void Camera::getCameraPtrs()
 
         if (name.empty())
         {
+            cameraDump
+                << '[' << std::dec << i << "]"
+                << " | Camera: 0x" << std::hex << cam
+                << " | GameObject: 0x" << go
+                << " | NamePtr: 0x" << namePtr << std::dec
+                << " | Name: <empty>"
+                << " | Status: empty camera name\n";
+
             logWarn(
                 "[Camera] Empty camera name at index ",
                 i,
@@ -239,6 +279,19 @@ void Camera::getCameraPtrs()
             );
             continue;
         }
+
+        const bool isFpsCamera = name == "FPS Camera";
+        const bool isOpticCamera = name == "BaseOpticCamera(Clone)";
+
+        cameraDump
+            << '[' << std::dec << i << "]"
+            << " | Camera: 0x" << std::hex << cam
+            << " | GameObject: 0x" << go
+            << " | NamePtr: 0x" << namePtr << std::dec
+            << " | Name: \"" << name << '"'
+            << " | FPS match: " << (isFpsCamera ? "yes" : "no")
+            << " | Optic match: " << (isOpticCamera ? "yes" : "no")
+            << " | Status: ok\n";
 
         logInfo(
             "[Camera] Index: ",
@@ -252,7 +305,7 @@ void Camera::getCameraPtrs()
             "\""
         );
 
-        if (!fpsCamera && name == "FPS Camera")
+        if (!fpsCamera && isFpsCamera)
         {
             fpsCamera = cam;
             cameraEntity = cam;
@@ -265,7 +318,7 @@ void Camera::getCameraPtrs()
             );
         }
 
-        if (!opticCamera && name == "BaseOpticCamera(Clone)")
+        if (!opticCamera && isOpticCamera)
         {
             opticCamera = cam;
 
@@ -276,9 +329,42 @@ void Camera::getCameraPtrs()
                 std::dec
             );
         }
+    }
 
-        if (fpsCamera && opticCamera)
-            break;
+    cameraDump
+        << "\nSelected cameras:\n"
+        << "FPS Camera: 0x" << std::hex << fpsCamera << '\n'
+        << "Optic Camera: 0x" << opticCamera << std::dec << '\n';
+
+    std::error_code fileError;
+    const std::filesystem::path logsDirectory = "logs";
+    std::filesystem::create_directories(logsDirectory, fileError);
+
+    if (fileError)
+    {
+        LOGS.logWarn(
+            "[Camera] Failed to create camera dump directory: " +
+            fileError.message()
+        );
+    }
+    else
+    {
+        const std::filesystem::path dumpPath =
+            logsDirectory / "camera_objects.txt";
+
+        std::ofstream output(dumpPath, std::ios::out | std::ios::trunc);
+
+        if (!output.is_open())
+        {
+            LOGS.logWarn(
+                "[Camera] Failed to open camera object dump: " +
+                dumpPath.string()
+            );
+        }
+        else
+        {
+            output << cameraDump.str();
+        }
     }
 
     logInfo(
