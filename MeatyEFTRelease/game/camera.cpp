@@ -106,8 +106,8 @@ void Camera::clearCameraPointerCacheOnly()
 
 void Camera::getCameraPtrs()
 {
-    fpsCamera = 0;
-    opticCamera = 0;
+    uint64_t foundFpsCamera = 0;
+    uint64_t foundOpticCamera = 0;
 
     constexpr bool debug = false;
 
@@ -208,7 +208,7 @@ void Camera::getCameraPtrs()
             continue;
         }
 
-        const uint64_t go = mem.Read<uint64_t>(cam + UnityOffsets::GameObject_ObjectClassOffset);
+        const uint64_t go = mem.Read<uint64_t>(cam + UnityOffsets::GameObject_ComponentsOffset);
 
         if (!Utils::valid_pointer(go))
         {
@@ -305,34 +305,60 @@ void Camera::getCameraPtrs()
             "\""
         );
 
-        if (!fpsCamera && isFpsCamera)
+        if (!foundFpsCamera && isFpsCamera)
         {
-            fpsCamera = cam;
-            cameraEntity = cam;
+            foundFpsCamera = cam;
 
             logInfo(
                 "[Camera] FPS Camera found: 0x",
                 std::hex,
-                fpsCamera,
+                foundFpsCamera,
                 std::dec
             );
         }
 
-        if (!opticCamera && isOpticCamera)
+        if (!foundOpticCamera && isOpticCamera)
         {
-            opticCamera = cam;
+            foundOpticCamera = cam;
 
             logInfo(
                 "[Camera] Optic Camera found: 0x",
                 std::hex,
-                opticCamera,
+                foundOpticCamera,
                 std::dec
             );
         }
     }
 
+    if (Utils::valid_pointer(foundFpsCamera))
+    {
+        if (foundFpsCamera != fpsCamera)
+        {
+            fpsMatrixAddr = 0;
+            initedCamera = false;
+        }
+
+        fpsCamera = foundFpsCamera;
+        cameraEntity = foundFpsCamera;
+    }
+
+    if (Utils::valid_pointer(foundOpticCamera))
+    {
+        if (foundOpticCamera != opticCamera)
+        {
+            opticMatrixAddr = 0;
+            opticCameraMatrix = 0;
+            resetOpticActivity();
+        }
+
+        opticCamera = foundOpticCamera;
+    }
+
     cameraDump
-        << "\nSelected cameras:\n"
+        << "\nMatches from this scan:\n"
+        << "FPS Camera: 0x" << std::hex << foundFpsCamera << '\n'
+        << "Optic Camera: 0x" << foundOpticCamera << '\n'
+        << "\nCached cameras after scan:\n"
         << "FPS Camera: 0x" << std::hex << fpsCamera << '\n'
         << "Optic Camera: 0x" << opticCamera << std::dec << '\n';
 
@@ -379,15 +405,29 @@ void Camera::getCameraPtrs()
 
 void Camera::getMatrixPtrs()
 {
-    fpsMatrixAddr =
-        Utils::valid_pointer(fpsCamera)
-        ? resolveMatrixAddress(fpsCamera)
-        : 0;
+    if (Utils::valid_pointer(fpsCamera))
+    {
+        const uint64_t resolvedFpsMatrix = resolveMatrixAddress(fpsCamera);
 
-    opticMatrixAddr =
-        Utils::valid_pointer(opticCamera)
-        ? resolveMatrixAddress(opticCamera)
-        : 0;
+        if (Utils::valid_pointer(resolvedFpsMatrix))
+            fpsMatrixAddr = resolvedFpsMatrix;
+    }
+    else
+    {
+        fpsMatrixAddr = 0;
+    }
+
+    if (Utils::valid_pointer(opticCamera))
+    {
+        const uint64_t resolvedOpticMatrix = resolveMatrixAddress(opticCamera);
+
+        if (Utils::valid_pointer(resolvedOpticMatrix))
+            opticMatrixAddr = resolvedOpticMatrix;
+    }
+    else
+    {
+        opticMatrixAddr = 0;
+    }
 }
 
 uint64_t Camera::resolveMatrixAddress(uint64_t cameraPtr) const
@@ -395,12 +435,12 @@ uint64_t Camera::resolveMatrixAddress(uint64_t cameraPtr) const
     if (!Utils::valid_pointer(cameraPtr))
         return 0;
 
-    const uint64_t gameObject = mem.Read<uint64_t>(cameraPtr + UnityOffsets::MonoBehaviour_GameObjectOffset);
+    const uint64_t gameObject = mem.Read<uint64_t>(cameraPtr + UnityOffsets::GameObject_ComponentsOffset);
 
     if (!Utils::valid_pointer(gameObject))
         return 0;
     
-    const uint64_t ptr1 = mem.Read<uint64_t>(gameObject + 0x48);
+    const uint64_t ptr1 = mem.Read<uint64_t>(gameObject + UnityOffsets::GameObject_ComponentsOffset);
 
     if (!Utils::valid_pointer(ptr1))
         return 0;
@@ -431,14 +471,14 @@ bool Camera::opticPointersReady() const
 
 bool Camera::refreshCameraPointersStrict()
 {
-    clearCameraPointerCacheOnly();
+    if (!Utils::valid_pointer(fpsCamera))
+        getCameraPtrs();
 
-    getCameraPtrs();
     getMatrixPtrs();
 
     if (!cameraPointersReady())
     {
-        clearCameraPointerCacheOnly();
+        initedCamera = false;
         return false;
     }
 
@@ -752,7 +792,14 @@ void Camera::cameraTask()
                 const uint64_t prevOpticCam = opticCamera;
                 const uint64_t prevOpticMatrix = opticMatrixAddr;
 
-                getCameraPtrs();
+                const bool cameraListScanNeeded =
+                    scopeJustStarted ||
+                    !Utils::valid_pointer(fpsCamera) ||
+                    !Utils::valid_pointer(opticCamera);
+
+                if (cameraListScanNeeded)
+                    getCameraPtrs();
+
                 getMatrixPtrs();
 
                 const bool resolvedFps = cameraPointersReady();
@@ -767,17 +814,18 @@ void Camera::cameraTask()
 
                 if (!resolvedOptic)
                 {
-                    if (scopeJustStarted)
+                    if (opticCamera == prevOpticCam &&
+                        Utils::valid_pointer(prevOpticMatrix))
                     {
-                        opticCamera = 0;
-                        opticMatrixAddr = 0;
-                        opticCameraMatrix = 0;
-                        resetOpticActivity();
+                        opticMatrixAddr = prevOpticMatrix;
                     }
                     else
                     {
-                        opticCamera = prevOpticCam;
-                        opticMatrixAddr = prevOpticMatrix;
+                        opticMatrixAddr = 0;
+                        opticCameraMatrix = 0;
+
+                        if (opticCamera != prevOpticCam)
+                            resetOpticActivity();
                     }
                 }
                 else if (

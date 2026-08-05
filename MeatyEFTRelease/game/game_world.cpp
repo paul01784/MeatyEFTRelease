@@ -4,17 +4,22 @@
 #include "headers/sdk.h"
 #include "headers/unitysdk.h"
 #include "headers/utils.h"
+#include "../app/debug.h"
 #include "../memory/Memory.h"
 
 #include <Windows.h>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <format>
-#include <vector>
-#include <unordered_set>
 #include <iostream>
+#include <sstream>
+#include <unordered_set>
+#include <vector>
 
 extern Memory mem;
 
@@ -32,6 +37,160 @@ struct LinkedListObject {
 
 constexpr std::uint64_t kGomLastActiveNode = 0x20;
 constexpr std::uint64_t kGomActiveNodes = 0x28;
+
+std::uint64_t g_runtime_game_object_name_offset =
+    UnityOffsets::GameObject_NameOffset;
+
+std::chrono::steady_clock::time_point g_last_name_offset_discovery{};
+
+struct NameOffsetDiscoveryResult
+{
+    bool found{};
+    bool found_game_world{};
+    std::uint64_t offset{};
+    std::size_t readable_names{};
+    std::string example_name;
+};
+
+bool plausibleGameObjectName(const std::string& name)
+{
+    if (name.empty() || name.size() >= 64)
+        return false;
+
+    bool has_alphanumeric = false;
+
+    for (const unsigned char character : name)
+    {
+        if (character < 0x20 || character > 0x7E)
+            return false;
+
+        if (std::isalnum(character) != 0)
+            has_alphanumeric = true;
+    }
+
+    return has_alphanumeric;
+}
+
+NameOffsetDiscoveryResult discoverGameObjectNameOffset(
+    const std::vector<LinkedListObject>& nodes,
+    std::uint64_t preferred_offset)
+{
+    constexpr std::uint64_t kFirstCandidateOffset = 0x20;
+    constexpr std::uint64_t kLastCandidateOffset = 0x180;
+    constexpr std::uint64_t kPointerAlignment = sizeof(std::uint64_t);
+    constexpr std::size_t kMaxSampleObjects = 64;
+
+    std::vector<std::uint64_t> sample_objects;
+    sample_objects.reserve(kMaxSampleObjects);
+
+    for (const LinkedListObject& node : nodes)
+    {
+        if (!Utils::valid_pointer(node.this_object))
+            continue;
+
+        sample_objects.push_back(node.this_object);
+
+        if (sample_objects.size() >= kMaxSampleObjects)
+            break;
+    }
+
+    if (sample_objects.empty())
+        return {};
+
+    NameOffsetDiscoveryResult best{};
+
+    const auto distanceFromPreferred = [preferred_offset](std::uint64_t offset)
+        {
+            return offset > preferred_offset
+                ? offset - preferred_offset
+                : preferred_offset - offset;
+        };
+
+    for (std::uint64_t offset = kFirstCandidateOffset;
+        offset <= kLastCandidateOffset;
+        offset += kPointerAlignment)
+    {
+        NameOffsetDiscoveryResult candidate{};
+        candidate.offset = offset;
+
+        for (const std::uint64_t object : sample_objects)
+        {
+            const std::uint64_t name_pointer =
+                mem.Read<std::uint64_t>(object + offset);
+
+            if (!Utils::valid_pointer(name_pointer))
+                continue;
+
+            const std::string name =
+                mem.readUTF8String(name_pointer, 64);
+
+            if (!plausibleGameObjectName(name))
+                continue;
+
+            ++candidate.readable_names;
+
+            if (candidate.example_name.empty())
+                candidate.example_name = name;
+
+            if (_stricmp(name.c_str(), "GameWorld") == 0)
+                candidate.found_game_world = true;
+        }
+
+        const bool better_candidate =
+            (candidate.found_game_world && !best.found_game_world) ||
+            (candidate.found_game_world == best.found_game_world &&
+                candidate.readable_names > best.readable_names) ||
+            (candidate.found_game_world == best.found_game_world &&
+                candidate.readable_names == best.readable_names &&
+                distanceFromPreferred(candidate.offset) <
+                distanceFromPreferred(best.offset));
+
+        if (better_candidate)
+            best = std::move(candidate);
+    }
+
+    const std::size_t minimum_readable_names =
+        (std::min)(std::size_t{ 3 }, sample_objects.size());
+
+    best.found =
+        best.found_game_world ||
+        best.readable_names >= minimum_readable_names;
+
+    return best;
+}
+
+void saveGameWorldObjectDump(const std::string& contents)
+{
+    std::error_code file_error;
+    const std::filesystem::path logs_directory = "logs";
+
+    std::filesystem::create_directories(logs_directory, file_error);
+
+    if (file_error)
+    {
+        LOGS.logWarn(
+            "[GameWorld] Failed to create object dump directory: ",
+            file_error.message()
+        );
+        return;
+    }
+
+    const std::filesystem::path dump_path =
+        logs_directory / "game_world_objects.txt";
+
+    std::ofstream output(dump_path, std::ios::out | std::ios::trunc);
+
+    if (!output.is_open())
+    {
+        LOGS.logWarn(
+            "[GameWorld] Failed to open object dump: ",
+            dump_path.string()
+        );
+        return;
+    }
+
+    output << contents;
+}
 
 bool mapKnown(const std::string& map)
 {
@@ -86,7 +245,7 @@ bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::
         return false;
 
     if (Utils::valid_pointer(g_last_disposed_game_world) && local_gw == g_last_disposed_game_world) {
-        debug_out = std::format("stale gw=0x{:X}", local_gw);
+        debug_out = "previously disposed GameWorld";
         return false;
     }
 
@@ -103,17 +262,27 @@ bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::
 
     int reg_count{};
     if (!countRegisteredPlayers(local_gw, reg_count)) {
-        debug_out = map.empty() ? "lobby: players=0" : std::format("lobby: map={} players=0", map);
+        debug_out = map.empty()
+            ? "registered player list is not ready"
+            : std::format("map={} registered player list is not ready", map);
         return false;
     }
 
     if (isLobbyMapName(map)) {
-        debug_out = std::format("lobby: map={} players={}", map, reg_count);
+        debug_out = std::format(
+            "lobby map={} registeredPlayers={}",
+            map,
+            reg_count
+        );
         return false;
     }
 
     if (!map.empty() && !mapKnown(map)) {
-        debug_out = std::format("unknown map '{}' (players={})", map, reg_count);
+        debug_out = std::format(
+            "unknown map='{}' registeredPlayers={}",
+            map,
+            reg_count
+        );
         return false;
     }
 
@@ -124,7 +293,11 @@ bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::
     raid.local_player = local_player;
     raid.map_name = map.empty() ? "unknown" : map;
     raid.registered_count = reg_count;
-    debug_out = std::format("raid ok map={} players={} gw=0x{:X}", raid.map_name, reg_count, local_gw);
+    debug_out = std::format(
+        "GameWorld ready: map={} registeredPlayers={}",
+        raid.map_name,
+        reg_count
+    );
     return true;
 }
 
@@ -141,7 +314,10 @@ bool tryPromotePendingRaid(std::uint64_t gom, std::uint64_t local_game_world, st
                            RaidState& raid, std::string& debug_out)
 {
     if (!Utils::valid_pointer(local_game_world))
+    {
+        debug_out = "Pending GameWorld pointer is invalid";
         return false;
+    }
 
     const std::uint64_t local_player =
         mem.Read<std::uint64_t>(local_game_world + sdk::ClientLocalGameWorld::MainPlayer);
@@ -157,9 +333,16 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     raid = {};
     debug_out.clear();
 
+    std::ostringstream object_dump;
+    object_dump << "Game World object scan\n";
+
     if (!Utils::valid_pointer(gom))
     {
-        debug_out = "gom=0";
+        debug_out =
+            "Game World scan skipped: GameObjectManager pointer is invalid";
+
+        object_dump << "Status: " << debug_out << '\n';
+        saveGameWorldObjectDump(object_dump.str());
         return false;
     }
 
@@ -172,12 +355,22 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     if (!Utils::valid_pointer(active_list_ptr) ||
         !Utils::valid_pointer(last_list_ptr))
     {
-        debug_out = std::format(
-            "gom=0x{:X} list ptr missing",
-            gom
-        );
+        debug_out =
+            "Game World scan failed: active-list pointers are unavailable";
+
+        object_dump
+            << "Active list node: 0x" << std::hex << active_list_ptr << '\n'
+            << "Sampled tail node: 0x" << last_list_ptr << std::dec << '\n'
+            << "Status: " << debug_out << '\n';
+
+        saveGameWorldObjectDump(object_dump.str());
         return false;
     }
+
+    object_dump
+        << "Scan order: active node to sampled tail\n"
+        << "Active list node: 0x" << std::hex << active_list_ptr << '\n'
+        << "Sampled tail node: 0x" << last_list_ptr << std::dec << '\n';
 
     constexpr std::size_t kMaxGomNodes = 8192;
 
@@ -225,12 +418,22 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
             hit_walk_cap = true;
     }
 
+    object_dump
+        << "Objects discovered: " << node_addrs.size() << '\n'
+        << "Reached sampled tail: "
+        << (reached_sampled_tail ? "yes" : "no") << '\n'
+        << "Cycle detected: " << (detected_cycle ? "yes" : "no") << '\n'
+        << "Walk cap reached: " << (hit_walk_cap ? "yes" : "no") << '\n'
+        << "Ended on invalid next pointer: "
+        << (ended_on_invalid_next ? "yes" : "no") << '\n';
+
     if (node_addrs.empty())
     {
-        debug_out = std::format(
-            "gom=0x{:X} nodes=0 (menu/loading?)",
-            gom
-        );
+        debug_out =
+            "Game World scan complete: no active objects (menu/loading?)";
+
+        object_dump << "Status: " << debug_out << '\n';
+        saveGameWorldObjectDump(object_dump.str());
         return false;
     }
 
@@ -263,7 +466,11 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
 
         if (!scatter)
         {
-            debug_out = "scatter open failed (nodes)";
+            debug_out =
+                "Game World scan failed: could not open the object read batch";
+
+            object_dump << "Status: " << debug_out << '\n';
+            saveGameWorldObjectDump(object_dump.str());
             return false;
         }
 
@@ -280,7 +487,11 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
         if (!mem.ExecuteReadScatter(scatter))
         {
             mem.CloseScatterHandle(scatter);
-            debug_out = "scatter read failed (nodes)";
+            debug_out =
+                "Game World scan failed: object list read failed";
+
+            object_dump << "Status: " << debug_out << '\n';
+            saveGameWorldObjectDump(object_dump.str());
             return false;
         }
 
@@ -288,68 +499,266 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     }
 
     std::vector<std::uint64_t> name_ptrs(count, 0);
+    std::vector<std::string> object_names(count);
 
-    {
-        auto scatter = mem.CreateScatterHandle();
+    std::string name_read_error;
 
-        if (!scatter)
+    const auto readNamePointers =
+        [&](std::uint64_t name_offset)
         {
-            debug_out = "scatter open failed (names)";
-            return false;
-        }
+            std::fill(name_ptrs.begin(), name_ptrs.end(), 0);
+            name_read_error.clear();
 
-        bool has_name_requests = false;
+            auto scatter = mem.CreateScatterHandle();
 
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            if (!Utils::valid_pointer(nodes[i].this_object))
-                continue;
+            if (!scatter)
+            {
+                name_read_error =
+                    "could not open the name read batch";
+                return false;
+            }
 
-            has_name_requests = true;
+            bool has_name_requests = false;
 
-            mem.AddScatterReadRequest(
-                scatter,
-                nodes[i].this_object + UnityOffsets::GameObject_NameOffset,
-                &name_ptrs[i],
-                sizeof(std::uint64_t)
-            );
-        }
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                if (!Utils::valid_pointer(nodes[i].this_object))
+                    continue;
 
-        if (has_name_requests && !mem.ExecuteReadScatter(scatter))
-        {
+                has_name_requests = true;
+
+                mem.AddScatterReadRequest(
+                    scatter,
+                    nodes[i].this_object + name_offset,
+                    &name_ptrs[i],
+                    sizeof(std::uint64_t)
+                );
+            }
+
+            if (has_name_requests && !mem.ExecuteReadScatter(scatter))
+            {
+                mem.CloseScatterHandle(scatter);
+                name_read_error = "object name pointer read failed";
+                return false;
+            }
+
             mem.CloseScatterHandle(scatter);
-            debug_out = "scatter read failed (names)";
-            return false;
-        }
+            return true;
+        };
 
-        mem.CloseScatterHandle(scatter);
+    const auto readObjectNames = [&]()
+        {
+            std::fill(
+                object_names.begin(),
+                object_names.end(),
+                std::string{}
+            );
+
+            std::size_t readable_name_count = 0;
+
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                if (!Utils::valid_pointer(name_ptrs[i]))
+                    continue;
+
+                object_names[i] =
+                    mem.readUTF8String(name_ptrs[i], 64);
+
+                if (plausibleGameObjectName(object_names[i]))
+                    ++readable_name_count;
+            }
+
+            return readable_name_count;
+        };
+
+    std::uint64_t name_offset =
+        g_runtime_game_object_name_offset;
+
+    if (!readNamePointers(name_offset))
+    {
+        debug_out = "Game World scan failed: " + name_read_error;
+
+        object_dump << "Status: " << debug_out << '\n';
+        saveGameWorldObjectDump(object_dump.str());
+        return false;
     }
 
-    bool saw_game_world = false;
-
-    std::string last_reject;
-
-    std::uint64_t pending_gw = 0;
-    std::uint64_t pending_gw_object = 0;
-    std::string pending_map;
+    std::size_t valid_object_count = 0;
+    std::size_t unusable_name_pointer_count = 0;
 
     for (std::size_t i = 0; i < count; ++i)
     {
         if (!Utils::valid_pointer(nodes[i].this_object))
             continue;
 
+        ++valid_object_count;
+
         if (!Utils::valid_pointer(name_ptrs[i]))
+            ++unusable_name_pointer_count;
+    }
+
+    std::size_t readable_name_count = readObjectNames();
+
+    bool game_world_name_found = false;
+
+    for (const std::string& name : object_names)
+    {
+        if (_stricmp(name.c_str(), "GameWorld") == 0)
+        {
+            game_world_name_found = true;
+            break;
+        }
+    }
+
+    const auto discovery_now = std::chrono::steady_clock::now();
+    constexpr auto kNameOffsetDiscoveryCooldown =
+        std::chrono::seconds(30);
+
+    const bool discovery_due =
+        g_last_name_offset_discovery ==
+            std::chrono::steady_clock::time_point{} ||
+        (discovery_now - g_last_name_offset_discovery) >=
+            kNameOffsetDiscoveryCooldown;
+
+    if (valid_object_count > 0 &&
+        unusable_name_pointer_count > 0 &&
+        !game_world_name_found &&
+        discovery_due)
+    {
+        g_last_name_offset_discovery = discovery_now;
+
+        const NameOffsetDiscoveryResult discovered =
+            discoverGameObjectNameOffset(nodes, name_offset);
+
+        if (discovered.found)
+        {
+            const bool discovered_new_offset =
+                discovered.offset != name_offset;
+
+            name_offset = discovered.offset;
+            g_runtime_game_object_name_offset = name_offset;
+
+            std::ostringstream announcement;
+            announcement
+                << "[GameWorld] "
+                << (discovered_new_offset
+                    ? "Discovered"
+                    : "Verified")
+                << " GameObject_NameOffset = 0x"
+                << std::hex << name_offset << std::dec
+                << " | Readable sample names: "
+                << discovered.readable_names;
+
+            if (!discovered.example_name.empty())
+            {
+                announcement
+                    << " | Example: \""
+                    << discovered.example_name
+                    << '"';
+            }
+
+            if (discovered.found_game_world)
+                announcement << " | GameWorld name confirmed";
+
+            std::cout << announcement.str() << std::endl;
+            LOGS.logInfo(announcement.str());
+
+            if (!readNamePointers(name_offset))
+            {
+                debug_out =
+                    "Game World scan failed after name-offset discovery: " +
+                    name_read_error;
+
+                object_dump << "Status: " << debug_out << '\n';
+                saveGameWorldObjectDump(object_dump.str());
+                return false;
+            }
+
+            readable_name_count = readObjectNames();
+        }
+        else
+        {
+            const std::string announcement =
+                "[GameWorld] GameObject_NameOffset discovery did not find "
+                "a reliable candidate between 0x20 and 0x180";
+
+            std::cout << announcement << std::endl;
+            LOGS.logWarn(announcement);
+        }
+    }
+
+    object_dump
+        << "GameObject name offset used: 0x"
+        << std::hex << name_offset << std::dec << '\n'
+        << "Readable object names: " << readable_name_count << '\n';
+
+    bool saw_game_world = false;
+    bool resolved_raid = false;
+
+    std::size_t game_world_matches = 0;
+    std::size_t selected_index = 0;
+
+    RaidState selected_raid{};
+    std::string selected_result;
+    std::string last_reject;
+
+    std::uint64_t pending_gw = 0;
+    std::uint64_t pending_gw_object = 0;
+    std::string pending_map;
+
+    object_dump << "\nEntries:\n";
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        object_dump
+            << '[' << std::dec << i << ']'
+            << " | Node: 0x" << std::hex << node_addrs[i]
+            << " | Previous: 0x" << nodes[i].previous
+            << " | Next: 0x" << nodes[i].next
+            << " | Object: 0x" << nodes[i].this_object;
+
+        if (!Utils::valid_pointer(nodes[i].this_object))
+        {
+            object_dump
+                << std::dec
+                << " | Status: invalid object pointer\n";
             continue;
+        }
 
-        const std::string name =
-            mem.readUTF8String(name_ptrs[i], 64);
+        object_dump << " | NamePtr: 0x" << name_ptrs[i] << std::dec;
 
-        //std::cout << "[" << std::to_string(i) << "] " << name.c_str() << "\n";
-
-        if (_stricmp(name.c_str(), "GameWorld") != 0)
+        if (!Utils::valid_pointer(name_ptrs[i]))
+        {
+            object_dump << " | Status: invalid name pointer\n";
             continue;
+        }
+
+        const std::string& name = object_names[i];
+
+        if (name.empty())
+        {
+            object_dump
+                << " | Name: <empty>"
+                << " | Status: empty object name\n";
+            continue;
+        }
+
+        const bool is_game_world =
+            _stricmp(name.c_str(), "GameWorld") == 0;
+
+        object_dump
+            << " | Name: \"" << name << '"'
+            << " | GameWorld match: "
+            << (is_game_world ? "yes" : "no");
+
+        if (!is_game_world)
+        {
+            object_dump << " | Status: ok\n";
+            continue;
+        }
 
         saw_game_world = true;
+        ++game_world_matches;
 
         const std::uint64_t local_gw = mem.ReadChain(
             nodes[i].this_object,
@@ -363,6 +772,11 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
         if (!Utils::valid_pointer(local_gw))
         {
             last_reject = "GameWorld component chain failed";
+
+            object_dump
+                << " | LocalGameWorld: 0x" << std::hex << local_gw
+                << std::dec
+                << " | Status: " << last_reject << '\n';
             continue;
         }
 
@@ -371,22 +785,40 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
         );
 
         RaidState attempt{};
-        std::string reject;
+        std::string candidate_result;
 
-        if (fillRaidFromLocalGameWorld(
+        const bool raid_ready = fillRaidFromLocalGameWorld(
             gom,
             local_gw,
             local_player,
             nodes[i].this_object,
             attempt,
-            reject))
+            candidate_result
+        );
+
+        const bool selected = raid_ready && !resolved_raid;
+
+        object_dump
+            << " | LocalGameWorld: 0x" << std::hex << local_gw
+            << " | LocalPlayer: 0x" << local_player << std::dec
+            << " | Raid ready: " << (raid_ready ? "yes" : "no")
+            << " | Selected: " << (selected ? "yes" : "no")
+            << " | Status: " << candidate_result << '\n';
+
+        if (raid_ready)
         {
-            raid = attempt;
-            debug_out = reject;
-            return true;
+            if (selected)
+            {
+                resolved_raid = true;
+                selected_index = i;
+                selected_raid = attempt;
+                selected_result = candidate_result;
+            }
+
+            continue;
         }
 
-        last_reject = reject;
+        last_reject = candidate_result;
 
         pending_gw = local_gw;
         pending_gw_object = nodes[i].this_object;
@@ -417,6 +849,34 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
         }
     }
 
+    object_dump
+        << "\nGameWorld matches: " << game_world_matches << '\n';
+
+    if (resolved_raid)
+    {
+        raid = selected_raid;
+        debug_out = std::format(
+            "{}; scan complete: {} objects checked{}",
+            selected_result,
+            count,
+            walk_status
+        );
+
+        object_dump
+            << "Selected index: " << selected_index << '\n'
+            << "Selected object: 0x" << std::hex
+            << selected_raid.game_world_object << '\n'
+            << "Selected LocalGameWorld: 0x"
+            << selected_raid.local_game_world << std::dec << '\n'
+            << "Selected map: " << selected_raid.map_name << '\n'
+            << "Registered players: "
+            << selected_raid.registered_count << '\n'
+            << "Result: " << debug_out << '\n';
+
+        saveGameWorldObjectDump(object_dump.str());
+        return true;
+    }
+
     if (pending_out && Utils::valid_pointer(pending_gw))
     {
         pending_out->active = true;
@@ -428,8 +888,8 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     if (!saw_game_world)
     {
         debug_out = std::format(
-            "gom=0x{:X} nodes={} no GameWorld (menu/hideout/loading?){}",
-            gom,
+            "Game World scan complete: {} objects checked; "
+            "no GameWorld found (menu/hideout/loading?){}",
             count,
             walk_status
         );
@@ -437,8 +897,9 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     else if (!last_reject.empty())
     {
         debug_out = std::format(
-            "gom=0x{:X} GameWorld pending: {}{}",
-            gom,
+            "Game World scan complete: {} objects checked; "
+            "GameWorld found but raid data is pending: {}{}",
+            count,
             last_reject,
             walk_status
         );
@@ -446,12 +907,15 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     else
     {
         debug_out = std::format(
-            "gom=0x{:X} nodes={} GameWorld reject{}",
-            gom,
+            "Game World scan complete: {} objects checked; "
+            "GameWorld candidates were rejected{}",
             count,
             walk_status
         );
     }
+
+    object_dump << "Result: " << debug_out << '\n';
+    saveGameWorldObjectDump(object_dump.str());
     return false;
 }
 

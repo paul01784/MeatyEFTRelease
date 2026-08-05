@@ -907,12 +907,15 @@ static void renderLootFiltersMenu()
             if (ImGui::ColorEdit4("##valuelistcolour", (float*)&coloursGlobals::valueLootColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
             ImGui::SetCursorPosX(20);
             ImGui::PushItemWidth(150);
-            if (ImGui::SliderInt("R (over) LOOT", &lootGlobals::valueLootFrom, 0, 1000000, "%d")) configManager.SaveConfig();
-            if (ImGui::SliderInt("R (over) EQUIP", &lootGlobals::valueLootFromEquip, 0, 1000000, "%d")) configManager.SaveConfig();
+            if (ImGui::SliderInt("R LOOT", &lootGlobals::valueLootFrom, 0, 1000000, "%d")) configManager.SaveConfig();
+            ImGui::PopItemWidth();
+            ImGui::SetCursorPosX(20);
+            ImGui::PushItemWidth(150);
+            if (ImGui::SliderInt("R EQUIP", &lootGlobals::valueLootFromEquip, 0, 1000000, "%d")) configManager.SaveConfig();
             ImGui::PopItemWidth();
             
 
-            ImGui::SetCursorPos(ImVec2(20, 200));
+            ImGui::SetCursorPos(ImVec2(20, 230));
             static bool containerPopupOpen = false;
 
             if (ImGui::Button("Container Options"))
@@ -1313,8 +1316,8 @@ static void renderLootFiltersMenu()
 
                 ImGui::EndPopup();
             }
-
-            ImGui::SetCursorPosX(20);
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(125);
             //fullLootListPopupOpen items
             static bool fullLootListPopupOpen = false;
             if (ImGui::Button("Debug LootList"))

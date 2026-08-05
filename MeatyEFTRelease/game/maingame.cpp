@@ -446,7 +446,7 @@ void MainGame::getPlayerListDetails()
 
 void MainGame::getGameWorldDetails()
 {
-    LOGS.logInfo("[Main] Waiting for raid start!");
+    LOGS.logInfo("[GameWorld] Waiting for raid start");
 
     globals::radarSubText = "Trying to resolve game world details";
 
@@ -480,7 +480,11 @@ void MainGame::getGameWorldDetails()
 
                     if (pendingAttempts >= kMaxPendingPromoteAttempts)
                     {
-                        LOGS.logInfo("[Main] Pending GameWorld did not become ready; rescanning GOM");
+                        LOGS.logInfo(
+                            "[GameWorld] Pending object did not become ready; "
+                            "rescanning the active object list | Last state: ",
+                            probe.empty() ? "raid data unavailable" : probe
+                        );
 
                         pending_local_gw = 0;
                         pending_gw_object = 0;
@@ -502,7 +506,10 @@ void MainGame::getGameWorldDetails()
                     pending_gw_object = pending.game_world_object;
                     pendingAttempts = 0;
 
-                    LOGS.logInfo("[Main] GameWorld found; waiting for raid data");
+                    LOGS.logInfo(
+                        "[GameWorld] Object found; waiting for raid data | ",
+                        probe.empty() ? "raid data unavailable" : probe
+                    );
                 }
             }
 
@@ -513,18 +520,24 @@ void MainGame::getGameWorldDetails()
                 this->gameWorld = raid.game_world_object;
                 this->localGameWorld = raid.local_game_world;
 
-                LOGS.logInfo("[Main] ", probe);
+                LOGS.logInfo("[GameWorld] ", probe);
                 break;
             }
 
             if ((waitAttempts % kLogEveryAttempts) == 0)
             {
-                LOGS.logInfo("[Main] Still waiting: ", probe.empty() ? "raid not ready" : probe);
+                LOGS.logInfo(
+                    "[GameWorld] Still waiting | ",
+                    probe.empty() ? "raid not ready" : probe
+                );
             }
         }
         catch (const std::exception& e)
         {
-            LOGS.logError("Exception in getGameWorldDetails: " + std::string(e.what()));
+            LOGS.logError(
+                "[GameWorld] Exception while resolving raid: " +
+                std::string(e.what())
+            );
 
             pending_local_gw = 0;
             pending_gw_object = 0;
@@ -532,7 +545,9 @@ void MainGame::getGameWorldDetails()
         }
         catch (...)
         {
-            LOGS.logError("Unknown exception in getGameWorldDetails");
+            LOGS.logError(
+                "[GameWorld] Unknown exception while resolving raid"
+            );
 
             pending_local_gw = 0;
             pending_gw_object = 0;
@@ -648,7 +663,10 @@ void MainGame::mainThread()
 
             if (!Utils::valid_pointer(gomSig))
             {
-                LOGS.logInfo("[GOM] gomSig Incorrect 1");
+                LOGS.logInfo(
+                    "[GOM] Signature scan did not find the "
+                    "GameObjectManager; retrying"
+                );
                 Sleep(3000);
                 continue;
             }
@@ -663,14 +681,16 @@ void MainGame::mainThread()
 
             if (this->gameObjectManager == NULL)
             {
-                LOGS.logInfo("GOM Not Located @ 0x", std::hex, this->gameObjectManager);
+                LOGS.logInfo(
+                    "[GOM] GameObjectManager pointer is unavailable; retrying"
+                );
                 Sleep(3000);
                 continue;
             }
             else
                 doOnce = true;
 
-            LOGS.logInfo("GOM Located @ 0x", std::hex, this->gameObjectManager);
+            LOGS.logInfo("[GOM] GameObjectManager resolved");
 
             
             
