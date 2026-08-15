@@ -69,6 +69,7 @@ static bool IsLocationObjectiveType(const std::string& type)
     return Utils::Text::containsIgnoreCase(type, "visit") ||
         Utils::Text::containsIgnoreCase(type, "mark") ||
         Utils::Text::containsIgnoreCase(type, "plantItem") ||
+        Utils::Text::containsIgnoreCase(type, "plantQuestItem") ||
         Utils::Text::containsIgnoreCase(type, "findQuestItem");
 }
 
@@ -157,7 +158,7 @@ static void FilterConditions(
         }
 
         
-        // visit / mark / plantItem / findQuestItem
+        // visit / mark / plantItem / plantQuestItem / findQuestItem
         if (!IsLocationObjectiveType(obj.type))
             continue;
 
@@ -194,7 +195,7 @@ static void FilterConditions(
         }
 
         // No zones
-        // plantItem / findQuestItem
+        // plantItem / plantQuestItem / findQuestItem
         if (!fallbackMap.empty())
         {
             QuestLocation loc{};

@@ -659,6 +659,7 @@ namespace fuserRender
 
             if (loc.objectiveType != "visit" &&
                 loc.objectiveType != "plantItem" &&
+                loc.objectiveType != "plantQuestItem" &&
                 loc.objectiveType != "mark")
             {
                 continue;
@@ -670,7 +671,8 @@ namespace fuserRender
 
             std::string questText = loc.questName;
 
-            if (loc.objectiveType == "plantItem")
+            if (loc.objectiveType == "plantItem" ||
+                loc.objectiveType == "plantQuestItem")
                 questText += " (PLANT)";
             else if (loc.objectiveType == "mark")
                 questText += " (MARK)";

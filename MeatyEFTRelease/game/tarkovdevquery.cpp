@@ -1,5 +1,7 @@
 ﻿#include "headers/tarkovdevquery.h"
 
+#include "headers/taskZonePatch.h"
+
 #include "../app/debug.h"
 
 #include <algorithm>
@@ -148,12 +150,29 @@ namespace
         return true;
     }
 
-    const json* FindCollection(const json& root, bool tasks)
+    bool RewriteTextFileAtomicallyPreservingTimestamp(const std::filesystem::path& path, const std::string& contents)
+    {
+        std::error_code timestampError;
+        const auto originalTimestamp = std::filesystem::last_write_time(path, timestampError);
+
+        if (!WriteTextFileAtomically(path, contents))
+            return false;
+
+        if (!timestampError)
+        {
+            std::error_code restoreError;
+            std::filesystem::last_write_time(path, originalTimestamp, restoreError);
+        }
+
+        return true;
+    }
+
+    json* FindMutableCollection(json& root, bool tasks)
     {
         if (root.is_array())
             return &root;
 
-        const auto findInObject = [tasks](const json& object) -> const json*
+        const auto findInObject = [tasks](json& object) -> json*
             {
                 if (!object.is_object())
                     return nullptr;
@@ -161,8 +180,11 @@ namespace
                 if (tasks)
                 {
                     const auto it = object.find("tasks");
-                    if (it != object.end() && (it->is_array() || it->is_object()))
+                    if (it != object.end() &&
+                        (it->is_array() || it->is_object()))
+                    {
                         return &(*it);
+                    }
                 }
                 else
                 {
@@ -173,7 +195,6 @@ namespace
                         return &(*itemsIt);
                     }
 
-                    //allows an existing GraphQL cache to remain usable
                     const auto oldItemsIt = object.find("itemsByType");
                     if (oldItemsIt != object.end() &&
                         (oldItemsIt->is_array() || oldItemsIt->is_object()))
@@ -188,11 +209,142 @@ namespace
         const auto dataIt = root.find("data");
         if (dataIt != root.end())
         {
-            if (const json* collection = findInObject(*dataIt))
+            if (json* collection = findInObject(*dataIt))
                 return collection;
         }
 
         return findInObject(root);
+    }
+
+    struct TaskZonePatchStats
+    {
+        std::size_t objectivesPatched = 0;
+        std::size_t zonesAdded = 0;
+        std::size_t plantingObjectivesStillMissing = 0;
+        std::size_t plantingObjectivesWithNonCanonicalId = 0;
+    };
+
+    bool IsCanonicalObjectId(std::string_view value)
+    {
+        if (value.size() != 24)
+            return false;
+
+        return std::all_of(
+            value.begin(),
+            value.end(),
+            [](const char character)
+            {
+                return (character >= '0' && character <= '9') ||
+                    (character >= 'a' && character <= 'f') ||
+                    (character >= 'A' && character <= 'F');
+            });
+    }
+
+    TaskZonePatchStats ApplyPlantingZonePatches(json& taskCollection)
+    {
+        TaskZonePatchStats stats{};
+
+        const auto readStringView = [](const json& object, const char* key)
+            -> std::string_view
+            {
+                if (!object.is_object())
+                    return {};
+
+                const auto it = object.find(key);
+                if (it == object.end() || !it->is_string())
+                    return {};
+
+                return it->get_ref<const std::string&>();
+            };
+
+        const auto patchTask = [&](json& task)
+            {
+                if (!task.is_object())
+                    return;
+
+                const std::string_view taskId = readStringView(task, "id");
+                const auto objectivesIt = task.find("objectives");
+
+                if (taskId.empty() ||
+                    objectivesIt == task.end() ||
+                    !objectivesIt->is_array())
+                {
+                    return;
+                }
+
+                for (auto& objective : *objectivesIt)
+                {
+                    if (!objective.is_object())
+                        continue;
+
+                    const std::string_view objectiveId = readStringView(objective, "id");
+                    const std::string_view objectiveType = readStringView(objective, "type");
+
+                    const bool isPlantingObjective = objectiveType == "plantItem" || objectiveType == "plantQuestItem";
+
+                    if (!isPlantingObjective)
+                        continue;
+
+                    if (!IsCanonicalObjectId(objectiveId))
+                        ++stats.plantingObjectivesWithNonCanonicalId;
+
+                    const auto zonesIt = objective.find("zones");
+                    if (zonesIt != objective.end() &&
+                        zonesIt->is_array() &&
+                        !zonesIt->empty())
+                    {
+                        continue;
+                    }
+
+                    json recoveredZones = json::array();
+
+                    for (const auto& patch : TaskZonePatchData::kPlantingZonePatches)
+                    {
+                        if (patch.taskId != taskId ||
+                            patch.objectiveId != objectiveId ||
+                            patch.objectiveType != objectiveType)
+                        {
+                            continue;
+                        }
+
+                        recoveredZones.push_back({
+                            { "map", std::string(patch.mapId) },
+                            { "position", {
+                                { "x", patch.x },
+                                { "y", patch.y },
+                                { "z", patch.z }
+                            } }
+                        });
+                    }
+
+                    if (recoveredZones.empty())
+                    {
+                        ++stats.plantingObjectivesStillMissing;
+                        continue;
+                    }
+
+                    stats.zonesAdded += recoveredZones.size();
+                    ++stats.objectivesPatched;
+                    objective["zones"] = std::move(recoveredZones);
+                }
+            };
+
+        if (taskCollection.is_array())
+        {
+            for (auto& task : taskCollection)
+                patchTask(task);
+        }
+        else if (taskCollection.is_object())
+        {
+            for (auto it = taskCollection.begin();
+                it != taskCollection.end();
+                ++it)
+            {
+                patchTask(it.value());
+            }
+        }
+
+        return stats;
     }
 
     bool CopyCollectionToArray(const json& collection, json& destination)
@@ -274,13 +426,16 @@ namespace
         }
     }
 
-    void ApplyTranslationLookup(json& value, const json& translations)
+    void ApplyTranslationLookup(json& value, const json& translations, bool translateString = true)
     {
         if (!translations.is_object())
             return;
 
         if (value.is_string())
         {
+            if (!translateString)
+                return;
+
             const std::string key = value.get<std::string>();
             const auto translatedIt = translations.find(key);
 
@@ -301,7 +456,9 @@ namespace
         if (value.is_object())
         {
             for (auto it = value.begin(); it != value.end(); ++it)
-                ApplyTranslationLookup(it.value(), translations);
+            {
+                ApplyTranslationLookup(it.value(), translations, it.key() != "id");
+            }
         }
     }
 
@@ -334,7 +491,7 @@ namespace
         return baseRoot.dump();
     }
 
-    bool ParseDataset(const std::string& raw, bool tasks, json& destination)
+    bool ParseDataset(const std::string& raw, bool tasks, json& destination, std::string* patchedRaw = nullptr, TaskZonePatchStats* patchStats = nullptr)
     {
         if (raw.empty())
             return false;
@@ -346,9 +503,26 @@ namespace
         if (!tasks)
             CaptureItemCategories(root);
 
-        const json* collection = FindCollection(root, tasks);
+        json* collection = FindMutableCollection(root, tasks);
         if (!collection)
             return false;
+
+        TaskZonePatchStats localPatchStats{};
+
+        if (tasks)
+        {
+            localPatchStats = ApplyPlantingZonePatches(*collection);
+
+            if (patchStats)
+                *patchStats = localPatchStats;
+        }
+
+        if (patchedRaw)
+        {
+            *patchedRaw = localPatchStats.objectivesPatched > 0
+                ? root.dump()
+                : raw;
+        }
 
         return CopyCollectionToArray(*collection, destination);
     }
@@ -367,6 +541,29 @@ namespace
 
         if (out.is_open())
             out << body;
+    }
+
+    void LogTaskZonePatchStats(const TaskZonePatchStats& stats, const char* source)
+    {
+        if (stats.objectivesPatched > 0)
+        {
+            LOGS.logInfo(
+                std::string("[TASKS][ZONE PATCH][") + source +
+                "] Recovered " +
+                std::to_string(stats.objectivesPatched) +
+                " planting objectives (" +
+                std::to_string(stats.zonesAdded) +
+                " zones)");
+        }
+
+        if (stats.plantingObjectivesStillMissing > 0)
+        {
+            LOGS.logInfo(
+                std::string("[TASKS][ZONE PATCH][") + source +
+                "] " +
+                std::to_string(stats.plantingObjectivesStillMissing) +
+                " planting objectives still have no known zone");
+        }
     }
 
     std::string ReadString(const json& object, const char* key)
@@ -763,19 +960,44 @@ std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh)
                 return {};
 
             json parsedArray;
-            if (!ParseDataset(cached, isTasks, parsedArray))
+            std::string usableCache = cached;
+            TaskZonePatchStats zonePatchStats{};
+
+            if (!ParseDataset(cached, isTasks, parsedArray,
+                isTasks ? &usableCache : nullptr,
+                isTasks ? &zonePatchStats : nullptr))
             {
                 LOGS.logError(std::string("[") + label + "][CACHE] Cached JSON is invalid");
                 return {};
             }
 
+            if (isTasks && requireFresh && zonePatchStats.plantingObjectivesWithNonCanonicalId > 0)
+            {
+                LOGS.logInfo(
+                    "[TASKS][ZONE PATCH][CACHE] Cached objective IDs were "
+                    "translated; refreshing cache");
+                return {};
+            }
+
             destination = std::move(parsedArray);
-            rawStorage = cached;
+            rawStorage = std::move(usableCache);
             loaded = true;
+
+            if (isTasks)
+            {
+                LogTaskZonePatchStats(zonePatchStats, "CACHE");
+
+                if (zonePatchStats.objectivesPatched > 0 && !RewriteTextFileAtomicallyPreservingTimestamp(cacheFile,rawStorage))
+                {
+                    LOGS.logError(
+                        "[TASKS][ZONE PATCH][CACHE] "
+                        "Failed to persist recovered zones");
+                }
+            }
 
             LOGS.logInfo(std::string("[") + label + "][CACHE] Loaded cached JSON");
 
-            return cached;
+            return rawStorage;
         };
 
     if (!forceRefresh)
@@ -848,14 +1070,21 @@ std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh)
         }
 
         json parsedArray;
+        std::string cacheResponse = processedResponse;
+        TaskZonePatchStats zonePatchStats{};
 
-        if (ParseDataset(processedResponse, isTasks, parsedArray))
+        if (ParseDataset(processedResponse, isTasks, parsedArray,
+            isTasks ? &cacheResponse : nullptr,
+            isTasks ? &zonePatchStats : nullptr))
         {
             destination = std::move(parsedArray);
-            rawStorage = processedResponse;
+            rawStorage = std::move(cacheResponse);
             loaded = true;
 
-            if (WriteTextFileAtomically(cacheFile, processedResponse))
+            if (isTasks)
+                LogTaskZonePatchStats(zonePatchStats, "DOWNLOAD");
+
+            if (WriteTextFileAtomically(cacheFile, rawStorage))
             {
                 LOGS.logInfo(std::string("[") + label + "][CACHE] Refreshed cache from JSON endpoint");
             }
@@ -864,7 +1093,7 @@ std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh)
                 LOGS.logError(std::string("[") + label + "][CACHE] Failed to write cache file");
             }
 
-            return processedResponse;
+            return rawStorage;
         }
 
         LOGS.logError(std::string("[") + label + "][JSON] Response did not contain the expected " +  (isTasks ? "data.tasks" : "data.items") + " collection");

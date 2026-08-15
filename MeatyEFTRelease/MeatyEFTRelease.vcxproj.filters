@@ -399,6 +399,7 @@
     <ClInclude Include="game\headers\unityHelper.h" />
     <ClInclude Include="game\headers\camera.h" />
     <ClInclude Include="game\headers\tarkovdevquery.h" />
+    <ClInclude Include="game\headers\taskZonePatch.h" />
     <ClInclude Include="game\headers\loot.h" />
     <ClInclude Include="game\headers\transform.h" />
     <ClInclude Include="game\headers\questManager.h" />
