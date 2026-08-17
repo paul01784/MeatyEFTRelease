@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <shared_mutex>
+#include <mutex>
 #include <chrono>
 #include <stop_token>
 #include <optional>
@@ -102,6 +103,7 @@ struct ActiveObjective
 {
     std::string objectiveId;
     std::string type;
+    std::string description;
     bool completed{ false }; // will be false for everything we keep (we skip completed)
 
     std::string itemId;
@@ -175,7 +177,7 @@ inline std::vector<std::string> GetMasterItemsSnapshot()
 
 inline std::vector<QuestData> GetQuestDataActiveSnapshot()
 {
-    //std::lock_guard<std::mutex> lock(g_questCacheMutex);
+    std::lock_guard<std::mutex> lock(g_questCacheMutex);
     return questDataActive;
 }
 

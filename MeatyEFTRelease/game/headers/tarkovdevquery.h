@@ -55,6 +55,7 @@ struct TarkovObjective
 {
     std::string type;
     std::string id;
+    std::string description;
     std::string itemId;
     std::string questItemId;
 

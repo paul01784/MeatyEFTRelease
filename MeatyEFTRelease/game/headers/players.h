@@ -197,6 +197,13 @@ struct PlayerCache {
 	bool isWatched;
 	bool isBTR;
 	uint64_t btrView;
+	bool isInBTR;
+	std::chrono::steady_clock::time_point btrNearSince{};
+	std::chrono::steady_clock::time_point nextBtrRecovery{};
+	float lastBtrRotation{ 0.0f };
+	int btrStaticRotationTicks{ 0 };
+	bool hasBtrRotationSample{ false };
+
 	bool invalidBones;
 	int bonePtrRefreshTick{ 0 };
 
@@ -318,6 +325,7 @@ struct PlayerCache {
 		isWatched(false),
 		isBTR(false),
 		btrView(0),
+		isInBTR(false),
 		isDead(false),
 		hasExfiled(false),
 		handsUpdateInterval{ 2000 },
@@ -380,6 +388,7 @@ private:
 	std::optional<PlayerCache> buildEntity(const uint64_t instance, bool isLocal);
 
 	void tryFindBTR();
+	void recoverBtrStuckPlayers();
 	void updateEntity();
 	void checkGroupIDs();
 	

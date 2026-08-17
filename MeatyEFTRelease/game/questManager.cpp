@@ -126,6 +126,7 @@ static void FilterConditions(
         ActiveObjective ao{};
         ao.objectiveId = obj.id;
         ao.type = obj.type;
+        ao.description = obj.description;
         ao.itemId = obj.itemId;
         ao.questItemId = obj.questItemId;
         ao.completed = false;

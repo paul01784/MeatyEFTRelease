@@ -93,17 +93,56 @@ public:
 };
 Color Col;
 
-void DrawLine(int x1, int y1, int x2, int y2, glm::vec4 color, int thickness)
+void DrawLine(float x1, float y1, float x2, float y2, glm::vec4 color, float thickness)
 {
 	ImDrawList* draw_list = ImGui::GetWindowDrawList();
 	draw_list->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), ImColor(color.x, color.y, color.z, color.w), thickness);
 }
 
-void DrawCircleFilled(int x, int y, int radius, ImVec4 color)
+void DrawCircleFilled(float x, float y, float radius, ImVec4 color)
 {
 	ImDrawList* draw_list = ImGui::GetWindowDrawList();
 	draw_list->AddCircleFilled(ImVec2(x, y), radius, ImColor(color.x, color.y, color.z, color.w));
 	draw_list->AddCircle(ImVec2(x, y), radius, ImColor(0.f, 0.f, 0.f, 1.f), 20, 1.f);
+}
+
+ImVec2 MeasureRadarText(ImFont* font, float fontSize, const char* text)
+{
+	if (font == nullptr || text == nullptr || text[0] == '\0')
+		return ImVec2(0.0f, 0.0f);
+
+	return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text);
+}
+
+float ScaleRadarTextSize(float fontSize)
+{
+	return fontSize * std::clamp(radarGlobals::textScale, 0.75f, 2.0f);
+}
+
+float DrawCenteredRadarText(ImDrawList* drawList, ImFont* font, float fontSize, float centerX, float topY, ImU32 color, const char* text)
+{
+	const ImVec2 textSize = MeasureRadarText(font, fontSize, text);
+	if (textSize.x <= 0.0f || textSize.y <= 0.0f)
+		return 0.0f;
+
+	drawList->AddText(
+		font,
+		fontSize,
+		ImVec2(centerX - (textSize.x * 0.5f), topY),
+		color,
+		text);
+
+	return textSize.y;
+}
+
+void DrawCenteredSquareMarker(float centerX, float centerY, float halfSize, ImU32 color)
+{
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const ImVec2 markerMin(centerX - halfSize, centerY - halfSize);
+	const ImVec2 markerMax(centerX + halfSize, centerY + halfSize);
+
+	drawList->AddRectFilled(markerMin, markerMax, color, 1.0f);
+	drawList->AddRect(markerMin, markerMax, IM_COL32(0, 0, 0, 255), 1.0f, 0, 1.0f);
 }
 
 void DrawRect(int x, int y, int w, int h, RGBA* color, int thickness)
@@ -118,50 +157,25 @@ void DrawFilledRect(int x, int y, int w, int h, ImVec4 color)
 	draw_list->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), ImColor(color.x, color.y, color.z, color.w), 0, 0);
 }
 
-void DrawRadarHealthBar(int x, int y, int healthStatus, float zoomLevel)
+ImVec4 GetRadarHealthColor(int healthStatus)
 {
-	int width = 50; // longer for more health
-	int height = 7; //static 
-	float scale = zoomLevel; // scale to map size
-	ImVec4 healthcol = { 0,1,0,1 };
+	if (healthStatus == 8192)
+		return ImVec4(1.0f, 0.12f, 0.08f, 1.0f);
 
-	/*
-	Healthy = 1024,
-	Injured = 2048,
-	BadlyInjured = 4096,
-	Dying = 8192,
-	*/
+	if (healthStatus == 2048 || healthStatus == 4096)
+		return ImVec4(1.0f, 0.86f, 0.0f, 1.0f);
 
-	if (healthStatus == 1024)
-	{
-		width = 50;
-		healthcol = { 0,1,0,1 };
-	}
-	else if (healthStatus == 2048)
-	{
-		width = 39;
-		healthcol = { 1,0.64,0,1 };
-	}
-	else if (healthStatus == 4096)
-	{
-		width = 26;
-		healthcol = { 1,1,0,1 };
-	}
-	else if (healthStatus == 8192)
-	{
-		width = 13;
-		healthcol = { 1,0,0,1 };
-	}
-	else
-	{
-		width = 50;
-		healthcol = { 0,1,0,1 };
-	}
+	return ImVec4(0.15f, 1.0f, 0.20f, 1.0f);
+}
 
-	//std::cout << "xy : " << std::to_string(x) << " " << std::to_string(y) << " Health : " << std::to_string(healthStatus) << std::endl;
+void DrawRadarHealthDot(float centerX, float centerY, int healthStatus)
+{
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const ImVec4 healthColor = GetRadarHealthColor(healthStatus);
+	const ImVec2 center(centerX, centerY);
 
-	DrawRect(x - 1, y - 1, 52, height + 2, (RGBA*)&Col.black, 1.5); // added 2 to space outside of max health to add a shadow to box
-	DrawFilledRect(x, y, width, height, healthcol);
+	drawList->AddCircleFilled(center, 3.5f, IM_COL32(0, 0, 0, 255), 16);
+	drawList->AddCircleFilled(center, 2.5f, ImColor(healthColor), 16);
 }
 
 void drawAimLine(glm::vec2 point, glm::vec2 rotation, int aimLineLength, glm::vec4 color)
@@ -270,12 +284,17 @@ void DrawPinnedPlayerSlotsBox(int x, int y, const PlayerCache& player)
 	}
 }
 
-void DrawRadarPlayerMarkers(int x, int y, float zoomLevel, PlayerCache player)
+void DrawRadarPlayerMarkers(float x, float y, float zoomLevel, const PlayerCache& player)
 {
-	float fontSize = std::clamp(30.f / zoomLevel, 7.f, 9.f);
+	const float markerFontSize = std::clamp(30.f / zoomLevel, 7.f, 9.f);
+	const float labelFontSize = ScaleRadarTextSize(markerFontSize + 8.0f);
+	const float equipmentFontSize = ScaleRadarTextSize(markerFontSize + 10.0f);
+	constexpr float markerRadius = 8.0f;
+	constexpr float labelGap = 3.0f;
+	constexpr float lineGap = 1.0f;
 
 	//player height
-	float height = player.location.y;
+	const float height = player.location.y;
 
 	//player height indicator
 	std::string hString = "";
@@ -310,8 +329,6 @@ void DrawRadarPlayerMarkers(int x, int y, float zoomLevel, PlayerCache player)
 
 
 
-	//name and details
-	int distancetoMe = std::trunc(players.getDistance(mainGame.localLocation, player.location));
 	std::string prefix;
 
 	if (player.playerSide == EPlayerSide::Usec)
@@ -319,31 +336,10 @@ void DrawRadarPlayerMarkers(int x, int y, float zoomLevel, PlayerCache player)
 	else if (player.playerSide == EPlayerSide::Bear)
 		prefix = "B:";
 
-	//check slots for wanted items
-	bool wanted = false;
-
-	for (const auto& slot : player._slots)
-	{
-		if (slot.wanted)
-		{
-			wanted = true;
-			break;
-		}
-	}
-
-
-	std::string name =
-		(wanted ? "" : "") +
-		prefix +
-		player.name;
-
-	float nameSizeHalf = ImGui::CalcTextSize(name.c_str()).x / 2;
+	const std::string name = prefix + player.name;
 
 	//item in hand
-	std::string itemInHand = player.observedHandsInfo.itemName + " (" + std::string(player.observedHandsInfo.ammoName) + ")";
-	float itemSizeHalf = ImGui::CalcTextSize(itemInHand.c_str()).x / 2;
-
-	va_list va_alist;
+	const std::string itemInHand = player.observedHandsInfo.itemName + " (" + std::string(player.observedHandsInfo.ammoName) + ")";
 
 	//color 
 	ImVec4 color;
@@ -366,81 +362,74 @@ void DrawRadarPlayerMarkers(int x, int y, float zoomLevel, PlayerCache player)
 
 	//draw list
 	ImDrawList* draw_list = ImGui::GetWindowDrawList();
+	ImFont* font = ImGui::GetFont();
+	const ImU32 drawColor = ImColor(color.x, color.y, color.z, color.w);
 
 	static uint64_t selectedPlayerInstance = 0;
 
 	if (!player.isDead)
 	{
-
-		int markerX = (int)(x - 4.f);
-		int markerY = (int)(y - 4.f);
-		int markerRadius = 8;
-
 		// main marker
-		DrawCircleFilled(markerX, markerY, markerRadius, ImColor(color.x, color.y, color.z, color.w));
+		DrawCircleFilled(x, y, markerRadius, ImColor(color.x, color.y, color.z, color.w));
+
+		if (!player.isBTR)
+			DrawRadarHealthDot(x, y, player.healthETAG);
 
 		// hover tooltip
-		HandlePlayerSlotClick(markerX, markerY, markerRadius, player, selectedPlayerInstance);
+		HandlePlayerSlotClick(static_cast<int>(std::round(x)), static_cast<int>(std::round(y)), static_cast<int>(markerRadius), player, selectedPlayerInstance);
 
 		if (selectedPlayerInstance == player.instance)
-			DrawPinnedPlayerSlotsBox(markerX, markerY, player);
+			DrawPinnedPlayerSlotsBox(static_cast<int>(std::round(x)), static_cast<int>(std::round(y)), player);
 
 		//Height indicator
-		draw_list->AddText(ImGui::GetFont(), fontSize + 8, ImVec2(x + 10, y - 5), ImColor(color.x, color.y, color.z, color.w), hString.c_str(), 0, 0.0f, 0);
-		if (hStringVal != "0" && hStringVal != "1" && hStringVal != "-1")
-			draw_list->AddText(ImGui::GetFont(), fontSize + 8, ImVec2(x + 10, y - 22), ImColor(color.x, color.y, color.z, color.w), hStringVal.c_str(), 0, 0.0f, 0);
+		const float heightTextX = x + markerRadius + 4.0f;
+		const ImVec2 heightIconSize = MeasureRadarText(font, labelFontSize, hString.c_str());
+		draw_list->AddText(font, labelFontSize, ImVec2(heightTextX, y - (heightIconSize.y * 0.5f)), drawColor, hString.c_str());
 
-		int equipmentTextY = 0;
+		if (hStringVal != "0" && hStringVal != "1" && hStringVal != "-1")
+		{
+			const ImVec2 heightValueSize = MeasureRadarText(font, labelFontSize, hStringVal.c_str());
+			draw_list->AddText(font, labelFontSize, ImVec2(heightTextX, y - heightIconSize.y - heightValueSize.y), drawColor, hStringVal.c_str());
+		}
+
+		float nextTextY = y + markerRadius + labelGap;
 
 		if (!appMenu::minView)
 		{
 			if (player.isPlayer || player.isBoss || player.isPlayerScav)
 			{
-
 				//name text
-				draw_list->AddText(ImGui::GetFont(), fontSize + 8, ImVec2(x - nameSizeHalf, y + 7), ImColor(color.x, color.y, color.z, color.w), name.c_str(), 0, 0.0f, 0);
+				const float nameHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, name.c_str());
+				if (nameHeight > 0.0f)
+					nextTextY += nameHeight + lineGap;
 
 				//item in hand
-				draw_list->AddText(ImGui::GetFont(), fontSize + 8, ImVec2(x - itemSizeHalf, y + 21), ImColor(color.x, color.y, color.z, color.w), itemInHand.c_str(), 0, 0.0f, 0);
-
-				//health
-				if (player.healthETAG != 1024)
-				{
-					DrawRadarHealthBar(x - (52 / 2), y + 40, player.healthETAG, zoomLevel);
-				}
-
-				equipmentTextY = y + 50;
+				const float itemHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, itemInHand.c_str());
+				if (itemHeight > 0.0f)
+					nextTextY += itemHeight + lineGap;
 			}
 			else if (player.isBTR)
 			{
 				//name text
-				draw_list->AddText(ImGui::GetFont(), fontSize + 8, ImVec2(x - nameSizeHalf, y + 7), ImColor(color.x, color.y, color.z, color.w), name.c_str(), 0, 0.0f, 0);
+				const float nameHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, name.c_str());
+				if (nameHeight > 0.0f)
+					nextTextY += nameHeight + lineGap;
 			}
 			else
 			{
 				//item in hand
-				draw_list->AddText(ImGui::GetFont(), fontSize + 8, ImVec2(x - itemSizeHalf, y + 4), ImColor(color.x, color.y, color.z, color.w), itemInHand.c_str(), 0, 0.0f, 0);
-
-				//health
-				if (player.healthETAG != 1024)
-				{
-					DrawRadarHealthBar(x - (52 / 2), y + 24, player.healthETAG, zoomLevel);
-				}
-
-				equipmentTextY = y + 33;
+				const float itemHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, itemInHand.c_str());
+				if (itemHeight > 0.0f)
+					nextTextY += itemHeight + lineGap;
 			}
-
-			
 		}
 
 		//draw equipment that is wanted
 		if (radarGlobals::getPlayerEquip)
 		{
-			y = equipmentTextY;
-
-			for (auto& slot : player._slots)
+			for (const auto& slot : player._slots)
 			{
-				std::string slotn = TrimEFT(slot.name);
+				const std::string slotn = TrimEFT(slot.name);
 
 				if (!slot.wanted)
 					continue;
@@ -451,34 +440,22 @@ void DrawRadarPlayerMarkers(int x, int y, float zoomLevel, PlayerCache player)
 				if (player.isPlayer && slotn == "Scabbard")
 					continue;
 
-				std::string text = slot.equipName + " " + FormatShortValue(slot.price) + "";
-
-				ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
-				float textHalf = textSize.x * 0.5f;
-
-				draw_list->AddText(
-					ImGui::GetFont(),
-					fontSize + 10,
-					ImVec2(x - textHalf, y),
-					ImColor(color.x, color.y, color.z, color.w),
-					text.c_str()
-				);
-
-				y += textSize.y + 2; // stack lines
+				const std::string text = slot.equipName + " " + FormatShortValue(slot.price);
+				const float textHeight = DrawCenteredRadarText(draw_list, font, equipmentFontSize, x, nextTextY, drawColor, text.c_str());
+				if (textHeight > 0.0f)
+					nextTextY += textHeight + lineGap;
 			}
 		}
 	}
-
-
 }
 
 void DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, LootList lootList)
 {
 	float markerFontSize = std::clamp(30.f / zoomLevel, 7.f, 9.f);
-	const float textFontSize = markerFontSize + 8.0f;
-	const float itemFontSize = markerFontSize + 6.0f;
+	const float textFontSize = ScaleRadarTextSize(markerFontSize + 8.0f);
+	const float itemFontSize = ScaleRadarTextSize(markerFontSize + 6.0f);
 	const float spacingX = 6.0f;
-	const float spacingY = 2.0f;
+	const float spacingY = 1.0f;
 
 	const std::string markerText = ICON_FK_TIMES;
 	const std::string valueText = FormatShortValue(lootList.corpseValue);
@@ -655,7 +632,7 @@ void drawGroupLine(glm::vec3 position, PlayerCache player)
 
 
 				//draw line to this player
-				DrawLine(position.x - 4.f, position.y - 4.f, positionOther.x - 4.f, positionOther.y - 4.f, glm::vec4(0, 1, 0, 1), 2);
+				DrawLine(position.x, position.y, positionOther.x, positionOther.y, glm::vec4(0, 1, 0, 1), 2);
 
 
 			}
@@ -760,17 +737,18 @@ void DrawExfil(int x, int y, float zoomLevel, exfilsMemory exfil)
 
 }
 
-void DrawLootContainerMarker(int x, int y, glm::vec4 color, float zoomLevel, LootList loot)
+void DrawLootContainerMarker(float x, float y, glm::vec4 color, float zoomLevel, const LootList& loot)
 {
-	float fontSize = std::clamp(20.f / zoomLevel, 8.f, 10.f);
-	float fontSizeFix = 0.f;
+	const float markerFontSize = std::clamp(20.f / zoomLevel, 8.f, 10.f);
+	const float labelFontSize = ScaleRadarTextSize(markerFontSize + 6.0f);
+	constexpr float markerHalfSize = 3.5f;
+	constexpr float labelGap = 3.0f;
 
 	//loot height indicator
-	std::string hString = "";
-	std::string hStringVal = "";
+	std::string hString;
 
 	//local height
-	float height = loot.worldLocation.y;
+	const float height = loot.worldLocation.y;
 
 	if (height > (mainGame.localLocation.y + 2.f)) // 2.f per level?!
 	{
@@ -790,50 +768,38 @@ void DrawLootContainerMarker(int x, int y, glm::vec4 color, float zoomLevel, Loo
 			hString = ICON_FK_ANGLE_DOWN;
 
 	}
-	if (height != mainGame.localLocation.y)
-	{
-		int correctedNumber = static_cast<int>(height - mainGame.localLocation.y);
-		hStringVal = std::to_string(correctedNumber); // height difference
-	}
-
-
-
-	//draw list
-	ImDrawList* draw_list = ImGui::GetWindowDrawList();
-	std::string string = ICON_FK_SQUARE;
-
-
-	//airdrop check and order name
-	std::string name;
-	if (loot.shortName == "AirDrop")
-		name = loot.shortName;
-	else
-		name = loot.shortName;
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	ImFont* font = ImGui::GetFont();
+	const ImU32 drawColor = ImColor(color.x, color.y, color.z, color.w);
 
 	//main marker
-	draw_list->AddText(ImGui::GetFont(), 5, ImVec2(x, y), ImColor(1.f, 1.f, 1.f, 1.f), string.c_str(), 0, 0.0f, 0);
+	DrawCenteredSquareMarker(x, y, markerHalfSize, drawColor);
 
 	//Height indicator
-	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x - 15, y - 5), ImColor(1.f, 1.f, 1.f, 1.f), hString.c_str(), 0, 0.0f, 0);
-	//if (hStringVal != "0" && hStringVal != "1" && hStringVal != "-1")
-	//	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x - 17, y + 20), ImColor(1.f,1.f,1.f,1.f), hStringVal.c_str(), 0, 0.0f, 0);
+	const ImVec2 heightSize = MeasureRadarText(font, labelFontSize, hString.c_str());
+	drawList->AddText(
+		font,
+		labelFontSize,
+		ImVec2(x + markerHalfSize + 4.0f, y - (heightSize.y * 0.5f)),
+		drawColor,
+		hString.c_str());
 
 	// name
-	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x + 10, y - 7), ImColor(1.f, 1.f, 1.f, 1.f), name.c_str(), 0, 0.0f, 0);
-
+	DrawCenteredRadarText(drawList, font, labelFontSize, x, y + markerHalfSize + labelGap, drawColor, loot.shortName.c_str());
 }
 
-void DrawLootItemMarker(int x, int y, glm::vec4 color, float zoomLevel, LootList loot)
+void DrawLootItemMarker(float x, float y, glm::vec4 color, float zoomLevel, const LootList& loot)
 {
-	float fontSize = std::clamp(20.f / zoomLevel, 8.f, 10.f);
-	float fontSizeFix = 0.f;
+	const float markerFontSize = std::clamp(20.f / zoomLevel, 8.f, 10.f);
+	const float labelFontSize = ScaleRadarTextSize(markerFontSize + 6.0f);
+	constexpr float markerHalfSize = 3.0f;
+	constexpr float labelGap = 3.0f;
 
 	//loot height indicator
-	std::string hString = "";
-	std::string hStringVal = "";
+	std::string hString;
 
 	//local height
-	float height = loot.worldLocation.y;
+	const float height = loot.worldLocation.y;
 
 	if (height > (mainGame.localLocation.y + 2.f)) // 2.f per level?!
 	{
@@ -853,29 +819,25 @@ void DrawLootItemMarker(int x, int y, glm::vec4 color, float zoomLevel, LootList
 			hString = ICON_FK_ANGLE_DOWN;
 
 	}
-	if (height != mainGame.localLocation.y)
-	{
-		int correctedNumber = static_cast<int>(height - mainGame.localLocation.y);
-		hStringVal = std::to_string(correctedNumber); // height difference
-	}
-
-
-	//draw list
-	ImDrawList* draw_list = ImGui::GetWindowDrawList();
-	std::string string = ICON_FK_SQUARE;
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	ImFont* font = ImGui::GetFont();
+	const ImU32 drawColor = ImColor(color.x, color.y, color.z, color.w);
 
 	//loose item 
 	//main marker
-	draw_list->AddText(ImGui::GetFont(), 6, ImVec2(x - 6.f, y - 6.f), ImColor(color.x, color.y, color.z, color.w), string.c_str(), 0, 0.0f, 0);
+	DrawCenteredSquareMarker(x, y, markerHalfSize, drawColor);
 
 	//Height indicator
-	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x - 15, y - 4), ImColor(color.x, color.y, color.z, color.w), hString.c_str(), 0, 0.0f, 0);
-	//if (hStringVal != "0" && hStringVal != "1" && hStringVal != "-1")
-	//	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x - 17, y + 20), ImColor(color.x, color.y, color.z, color.w), hStringVal.c_str(), 0, 0.0f, 0);
+	const ImVec2 heightSize = MeasureRadarText(font, labelFontSize, hString.c_str());
+	drawList->AddText(
+		font,
+		labelFontSize,
+		ImVec2(x + markerHalfSize + 4.0f, y - (heightSize.y * 0.5f)),
+		drawColor,
+		hString.c_str());
 
 	//item name
-	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x + 10, y - 7), ImColor(color.x, color.y, color.z, color.w), loot.shortName.c_str(), 0, 0.0f, 0);
-	
+	DrawCenteredRadarText(drawList, font, labelFontSize, x, y + markerHalfSize + labelGap, drawColor, loot.shortName.c_str());
 }
 
 void DrawGrenade(int x, int y, float zoomLevel, GrenadeList grenade)

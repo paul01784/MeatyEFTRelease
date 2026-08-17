@@ -1828,7 +1828,7 @@ void Players::playersTask()
 
         for (const uint64_t currentPlayer : registeredPlayers)
         {
-            if (existingInstances.contains(currentPlayer))
+            if (!existingInstances.insert(currentPlayer).second)
                 continue;
 
             const bool isLocal = currentPlayer == mainGame.localPlayerPtr;
@@ -1851,20 +1851,24 @@ void Players::playersTask()
         {
             std::lock_guard<std::mutex> lock(playerMutex);
 
+            std::unordered_set<uint64_t> cachedInstances;
+            cachedInstances.reserve(
+                playerCache.size() + pendingNewEntities.size()
+            );
+
+            for (const PlayerCache& cachedPlayer : playerCache)
+            {
+                if (Utils::valid_pointer(cachedPlayer.instance))
+                    cachedInstances.insert(cachedPlayer.instance);
+            }
+
             for (PlayerCache& entity : pendingNewEntities)
             {
-                const auto found = std::find_if(
-                    playerCache.begin(),
-                    playerCache.end(),
-                    [&](const PlayerCache& cachedPlayer)
-                    {
-                        return cachedPlayer.instance ==
-                            entity.instance;
-                    }
-                );
-
-                if (found != playerCache.end())
+                if (!Utils::valid_pointer(entity.instance) ||
+                    !cachedInstances.insert(entity.instance).second)
+                {
                     continue;
+                }
 
                 std::ostringstream ss;
 
@@ -1905,6 +1909,7 @@ void Players::playersTask()
         }
 
         updateEntity();
+        recoverBtrStuckPlayers();
         checkGroupIDs();
         checkExfil();
 
@@ -2635,6 +2640,192 @@ void Players::tryFindBTR()
         }
 
         return;
+    }
+}
+
+void Players::recoverBtrStuckPlayers()
+{
+    using Clock = std::chrono::steady_clock;
+
+    static constexpr float kBtrRadius = 4.0f;
+    static constexpr float kBtrRadiusSquared = kBtrRadius * kBtrRadius;
+    static constexpr float kStaticRotationEpsilon = 0.75f;
+    static constexpr int kStaticRotationTicks = 5;
+    static constexpr auto kStuckDuration = std::chrono::milliseconds(600);
+    static constexpr auto kRecoveryCooldown = std::chrono::seconds(5);
+
+    const Clock::time_point now = Clock::now();
+
+    auto ResetTracking = [](PlayerCache& player)
+        {
+            player.isInBTR = false;
+            player.btrNearSince = {};
+            player.lastBtrRotation = 0.0f;
+            player.btrStaticRotationTicks = 0;
+            player.hasBtrRotationSample = false;
+        };
+
+    auto IsFinitePosition = [](const glm::vec3& position)
+        {
+            return std::isfinite(position.x) &&
+                std::isfinite(position.y) &&
+                std::isfinite(position.z);
+        };
+
+    auto IsNear = [](const glm::vec3& first, const glm::vec3& second)
+        {
+            const glm::vec3 delta = first - second;
+
+            return
+                (delta.x * delta.x) +
+                (delta.y * delta.y) +
+                (delta.z * delta.z) <=
+                kBtrRadiusSquared;
+        };
+
+    auto RotationNearlyEqual = [](float first, float second)
+        {
+            float difference = std::fmod(
+                std::fabs(first - second),
+                360.0f
+            );
+
+            if (difference > 180.0f)
+                difference = 360.0f - difference;
+
+            return difference <= kStaticRotationEpsilon;
+        };
+
+    std::lock_guard<std::mutex> lock(playerMutex);
+
+    std::vector<PlayerCache>& cache = players.getCache();
+
+    if (cache.empty())
+        return;
+
+    std::vector<glm::vec3> btrPositions;
+    btrPositions.reserve(1);
+
+    for (const PlayerCache& player : cache)
+    {
+        if (!player.isBTR || !IsFinitePosition(player.location))
+            continue;
+
+        const float positionMagnitudeSquared =
+            (player.location.x * player.location.x) +
+            (player.location.y * player.location.y) +
+            (player.location.z * player.location.z);
+
+        if (positionMagnitudeSquared > 1.0f)
+            btrPositions.emplace_back(player.location);
+    }
+
+    if (btrPositions.empty())
+    {
+        for (PlayerCache& player : cache)
+            ResetTracking(player);
+
+        return;
+    }
+
+    for (PlayerCache& player : cache)
+    {
+        if (player.isBTR)
+            continue;
+
+        const bool isHuman =
+            player.isLocal ||
+            (!player.isAi &&
+                (player.isPlayer || player.isPlayerScav));
+
+        if (!isHuman ||
+            player.isDead ||
+            player.hasExfiled ||
+            !Utils::valid_pointer(player.instance) ||
+            !IsFinitePosition(player.location))
+        {
+            ResetTracking(player);
+            continue;
+        }
+
+        const bool nearBtr = std::any_of(
+            btrPositions.begin(),
+            btrPositions.end(),
+            [&](const glm::vec3& btrPosition)
+            {
+                return IsNear(player.location, btrPosition);
+            }
+        );
+
+        if (!nearBtr)
+        {
+            ResetTracking(player);
+            continue;
+        }
+
+        player.isInBTR = true;
+
+        const float currentRotation = player.rotation.x;
+
+        if (!std::isfinite(currentRotation))
+        {
+            ResetTracking(player);
+            continue;
+        }
+
+        if (!player.hasBtrRotationSample)
+        {
+            player.btrNearSince = now;
+            player.lastBtrRotation = currentRotation;
+            player.btrStaticRotationTicks = 0;
+            player.hasBtrRotationSample = true;
+            continue;
+        }
+
+        if (RotationNearlyEqual(
+            currentRotation,
+            player.lastBtrRotation))
+        {
+            ++player.btrStaticRotationTicks;
+        }
+        else
+        {
+            player.btrStaticRotationTicks = 0;
+        }
+
+        player.lastBtrRotation = currentRotation;
+
+        if (now - player.btrNearSince < kStuckDuration ||
+            player.btrStaticRotationTicks >= kStaticRotationTicks ||
+            now < player.nextBtrRecovery)
+        {
+            continue;
+        }
+
+        // Refresh only the transform hierarchy
+        player.playerBoneMatrixPtr = 0;
+        player.bonePointersNeedResolve = true;
+        player.invalidBones = true;
+
+        std::fill(player.bonePtrs.begin(), player.bonePtrs.end(), 0ULL);
+
+        std::fill(player.bonePositions.begin(), player.bonePositions.end(), glm::vec3(0.0f));
+
+        player.boneTransformCache.clear();
+        player.nextBtrRecovery = now + kRecoveryCooldown;
+
+        std::ostringstream message;
+        message << "[BTR][RECOVERY] Refreshing stuck player transforms: "
+            << player.name
+            << " (0x"
+            << std::hex
+            << player.instance
+            << ')';
+
+        LOGS.logInfo(message.str());
+
+        ResetTracking(player);
+        player.isInBTR = true;
     }
 }
 

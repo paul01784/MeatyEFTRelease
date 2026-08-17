@@ -1168,6 +1168,7 @@ void TarkovDev::buildTasksList()
                 TarkovObjective objective{};
                 objective.id = ReadString(objectiveJson, "id");
                 objective.type = ReadString(objectiveJson, "type");
+                objective.description = ReadString(objectiveJson, "description");
 
                 if (objective.type.empty())
                     objective.type = ReadString(objectiveJson, "__typename");

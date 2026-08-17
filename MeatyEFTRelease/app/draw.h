@@ -106,33 +106,35 @@ void drawPlayers()
 
             glm::vec3 position = mapControl.getMapPosition(player.location, currentMap::configX, currentMap::configY, currentMap::configScale);
 
-            DrawRadarPlayerMarkers(position.x, position.y, mapControl.zoomLevel, player);
-
             if (!player.isBTR)
             {
-                int aimLineLen = 100;
-                if (player.groupId != mainGame.localGroupId)
-                    aimLineLen = radarGlobals::enemyAimLine;
-                else
-                    aimLineLen = radarGlobals::friendAimLine;
+                if (!player.isInBTR)
+                {
+                    int aimLineLen = 100;
+                    if (player.groupId != mainGame.localGroupId)
+                        aimLineLen = radarGlobals::enemyAimLine;
+                    else
+                        aimLineLen = radarGlobals::friendAimLine;
 
-                if (mainGame.localGroupId == "")
-                    aimLineLen = radarGlobals::enemyAimLine;
+                    if (mainGame.localGroupId == "")
+                        aimLineLen = radarGlobals::enemyAimLine;
 
-                drawAimLine(
-                    glm::vec2(position.x - 5.f, position.y - 5.f),
-                    player.rotation,
-                    aimLineLen,
-                    player.colour
-                );
-
-
+                    drawAimLine(
+                        glm::vec2(position.x, position.y),
+                        player.rotation,
+                        aimLineLen,
+                        player.colour
+                    );
+                }
 
                 drawGroupLine(position, player);
 
-                
+
             }
+
             
+            DrawRadarPlayerMarkers(position.x, position.y, mapControl.zoomLevel, player);
+
         }
 
 
@@ -148,13 +150,13 @@ void drawLocalPlayer()
 
 
     drawAimLine(
-        glm::vec2(position.x - 4.f, position.y - 4.f),
+        glm::vec2(position.x, position.y),
         mainGame.localRotation,
         radarGlobals::localAimLine,
         coloursGlobals::playerLocal
     );
 
-    DrawCircleFilled(position.x - 4.f, position.y - 4.f, 8, ImColor(coloursGlobals::playerLocal.x, coloursGlobals::playerLocal.y, coloursGlobals::playerLocal.z, coloursGlobals::playerLocal.w));
+    DrawCircleFilled(position.x, position.y, 8.0f, ImColor(coloursGlobals::playerLocal.x, coloursGlobals::playerLocal.y, coloursGlobals::playerLocal.z, coloursGlobals::playerLocal.w));
 
 }
 
