@@ -19,6 +19,7 @@
 #include "game/headers/camera.h"
 #include "game/headers/fireport.h"
 #include "game/headers/readOnlyAim.h"
+#include "../app/makcu.h"
 #include "../app/globals.h"
 #include "../game/headers/exfil.h"
 
@@ -636,7 +637,9 @@ namespace fuserRender
     {
         if (!g_frameCameraSnapshot ||
             !g_frameCameraSnapshot->valid ||
-            !espGlobals::drawFireportLine)
+            !makcu.IsConnected() ||
+            !aimGlobals::aimEnabled ||
+            !aimGlobals::drawFireportLine)
             return;
 
 
@@ -644,32 +647,40 @@ namespace fuserRender
         if (!pose.valid)
             return;
 
-        const float length = (std::max)(10.0f, aimGlobals::fireportLineLengthM);
-        const glm::vec3 endWorld = pose.worldOrigin + (pose.worldForward * length);
         glm::vec2 screenStart{};
-        glm::vec2 screenEnd{};
 
         if (!ProjectWorldToScreen(pose.worldOrigin, &screenStart))
             return;
 
-        static const glm::vec4 kFireportLine{1.0f, 0.86f, 0.24f, 0.95f};
-        if (ProjectWorldToScreen(endWorld, &screenEnd)) {
-            g_DxWindow.DrawLine(
-                screenStart.x,
-                screenStart.y,
-                screenEnd.x,
-                screenEnd.y,
-                kFireportLine,
-                2.0f
-            );
-        } else {
-            g_DxWindow.DrawFilledCircle(screenStart.x, screenStart.y, 3.0f, kFireportLine);
+        glm::vec2 screenEnd{
+            ScreenWidth() * 0.5f,
+            ScreenHeight() * 0.5f
+        };
+
+        if (aimGlobals::aimReference == AimReference::Fireport)
+        {
+            if (!pose.aimRefOk)
+                return;
+
+            screenEnd = pose.screenEnd;
         }
+
+        static const glm::vec4 kFireportLine{1.0f, 0.86f, 0.24f, 0.95f};
+        g_DxWindow.DrawLine(
+            screenStart.x,
+            screenStart.y,
+            screenEnd.x,
+            screenEnd.y,
+            kFireportLine,
+            2.0f
+        );
     }
 
     static inline void RenderAimFovRing()
     {
-        if (!aimGlobals::showAimFovRing || !aimGlobals::aimEnabled)
+        if (!aimGlobals::showAimFovRing ||
+            !aimGlobals::aimEnabled ||
+            !makcu.IsConnected())
             return;
         if (aimGlobals::aimFOV <= 0.f)
             return;
@@ -682,15 +693,10 @@ namespace fuserRender
         if (aimGlobals::aimReference == AimReference::Fireport)
         {
             const FireportPose& pose = *g_frameFireportSnapshot;
-            if (!pose.valid)
+            if (!pose.valid || !pose.aimRefOk)
                 return;
 
-            const float length =
-                (std::max)(10.0f, aimGlobals::fireportLineLengthM);
-            const glm::vec3 endWorld = pose.worldOrigin + (pose.worldForward * length);
-
-            if (!ProjectWorldToScreen(endWorld, &ringCenter))
-                return;
+            ringCenter = pose.screenEnd;
         }
 
         g_DxWindow.DrawCircle(
@@ -993,6 +999,24 @@ namespace fuserRender
 
             if (static_cast<size_t>(index) >= count)
                 return false;
+
+            const size_t boneIndex = static_cast<size_t>(index);
+            if (boneIndex >= player.bonePtrs.size() ||
+                !Utils::valid_pointer(player.bonePtrs[boneIndex]))
+            {
+                return false;
+            }
+
+            const glm::vec3& position = player.bonePositions[boneIndex];
+            if (!std::isfinite(position.x) ||
+                !std::isfinite(position.y) ||
+                !std::isfinite(position.z) ||
+                (std::fabs(position.x) < 0.001f &&
+                    std::fabs(position.y) < 0.001f &&
+                    std::fabs(position.z) < 0.001f))
+            {
+                return false;
+            }
         }
 
         return true;

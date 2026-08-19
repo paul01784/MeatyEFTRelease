@@ -6,6 +6,7 @@
 
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 #include <glm/glm.hpp>
@@ -41,6 +42,24 @@ static bool HasBones(const PlayerCache& player, std::initializer_list<int> index
 
         if (static_cast<size_t>(index) >= count)
             return false;
+
+        const size_t boneIndex = static_cast<size_t>(index);
+        if (boneIndex >= player.bonePtrs.size() ||
+            !Utils::valid_pointer(player.bonePtrs[boneIndex]))
+        {
+            return false;
+        }
+
+        const glm::vec3& position = player.bonePositions[boneIndex];
+        if (!std::isfinite(position.x) ||
+            !std::isfinite(position.y) ||
+            !std::isfinite(position.z) ||
+            (std::fabs(position.x) < 0.001f &&
+                std::fabs(position.y) < 0.001f &&
+                std::fabs(position.z) < 0.001f))
+        {
+            return false;
+        }
     }
 
     return true;

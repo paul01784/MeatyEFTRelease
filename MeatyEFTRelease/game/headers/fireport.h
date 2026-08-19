@@ -7,6 +7,8 @@
 
 #include "transform.h"
 
+inline constexpr float kFireportProjectionDistanceM = 100.0f;
+
 struct FireportPose
 {
     bool valid = false;
@@ -27,6 +29,7 @@ class FireportTracker
 public:
     FireportTracker();
 
+    void clear() noexcept;
     void update(uint64_t localPlayer);
     [[nodiscard]] FireportPoseSnapshot
         getSnapshot() const noexcept;

@@ -640,6 +640,64 @@ namespace
             std::fabs(position.z) >= epsilon;
     }
 
+    static bool HasValidMinimalBonePose(const PlayerCache& player)
+    {
+        constexpr float kNearOriginLimit = 2.0f;
+        constexpr float kMaxFootDistanceFromBase = 5.0f;
+        constexpr float kMaxFootDistanceSq = kMaxFootDistanceFromBase * kMaxFootDistanceFromBase;
+
+        const size_t baseIndex = static_cast<size_t>(boneListIndexes::Base);
+        const size_t leftFootIndex = static_cast<size_t>(boneListIndexes::LFoot);
+        const size_t rightFootIndex = static_cast<size_t>(boneListIndexes::RFoot);
+
+        if (baseIndex >= player.bonePositions.size() ||
+            leftFootIndex >= player.bonePositions.size() ||
+            rightFootIndex >= player.bonePositions.size())
+        {
+            return false;
+        }
+
+        const glm::vec3& base = player.bonePositions[baseIndex];
+        const glm::vec3& leftFoot = player.bonePositions[leftFootIndex];
+        const glm::vec3& rightFoot = player.bonePositions[rightFootIndex];
+
+        const auto isFinite = [](const glm::vec3& value)
+        {
+            return std::isfinite(value.x) &&
+                std::isfinite(value.y) &&
+                std::isfinite(value.z);
+        };
+
+        const auto isNearOrigin = [kNearOriginLimit](const glm::vec3& value)
+        {
+            return std::fabs(value.x) < kNearOriginLimit &&
+                std::fabs(value.y) < kNearOriginLimit &&
+                std::fabs(value.z) < kNearOriginLimit;
+        };
+
+        if (!isFinite(base) ||
+            !isFinite(leftFoot) ||
+            !isFinite(rightFoot) ||
+            isNearOrigin(base) ||
+            isNearOrigin(leftFoot) ||
+            isNearOrigin(rightFoot))
+        {
+            return false;
+        }
+
+        const auto distanceSquared = [](const glm::vec3& first,
+            const glm::vec3& second)
+        {
+            const glm::vec3 delta = first - second;
+            return (delta.x * delta.x) +
+                (delta.y * delta.y) +
+                (delta.z * delta.z);
+        };
+
+        return distanceSquared(base, leftFoot) <= kMaxFootDistanceSq &&
+            distanceSquared(base, rightFoot) <= kMaxFootDistanceSq;
+    }
+
     static void EnsureTransformCacheShape(
         PlayerCache& player)
     {
@@ -1372,6 +1430,23 @@ namespace
                 continue;
             }
 
+            if (!HasValidMinimalBonePose(*player))
+            {
+                player->bonePointersNeedResolve = true;
+                std::fill(
+                    player->bonePtrs.begin(),
+                    player->bonePtrs.end(),
+                    0ULL
+                );
+                std::fill(
+                    player->bonePositions.begin(),
+                    player->bonePositions.end(),
+                    glm::vec3(0.0f)
+                );
+                player->boneTransformCache.clear();
+                continue;
+            }
+
             if (!state.gotMinimalBonePosition)
                 continue;
 
@@ -1515,6 +1590,8 @@ namespace
         // Base drives the player marker and is the only movement bone needed
         // for the local player.
         QueueBone(static_cast<int>(boneListIndexes::Base));
+        QueueBone(static_cast<int>(boneListIndexes::LFoot));
+        QueueBone(static_cast<int>(boneListIndexes::RFoot));
 
         if (!player.isLocal)
         {
@@ -1598,9 +1675,7 @@ void Players::positionTask()
             reads.end(),
             [](const LiveBoneRead& read)
             {
-                return read.hasPosition &&
-                    read.boneSlot ==
-                    static_cast<int>(boneListIndexes::Base);
+                return read.hasPosition && IsMinimalBoneSlot(read.boneSlot);
             });
 
         ApplyBoneResults(reads);
@@ -1635,13 +1710,16 @@ void Players::boneTask()
 
         constexpr float kNearOriginLimit = 2.0f;
         constexpr float kMaxFootDistanceFromBase = 5.0f;
-        constexpr float kMaxBoneDistanceFromBase = 10.0f;
+        constexpr float kMaxBoneDistanceFromBase = 5.0f;
+        constexpr float kMaxBoneSeparation = 5.0f;
 
-        constexpr float kMaxFootDistanceSq =
-            kMaxFootDistanceFromBase * kMaxFootDistanceFromBase;
+        constexpr float kMaxFootDistanceSq = kMaxFootDistanceFromBase * kMaxFootDistanceFromBase;
 
-        constexpr float kMaxBoneDistanceSq =
-            kMaxBoneDistanceFromBase * kMaxBoneDistanceFromBase;
+        constexpr float kMaxBoneDistanceSq = kMaxBoneDistanceFromBase * kMaxBoneDistanceFromBase;
+
+        constexpr float kMaxBoneSeparationSq = kMaxBoneSeparation * kMaxBoneSeparation;
+
+        constexpr float kFullBoneUpdateDistanceMargin = 2.0f;
 
         const float drawPlayerDistance = static_cast<float>(espGlobals::drawPlayerDist);
 
@@ -1733,12 +1811,12 @@ void Players::boneTask()
                 pending.snapshot.bonePtrs = player.bonePtrs;
                 pending.snapshot.transformCache = player.boneTransformCache;
 
-                // Base / LFoot / RFoot are always read
+                // Full skeleton reads include Base / LFoot / RFoot
                 pending.readFullBoneList =
                     espGlobals::drawSkeletons &&
                     !player.isLocal &&
                     player.distance > 0.0f &&
-                    player.distance <= drawPlayerDistance;
+                    player.distance <= drawPlayerDistance + kFullBoneUpdateDistanceMargin;
 
                 if (!pending.readFullBoneList)
                     continue;
@@ -1868,9 +1946,12 @@ void Players::boneTask()
 
                         for (size_t boneIndex = 0; boneIndex < boneCount; ++boneIndex)
                         {
-                            // Do not validate a slot that has no active transform pointer
                             if (!Utils::valid_pointer(player.bonePtrs[boneIndex]))
-                                continue;
+                            {
+                                needsPointerRefresh = true;
+                                invalidReason = "full skeleton bone pointer missing";
+                                break;
+                            }
 
                             if (boneIndex >= player.bonePositions.size())
                                 continue;
@@ -1903,8 +1984,31 @@ void Players::boneTask()
                                 kMaxBoneDistanceSq)
                             {
                                 needsPointerRefresh = true;
-                                invalidReason = "bone more than 10m from Base";
+                                invalidReason = "bone more than 5m from Base";
                                 break;
+                            }
+                        }
+
+                        if (!needsPointerRefresh)
+                        {
+                            for (size_t firstBone = 0;
+                                firstBone < boneCount && !needsPointerRefresh;
+                                ++firstBone)
+                            {
+                                for (size_t secondBone = firstBone + 1;
+                                    secondBone < boneCount;
+                                    ++secondBone)
+                                {
+                                    if (DistanceSquared(
+                                            player.bonePositions[firstBone],
+                                            player.bonePositions[secondBone]) >
+                                        kMaxBoneSeparationSq)
+                                    {
+                                        needsPointerRefresh = true;
+                                        invalidReason = "bones more than 5m apart";
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1930,6 +2034,12 @@ void Players::boneTask()
                     player.bonePtrs.begin(),
                     player.bonePtrs.end(),
                     0ULL
+                );
+
+                std::fill(
+                    player.bonePositions.begin(),
+                    player.bonePositions.end(),
+                    glm::vec3(0.0f)
                 );
 
                 player.boneTransformCache.clear();

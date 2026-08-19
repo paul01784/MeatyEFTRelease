@@ -30,6 +30,7 @@
 #include "headers/fireport.h"
 #include "headers/readOnlyAim.h"
 #include "headers/watchList.h"
+#include "../app/makcu.h"
 
 #include <condition_variable>
 #include <mutex>
@@ -768,10 +769,12 @@ void MainGame::mainThread(std::stop_token stopToken)
             "fireportTask",
             []()
             {
-                const bool fireportNeeded = espGlobals::drawFireportLine || (aimGlobals::aimEnabled && aimGlobals::aimReference == AimReference::Fireport);
+                const bool fireportNeeded = makcu.IsConnected() && aimGlobals::aimEnabled && (aimGlobals::drawFireportLine || aimGlobals::aimReference == AimReference::Fireport);
 
                 if (fireportNeeded)
                     g_fireport.update(mainGame.localPlayerPtr);
+                else
+                    g_fireport.clear();
             },
             &globals::taskFireport,
             { TaskPriority::High, DmaPriority::High, false, 4.0 });

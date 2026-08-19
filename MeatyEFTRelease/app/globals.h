@@ -113,7 +113,6 @@ struct espGlobals {
     static bool drawHeadDot;
     static float headDotSize;
     static bool runEsp;
-    static bool drawFireportLine;
     static int drawExfilDist;
     static bool drawExfil;
 };
@@ -129,7 +128,7 @@ struct aimGlobals {
     static float aimSmooth;
     static AimReference aimReference;
     static bool showAimFovRing;
-    static float fireportLineLengthM;
+    static bool drawFireportLine;
 };
 
 struct coloursGlobals {

@@ -70,6 +70,16 @@ bool onScreen(const glm::vec2& p, float w, float h)
 
 } // namespace
 
+void FireportTracker::clear() noexcept
+{
+    const FireportPoseSnapshot current = publishedPose_.load(std::memory_order_acquire);
+
+    if (current && !current->valid)
+        return;
+
+    publish(FireportPose{});
+}
+
 void FireportTracker::publish(FireportPose pose)
 {
     publishedPose_.store(
@@ -263,8 +273,9 @@ void FireportTracker::update(uint64_t localPlayer)
     pose.valid = true;
 
     if (pose.valid) {
-        const float lenM = (std::max)(10.f, aimGlobals::fireportLineLengthM);
-        const glm::vec3 endWorld = pose.worldOrigin + pose.worldForward * lenM;
+        const glm::vec3 endWorld =
+            pose.worldOrigin +
+            pose.worldForward * kFireportProjectionDistanceM;
         const CameraProjectionSnapshot projection = camera.getProjectionSnapshot();
 
         if (projection)

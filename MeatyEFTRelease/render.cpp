@@ -3145,7 +3145,6 @@ static void renderMenuSettings()
                 if (ImGui::Checkbox(" Draw Skeleton", &espGlobals::drawSkeletons)) configManager.SaveConfig(); ImGui::SameLine(); if (ImGui::Checkbox(" Only closest", &espGlobals::skeletonsOnlyClosest)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Head Dot", &espGlobals::drawHeadDot)) configManager.SaveConfig();ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderFloat("##headdotSize", &espGlobals::headDotSize, 0.5, 10, "%.0f", ImGuiSliderFlags_AlwaysClamp)) espGlobals::headDotSize = std::round(espGlobals::headDotSize * 10.0f) / 10.0f; configManager.SaveConfig(); ImGui::PopItemWidth();
                 if (ImGui::Checkbox(" Draw Crosshair", &espGlobals::drawCrosshair)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Fireport line", &espGlobals::drawFireportLine)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Exfils             ", &espGlobals::drawExfil)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##exfildist", &espGlobals::drawExfilDist, 5, 1000, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
 
 

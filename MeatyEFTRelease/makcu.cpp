@@ -1513,18 +1513,13 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 &aimGlobals::showAimFovRing
             );
 
-            configChanged |= ImGui::DragFloat(
-                "Fireport line length (m)",
-                &aimGlobals::fireportLineLengthM,
-                1.0f,
-                25.0f,
-                300.0f,
-                "%.0f m"
+            configChanged |= ImGui::Checkbox(
+                "Draw fireport line",
+                &aimGlobals::drawFireportLine
             );
 
-            configChanged |= ImGui::Checkbox(
-                "Draw fireport line (ESP)",
-                &espGlobals::drawFireportLine
+            ImGui::TextDisabled(
+                "Crosshair draws barrel to screen centre; Fireport draws barrel to the fireport ray."
             );
 
             if (aimGlobals::aimReference ==
@@ -1572,7 +1567,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             );
 
             ImGui::TextDisabled(
-                "FOV is the pixel radius from screen centre."
+                "FOV is the pixel radius from the selected aim reference."
             );
 
             ImGui::Spacing();

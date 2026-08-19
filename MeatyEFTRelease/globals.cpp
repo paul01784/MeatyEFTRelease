@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.28.8";
+std::string globals::appVersion = "1.0.28.9";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -100,7 +100,6 @@ bool espGlobals::drawCrosshair = false;
 bool espGlobals::drawHeadDot = false;
 float espGlobals::headDotSize = 1.5f;
 bool espGlobals::runEsp = false;
-bool espGlobals::drawFireportLine = true;
 int espGlobals::drawExfilDist = 1000;
 bool espGlobals::drawExfil = true;
 
@@ -114,7 +113,7 @@ bool aimGlobals::targetLock = false;
 float aimGlobals::aimSmooth = 4.f;
 AimReference aimGlobals::aimReference = AimReference::Crosshair;
 bool aimGlobals::showAimFovRing = true;
-float aimGlobals::fireportLineLengthM = 120.f;
+bool aimGlobals::drawFireportLine = true;
 
 
 glm::vec4 coloursGlobals::playerPMC = { 1,1,1,1 };
