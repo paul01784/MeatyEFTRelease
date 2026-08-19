@@ -80,15 +80,15 @@ namespace Utils {
 
 	namespace Camera {
 
-		inline bool world_to_screentight(glm::vec3 world, glm::vec2* screen)
+		inline bool world_to_screentight(
+			glm::vec3 world,
+			glm::vec2* screen,
+			const ::CameraProjectionState& projection)
 		{
+			if (!projection.valid)
+				return false;
 
-			glm::highp_mat4 cameraMatrix{};
-			if (mainGame.localIsScoped && camera.localmpCamera)
-				cameraMatrix = camera.g_viewMatrixOptic;
-			else
-				cameraMatrix = camera.g_viewMatrix;
-
+			const glm::highp_mat4& cameraMatrix = projection.viewMatrix;
 
 			const auto pos_vec = glm::vec3{ cameraMatrix[3][0], cameraMatrix[3][1], cameraMatrix[3][2] };
 
@@ -100,15 +100,15 @@ namespace Utils {
 			auto x = glm::dot(glm::vec3{ cameraMatrix[0][0], cameraMatrix[0][1], cameraMatrix[0][2] }, world) + cameraMatrix[0][3];
 			auto y = glm::dot(glm::vec3{ cameraMatrix[1][0], cameraMatrix[1][1], cameraMatrix[1][2] }, world) + cameraMatrix[1][3];
 
-			static const auto screen_center_x = espGlobals::gameRes.x * 0.5f;
-			static const auto screen_center_y = espGlobals::gameRes.y * 0.5f;
+			const float screen_center_x = espGlobals::gameRes.x * 0.5f;
+			const float screen_center_y = espGlobals::gameRes.y * 0.5f;
 
-			if (mainGame.localIsScoped && camera.localmpCamera)
+			if (projection.usingOptic)
 			{
-				float AngleRadHalf = (M_PI / 180) * camera.gameFOV * 0.5f;
+				float AngleRadHalf = (M_PI / 180) * projection.gameFOV * 0.5f;
 				float AngleCtg = cosf(AngleRadHalf) / sinf(AngleRadHalf);
 
-				x /= AngleCtg * camera.gameAspect * 0.5f;
+				x /= AngleCtg * projection.gameAspect * 0.5f;
 				y /= AngleCtg * 0.5f;
 
 			}
@@ -127,14 +127,24 @@ namespace Utils {
 
 		}
 
-		inline bool world_to_screen(glm::vec3 world, glm::vec2* screen)
+		inline bool world_to_screentight(glm::vec3 world, glm::vec2* screen)
 		{
-			glm::highp_mat4 cameraMatrix{};
+			const ::CameraProjectionSnapshot projection =
+				camera.getProjectionSnapshot();
 
-			if (mainGame.localIsScoped && camera.localmpCamera)
-				cameraMatrix = camera.g_viewMatrixOptic;
-			else
-				cameraMatrix = camera.g_viewMatrix;
+			return projection &&
+				world_to_screentight(world, screen, *projection);
+		}
+
+		inline bool world_to_screen(
+			glm::vec3 world,
+			glm::vec2* screen,
+			const ::CameraProjectionState& projection)
+		{
+			if (!projection.valid)
+				return false;
+
+			const glm::highp_mat4& cameraMatrix = projection.viewMatrix;
 
 			const auto pos_vec = glm::vec3{
 				cameraMatrix[3][0],
@@ -160,12 +170,12 @@ namespace Utils {
 				cameraMatrix[1][2]
 				}, world) + cameraMatrix[1][3];
 
-			if (mainGame.localIsScoped && camera.localmpCamera)
+			if (projection.usingOptic)
 			{
-				float angleRadHalf = (PI / 180.0f) * camera.gameFOV * 0.5f;
+				float angleRadHalf = (PI / 180.0f) * projection.gameFOV * 0.5f;
 				float angleCtg = cosf(angleRadHalf) / sinf(angleRadHalf);
 
-				x /= angleCtg * camera.gameAspect * 0.5f;
+				x /= angleCtg * projection.gameAspect * 0.5f;
 				y /= angleCtg * 0.5f;
 			}
 
@@ -197,6 +207,15 @@ namespace Utils {
 			}
 
 			return true;
+		}
+
+		inline bool world_to_screen(glm::vec3 world, glm::vec2* screen)
+		{
+			const ::CameraProjectionSnapshot projection =
+				camera.getProjectionSnapshot();
+
+			return projection &&
+				world_to_screen(world, screen, *projection);
 		}
 	}
 }

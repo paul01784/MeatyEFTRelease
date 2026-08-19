@@ -28,11 +28,18 @@ public:
 public:
     UnityTransform(uint64_t transformInternal, bool useCache = false);
 
+    static bool TryResolveNative(
+        uint64_t transformObject,
+        uint64_t& nativeTransform,
+        bool useCache = false
+    );
+
     const glm::vec3& Position() const;
 
 
     glm::vec3& UpdatePosition(std::span<TrsX> vertices = {});
     glm::quat  GetRotation(std::span<TrsX> vertices = {});
+    bool UpdateWorldPose(glm::vec3& position, glm::quat& rotation);
 
     glm::vec3 GetRootPosition(); 
     glm::vec3 GetLocalPosition();

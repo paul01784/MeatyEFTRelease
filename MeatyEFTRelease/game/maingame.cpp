@@ -27,8 +27,37 @@
 #include "headers/wishlist.h"
 #include "headers/explosives.h"
 #include "headers/dogtag.h"
+#include "headers/fireport.h"
 #include "headers/readOnlyAim.h"
 #include "headers/watchList.h"
+
+#include <condition_variable>
+#include <mutex>
+#include <unordered_set>
+
+namespace
+{
+    template <typename Rep, typename Period>
+    bool WaitForStop(
+        std::stop_token stopToken,
+        std::chrono::duration<Rep, Period> duration)
+    {
+        std::condition_variable_any wakeCondition;
+        std::mutex wakeMutex;
+        std::unique_lock wakeLock(wakeMutex);
+
+        wakeCondition.wait_for(
+            wakeLock,
+            stopToken,
+            duration,
+            []
+            {
+                return false;
+            });
+
+        return !stopToken.stop_requested();
+    }
+}
 
 
 
@@ -217,11 +246,6 @@ bool MainGame::updatePlayerList()
     if (!Utils::valid_pointer(mainGame.localGameWorld))
         return false;
 
-    const auto keepStaleList = [&]() -> bool
-        {
-            return mainGame.registeredPlayersCount > 0;
-        };
-
     const auto commitEmptyPlayerList = [&]()
         {
             mainGame.registeredPlayers = 0;
@@ -234,16 +258,6 @@ bool MainGame::updatePlayerList()
                 0
             );
         };
-
-    try
-    {
-        updateLocalPlayerPtr();
-    }
-    catch (...)
-    {
-        LOGS.logError("[PLAYERS][LIST] updateLocalPlayerPtr failed");
-        return false;
-    }
 
     auto TryReadValue = [&](uint64_t address, auto& out) -> bool
         {
@@ -282,35 +296,73 @@ bool MainGame::updatePlayerList()
             }
         };
 
+    // Both of these fields belong to LocalGameWorld, so fetch them together.
+    // Keeping them as separate direct reads turned an otherwise small roster
+    // refresh into two independent DMA round trips every player tick.
+    uint64_t latestLocalPlayer = mainGame.localPlayerPtr;
     uint64_t registeredPlayers = 0;
     uint64_t registeredPlayersList = 0;
     int registeredPlayersCount = 0;
 
-    if (!TryReadValue(
-        mainGame.localGameWorld +
-        sdk::ClientLocalGameWorld::RegisteredPlayers,
-        registeredPlayers))
+    const Memory::ScatterReadRequest rootRequests[] =
     {
-        return keepStaleList();
+        {
+            mainGame.localGameWorld + sdk::ClientLocalGameWorld::MainPlayer,
+            &latestLocalPlayer,
+            sizeof(latestLocalPlayer)
+        },
+        {
+            mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers,
+            &registeredPlayers,
+            sizeof(registeredPlayers)
+        }
+    };
+
+    if (!mem.ReadScatter(
+        rootRequests,
+        std::size(rootRequests),
+        false,
+        "Player roster roots"))
+    {
+        return false;
     }
 
+    if (Utils::valid_pointer(latestLocalPlayer))
+        mainGame.localPlayerPtr = latestLocalPlayer;
+
     if (!Utils::valid_pointer(registeredPlayers))
-        return keepStaleList();
+        return false;
 
-    if (!TryReadValue(registeredPlayers + 0x18, registeredPlayersCount))
-        return keepStaleList();
+    const Memory::ScatterReadRequest headerRequests[] =
+    {
+        {
+            registeredPlayers + 0x10,
+            &registeredPlayersList,
+            sizeof(registeredPlayersList)
+        },
+        {
+            registeredPlayers + 0x18,
+            &registeredPlayersCount,
+            sizeof(registeredPlayersCount)
+        }
+    };
 
-    constexpr int MAX_REASONABLE_REGISTERED_PLAYERS = 512;
+    if (!mem.ReadScatter(headerRequests, std::size(headerRequests), false, "Player roster header"))
+    {
+        return false;
+    }
 
-    if (registeredPlayersCount < 0 ||
-        registeredPlayersCount > MAX_REASONABLE_REGISTERED_PLAYERS)
+    const int bufferCapacity =
+        static_cast<int>(std::size(mainGame.player_buffer));
+
+    if (registeredPlayersCount < 0 || registeredPlayersCount > bufferCapacity)
     {
         LOGS.logError(
             "[PLAYERS][LIST] registeredPlayersCount invalid: " +
             std::to_string(registeredPlayersCount)
         );
 
-        return keepStaleList();
+        return false;
     }
 
     // This is a valid read of a genuinely empty list
@@ -321,60 +373,79 @@ bool MainGame::updatePlayerList()
         return true;
     }
 
-    if (!TryReadValue(registeredPlayers + 0x10, registeredPlayersList))
-        return keepStaleList();
-
     if (!Utils::valid_pointer(registeredPlayersList))
-        return keepStaleList();
-
-    const int bufferCapacity =
-        static_cast<int>(std::size(mainGame.player_buffer));
-
-    const int readCount =
-        std::min(registeredPlayersCount, bufferCapacity);
-
-    if (readCount <= 0)
-        return keepStaleList();
+        return false;
 
     std::vector<uint64_t> tempBuffer(
-        static_cast<size_t>(readCount),
+        static_cast<size_t>(registeredPlayersCount),
         0
     );
 
     const uint64_t playerArrayStart = registeredPlayersList + 0x20;
 
-    if (!TryReadBuffer(
-        playerArrayStart,
-        tempBuffer.data(),
-        sizeof(uint64_t) * static_cast<size_t>(readCount)))
+    if (!TryReadBuffer(playerArrayStart, tempBuffer.data(), sizeof(uint64_t) * tempBuffer.size()))
     {
-        return keepStaleList();
+        return false;
     }
 
-    int validCount = 0;
+    uint64_t verifiedRegisteredPlayers = 0;
+    uint64_t verifiedRegisteredPlayersList = 0;
+    int verifiedRegisteredPlayersCount = 0;
 
-    for (int i = 0; i < readCount; ++i)
+    const Memory::ScatterReadRequest verificationRequests[] =
     {
-        const uint64_t player = tempBuffer[static_cast<size_t>(i)];
+        {
+            mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers,
+            &verifiedRegisteredPlayers,
+            sizeof(verifiedRegisteredPlayers)
+        },
+        {
+            registeredPlayers + 0x10,
+            &verifiedRegisteredPlayersList,
+            sizeof(verifiedRegisteredPlayersList)
+        },
+        {
+            registeredPlayers + 0x18,
+            &verifiedRegisteredPlayersCount,
+            sizeof(verifiedRegisteredPlayersCount)
+        }
+    };
 
-        if (!Utils::valid_pointer(player))
-            continue;
-
-        mainGame.player_buffer[validCount++] = player;
+    if (!mem.ReadScatter(verificationRequests, std::size(verificationRequests), false, "Player roster verify"))
+    {
+        return false;
     }
 
-    // The list claimed to have players, but none were usable
-    // Treat this as a transient/bad list read, not an empty raid
-    if (validCount <= 0)
-        return keepStaleList();
+    if (verifiedRegisteredPlayers != registeredPlayers ||
+        verifiedRegisteredPlayersList != registeredPlayersList ||
+        verifiedRegisteredPlayersCount != registeredPlayersCount)
+    {
+        return false;
+    }
+
+    std::unordered_set<uint64_t> uniquePlayers;
+    uniquePlayers.reserve(tempBuffer.size());
+
+    for (const uint64_t player : tempBuffer)
+    {
+        if (!Utils::valid_pointer(player) || !uniquePlayers.insert(player).second)
+        {
+            return false;
+        }
+    }
+
+    std::copy(
+        tempBuffer.begin(),
+        tempBuffer.end(),
+        std::begin(mainGame.player_buffer));
 
     // Clear old entries left after the new shorter list
-    for (int i = validCount; i < bufferCapacity; ++i)
+    for (int i = registeredPlayersCount; i < bufferCapacity; ++i)
         mainGame.player_buffer[i] = 0;
 
     mainGame.registeredPlayers = registeredPlayers;
     mainGame.registeredPlayersList = registeredPlayersList;
-    mainGame.registeredPlayersCount = validCount;
+    mainGame.registeredPlayersCount = registeredPlayersCount;
 
     return true;
 }
@@ -449,7 +520,7 @@ void MainGame::getPlayerListDetails()
     }
 }
 
-void MainGame::getGameWorldDetails()
+bool MainGame::getGameWorldDetails(std::stop_token stopToken)
 {
     LOGS.logInfo("[GameWorld] Waiting for raid start");
 
@@ -463,13 +534,29 @@ void MainGame::getGameWorldDetails()
 
     constexpr int kLogEveryAttempts = 4;
     constexpr int kMaxPendingPromoteAttempts = 6;
+    constexpr int kRefreshEveryAttempts = 2;
     constexpr DWORD kRetryDelayMs = 2500;
 
-    while (true)
+    while (!stopToken.stop_requested())
     {
         try
         {
             ++waitAttempts;
+
+            const bool refreshBeforeLookup = waitAttempts == 1 || ((waitAttempts - 1) % kRefreshEveryAttempts) == 0;
+
+            if (refreshBeforeLookup)
+            {
+                const ScopedDmaPriority refreshPriority(DmaPriority::High);
+
+                if (!mem.RefreshProcessInformationNow())
+                {
+                    LOGS.logWarn(
+                        "[GameWorld] DMA process/TLB refresh failed; "
+                        "continuing with uncached lookup"
+                    );
+                }
+            }
 
             RaidState raid{};
             std::string probe;
@@ -526,7 +613,7 @@ void MainGame::getGameWorldDetails()
                 this->localGameWorld = raid.local_game_world;
 
                 LOGS.logInfo("[GameWorld] ", probe);
-                break;
+                return true;
             }
 
             if ((waitAttempts % kLogEveryAttempts) == 0)
@@ -559,85 +646,22 @@ void MainGame::getGameWorldDetails()
             pendingAttempts = 0;
         }
 
-        Sleep(kRetryDelayMs);
-    }
-}
-
-void MainGame::cameraAndAimWorker()
-{
-    while (true)
-    {
-        while (!appGlobals::runThreads.load(std::memory_order_acquire))
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-        try {
-
-            TaskManager cameraAndAimTask;
-
-            //Task List
-            cameraAndAimTask.addTask("cameraTask", std::bind(&Camera::cameraTask, &camera), &globals::taskCamera);
-            cameraAndAimTask.addTask("readOnlyAim", std::bind(&ReadOnlyAim::aimTask, &readOnlyAim), &globals::taskAim);
-            cameraAndAimTask.addTask("keyManager", std::bind(&MainGame::keyManagerTask, &mainGame), &globals::taskKeyManager);
-
-            //run the tasks
-            cameraAndAimTask.run();
-
-        }
-        catch (const std::exception& e) {
-            LOGS.logError("Exception caught in cameraAndAimWorker: " + std::string(e.what()) + ". Retrying...");
-        }
-        catch (...) {
-            LOGS.logError("Unknown exception caught in cameraAndAimWorker. Retrying...");
+        if (!WaitForStop(
+            stopToken,
+            std::chrono::milliseconds(kRetryDelayMs)))
+        {
+            break;
         }
     }
+
+    return false;
 }
 
-void MainGame::featuresTaskWorker()
-{
-    while (true)
-    {
-        while (!appGlobals::runThreads.load(std::memory_order_acquire))
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-        try {
-
-            TaskManager featuresTask;
-
-            //Task List
-            
-            featuresTask.addTask("exfilTask", std::bind(&Exfil::exfilTask, &exfil), &globals::taskExfil);
-            featuresTask.addTask("lootTask", std::bind(&loot::lootTask, &Loot), &globals::taskLoot);
-            featuresTask.addTask("questTask", std::bind(&QuestManager::updateAndPruneActiveQuests, &questManager), &globals::taskQuest);
-            featuresTask.addTask("wishManagerTask", std::bind(&WishListManager::createWishList, &wishListManager), &globals::taskWishManager);
-            featuresTask.addTask("ExplosiveManagerTask", std::bind(&ExplosiveManager::initManager, &explosiveManager), &globals::taskGrenades, 100.0);
-            featuresTask.addTask("PlayerEquipmentTask", std::bind(&Players::playerEquipment, &players), &globals::taskPlayersEquipment);
-
-            //run the tasks
-            featuresTask.run();
-
-            //clear cache after ending worker
-            exfil.clearCache();
-            Loot.clearCache();
-            wishListData.clear();
-            explosiveManager.reset();
-            
-        }
-        catch (const std::exception& e) {
-            LOGS.logError("Exception caught in featuresTaskWorker: " + std::string(e.what()) + ". Retrying...");
-
-        }
-        catch (...) {
-            LOGS.logError("Unknown exception caught in featuresTaskWorker. Retrying...");
-
-        }
-    }
-}
-
-void MainGame::mainThread()
+void MainGame::mainThread(std::stop_token stopToken)
 {
     bool doOnce = false;
 
-    while (true)
+    while (!stopToken.stop_requested())
     {
         const bool initRunning = mem.IsInitRunning();
 
@@ -653,7 +677,8 @@ void MainGame::mainThread()
         {
             doOnce = false;
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            if (!WaitForStop(stopToken, std::chrono::milliseconds(250)))
+                break;
             continue;
         }
 
@@ -672,7 +697,8 @@ void MainGame::mainThread()
                     "[GOM] Signature scan did not find the "
                     "GameObjectManager; retrying"
                 );
-                Sleep(3000);
+                if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))
+                    break;
                 continue;
             }
 
@@ -689,7 +715,8 @@ void MainGame::mainThread()
                 LOGS.logInfo(
                     "[GOM] GameObjectManager pointer is unavailable; retrying"
                 );
-                Sleep(3000);
+                if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))
+                    break;
                 continue;
             }
             else
@@ -701,66 +728,155 @@ void MainGame::mainThread()
             
         }
 
-        Sleep(4000);
+        if (!WaitForStop(stopToken, std::chrono::milliseconds(4000)))
+            break;
+
         // wait here to get game world!
-        getGameWorldDetails();
+        if (!getGameWorldDetails(stopToken))
+            break;
 
         //load required map to memory
         loadMaps(this->selectedLocation.c_str());
         appGlobals::runRadar = true;
         mapGlobals::followLocal = true;
 
-        bool once = false;
-        static std::atomic_bool workerThreadsStarted{ false };
+        LOGS.logInfo("[MAIN][THREADS] Starting radar");
+        appGlobals::runThreads.store(true, std::memory_order_release);
+
         TaskManager manager;
-        while (appGlobals::runRadar.load(std::memory_order_acquire))
-        {
-            if (!once)
+
+        // One scheduler
+        manager.addTask(
+            "cameraTask",
+            std::bind(&Camera::cameraTask, &camera),
+            &globals::taskCamera,
+            { TaskPriority::Critical, DmaPriority::Critical, false, 0.0 });
+
+        manager.addTask(
+            "playerPositionTask",
+            std::bind(&Players::positionTask, &players),
+            &globals::taskPlayerPositions,
+            { TaskPriority::Critical, DmaPriority::High, false, 0.0 });
+
+        manager.addTask(
+            "readOnlyAim",
+            std::bind(&ReadOnlyAim::aimTask, &readOnlyAim),
+            &globals::taskAim,
+            { TaskPriority::Critical, DmaPriority::Critical, false, 0.0 });
+
+        manager.addTask(
+            "fireportTask",
+            []()
             {
-                LOGS.logInfo("[MAIN][THREADS] Starting radar");
-                once = true;
-                appGlobals::runThreads = true;
+                const bool fireportNeeded = espGlobals::drawFireportLine || (aimGlobals::aimEnabled && aimGlobals::aimReference == AimReference::Fireport);
 
-                bool expected = false;
-                if (workerThreadsStarted.compare_exchange_strong(expected, true))
-                {
-                    std::thread featuresTaskManager(&MainGame::featuresTaskWorker, &mainGame);
-                    featuresTaskManager.detach();
+                if (fireportNeeded)
+                    g_fireport.update(mainGame.localPlayerPtr);
+            },
+            &globals::taskFireport,
+            { TaskPriority::High, DmaPriority::High, false, 4.0 });
 
-                    std::thread cameraAndAimManager(&MainGame::cameraAndAimWorker, &mainGame);
-                    cameraAndAimManager.detach();
-                }
-            }
+        manager.addTask(
+            "playersTask",
+            std::bind(&Players::playersTask, &players),
+            &globals::taskPlayers,
+            { TaskPriority::High, DmaPriority::Normal, false, 0.0 });
 
-            LOGS.logInfo("[MAIN][MANAGER] Starting Manager");
+        manager.addTask(
+            "playersBoneTask",
+            std::bind(&Players::boneTask, &players),
+            &globals::taskPlayersBones,
+            { TaskPriority::High, DmaPriority::Normal, false, 10.0 });
 
-            manager.addTask("raidMonitor", std::bind(&MainGame::raidMonitorTask, &mainGame), &globals::taskRaidMonitor);
-            manager.addTask("playersTask", std::bind(&Players::playersTask, &players), &globals::taskPlayers);
-            manager.addTask("playersBoneTask", std::bind(&Players::boneTask, &players), &globals::taskPlayersBones, 16.0);
-            
-            LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log Start");
-            watchListManager.logRaidStart(this->selectedLocation.c_str());
-            
-            manager.run(); // wont return from here till end of raid
-            LOGS.logInfo("[MAIN][MANAGER] Stopping Manager");
+        manager.addTask(
+            "ExplosiveManagerTask",
+            std::bind(&ExplosiveManager::initManager, &explosiveManager),
+            &globals::taskGrenades,
+            { TaskPriority::High, DmaPriority::High, false, 100.0 });
 
-            watchListManager.logRaidEnd();
-            LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log End");
+        manager.addTask(
+            "raidMonitor",
+            std::bind(&MainGame::raidMonitorTask, &mainGame),
+            &globals::taskRaidMonitor,
+            { TaskPriority::Normal, DmaPriority::Normal, false, 40.0 });
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
+        manager.addTask(
+            "keyManager",
+            std::bind(&MainGame::keyManagerTask, &mainGame),
+            &globals::taskKeyManager,
+            { TaskPriority::Normal, DmaPriority::Normal, false, 0.0 });
+
+        manager.addTask(
+            "exfilTask",
+            std::bind(&Exfil::exfilTask, &exfil),
+            &globals::taskExfil,
+            { TaskPriority::Normal, DmaPriority::Normal, false, 250.0 });
+
+        manager.addTask(
+            "lootTask",
+            std::bind(&loot::lootTask, &Loot),
+            &globals::taskLoot,
+            { TaskPriority::Background, DmaPriority::Background, true, 50.0 });
+
+        manager.addTask(
+            "PlayerEquipmentTask",
+            std::bind(&Players::playerEquipment, &players),
+            &globals::taskPlayersEquipment,
+            { TaskPriority::Background, DmaPriority::Background, true, 150.0 });
+
+        manager.addTask(
+            "PlayerMetadataTask",
+            std::bind(&Players::playerMetadataTask, &players),
+            &globals::taskPlayerMetadata,
+            { TaskPriority::Background, DmaPriority::Background, true, 225.0 });
+
+        manager.addTask(
+            "questTask",
+            std::bind(&QuestManager::updateAndPruneActiveQuests, &questManager),
+            &globals::taskQuest,
+            { TaskPriority::Background, DmaPriority::Background, true, 350.0 });
+
+        manager.addTask(
+            "wishManagerTask",
+            std::bind(&WishListManager::createWishList, &wishListManager),
+            &globals::taskWishManager,
+            { TaskPriority::Background, DmaPriority::Background, false, 450.0 });
+
+        LOGS.logInfo("[MAIN][MANAGER] Starting Manager");
+        LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log Start");
+        watchListManager.logRaidStart(this->selectedLocation.c_str());
+
+        manager.run(stopToken);
+
+        appGlobals::runThreads.store(false, std::memory_order_release);
+
+        exfil.clearCache();
+        Loot.clearCache();
+        wishListData.clear();
+        explosiveManager.reset();
+
+        LOGS.logInfo("[MAIN][MANAGER] Stopping Manager");
+        watchListManager.logRaidEnd();
+        LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log End");
 
         LOGS.logInfo("[MAIN][THREADS] Stopping radar");
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+        if (stopToken.stop_requested())
+            break;
+
         //clear caches
         mainGame.clearCache();
         players.clearCache();
         camera.clearCache();
         exfil.clearCache();
         g_dogTagCache.ClearProcessedCorpses();
-        Sleep(3000);
+        if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))
+            break;
 
     }
+
+    appGlobals::runThreads.store(false, std::memory_order_release);
+    appGlobals::runRadar.store(false, std::memory_order_release);
 }
 
 void MainGame::keyManagerTask()
@@ -855,7 +971,9 @@ void MainGame::raidMonitorTask()
 
         auto countActiveCachedPlayers = []() -> int
             {
-                const std::vector<PlayerCache> snapshot = players.getCacheSnapshot();
+                const PlayerCacheSnapshot snapshotHandle =
+                    players.getCacheSnapshot();
+                const PlayerCacheCollection& snapshot = *snapshotHandle;
 
                 int active = 0;
 

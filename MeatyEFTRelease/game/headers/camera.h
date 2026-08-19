@@ -1,7 +1,10 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <memory>
 
 struct CameraArray
 {
@@ -11,33 +14,75 @@ struct CameraArray
     uint64_t maxCount;
 };
 
+struct CameraMatrixActivityDebugState
+{
+    bool localScoped = false;
+
+    bool fpsMatrixValid = false;
+    bool opticMatrixValid = false;
+
+    bool opticMatrixChanged = false;
+    bool opticMatrixActive = false;
+    bool usingOpticMatrix = false;
+
+    int activityTick = 0;
+    int noChangeSamples = 0;
+
+    float opticMatrixDiff = 0.0f;
+};
+
+struct CameraProjectionState
+{
+    glm::highp_mat4 viewMatrix{};
+    glm::highp_mat4 fpsViewMatrix{};
+    glm::highp_mat4 opticViewMatrix{};
+    glm::highp_mat4 fpsRawMatrix{};
+    glm::highp_mat4 opticRawMatrix{};
+
+    float gameFOV = 0.0f;
+    float gameAspect = 0.0f;
+
+    std::uint64_t fpsCamera = 0;
+    std::uint64_t fpsMatrixAddress = 0;
+    std::uint64_t opticCamera = 0;
+    std::uint64_t opticMatrixAddress = 0;
+    std::uint64_t cameraEntity = 0;
+    std::uint64_t opticCameraMatrix = 0;
+
+    bool valid = false;
+    bool scoped = false;
+    bool usingOptic = false;
+    bool fpsPointersReady = false;
+    bool opticPointersReady = false;
+
+    CameraMatrixActivityDebugState matrixDebug{};
+
+    std::uint64_t version = 0;
+    std::chrono::steady_clock::time_point publishedAt{};
+    double averageIntervalMs = 0.0;
+};
+
+using CameraProjectionSnapshot =
+    std::shared_ptr<const CameraProjectionState>;
+
 class Camera
 {
 public:
+	Camera();
 
-    struct MatrixActivityDebugState
-    {
-        bool localScoped = false;
+    using MatrixActivityDebugState = CameraMatrixActivityDebugState;
 
-        bool fpsMatrixValid = false;
-        bool opticMatrixValid = false;
-
-        bool opticMatrixChanged = false;
-        bool opticMatrixActive = false;
-        bool usingOpticMatrix = false;
-
-        int activityTick = 0;
-        int noChangeSamples = 0;
-
-        float opticMatrixDiff = 0.0f;
-    };
-
-    const MatrixActivityDebugState& getMatrixActivityDebug() const;
+    [[nodiscard]] MatrixActivityDebugState
+        getMatrixActivityDebug() const noexcept;
 
     void getCameraPtrs();
     void getMatrixPtrs();
     void cameraTask();
     void clearCache();
+
+    [[nodiscard]] CameraProjectionSnapshot
+        getProjectionSnapshot() const noexcept;
+    [[nodiscard]] std::uint64_t getBusyReadSkips() const noexcept;
 
     bool checkIfOpticMatrix();
 
@@ -138,6 +183,14 @@ private:
 
     static bool validFov(float value);
     static bool validAspect(float value);
+
+    void publishProjectionSnapshot(bool valid, bool scoped);
+
+    std::atomic<CameraProjectionSnapshot> m_publishedProjection;
+    std::atomic<std::uint64_t> m_projectionVersion{ 0 };
+    std::atomic<std::uint64_t> m_busyReadSkips{ 0 };
+    std::chrono::steady_clock::time_point m_lastProjectionPublish{};
+    double m_averageProjectionIntervalMs = 0.0;
 };
 
 extern Camera camera;

@@ -58,6 +58,58 @@ namespace MapNamesRender
 
 namespace fuserRender
 {
+    inline thread_local CameraProjectionSnapshot g_frameCameraSnapshot;
+    inline thread_local PlayerCacheSnapshot g_framePlayerSnapshot;
+    inline thread_local LootCacheSnapshot g_frameLootSnapshot;
+    inline thread_local GrenadeCacheSnapshot g_frameGrenadeSnapshot;
+    inline thread_local QuestPublishedSnapshot g_frameQuestSnapshot;
+    inline thread_local ExfilCacheSnapshot g_frameExfilSnapshot;
+    inline thread_local FireportPoseSnapshot g_frameFireportSnapshot;
+    inline thread_local glm::vec3 g_frameLocalLocation{};
+
+    static inline bool ProjectWorldToScreen(
+        const glm::vec3& world,
+        glm::vec2* screen)
+    {
+        return g_frameCameraSnapshot &&
+            Utils::Camera::world_to_screen(
+                world,
+                screen,
+                *g_frameCameraSnapshot);
+    }
+
+    static inline void CaptureFrameSnapshots()
+    {
+        g_frameCameraSnapshot = camera.getProjectionSnapshot();
+        g_framePlayerSnapshot = players.getCacheSnapshot();
+        g_frameLootSnapshot = Loot.getCacheSnapshot();
+        g_frameGrenadeSnapshot = explosiveManager.getGrenadesSnapshot();
+        g_frameQuestSnapshot = GetQuestPublishedSnapshot();
+        g_frameExfilSnapshot = exfil.getCacheExfilSnapshot();
+        g_frameFireportSnapshot = g_fireport.getSnapshot();
+        g_frameLocalLocation = mainGame.localLocation;
+
+        for (const PlayerCache& player : *g_framePlayerSnapshot)
+        {
+            if (player.isLocal)
+            {
+                g_frameLocalLocation = player.location;
+                break;
+            }
+        }
+    }
+
+    static inline void ReleaseFrameSnapshots()
+    {
+        g_frameCameraSnapshot.reset();
+        g_framePlayerSnapshot.reset();
+        g_frameLootSnapshot.reset();
+        g_frameGrenadeSnapshot.reset();
+        g_frameQuestSnapshot.reset();
+        g_frameExfilSnapshot.reset();
+        g_frameFireportSnapshot.reset();
+    }
+
     //exception tracking
 
     inline std::atomic<const char*> g_currentStage = "Idle";
@@ -558,13 +610,14 @@ namespace fuserRender
 
     static inline void RenderCrosshair()
     {
-        if (!camera.fpsCamera)
+        if (!g_frameCameraSnapshot ||
+            !g_frameCameraSnapshot->valid)
             return;
 
         if (!espGlobals::drawCrosshair)
             return;
 
-        if (mainGame.localIsScoped)
+        if (g_frameCameraSnapshot && g_frameCameraSnapshot->scoped)
             return;
 
         const float screenW = ScreenWidth();
@@ -581,30 +634,36 @@ namespace fuserRender
 
     static inline void RenderFireportVisual()
     {
-        if (!camera.fpsCamera || !espGlobals::drawFireportLine)
+        if (!g_frameCameraSnapshot ||
+            !g_frameCameraSnapshot->valid ||
+            !espGlobals::drawFireportLine)
             return;
 
-        if (!Utils::valid_pointer(mainGame.localPlayerPtr))
+
+        const FireportPose& pose = *g_frameFireportSnapshot;
+        if (!pose.valid)
             return;
 
-        // We shouldnt read memory in rendering operations, causes fps lag
-        //g_fireport.update(mainGame.localPlayerPtr);
-        const FireportPose pose = g_fireport.snapshot();
-        if (!pose.valid || !pose.screenStartOk)
+        const float length = (std::max)(10.0f, aimGlobals::fireportLineLengthM);
+        const glm::vec3 endWorld = pose.worldOrigin + (pose.worldForward * length);
+        glm::vec2 screenStart{};
+        glm::vec2 screenEnd{};
+
+        if (!ProjectWorldToScreen(pose.worldOrigin, &screenStart))
             return;
 
         static const glm::vec4 kFireportLine{1.0f, 0.86f, 0.24f, 0.95f};
-        if (pose.screenEndOk) {
+        if (ProjectWorldToScreen(endWorld, &screenEnd)) {
             g_DxWindow.DrawLine(
-                pose.screenStart.x,
-                pose.screenStart.y,
-                pose.screenEnd.x,
-                pose.screenEnd.y,
+                screenStart.x,
+                screenStart.y,
+                screenEnd.x,
+                screenEnd.y,
                 kFireportLine,
                 2.0f
             );
         } else {
-            g_DxWindow.DrawFilledCircle(pose.screenStart.x, pose.screenStart.y, 3.0f, kFireportLine);
+            g_DxWindow.DrawFilledCircle(screenStart.x, screenStart.y, 3.0f, kFireportLine);
         }
     }
 
@@ -615,13 +674,28 @@ namespace fuserRender
         if (aimGlobals::aimFOV <= 0.f)
             return;
 
-        const AimReferencePoint ref = readOnlyAim.resolveAimReference();
-        if (aimGlobals::aimReference == AimReference::Fireport && !ref.valid)
-            return;
+        glm::vec2 ringCenter{
+            ScreenWidth() * 0.5f,
+            ScreenHeight() * 0.5f
+        };
+
+        if (aimGlobals::aimReference == AimReference::Fireport)
+        {
+            const FireportPose& pose = *g_frameFireportSnapshot;
+            if (!pose.valid)
+                return;
+
+            const float length =
+                (std::max)(10.0f, aimGlobals::fireportLineLengthM);
+            const glm::vec3 endWorld = pose.worldOrigin + (pose.worldForward * length);
+
+            if (!ProjectWorldToScreen(endWorld, &ringCenter))
+                return;
+        }
 
         g_DxWindow.DrawCircle(
-            ref.pos.x,
-            ref.pos.y,
+            ringCenter.x,
+            ringCenter.y,
             aimGlobals::aimFOV,
             coloursGlobals::fovCircle,
             1.5f
@@ -637,7 +711,7 @@ namespace fuserRender
 
         
 
-        std::vector<QuestLocation> locations = GetMasterLocationsSnapshot();
+        const std::vector<QuestLocation>& locations = g_frameQuestSnapshot->masterLocations;
 
         for (const auto& loc : locations)
         {
@@ -650,10 +724,7 @@ namespace fuserRender
                 continue;
             }
 
-            const int distance = static_cast<int>(
-                glm::distance(mainGame.localLocation, loc.pos)
-                );
-
+            const int distance = static_cast<int>(glm::distance(g_frameLocalLocation, loc.pos));
             if (distance > espGlobals::drawLootDist)
                 continue;
 
@@ -666,7 +737,7 @@ namespace fuserRender
             }
 
             glm::vec2 screenPos{};
-            if (!Utils::Camera::world_to_screen(loc.pos, &screenPos))
+            if (!ProjectWorldToScreen(loc.pos, &screenPos))
                 continue;
 
             std::string questText = loc.questName;
@@ -700,8 +771,7 @@ namespace fuserRender
 
     static inline void RenderExfil()
     {
-        const std::vector<exfilsMemory> exfilCache =
-            exfil.getCacheExfil();
+        const ExfilCacheCollection& exfilCache = *g_frameExfilSnapshot;
 
         if (exfilCache.empty() || !espGlobals::drawExfil)
             return;
@@ -716,7 +786,7 @@ namespace fuserRender
 
             const int distance = static_cast<int>(
                 glm::distance(
-                    mainGame.localLocation,
+                    g_frameLocalLocation,
                     currentExfil.locationWorld
                 )
                 );
@@ -726,7 +796,7 @@ namespace fuserRender
 
             glm::vec2 screenPos{};
 
-            if (!Utils::Camera::world_to_screen(
+            if (!ProjectWorldToScreen(
                 currentExfil.locationWorld,
                 &screenPos))
             {
@@ -789,7 +859,7 @@ namespace fuserRender
 
     static inline void RenderNades()
     {
-        const std::vector<GrenadeList> nadeCache = explosiveManager.getGrenades();
+        const GrenadeCacheCollection& nadeCache = *g_frameGrenadeSnapshot;
 
         if (nadeCache.empty())
             return;
@@ -809,7 +879,7 @@ namespace fuserRender
 
             const float distance =
                 glm::distance(
-                    mainGame.localLocation,
+                    g_frameLocalLocation,
                     nade.worldLocation);
 
             if (distance > espGlobals::drawGrenadesDist)
@@ -820,7 +890,7 @@ namespace fuserRender
 
             glm::vec2 screenPos{};
 
-            if (!Utils::Camera::world_to_screen(
+            if (!ProjectWorldToScreen(
                 nade.worldLocation,
                 &screenPos))
             {
@@ -895,7 +965,7 @@ namespace fuserRender
         {
             glm::vec2 screenPos{};
 
-            if (!Utils::Camera::world_to_screen(player.bonePositions[i], &screenPos))
+            if (!ProjectWorldToScreen(player.bonePositions[i], &screenPos))
                 return false;
 
             if (screenPos.x == 0.0f && screenPos.y == 0.0f)
@@ -930,7 +1000,7 @@ namespace fuserRender
 
     static inline void RenderAmmoHud()
     {
-        std::vector<PlayerCache>& cache = players.getCache();
+        const PlayerCacheCollection& cache = *g_framePlayerSnapshot;
 
         if (cache.empty())
             return;
@@ -989,7 +1059,7 @@ namespace fuserRender
     static inline void RenderPlayers()
     {
         
-            std::vector<PlayerCache>& cache = players.getCache();
+            const PlayerCacheCollection& cache = *g_framePlayerSnapshot;
 
             if (cache.empty())
                 return;
@@ -1012,7 +1082,7 @@ namespace fuserRender
                     continue;
 
                 glm::vec2 screenPos{};
-                if (!Utils::Camera::world_to_screen(player.location, &screenPos))
+                if (!ProjectWorldToScreen(player.location, &screenPos))
                     continue;
 
                 const glm::vec4 playerColour = player.colour;
@@ -1062,7 +1132,7 @@ namespace fuserRender
                 {
                     glm::vec2 headPos{};
 
-                    if (Utils::Camera::world_to_screen(
+                    if (ProjectWorldToScreen(
                         player.bonePositions[boneListIndexes::Head],
                         &headPos))
                     {
@@ -1095,7 +1165,7 @@ namespace fuserRender
                 {
                     glm::vec2 screenHead{};
 
-                    if (Utils::Camera::world_to_screen(
+                    if (ProjectWorldToScreen(
                         player.bonePositions[boneListIndexes::Head],
                         &screenHead))
                     {
@@ -1164,7 +1234,7 @@ namespace fuserRender
         if (!espGlobals::drawLoot)
             return;
 
-        std::vector<LootList> lootList = Loot.getCacheLoot();
+        const LootCacheCollection& lootList = *g_frameLootSnapshot;
 
         for (const auto& loot : lootList)
         {
@@ -1183,15 +1253,13 @@ namespace fuserRender
             if (loot.isCorpse && !espGlobals::drawCorpse)
                 continue;
 
-            const int distance = static_cast<int>(
-                glm::distance(mainGame.localLocation, loot.worldLocation)
-                );
+            const int distance = static_cast<int>(glm::distance(g_frameLocalLocation, loot.worldLocation));
 
             if (distance > espGlobals::drawLootDist)
                 continue;
 
             glm::vec2 screenPos{};
-            if (!Utils::Camera::world_to_screen(loot.worldLocation, &screenPos))
+            if (!ProjectWorldToScreen(loot.worldLocation, &screenPos))
                 continue;
 
             const glm::vec4 lootColour = loot.isQuestItem
@@ -1283,6 +1351,7 @@ namespace fuserRender
 
     static inline bool Render()
     {
+        CaptureFrameSnapshots();
         g_DxWindow.BeginDrawList();
 
         bool activeScene = false;
@@ -1306,6 +1375,7 @@ namespace fuserRender
             });
 
         g_DxWindow.SubmitDrawList();
+        ReleaseFrameSnapshots();
 
         g_currentStage.store("Idle", std::memory_order_relaxed);
 

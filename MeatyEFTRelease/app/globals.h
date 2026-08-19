@@ -13,9 +13,11 @@ struct globals {
     static std::string radarSubText;
 
     static double taskPlayers;
+    static double taskPlayerPositions;
     static double taskPlayersBones;
     static double taskGrenades;
     static double taskPlayersEquipment;
+    static double taskPlayerMetadata;
     static double taskExfil;
     static double taskLoot;
     static double taskQuest;
@@ -23,6 +25,7 @@ struct globals {
     static double taskTripWire;
     static double taskKeyManager;
     static double taskCamera;
+    static double taskFireport;
     static double taskMemoryManager;
     static double taskRaidMonitor;
     static double taskAim;
@@ -149,6 +152,7 @@ struct coloursGlobals {
     static glm::vec4 questColour;
     static glm::vec4 wishListColour;
     static glm::vec4 valueLootColour;
+    static glm::vec4 containerColour;
 };
 
 struct keyGlobals {
@@ -165,6 +169,27 @@ struct lootGlobals {
     static bool enableValueLoot;
     static int valueLootFrom;
     static int valueLootFromEquip;
+    static bool drawDrawer;
+    static bool drawDuffle;
+    static bool drawSafe;
+    static bool drawWeaponBox;
+    static bool drawTechCrate;
+    static bool drawRationCrate;
+    static bool drawMedicalCrate;
+    static bool drawJacket;
+    static bool drawMedPackage;
+    static bool drawMedBox;
+    static bool drawToolbox;
+    static bool drawGrenadeBox;
+    static bool drawBuriedStash;
+    static bool drawGroundCache;
+    static bool drawWoodenCrate;
+    static bool drawSuitcase;
+    static bool drawAmmoBox;
+    static bool drawDeadBody;
+    static bool drawPCBlock;
+    static bool drawRegister;
+    static bool drawAirDrops;
 };
 
 struct writeGlobals {

@@ -3,6 +3,7 @@
 #include "../app/globals.h"
 
 #include "../memory/Memory.h"
+#include "../memory/ScatterReadBatch.h"
 
 #include "headers/maingame.h"
 #include "../app/debug.h"
@@ -12,7 +13,6 @@
 #include "headers/tarkovdevquery.h"
 #include <cmath>
 #include "headers/questManager.h"
-#include "headers/tarkovdevquery.h"
 #include "headers/loot.h"
 #include "headers/wishlist.h"
 #include "headers/dogtag.h"
@@ -28,8 +28,20 @@ bool Players::groupIDSet = false;
 
 static glm::vec3 GetBestPlayerBasePosition(const PlayerCache& cachePlayer);
 
+Players::Players()
+    : publishedPlayerCache(
+        std::make_shared<const PlayerCacheCollection>())
+{
+}
+
 namespace
 {
+    static std::int64_t SteadyClockTicks() noexcept
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
     static void EnsureTransformCacheShape(PlayerCache& player);
 
     static bool HasMinimalBonePointers(const PlayerCache& player);
@@ -37,56 +49,8 @@ namespace
     static bool IsMinimalBoneSlot(int slot);
 
     static bool IsUsableBonePosition(const glm::vec3& position);
-}
 
-static std::string CleanString(std::string str)
-{
-    const size_t nullPos = str.find('\0');
-    if (nullPos != std::string::npos)
-        str.erase(nullPos);
-
-    while (!str.empty() && (str.back() == ' ' || str.back() == '\r' || str.back() == '\n' || str.back() == '\t'))
-        str.pop_back();
-
-    return str;
-}
-
-static std::string ReadString(uint64_t fieldAddr)
-{
-    if (!Utils::valid_pointer(fieldAddr))
-        return "";
-
-    uint64_t namePtr = mem.Read<uint64_t>(fieldAddr);
-    if (!Utils::valid_pointer(namePtr))
-        return "";
-
-    int len = mem.Read<int>(static_cast<SIZE_T>(namePtr) + 0x10);
-    if (len <= 0 || len > 256)
-        return "";
-
-    return CleanString(mem.readUnicodeString(namePtr + 0x14, len));
-}
-
-inline bool isValidBoneVector(const glm::vec3& v)
-{
-    if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z))
-        return false;
-
-    if (std::abs(v.x) < 0.001f &&
-        std::abs(v.y) < 0.001f &&
-        std::abs(v.z) < 0.001f)
-        return false;
-
-    constexpr float LIMIT = 100000.f;
-    if (std::abs(v.x) > LIMIT || std::abs(v.y) > LIMIT || std::abs(v.z) > LIMIT)
-        return false;
-
-    return true;
-}
-
-
-
-inline std::string SideToString(EPlayerSide side)
+std::string SideToString(EPlayerSide side)
 {
     switch (side)
     {
@@ -125,7 +89,7 @@ double CalculatePKD(uint32_t kills, uint32_t deaths)
     return std::round(pkd * 100.0) / 100.0;
 }
 
-static int ConvertXpToLevel(int xp)
+int ConvertXpToLevel(int xp)
 {
     const auto& t = LevelXpThresholds;
 
@@ -138,6 +102,8 @@ static int ConvertXpToLevel(int xp)
     // If XP exceeds the highest value themn max level
     return static_cast<int>(t.size());
 }
+
+} // namespace
 
 int Players::getDistance(glm::vec3 point1, glm::vec3 point2)
 {
@@ -219,6 +185,7 @@ void Players::clearCache()
     this->playerCache.clear();
     this->playerGroups.clear();
     players.groupIDSet = false;
+    publishCacheSnapshotLocked();
 
     LOGS.logInfo("[PLAYER][CACHE] Data cleared");
 }
@@ -231,16 +198,143 @@ void Players::softRestart()
     mainGame.localGroupId = "";
     this->playerCache.clear();
     this->playerGroups.clear();
+    publishCacheSnapshotLocked();
 }
 
 std::vector<PlayerCache>& Players::getCache() {
     return playerCache;
 }
 
-std::vector<PlayerCache> Players::getCacheSnapshot()
+PlayerCacheSnapshot Players::getCacheSnapshot() const noexcept
+{
+    PlayerCacheSnapshot snapshot = publishedPlayerCache.load(
+        std::memory_order_acquire);
+
+    if (snapshot)
+        return snapshot;
+
+    static const PlayerCacheSnapshot emptySnapshot =
+        std::make_shared<const PlayerCacheCollection>();
+
+    return emptySnapshot;
+}
+
+PlayerSnapshotTelemetry Players::getSnapshotTelemetry() const noexcept
+{
+    PlayerSnapshotTelemetry telemetry{};
+    const PlayerCacheSnapshot snapshot = getCacheSnapshot();
+    const std::int64_t nowTicks = SteadyClockTicks();
+    const std::int64_t snapshotTicks =
+        publishedSnapshotTicks.load(std::memory_order_acquire);
+    const std::int64_t motionTicks =
+        publishedMotionTicks.load(std::memory_order_acquire);
+
+    telemetry.snapshotVersion =
+        publishedSnapshotVersion.load(std::memory_order_relaxed);
+    telemetry.motionVersion =
+        publishedMotionVersion.load(std::memory_order_relaxed);
+    telemetry.playerCount = snapshot->size();
+    telemetry.averageMotionIntervalMs =
+        averageMotionIntervalMs.load(std::memory_order_relaxed);
+
+    if (snapshotTicks > 0)
+        telemetry.snapshotAgeMs =
+            static_cast<double>(nowTicks - snapshotTicks) / 1'000'000.0;
+
+    if (motionTicks > 0)
+        telemetry.motionAgeMs =
+            static_cast<double>(nowTicks - motionTicks) / 1'000'000.0;
+
+    return telemetry;
+}
+
+void Players::publishCacheSnapshotLocked(bool motionUpdated)
+{
+    const PlayerCacheSnapshot snapshot =
+        std::make_shared<const PlayerCacheCollection>(playerCache);
+    const std::int64_t nowTicks = SteadyClockTicks();
+
+    publishedPlayerCache.store(snapshot, std::memory_order_release);
+    publishedSnapshotTicks.store(nowTicks, std::memory_order_release);
+    publishedSnapshotVersion.fetch_add(1, std::memory_order_relaxed);
+
+    if (!motionUpdated)
+        return;
+
+    const std::int64_t previousTicks =
+        publishedMotionTicks.exchange(nowTicks, std::memory_order_acq_rel);
+
+    if (previousTicks > 0 && nowTicks > previousTicks)
+    {
+        const double intervalMs =
+            static_cast<double>(nowTicks - previousTicks) / 1'000'000.0;
+        const double currentAverage =
+            averageMotionIntervalMs.load(std::memory_order_relaxed);
+        const double nextAverage = currentAverage <= 0.0
+            ? intervalMs
+            : (currentAverage * 0.88) + (intervalMs * 0.12);
+
+        averageMotionIntervalMs.store(
+            nextAverage,
+            std::memory_order_relaxed);
+    }
+
+    publishedMotionVersion.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Players::publishCacheSnapshot(bool motionUpdated)
 {
     std::lock_guard<std::mutex> lock(playerMutex);
-    return playerCache;
+    publishCacheSnapshotLocked(motionUpdated);
+}
+
+void Players::applyGroupEdits(
+    const std::vector<std::pair<uint64_t, std::string>>& edits)
+{
+    if (edits.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(playerMutex);
+
+    for (const auto& [instance, newGroupId] : edits)
+    {
+        auto player = std::find_if(
+            playerCache.begin(),
+            playerCache.end(),
+            [&](const PlayerCache& candidate)
+            {
+                return candidate.instance == instance;
+            });
+
+        if (player == playerCache.end() ||
+            player->isDead ||
+            player->hasExfiled)
+        {
+            continue;
+        }
+
+        player->groupId = newGroupId;
+
+        if (player->isLocal || player->instance == mainGame.localPlayerPtr)
+        {
+            if (newGroupId.empty() || newGroupId == "0")
+                mainGame.localGroupId.clear();
+            else
+                mainGame.localGroupId = newGroupId;
+        }
+
+        std::ostringstream message;
+        message << "[PLAYERS][GROUP EDIT] "
+            << player->name
+            << " instance: 0x"
+            << std::hex << player->instance
+            << " groupId: "
+            << (newGroupId.empty() ? "none" : newGroupId);
+
+        LOGS.logInfo(message.str());
+    }
+
+    publishCacheSnapshotLocked();
 }
 
 std::vector<PlayerGroups>& Players::getGroupCache() {
@@ -517,32 +611,6 @@ namespace
 
         std::vector<uint64_t> bonePtrs;
         std::vector<BoneTransformCacheEntry> transformCache;
-    };
-
-    struct ScatterGuard
-    {
-        Memory& mem;
-        VMMDLL_SCATTER_HANDLE handle{ nullptr };
-
-        explicit ScatterGuard(Memory& memory)
-            : mem(memory),
-            handle(memory.CreateScatterHandle())
-        {
-        }
-
-        ~ScatterGuard()
-        {
-            if (!handle)
-                return;
-
-            try
-            {
-                mem.CloseScatterHandle(handle);
-            }
-            catch (...)
-            {
-            }
-        }
     };
 
     static bool IsMinimalBoneSlot(int slot)
@@ -856,9 +924,13 @@ namespace
         bool queuedMetadataReads = false;
 
         {
-            ScatterGuard scatter(memory);
+            ScatterReadBatch scatter(
+                memory,
+                false,
+                "Player bone metadata"
+            );
 
-            if (!scatter.handle)
+            if (!scatter.Valid())
                 return;
 
             for (LiveBoneRead& read : reads)
@@ -872,12 +944,10 @@ namespace
                 read.cache.boneTransform = read.boneTransform;
                 read.access = {};
 
-                if (!memory.AddScatterReadRequest(
-                    scatter.handle,
+                if (!scatter.Add(
                     read.boneTransform +
                     UnityOffsets::TransformInternal_TransformAccessOffset,
-                    &read.access,
-                    sizeof(TransformAccessReadOnly)))
+                    read.access))
                 {
                     read.cache.valid = false;
                     continue;
@@ -888,11 +958,7 @@ namespace
 
             if (queuedMetadataReads)
             {
-                const bool executed =
-                    memory.ExecuteReadScatter(scatter.handle);
-
-                // Your ExecuteReadScatter consumes/clears the handle.
-                scatter.handle = nullptr;
+                const bool executed = scatter.Execute();
 
                 if (!executed)
                 {
@@ -934,9 +1000,13 @@ namespace
         bool queuedHierarchyReads = false;
 
         {
-            ScatterGuard scatter(memory);
+            ScatterReadBatch scatter(
+                memory,
+                false,
+                "Player bone hierarchy"
+            );
 
-            if (!scatter.handle)
+            if (!scatter.Valid())
                 return;
 
             for (LiveBoneRead& read : reads)
@@ -945,21 +1015,17 @@ namespace
                     continue;
 
                 const bool matrixQueued =
-                    memory.AddScatterReadRequest(
-                        scatter.handle,
+                    scatter.Add(
                         read.cache.transformData +
                         UnityOffsets::Hierarchy_VerticesOffset,
-                        &read.cache.transformArray,
-                        sizeof(uint64_t)
+                        read.cache.transformArray
                     );
 
                 const bool indicesQueued =
-                    memory.AddScatterReadRequest(
-                        scatter.handle,
+                    scatter.Add(
                         read.cache.transformData +
                         UnityOffsets::Hierarchy_IndicesOffset,
-                        &read.cache.transformIndices,
-                        sizeof(uint64_t)
+                        read.cache.transformIndices
                     );
 
                 if (!matrixQueued || !indicesQueued)
@@ -974,10 +1040,7 @@ namespace
 
             if (queuedHierarchyReads)
             {
-                const bool executed =
-                    memory.ExecuteReadScatter(scatter.handle);
-
-                scatter.handle = nullptr;
+                const bool executed = scatter.Execute();
 
                 if (!executed)
                 {
@@ -1078,9 +1141,13 @@ namespace
             matrices.resize(totalMatrixElements);
             indices.resize(totalMatrixElements);
 
-            ScatterGuard scatter(memory);
+            ScatterReadBatch scatter(
+                memory,
+                false,
+                "Player bone positions"
+            );
 
-            if (!scatter.handle)
+            if (!scatter.Valid())
             {
                 for (size_t i = start; i < end; ++i)
                     positionReads[i]->cache.valid = false;
@@ -1102,8 +1169,7 @@ namespace
                 cursor += matrixCount;
 
                 read.matrixQueued =
-                    memory.AddScatterReadRequest(
-                        scatter.handle,
+                    scatter.AddBytes(
                         read.cache.transformArray,
                         matrices.data() + read.bufOffset,
                         static_cast<SIZE_T>(
@@ -1112,8 +1178,7 @@ namespace
                     );
 
                 read.indicesQueued =
-                    memory.AddScatterReadRequest(
-                        scatter.handle,
+                    scatter.AddBytes(
                         read.cache.transformIndices,
                         indices.data() + read.bufOffset,
                         static_cast<SIZE_T>(
@@ -1137,10 +1202,7 @@ namespace
                 continue;
             }
 
-            const bool executed =
-                memory.ExecuteReadScatter(scatter.handle);
-
-            scatter.handle = nullptr;
+            const bool executed = scatter.Execute();
 
             if (!executed)
             {
@@ -1412,11 +1474,157 @@ namespace
             ? AppendResult::Queued
             : AppendResult::NoBones;
     }
+
+    static AppendResult AppendFastPlayerBoneReads(
+        const BonePlayerSnapshot& player,
+        std::vector<LiveBoneRead>& reads)
+    {
+        const size_t firstRead = reads.size();
+
+        auto QueueBone = [&](int slot)
+            {
+                if (slot < 0)
+                    return;
+
+                for (size_t i = firstRead; i < reads.size(); ++i)
+                {
+                    if (reads[i].boneSlot == slot)
+                        return;
+                }
+
+                const size_t boneIndex = static_cast<size_t>(slot);
+                if (boneIndex >= player.bonePtrs.size())
+                    return;
+
+                const uint64_t bonePtr = player.bonePtrs[boneIndex];
+                if (!Utils::valid_pointer(bonePtr))
+                    return;
+
+                LiveBoneRead read{};
+                read.playerInstance = player.instance;
+                read.boneTransform = bonePtr;
+                read.boneSlot = slot;
+                read.kind = BoneReadKind::Normal;
+
+                if (boneIndex < player.transformCache.size())
+                    read.cache = player.transformCache[boneIndex];
+
+                reads.emplace_back(std::move(read));
+            };
+
+        // Base drives the player marker and is the only movement bone needed
+        // for the local player.
+        QueueBone(static_cast<int>(boneListIndexes::Base));
+
+        if (!player.isLocal)
+        {
+            if (espGlobals::drawBoxPlayers ||
+                espGlobals::drawHeadDot ||
+                espGlobals::drawSkeletons)
+            {
+                QueueBone(static_cast<int>(boneListIndexes::Head));
+            }
+
+            if (aimGlobals::aimEnabled)
+            {
+                QueueBone(static_cast<int>(aimGlobals::aiBone));
+                QueueBone(static_cast<int>(aimGlobals::pmcBone));
+            }
+        }
+
+        return reads.size() > firstRead
+            ? AppendResult::Queued
+            : AppendResult::NoBones;
+    }
+}
+
+
+void Players::positionTask()
+{
+    try
+    {
+        if (!mem.IsDmaOperational() ||
+            !Utils::valid_pointer(mainGame.localPlayerPtr))
+        {
+            return;
+        }
+
+        std::vector<BonePlayerSnapshot> pendingScans;
+
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+            pendingScans.reserve(playerCache.size());
+
+            for (PlayerCache& player : playerCache)
+            {
+                if (!Utils::valid_pointer(player.instance) ||
+                    player.isBTR ||
+                    player.isDead ||
+                    player.hasExfiled ||
+                    player.bonePointersNeedResolve ||
+                    !HasMinimalBonePointers(player))
+                {
+                    continue;
+                }
+
+                EnsureTransformCacheShape(player);
+
+                BonePlayerSnapshot pending{};
+                pending.instance = player.instance;
+                pending.distance = player.distance;
+                pending.isLocal = player.isLocal;
+                pending.bonePtrs = player.bonePtrs;
+                pending.transformCache = player.boneTransformCache;
+                pendingScans.emplace_back(std::move(pending));
+            }
+        }
+
+        if (pendingScans.empty())
+            return;
+
+        std::vector<LiveBoneRead> reads;
+        reads.reserve(pendingScans.size() * 3);
+
+        for (const BonePlayerSnapshot& pending : pendingScans)
+            AppendFastPlayerBoneReads(pending, reads);
+
+        if (reads.empty())
+            return;
+
+        BatchReadBoneWorldPositions(mem, reads);
+
+        const bool hasFreshPosition = std::any_of(
+            reads.begin(),
+            reads.end(),
+            [](const LiveBoneRead& read)
+            {
+                return read.hasPosition &&
+                    read.boneSlot ==
+                    static_cast<int>(boneListIndexes::Base);
+            });
+
+        ApplyBoneResults(reads);
+
+        if (hasFreshPosition)
+            publishCacheSnapshot(true);
+    }
+    catch (const std::exception& e)
+    {
+        LOGS.logError(
+            "[PLAYERS][POSITION] Exception: " +
+            std::string(e.what()));
+    }
+    catch (...)
+    {
+        LOGS.logError("[PLAYERS][POSITION] Unknown exception");
+    }
 }
 
 
 void Players::boneTask()
 {
+    bool motionUpdated = false;
+
     try
     {
         if (!mem.IsDmaOperational())
@@ -1526,7 +1734,14 @@ void Players::boneTask()
                 pending.snapshot.transformCache = player.boneTransformCache;
 
                 // Base / LFoot / RFoot are always read
-                pending.readFullBoneList = !player.isLocal && player.distance > 0.0f && player.distance <= drawPlayerDistance;
+                pending.readFullBoneList =
+                    espGlobals::drawSkeletons &&
+                    !player.isLocal &&
+                    player.distance > 0.0f &&
+                    player.distance <= drawPlayerDistance;
+
+                if (!pending.readFullBoneList)
+                    continue;
 
                 pendingScans.emplace_back(std::move(pending));
             }
@@ -1568,6 +1783,14 @@ void Players::boneTask()
             return;
 
         BatchReadBoneWorldPositions(mem, reads);
+
+        motionUpdated = std::any_of(
+            reads.begin(),
+            reads.end(),
+            [](const LiveBoneRead& read)
+            {
+                return read.hasPosition;
+            });
 
         ApplyBoneResults(reads);
 
@@ -1726,6 +1949,8 @@ void Players::boneTask()
             "[PLAYERS][BONES] Unknown exception"
         );
     }
+
+    publishCacheSnapshot(motionUpdated);
 }
 
 void PlayerCache::UpdateBonePositions()
@@ -1824,12 +2049,31 @@ void Players::playersTask()
         }
 
         std::vector<PlayerCache> pendingNewEntities;
-        pendingNewEntities.reserve(registeredPlayers.size());
+        pendingNewEntities.reserve(
+            (std::min)(kMaxNewPlayersPerTick, registeredPlayers.size()));
 
-        for (const uint64_t currentPlayer : registeredPlayers)
+        // Player construction performs several dependent reads. Limit that
+        // work per tick and rotate the start so a temporarily bad entity
+        // cannot monopolise DMA or prevent later players being discovered.
+        static size_t nextNewPlayerCursor = 0;
+        nextNewPlayerCursor %= registeredPlayers.size();
+
+        size_t inspected = 0;
+        size_t buildAttempts = 0;
+
+        for (; inspected < registeredPlayers.size() &&
+            buildAttempts < kMaxNewPlayersPerTick;
+            ++inspected)
         {
+            const size_t index =
+                (nextNewPlayerCursor + inspected) %
+                registeredPlayers.size();
+            const uint64_t currentPlayer = registeredPlayers[index];
+
             if (!existingInstances.insert(currentPlayer).second)
                 continue;
+
+            ++buildAttempts;
 
             const bool isLocal = currentPlayer == mainGame.localPlayerPtr;
 
@@ -1838,13 +2082,17 @@ void Players::playersTask()
             if (!builtEntity.has_value())
                 continue;
 
+            // Log before moving the entity into the pending collection.
+            watchListManager.logAddPlayer(*builtEntity);
+
             pendingNewEntities.emplace_back(
                 std::move(*builtEntity)
             );
-
-            //add player to raid list
-            watchListManager.logAddPlayer(*builtEntity);
         }
+
+        nextNewPlayerCursor =
+            (nextNewPlayerCursor + (std::max)(size_t{ 1 }, inspected)) %
+            registeredPlayers.size();
 
         std::vector<uint64_t> addedPlayerInstances;
 
@@ -1927,6 +2175,8 @@ void Players::playersTask()
             "[PLAYERS] Unknown exception in playersTask"
         );
     }
+
+    publishCacheSnapshot();
 }
 
 inline bool containsIgnoreCase(const std::string& str, const std::string& search)
@@ -2829,6 +3079,51 @@ void Players::recoverBtrStuckPlayers()
     }
 }
 
+namespace
+{
+    void ApplyPlayerColour(PlayerCache& player)
+    {
+        player.colour = { 1, 1, 1, 1 };
+
+        if (player.isDead)
+        {
+            player.colour = coloursGlobals::playerCorpse;
+            return;
+        }
+
+        if (player.isAi && !player.isPlayerScav && !player.isPlayer)
+            player.colour = coloursGlobals::playerAI;
+
+        if (player.isPlayerScav && !player.isAi && player.isPlayer)
+            player.colour = coloursGlobals::playerScav;
+
+        if (player.isBoss)
+            player.colour = coloursGlobals::playerBoss;
+
+        if (player.isPlayer && !player.isPlayerScav && !player.isAi)
+            player.colour = coloursGlobals::playerPMC;
+
+        if (player.isWatched)
+            player.colour = coloursGlobals::playerWatched;
+
+        if (player.isFriend)
+            player.colour = coloursGlobals::playerFriendly;
+
+        if (!mainGame.localGroupId.empty() &&
+            player.groupId == mainGame.localGroupId)
+        {
+            player.colour = coloursGlobals::playerFriendly;
+        }
+
+        if (player.isLocal &&
+            Utils::valid_pointer(player.instance) &&
+            mainGame.localPlayerPtr == player.instance)
+        {
+            player.colour = coloursGlobals::playerLocal;
+        }
+    }
+}
+
 void Players::updateEntity()
 {
     if (!mem.vHandle)
@@ -2837,541 +3132,589 @@ void Players::updateEntity()
     using Clock = std::chrono::steady_clock;
     using Milliseconds = std::chrono::milliseconds;
 
-    static constexpr Milliseconds kCorpseReadInterval{ 1000 };
+    // Corpse is the authoritative, low-cost death state. Read it often
+    // enough that a dead player leaves the active display promptly.
+    static constexpr Milliseconds kCorpseReadInterval{ 250 };
     static constexpr Milliseconds kHealthReadInterval{ 2000 };
     static constexpr Milliseconds kHandsReadInterval{ 2000 };
-    static constexpr Milliseconds kHeldItemRefreshInterval{ 3000 };
     static constexpr Milliseconds kFailedReadRetryInterval{ 2500 };
 
     const Clock::time_point now = Clock::now();
 
-    struct ScheduledRead
+    struct EntityRead
     {
-        Clock::time_point* nextRead = nullptr;
-        Milliseconds interval{};
+        uint64_t instance = 0;
+        bool isBtr = false;
+        bool isOfflinePlayer = false;
+
+        uint64_t btrView = 0;
+        uint64_t rotationAddress = 0;
+        uint64_t corpseAddress = 0;
+        uint64_t handsControllerAddress = 0;
+        uint64_t proceduralWeaponAnimation = 0;
+        uint64_t healthController = 0;
+
+        glm::vec3 location{};
+        glm::vec3 rotationRaw{};
+        uint64_t corpseClass = 0;
+        uint64_t handsController = 0;
+        int healthTag = 0;
+        bool isAiming = false;
+
+        bool corpseDue = false;
+        bool healthDue = false;
+        bool handsDue = false;
+
+        bool locationQueued = false;
+        bool rotationQueued = false;
+        bool corpseQueued = false;
+        bool healthQueued = false;
+        bool handsQueued = false;
+        bool aimingQueued = false;
     };
 
-    std::vector<ScheduledRead> scheduledReads;
+    std::vector<EntityRead> reads;
 
-    // Fast scatter
     {
         std::lock_guard<std::mutex> lock(playerMutex);
+        reads.reserve(playerCache.size());
 
-        std::vector<PlayerCache>& cache =
-            players.getCache();
+        for (const PlayerCache& player : playerCache)
+        {
+            if (!Utils::valid_pointer(player.instance))
+                continue;
 
-        if (cache.empty())
-            return;
+            EntityRead read{};
+            read.instance = player.instance;
+            read.isBtr = player.isBTR;
+            read.location = player.location;
+            read.rotationRaw = player.rotationRAW;
+            read.corpseClass = player.P_CorpseClass;
+            read.handsController = player.P_HandsController;
+            read.healthTag = player.healthETAG;
+            read.isAiming = player.isAiming;
 
-        auto updateHandle = mem.CreateScatterHandle();
+            if (player.isBTR)
+            {
+                read.btrView = player.btrView;
+                reads.emplace_back(std::move(read));
+                continue;
+            }
 
-        if (!updateHandle)
+            if (player.isDead || player.hasExfiled)
+                continue;
+
+            read.isOfflinePlayer =
+                player.className == "LocalPlayer" ||
+                player.className == "ClientPlayer";
+
+            read.rotationAddress = player.P_RotationAddress;
+            read.corpseAddress = player.P_CorpseAddr;
+            read.handsControllerAddress = player.P_HandsControllerAddr;
+            read.proceduralWeaponAnimation = player.P_PWA;
+            read.healthController = player.P_ObservedHealthController;
+
+            read.corpseDue =
+                player.nextCorpseRead == Clock::time_point{} ||
+                now >= player.nextCorpseRead;
+
+            read.handsDue =
+                player.nextHandsControllerRead == Clock::time_point{} ||
+                now >= player.nextHandsControllerRead;
+
+            read.healthDue =
+                !read.isOfflinePlayer &&
+                (player.nextHealthRead == Clock::time_point{} ||
+                    now >= player.nextHealthRead);
+
+            if (read.corpseDue)
+                read.corpseClass = 0;
+
+            if (read.isOfflinePlayer)
+                read.isAiming = false;
+
+            reads.emplace_back(std::move(read));
+        }
+    }
+
+    bool executed = true;
+    bool queuedAnything = false;
+
+    if (!reads.empty())
+    {
+        ScatterReadBatch updateBatch(mem, false, "Player update");
+
+        if (!updateBatch.Valid())
         {
             LOGS.logError(
-                "[PLAYERS][UPDATE] Failed to create scatter handle"
-            );
+                "[PLAYERS][UPDATE] Failed to create scatter handle");
             return;
         }
 
-        bool queuedAnything = false;
-
-        for (PlayerCache& cachePlayer : cache)
+        for (EntityRead& read : reads)
         {
-            if (!Utils::valid_pointer(cachePlayer.instance))
-                continue;
-
-            if (cachePlayer.isBTR)
+            if (read.isBtr)
             {
-                if (mem.AddScatterReadRequest(
-                    updateHandle,
-                    cachePlayer.btrView +
-                    sdk::BTRView::previousPosition,
-                    &cachePlayer.location,
-                    sizeof(glm::vec3)))
-                {
-                    queuedAnything = true;
-                }
-
+                read.locationQueued = updateBatch.Add(
+                    read.btrView + sdk::BTRView::previousPosition,
+                    read.location);
+                queuedAnything = queuedAnything || read.locationQueued;
                 continue;
             }
 
-            if (cachePlayer.isDead || cachePlayer.hasExfiled)
+            read.rotationQueued = updateBatch.AddBytes(
+                read.rotationAddress,
+                &read.rotationRaw,
+                sizeof(glm::vec2));
+            queuedAnything = queuedAnything || read.rotationQueued;
+
+            if (read.corpseDue)
             {
-                continue;
+                read.corpseQueued = updateBatch.Add(
+                    read.corpseAddress,
+                    read.corpseClass);
+                queuedAnything = queuedAnything || read.corpseQueued;
             }
 
-            const bool isOfflinePlayer =
-                cachePlayer.className == "LocalPlayer" ||
-                cachePlayer.className == "ClientPlayer";
-
-            if (mem.AddScatterReadRequest(
-                updateHandle,
-                cachePlayer.P_RotationAddress,
-                &cachePlayer.rotationRAW,
-                sizeof(glm::vec2)))
+            if (read.handsDue)
             {
-                queuedAnything = true;
+                read.handsQueued = updateBatch.Add(
+                    read.handsControllerAddress,
+                    read.handsController);
+                queuedAnything = queuedAnything || read.handsQueued;
             }
 
-            const bool corpseDue = cachePlayer.nextCorpseRead == Clock::time_point{} || now >= cachePlayer.nextCorpseRead;
-
-            if (corpseDue)
+            if (read.isOfflinePlayer)
             {
-                cachePlayer.P_CorpseClass = 0;
-
-                if (mem.AddScatterReadRequest(
-                    updateHandle,
-                    cachePlayer.P_CorpseAddr,
-                    &cachePlayer.P_CorpseClass,
-                    sizeof(uint64_t)))
-                {
-                    queuedAnything = true;
-
-                    scheduledReads.push_back({
-                        &cachePlayer.nextCorpseRead,
-                        kCorpseReadInterval
-                        });
-                }
-                else
-                {
-                    cachePlayer.nextCorpseRead = now + kFailedReadRetryInterval;
-                }
+                read.aimingQueued = updateBatch.Add(
+                    read.proceduralWeaponAnimation +
+                        sdk::ProceduralWeaponAnimation::_isAiming,
+                    read.isAiming);
+                queuedAnything = queuedAnything || read.aimingQueued;
             }
-
-            const bool handsDue = cachePlayer.nextHandsControllerRead == Clock::time_point{} || now >= cachePlayer.nextHandsControllerRead;
-
-            if (handsDue)
+            else if (read.healthDue)
             {
-                if (mem.AddScatterReadRequest(
-                    updateHandle,
-                    cachePlayer.P_HandsControllerAddr,
-                    &cachePlayer.P_HandsController,
-                    sizeof(uint64_t)))
-                {
-                    queuedAnything = true;
-
-                    scheduledReads.push_back({
-                        &cachePlayer.nextHandsControllerRead,
-                        kHandsReadInterval
-                        });
-                }
-                else
-                {
-                    cachePlayer.nextHandsControllerRead = now + kFailedReadRetryInterval;
-                }
-            }
-
-            if (isOfflinePlayer)
-            {
-                cachePlayer.isAiming = false;
-
-                if (mem.AddScatterReadRequest(
-                    updateHandle,
-                    cachePlayer.P_PWA +
-                    sdk::ProceduralWeaponAnimation::_isAiming,
-                    &cachePlayer.isAiming,
-                    sizeof(bool)))
-                {
-                    queuedAnything = true;
-                }
-            }
-            else
-            {
-                const bool healthDue = cachePlayer.nextHealthRead == Clock::time_point{} || now >= cachePlayer.nextHealthRead;
-
-                if (healthDue)
-                {
-                    if (mem.AddScatterReadRequest(
-                        updateHandle,
-                        cachePlayer.P_ObservedHealthController +
+                read.healthQueued = updateBatch.AddBytes(
+                    read.healthController +
                         sdk::ObservedHealthController::HealthStatus,
-                        &cachePlayer.healthETAG,
-                        sizeof(ETagStatus)))
-                    {
-                        queuedAnything = true;
-
-                        scheduledReads.push_back({
-                            &cachePlayer.nextHealthRead,
-                            kHealthReadInterval
-                            });
-                    }
-                    else
-                    {
-                        cachePlayer.nextHealthRead = now + kFailedReadRetryInterval;
-                    }
-                }
+                    &read.healthTag,
+                    sizeof(ETagStatus));
+                queuedAnything = queuedAnything || read.healthQueued;
             }
         }
 
         if (queuedAnything)
-        {
-            const bool executed = mem.ExecuteReadScatter(updateHandle);
-
-            updateHandle = {};
-
-            if (!executed)
-            {
-                for (const ScheduledRead& read : scheduledReads)
-                {
-                    if (read.nextRead)
-                    {
-                        *read.nextRead = now + kFailedReadRetryInterval;
-                    }
-                }
-
-                LOGS.logError(
-                    "[PLAYERS][UPDATE] Player scatter execute failed"
-                );
-
-                return;
-            }
-
-            for (const ScheduledRead& read : scheduledReads)
-            {
-                if (read.nextRead)
-                    *read.nextRead = now + read.interval;
-            }
-        }
-        else
-        {
-            mem.CloseScatterHandle(updateHandle);
-            updateHandle = {};
-        }
+            executed = updateBatch.Execute();
     }
 
-    auto ApplyPlayerColour = [&](PlayerCache& cachePlayer)
-        {
-            cachePlayer.colour = { 1, 1, 1, 1 };
-
-            if (cachePlayer.isDead)
-            {
-                cachePlayer.colour =
-                    coloursGlobals::playerCorpse;
-                return;
-            }
-
-            if (cachePlayer.isAi &&
-                !cachePlayer.isPlayerScav &&
-                !cachePlayer.isPlayer)
-            {
-                cachePlayer.colour =
-                    coloursGlobals::playerAI;
-            }
-
-            if (cachePlayer.isPlayerScav &&
-                !cachePlayer.isAi &&
-                cachePlayer.isPlayer)
-            {
-                cachePlayer.colour =
-                    coloursGlobals::playerScav;
-            }
-
-            if (cachePlayer.isBoss)
-            {
-                cachePlayer.colour =
-                    coloursGlobals::playerBoss;
-            }
-
-            if (cachePlayer.isPlayer &&
-                !cachePlayer.isPlayerScav &&
-                !cachePlayer.isAi)
-            {
-                cachePlayer.colour =
-                    coloursGlobals::playerPMC;
-            }
-
-            if (cachePlayer.isWatched)
-            {
-                cachePlayer.colour =
-                    coloursGlobals::playerWatched;
-            }
-
-            if (!mainGame.localGroupId.empty() &&
-                cachePlayer.groupId ==
-                mainGame.localGroupId)
-            {
-                cachePlayer.colour =
-                    coloursGlobals::playerFriendly;
-            }
-
-            if (cachePlayer.isLocal &&
-                Utils::valid_pointer(cachePlayer.instance) &&
-                mainGame.localPlayerPtr ==
-                cachePlayer.instance)
-            {
-                cachePlayer.colour =
-                    coloursGlobals::playerLocal;
-            }
-        };
-
-    // Apply updates
     {
         std::lock_guard<std::mutex> lock(playerMutex);
 
-        std::vector<PlayerCache>& cache =
-            players.getCache();
-
-        for (PlayerCache& cachePlayer : cache)
+        for (const EntityRead& read : reads)
         {
-            if (cachePlayer.isBTR)
+            PlayerCache* player =
+                FindPlayerByInstance(playerCache, read.instance);
+
+            if (!player)
+                continue;
+
+            if (executed)
             {
-                cachePlayer.colour = coloursGlobals::aiBTR;
+                if (read.locationQueued)
+                    player->location = read.location;
 
-                cachePlayer.distance = getDistance(
-                    cachePlayer.location,
-                    mainGame.localLocation
-                );
+                if (read.rotationQueued)
+                    player->rotationRAW = read.rotationRaw;
 
+                if (read.corpseQueued)
+                    player->P_CorpseClass = read.corpseClass;
+
+                if (read.handsQueued)
+                    player->P_HandsController = read.handsController;
+
+                if (read.healthQueued)
+                    player->healthETAG = read.healthTag;
+
+                if (read.aimingQueued)
+                    player->isAiming = read.isAiming;
+            }
+
+            if (read.corpseDue)
+            {
+                player->nextCorpseRead =
+                    executed && read.corpseQueued
+                    ? now + kCorpseReadInterval
+                    : now + kFailedReadRetryInterval;
+            }
+
+            if (read.handsDue)
+            {
+                player->nextHandsControllerRead =
+                    executed && read.handsQueued
+                    ? now + kHandsReadInterval
+                    : now + kFailedReadRetryInterval;
+            }
+
+            if (read.healthDue)
+            {
+                player->nextHealthRead =
+                    executed && read.healthQueued
+                    ? now + kHealthReadInterval
+                    : now + kFailedReadRetryInterval;
+            }
+        }
+    }
+
+    if (!executed)
+    {
+        LOGS.logError(
+            "[PLAYERS][UPDATE] Player scatter execute failed");
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+
+        for (PlayerCache& player : playerCache)
+        {
+            if (player.isBTR)
+            {
+                player.colour = coloursGlobals::aiBTR;
+                player.distance = getDistance(
+                    player.location,
+                    mainGame.localLocation);
                 continue;
             }
 
-            if (cachePlayer.isDead ||
-                cachePlayer.hasExfiled)
+            if (player.isDead || player.hasExfiled)
             {
-                cachePlayer.distance = getDistance(
-                    cachePlayer.location,
-                    mainGame.localLocation
-                );
-
-                ApplyPlayerColour(cachePlayer);
+                player.distance = getDistance(
+                    player.location,
+                    mainGame.localLocation);
+                ApplyPlayerColour(player);
                 continue;
             }
 
-            if (Utils::valid_pointer(
-                cachePlayer.P_CorpseClass))
+            if (Utils::valid_pointer(player.P_CorpseClass))
             {
-                cachePlayer.isDead = true;
-                cachePlayer.instance = 0;
-
-                cachePlayer.distance = getDistance(
-                    cachePlayer.location,
-                    mainGame.localLocation
-                );
-
-                ApplyPlayerColour(cachePlayer);
+                player.isDead = true;
+                player.distance = getDistance(
+                    player.location,
+                    mainGame.localLocation);
+                ApplyPlayerColour(player);
                 continue;
             }
 
-            if (!Utils::valid_pointer(cachePlayer.instance))
+            if (!Utils::valid_pointer(player.instance))
                 continue;
 
-            // The bone task updates Base/LFoot/RFoot
-            const glm::vec3 newLocation = GetBestPlayerBasePosition(cachePlayer);
+            const glm::vec3 newLocation =
+                GetBestPlayerBasePosition(player);
 
             if (newLocation.x != 0.0f ||
                 newLocation.y != 0.0f ||
                 newLocation.z != 0.0f)
             {
-                cachePlayer.location = newLocation;
+                player.location = newLocation;
             }
 
-            if (cachePlayer.isLocal)
-                mainGame.localLocation =
-                cachePlayer.location;
+            if (player.isLocal)
+                mainGame.localLocation = player.location;
 
-            cachePlayer.distance = getDistance(
-                cachePlayer.location,
-                mainGame.localLocation
-            );
+            player.distance = getDistance(
+                player.location,
+                mainGame.localLocation);
 
-            // Raw rotation was read in the scatter phase.
             try
             {
-                cachePlayer.rotation =
-                    Utils::Player::Rotation::
-                    correctRotation2d(
-                        cachePlayer.rotationRAW
-                    );
+                player.rotation =
+                    Utils::Player::Rotation::correctRotation2d(
+                        player.rotationRAW);
             }
             catch (...)
             {
-                cachePlayer.rotation = {};
-
+                player.rotation = {};
                 LOGS.logError(
-                    "[PLAYERS][UPDATE] Rotation correction failed"
-                );
+                    "[PLAYERS][UPDATE] Rotation correction failed");
             }
 
-            // Initial update as soon as hands appear, update every # seconds
-            try
+            if (!Utils::valid_pointer(player.P_HandsController))
             {
-                if (!Utils::valid_pointer(
-                    cachePlayer.P_HandsController))
-                {
-                    cachePlayer.itemInHand.clear();
-
-                    cachePlayer.lastHeldItemHandsController = 0;
-                    cachePlayer.nextHeldItemRefresh = {};
-                }
-                else
-                {
-                    const bool handsChanged =
-                        cachePlayer.lastHeldItemHandsController !=
-                        cachePlayer.P_HandsController;
-
-                    if (handsChanged)
-                    {
-                        cachePlayer.lastHeldItemHandsController =
-                            cachePlayer.P_HandsController;
-
-                        cachePlayer.nextHeldItemRefresh = now;
-                    }
-
-                    const bool heldItemDue =
-                        cachePlayer.nextHeldItemRefresh ==
-                        Clock::time_point{} ||
-                        now >= cachePlayer.nextHeldItemRefresh;
-
-                    if (heldItemDue)
-                    {
-                        cachePlayer.observedHandsInfo.update(
-                            cachePlayer
-                        );
-
-                        cachePlayer.nextHeldItemRefresh =
-                            now + kHeldItemRefreshInterval;
-                    }
-                }
+                player.itemInHand.clear();
+                player.lastHeldItemHandsController = 0;
+                player.nextHeldItemRefresh = {};
             }
-            catch (...)
+            else if (player.lastHeldItemHandsController !=
+                player.P_HandsController)
             {
-                cachePlayer.itemInHand.clear();
-
-                cachePlayer.nextHeldItemRefresh = now + kFailedReadRetryInterval;
-
-                LOGS.logError(
-                    "[PLAYERS][UPDATE] heldItemName failed"
-                );
+                player.lastHeldItemHandsController =
+                    player.P_HandsController;
+                player.nextHeldItemRefresh = now;
             }
 
-            //update out watch status if changes
-            if (cachePlayer.isPlayer)
+            ApplyPlayerColour(player);
+
+            if (player.isLocal &&
+                mainGame.localPlayerPtr == player.instance)
             {
-                watchListManager.UpdateWatchStatus(cachePlayer);
-            }
-
-            if (cachePlayer.isPlayer &&
-                !cachePlayer.profileId.empty())
-            {
-                const auto profileNow = Clock::now();
-
-                if (!cachePlayer.foundDogTagCache &&
-                    cachePlayer.name.contains("PMC") &&
-                    profileNow -
-                    cachePlayer.lastDogTagLookup >
-                    std::chrono::seconds(5))
-                {
-                    cachePlayer.lastDogTagLookup = profileNow;
-
-                    try
-                    {
-                        auto result =
-                            g_dogTagCache.GetByProfileId(
-                                cachePlayer.profileId
-                            );
-
-                        if (result.has_value())
-                        {
-                            if (!result->nickname.empty())
-                            {
-                                cachePlayer.name = result->nickname;
-                            }
-
-                            cachePlayer.accountId = result->accountId;
-
-                            cachePlayer.foundDogTagCache = true;
-                        }
-                    }
-                    catch (...)
-                    {
-                        LOGS.logError(
-                            "[PLAYERS][UPDATE] Dogtag cache lookup failed"
-                        );
-                    }
-                }
-
-                if (!cachePlayer.hasProfileData &&
-                    !cachePlayer.accountId.empty() &&
-                    radarGlobals::getPlayerStats == TRUE &&
-                    !cachePlayer.triedprofileonce)
-                {
-                    cachePlayer.triedprofileonce = true;
-
-                    try
-                    {
-                        auto profile =
-                            TarkovDevProfileClient::
-                            GetProfileForAccountId(
-                                cachePlayer.accountId
-                            );
-
-                        if (profile)
-                        {
-                            cachePlayer.profileStats = *profile;
-                            cachePlayer.hasProfileData = true;
-
-                            cachePlayer.DT_lvl =
-                                ConvertXpToLevel(
-                                    profile->experience
-                                );
-
-                            cachePlayer.kd =
-                                CalculateKD(
-                                    profile->Kills,
-                                    profile->deathsPMC
-                                );
-
-                            cachePlayer.pkd =
-                                CalculatePKD(
-                                    profile->killedPMC,
-                                    profile->deathsPMC
-                                );
-
-                            cachePlayer.hours =
-                                profile->hoursPlayed;
-                        }
-                    }
-                    catch (...)
-                    {
-                        LOGS.logError(
-                            "[PLAYERS][UPDATE] Tarkov profile lookup failed"
-                        );
-                    }
-                }
-            }
-
-            ApplyPlayerColour(cachePlayer);
-
-            if (cachePlayer.isLocal &&
-                Utils::valid_pointer(cachePlayer.instance) &&
-                mainGame.localPlayerPtr ==
-                cachePlayer.instance)
-            {
-                mainGame.localLocation =
-                    cachePlayer.location;
-
-                mainGame.localRotation =
-                    cachePlayer.rotation;
-
-                mainGame.localGroupId =
-                    cachePlayer.groupId;
-
-                mainGame.localPlayerHands =
-                    cachePlayer.P_HandsController;
-
-                mainGame.localIsScoped =
-                    cachePlayer.isAiming;
-
-                mainGame.localPlayerPWA =
-                    cachePlayer.P_PWA;
-
-                cachePlayer.colour =
-                    coloursGlobals::playerLocal;
+                mainGame.localLocation = player.location;
+                mainGame.localRotation = player.rotation;
+                mainGame.localGroupId = player.groupId;
+                mainGame.localPlayerHands = player.P_HandsController;
+                mainGame.localIsScoped = player.isAiming;
+                mainGame.localPlayerPWA = player.P_PWA;
+                player.colour = coloursGlobals::playerLocal;
             }
         }
     }
 }
 
+void Players::playerMetadataTask()
+{
+    using Clock = std::chrono::steady_clock;
+    using Milliseconds = std::chrono::milliseconds;
+
+    static constexpr Milliseconds kHeldItemRefreshInterval{ 3000 };
+    static constexpr Milliseconds kFailedReadRetryInterval{ 2500 };
+
+    struct MetadataJob
+    {
+        uint64_t instance = 0;
+        PlayerCache player;
+        bool updateHands = false;
+        bool updateWatchStatus = false;
+        bool lookupDogTag = false;
+        bool lookupProfile = false;
+        bool handsSucceeded = false;
+    };
+
+    const Clock::time_point now = Clock::now();
+    std::vector<MetadataJob> jobs;
+
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+        jobs.reserve(playerCache.size());
+
+        for (PlayerCache& player : playerCache)
+        {
+            if (!Utils::valid_pointer(player.instance) ||
+                player.isBTR ||
+                player.isDead ||
+                player.hasExfiled)
+            {
+                continue;
+            }
+
+            MetadataJob job{};
+            job.instance = player.instance;
+
+            if (Utils::valid_pointer(player.P_HandsController))
+            {
+                job.updateHands =
+                    player.nextHeldItemRefresh == Clock::time_point{} ||
+                    now >= player.nextHeldItemRefresh;
+
+                if (job.updateHands)
+                {
+                    player.nextHeldItemRefresh =
+                        now + kHeldItemRefreshInterval;
+                }
+            }
+
+            job.updateWatchStatus = player.isPlayer || player.isPlayerScav;
+
+            job.lookupDogTag =
+                player.isPlayer &&
+                !player.profileId.empty() &&
+                !player.foundDogTagCache &&
+                player.name.contains("PMC") &&
+                now - player.lastDogTagLookup >
+                    std::chrono::seconds(5);
+
+            if (job.lookupDogTag)
+                player.lastDogTagLookup = now;
+
+            job.lookupProfile =
+                player.isPlayer &&
+                !player.profileId.empty() &&
+                !player.hasProfileData &&
+                !player.accountId.empty() &&
+                radarGlobals::getPlayerStats == TRUE &&
+                !player.triedprofileonce;
+
+            if (job.lookupProfile)
+                player.triedprofileonce = true;
+
+            if (!job.updateHands &&
+                !job.updateWatchStatus &&
+                !job.lookupDogTag &&
+                !job.lookupProfile)
+            {
+                continue;
+            }
+
+            job.player = player;
+            jobs.emplace_back(std::move(job));
+        }
+    }
+
+    for (MetadataJob& job : jobs)
+    {
+        if (job.updateHands)
+        {
+            try
+            {
+                job.handsSucceeded =
+                    job.player.observedHandsInfo.update(job.player);
+            }
+            catch (...)
+            {
+                job.handsSucceeded = false;
+                LOGS.logError(
+                    "[PLAYERS][METADATA] Hands update failed");
+            }
+        }
+
+        if (job.updateWatchStatus)
+        {
+            try
+            {
+                watchListManager.UpdateWatchStatus(job.player);
+            }
+            catch (...)
+            {
+                LOGS.logError(
+                    "[PLAYERS][METADATA] Watch status update failed");
+            }
+        }
+
+        if (job.lookupDogTag)
+        {
+            try
+            {
+                const auto result =
+                    g_dogTagCache.GetByProfileId(job.player.profileId);
+
+                if (result.has_value())
+                {
+                    if (!result->nickname.empty())
+                        job.player.name = result->nickname;
+
+                    job.player.accountId = result->accountId;
+                    job.player.foundDogTagCache = true;
+                }
+            }
+            catch (...)
+            {
+                LOGS.logError(
+                    "[PLAYERS][METADATA] Dogtag cache lookup failed");
+            }
+        }
+
+        if (job.lookupProfile)
+        {
+            try
+            {
+                const auto profile =
+                    TarkovDevProfileClient::GetProfileForAccountId(
+                        job.player.accountId);
+
+                if (profile)
+                {
+                    job.player.profileStats = *profile;
+                    job.player.hasProfileData = true;
+                    job.player.DT_lvl =
+                        ConvertXpToLevel(profile->experience);
+                    job.player.kd =
+                        CalculateKD(profile->Kills, profile->deathsPMC);
+                    job.player.pkd =
+                        CalculatePKD(
+                            profile->killedPMC,
+                            profile->deathsPMC);
+                    job.player.hours = profile->hoursPlayed;
+                }
+            }
+            catch (...)
+            {
+                LOGS.logError(
+                    "[PLAYERS][METADATA] Tarkov profile lookup failed");
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+
+        for (const MetadataJob& job : jobs)
+        {
+            PlayerCache* player =
+                FindPlayerByInstance(playerCache, job.instance);
+
+            if (!player)
+                continue;
+
+            if (job.updateHands)
+            {
+                if (job.handsSucceeded)
+                {
+                    player->observedHandsInfo =
+                        job.player.observedHandsInfo;
+                }
+                else
+                {
+                    player->itemInHand.clear();
+                    player->nextHeldItemRefresh =
+                        now + kFailedReadRetryInterval;
+                }
+            }
+
+            if (job.updateWatchStatus)
+            {
+                player->isWatched = job.player.isWatched;
+                player->isFriend = job.player.isFriend;
+
+                if (player->isFriend && !player->isLocal)
+                {
+                    if (!player->friendGroupOverride)
+                    {
+                        player->groupIdBeforeFriend = player->groupId;
+                        player->friendGroupOverride = true;
+                    }
+
+                    player->groupId = mainGame.localGroupId;
+                }
+                else if (player->friendGroupOverride)
+                {
+                    player->groupId = std::move(player->groupIdBeforeFriend);
+                    player->groupIdBeforeFriend.clear();
+                    player->friendGroupOverride = false;
+                }
+            }
+
+            if (job.lookupDogTag)
+            {
+                player->name = job.player.name;
+                player->accountId = job.player.accountId;
+                player->foundDogTagCache =
+                    job.player.foundDogTagCache;
+            }
+
+            if (job.lookupProfile && job.player.hasProfileData)
+            {
+                player->profileStats = job.player.profileStats;
+                player->hasProfileData = true;
+                player->DT_lvl = job.player.DT_lvl;
+                player->kd = job.player.kd;
+                player->pkd = job.player.pkd;
+                player->hours = job.player.hours;
+            }
+
+            ApplyPlayerColour(*player);
+        }
+    }
+
+    publishCacheSnapshot();
+}
 void Players::checkGroupIDs()
 {
     if (groupIDSet)
@@ -3624,6 +3967,11 @@ void Players::playerEquipment()
     if (!radarGlobals::getPlayerEquip)
         return;
 
+    const QuestPublishedSnapshot questSnapshot =
+        GetQuestPublishedSnapshot();
+    const std::vector<std::string>& questItemIds =
+        questSnapshot->masterItems;
+
     using Clock = std::chrono::steady_clock;
     using SlotVec =
         std::remove_reference_t<
@@ -3708,30 +4056,30 @@ void Players::playerEquipment()
 
     auto executeScatter = [&](auto&& queueReads) -> bool
         {
-            auto handle = mem.CreateScatterHandle();
+            ScatterReadBatch batch(
+                mem,
+                false,
+                "Player equipment"
+            );
 
-            if (!handle)
+            if (!batch.Valid())
                 return false;
 
             bool queuedAnything = false;
 
             try
             {
-                queuedAnything = queueReads(handle);
+                queuedAnything = queueReads(batch.Handle());
             }
             catch (...)
             {
-                mem.CloseScatterHandle(handle);
                 return false;
             }
 
             if (!queuedAnything)
-            {
-                mem.CloseScatterHandle(handle);
                 return true;
-            }
 
-            return mem.ExecuteReadScatter(handle);
+            return batch.Execute();
         };
 
     auto takeInitBatch = [&](
@@ -3987,7 +4335,9 @@ void Players::playerEquipment()
 
                 try
                 {
-                    UnityArray<uint64_t> slotsArray(job.slotsPtr);
+                    UnityArray<uint64_t> slotsArray(
+                        job.slotsPtr,
+                        "Player equipment slots");
 
                     const int slotCount =
                         static_cast<int>(slotsArray.count);
@@ -4357,7 +4707,10 @@ void Players::playerEquipment()
                         else
                         {
                             const std::string readString =
-                                ReadString(profileIdPtr);
+                                mem.readUnityStringField(
+                                    profileIdPtr,
+                                    256
+                                );
 
                             if (!readString.empty())
                             {
@@ -4446,7 +4799,7 @@ void Players::playerEquipment()
 
             if (!slot.wanted)
             {
-                for (const auto& questId : masterItems)
+                for (const auto& questId : questItemIds)
                 {
                     if (questId == id)
                     {
@@ -4575,6 +4928,8 @@ void Players::playerEquipment()
             "[PLAYER][EQUIP] Unknown exception."
         );
     }
+
+    publishCacheSnapshot();
 }
 
 std::string Players::heldItemName(PlayerCache& player)
@@ -4681,7 +5036,7 @@ static inline bool CountLoadedChamberArray(
     if (!Utils::valid_pointer(chambersPtr))
         return false;
 
-    UnityArray<Chamber> chambers(chambersPtr);
+    UnityArray<Chamber> chambers(chambersPtr, "Weapon chambers");
 
     if (chambers.count <= 0)
         return false;
@@ -4780,7 +5135,9 @@ static inline bool TryGetAmmoTemplateFromWeapon(
     if (mem.TryRead<uint64_t>(magItemPtr + sdk::LootItemMod::Slots, magChambersPtr) &&
         Utils::valid_pointer(magChambersPtr))
     {
-        UnityArray<Chamber> magChambers(magChambersPtr);
+        UnityArray<Chamber> magChambers(
+            magChambersPtr,
+            "Magazine chambers");
 
         if (magChambers.count > 0)
         {
@@ -5112,7 +5469,7 @@ void Players::checkExfil()
         if (cachedPlayer.isBTR)
             continue;
 
-        if (cachedPlayer.isDead || cachedPlayer.hasExfiled)
+        if (cachedPlayer.isDead)
             continue;
 
         if (!Utils::valid_pointer(cachedPlayer.instance))
@@ -5121,25 +5478,37 @@ void Players::checkExfil()
         const bool stillRegistered =
             alivePlayers.find(cachedPlayer.instance) != alivePlayers.end();
 
-        if (!stillRegistered)
+        if (stillRegistered)
         {
-            cachedPlayer.hasExfiled = true;
-            cachedPlayer.instance = 0x0; // avoid unnecessary future reads
-
-            if (cachedPlayer.isLocal)
+            if (cachedPlayer.hasExfiled)
             {
-                LOGS.logInfo("[PLAYERS][EXFIL] Local player no longer registered");
+                cachedPlayer.hasExfiled = false;
+                LOGS.logWarn(
+                    "[PLAYERS][EXFIL] Restored player after roster recovery: " +
+                    cachedPlayer.name);
             }
-            else
-            {
-                std::ostringstream ss;
-                ss << "[PLAYERS][EXFIL] Player exfiled/removed: "
-                    << cachedPlayer.name
-                    << " old instance: 0x"
-                    << std::hex << cachedPlayer.instance;
 
-                LOGS.logInfo(ss.str());
-            }
+            continue;
+        }
+
+        if (cachedPlayer.hasExfiled)
+            continue;
+
+        cachedPlayer.hasExfiled = true;
+
+        if (cachedPlayer.isLocal)
+        {
+            LOGS.logInfo("[PLAYERS][EXFIL] Local player no longer registered");
+        }
+        else
+        {
+            std::ostringstream ss;
+            ss << "[PLAYERS][EXFIL] Player removed from roster: "
+                << cachedPlayer.name
+                << " instance: 0x"
+                << std::hex << cachedPlayer.instance;
+
+            LOGS.logInfo(ss.str());
         }
     }
 }

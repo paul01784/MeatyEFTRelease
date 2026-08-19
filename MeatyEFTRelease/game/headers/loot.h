@@ -1,5 +1,8 @@
 #pragma once
+#include <atomic>
 #include <map>
+#include <memory>
+#include <shared_mutex>
 #include <string>
 #include <glm/glm.hpp>
 #include <unordered_set>
@@ -83,12 +86,15 @@ struct LootList
     std::chrono::steady_clock::time_point lastCorpseEquipmentUpdate{};
 };
 
+using LootCacheCollection = std::vector<LootList>;
+using LootCacheSnapshot = std::shared_ptr<const LootCacheCollection>;
+
 extern std::vector<LootFilters> lootFilters;
 
 class loot
 {
 public:
-    loot() = default;
+    loot();
 
     void lootTask();
     void clearCache();
@@ -97,32 +103,11 @@ public:
     void setLootWanted(uint64_t instance, bool wanted, const glm::vec4& colour);
 
     [[nodiscard]] std::vector<LootList> getCacheLoot() const;
+    [[nodiscard]] LootCacheSnapshot getCacheSnapshot() const noexcept;
 
     uint64_t lootListP = 0;
     uint64_t lootListPtr = 0;
     long lootCount = 0;
-
-    bool drawDrawer = false;
-    bool drawDuffle = false;
-    bool drawSafe = false;
-    bool drawWeaponBox = false;
-    bool drawTechCrate = false;
-    bool drawRationCrate = false;
-    bool drawMedicalCrate = false;
-    bool drawJacket = false;
-    bool drawMedPackage = false;
-    bool drawMedBox = false;
-    bool drawToolbox = false;
-    bool drawGrenadeBox = false;
-    bool drawBuriedStash = false;
-    bool drawGroundCache = false;
-    bool drawWoodenCrate = false;
-    bool drawSuitcase = false;
-    bool drawAmmoBox = false;
-    bool drawDeadBody = false;
-    bool drawPCBlock = false;
-    bool drawRegister = false;
-    bool drawAirDrops = false;
 
 private:
     struct WantedLookup
@@ -181,6 +166,7 @@ private:
     mutable std::shared_mutex lootMutex;
 
     std::vector<LootList> lootList;
+    std::atomic<LootCacheSnapshot> publishedLootCache;
     std::vector<uint64_t> loot_buffer;
     std::unordered_set<uint64_t> liveLootPointers;
 
@@ -189,6 +175,8 @@ private:
 
     size_t corpseRefreshCursor = 0;
     size_t dogTagRefreshCursor = 0;
+
+    void publishCacheSnapshotLocked();
 };
 
 extern loot Loot;

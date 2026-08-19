@@ -8,34 +8,6 @@
 
 DogTagCache g_dogTagCache;
 
-static std::string CleanString(std::string str)
-{
-    const size_t nullPos = str.find('\0');
-    if (nullPos != std::string::npos)
-        str.erase(nullPos);
-
-    while (!str.empty() && (str.back() == ' ' || str.back() == '\r' || str.back() == '\n' || str.back() == '\t'))
-        str.pop_back();
-
-    return str;
-}
-
-static std::string ReadString(uint64_t fieldAddr)
-{
-    if (!Utils::valid_pointer(fieldAddr))
-        return "";
-
-    uint64_t namePtr = mem.Read<uint64_t>(fieldAddr);
-    if (!Utils::valid_pointer(namePtr))
-        return "";
-
-    int len = mem.Read<int>(static_cast<SIZE_T>(namePtr) + 0x10);
-    if (len <= 0 || len > 256)
-        return "";
-
-    return CleanString(mem.readUnicodeString(namePtr + 0x14, len));
-}
-
 DogTagCache::DogTagCache()
 {
 }
@@ -182,7 +154,7 @@ void DogTagCache::ReadFromCorpse(uint64_t corpseInteractiveClass)
         if (!Utils::valid_pointer(slotsPtr))
             return;
 
-        auto slotsRead = UnityArray<uint64_t>(slotsPtr);
+        auto slotsRead = UnityArray<uint64_t>(slotsPtr, "Dogtag slots");
         if (slotsRead.count == 0)
             return;
 
@@ -211,14 +183,14 @@ void DogTagCache::ReadFromCorpse(uint64_t corpseInteractiveClass)
                 break;
 
             Entry victim;
-            victim.profileId = ReadString(dogtagComp + sdk::DogtagComponent::ProfileId);
-            victim.accountId = ReadString(dogtagComp + sdk::DogtagComponent::AccountId);
-            victim.nickname = ReadString(dogtagComp + sdk::DogtagComponent::Nickname);
+            victim.profileId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::ProfileId, 256);
+            victim.accountId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::AccountId, 256);
+            victim.nickname = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::Nickname, 256);
 
             Entry killer;
-            killer.profileId = ReadString(dogtagComp + sdk::DogtagComponent::KillerProfileId);
-            killer.accountId = ReadString(dogtagComp + sdk::DogtagComponent::KillerAccountId);
-            killer.nickname = ReadString(dogtagComp + sdk::DogtagComponent::KillerName);
+            killer.profileId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::KillerProfileId, 256);
+            killer.accountId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::KillerAccountId, 256);
+            killer.nickname = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::KillerName, 256);
 
             AddEntryIfMissing(victim);
 

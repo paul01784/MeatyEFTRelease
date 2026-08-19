@@ -288,6 +288,7 @@ void DrawRadarPlayerMarkers(float x, float y, float zoomLevel, const PlayerCache
 {
 	const float markerFontSize = std::clamp(30.f / zoomLevel, 7.f, 9.f);
 	const float labelFontSize = ScaleRadarTextSize(markerFontSize + 8.0f);
+	const float heightIconFontSize = labelFontSize * 0.5f;
 	const float equipmentFontSize = ScaleRadarTextSize(markerFontSize + 10.0f);
 	constexpr float markerRadius = 8.0f;
 	constexpr float labelGap = 3.0f;
@@ -383,8 +384,8 @@ void DrawRadarPlayerMarkers(float x, float y, float zoomLevel, const PlayerCache
 
 		//Height indicator
 		const float heightTextX = x + markerRadius + 4.0f;
-		const ImVec2 heightIconSize = MeasureRadarText(font, labelFontSize, hString.c_str());
-		draw_list->AddText(font, labelFontSize, ImVec2(heightTextX, y - (heightIconSize.y * 0.5f)), drawColor, hString.c_str());
+		const ImVec2 heightIconSize = MeasureRadarText(font, heightIconFontSize, hString.c_str());
+		draw_list->AddText(font, heightIconFontSize, ImVec2(heightTextX, y - (heightIconSize.y * 0.5f)), drawColor, hString.c_str());
 
 		if (hStringVal != "0" && hStringVal != "1" && hStringVal != "-1")
 		{
@@ -611,7 +612,8 @@ void drawGroupLine(glm::vec3 position, PlayerCache player)
 	//filter out no groups here
 	if (groupid > "")
 	{
-		std::vector<PlayerCache> playerCache = players.getCacheSnapshot();
+		const PlayerCacheSnapshot playerCacheSnapshot = players.getCacheSnapshot();
+		const PlayerCacheCollection& playerCache = *playerCacheSnapshot;
 		//loop player list to find other players with same group and draw line to them from current player
 		for (auto& cache : playerCache)
 		{
@@ -643,6 +645,7 @@ void drawGroupLine(glm::vec3 position, PlayerCache player)
 void DrawQuest(float x, float y, float zoom, QuestLocation qloc)
 {
 	float fontSize = std::clamp(20.f / zoom, 8.f, 10.f);
+	const float heightIconFontSize = (fontSize + 6.0f) * 0.5f;
 	float fontSizeFix = 0.f;
 
 	//loot height indicator
@@ -690,7 +693,7 @@ void DrawQuest(float x, float y, float zoom, QuestLocation qloc)
 	draw_list->AddText(ImGui::GetFont(), 5, ImVec2(x, y), ImColor(color.x, color.y, color.z, color.w), string.c_str(), 0, 0.0f, 0);
 
 	//Height indicator
-	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x - 15, y - 5), ImColor(color.x, color.y, color.z, color.w), hString.c_str(), 0, 0.0f, 0);
+	draw_list->AddText(ImGui::GetFont(), heightIconFontSize, ImVec2(x - 15, y - 5), ImColor(color.x, color.y, color.z, color.w), hString.c_str(), 0, 0.0f, 0);
 	//if (hStringVal != "0" && hStringVal != "1" && hStringVal != "-1")
 	//	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x - 17, y + 20), ImColor(1.f,1.f,1.f,1.f), hStringVal.c_str(), 0, 0.0f, 0);
 
@@ -741,6 +744,7 @@ void DrawLootContainerMarker(float x, float y, glm::vec4 color, float zoomLevel,
 {
 	const float markerFontSize = std::clamp(20.f / zoomLevel, 8.f, 10.f);
 	const float labelFontSize = ScaleRadarTextSize(markerFontSize + 6.0f);
+	const float heightIconFontSize = labelFontSize * 0.5f;
 	constexpr float markerHalfSize = 3.5f;
 	constexpr float labelGap = 3.0f;
 
@@ -776,10 +780,10 @@ void DrawLootContainerMarker(float x, float y, glm::vec4 color, float zoomLevel,
 	DrawCenteredSquareMarker(x, y, markerHalfSize, drawColor);
 
 	//Height indicator
-	const ImVec2 heightSize = MeasureRadarText(font, labelFontSize, hString.c_str());
+	const ImVec2 heightSize = MeasureRadarText(font, heightIconFontSize, hString.c_str());
 	drawList->AddText(
 		font,
-		labelFontSize,
+		heightIconFontSize,
 		ImVec2(x + markerHalfSize + 4.0f, y - (heightSize.y * 0.5f)),
 		drawColor,
 		hString.c_str());
@@ -792,6 +796,7 @@ void DrawLootItemMarker(float x, float y, glm::vec4 color, float zoomLevel, cons
 {
 	const float markerFontSize = std::clamp(20.f / zoomLevel, 8.f, 10.f);
 	const float labelFontSize = ScaleRadarTextSize(markerFontSize + 6.0f);
+	const float heightIconFontSize = labelFontSize * 0.5f;
 	constexpr float markerHalfSize = 3.0f;
 	constexpr float labelGap = 3.0f;
 
@@ -828,10 +833,10 @@ void DrawLootItemMarker(float x, float y, glm::vec4 color, float zoomLevel, cons
 	DrawCenteredSquareMarker(x, y, markerHalfSize, drawColor);
 
 	//Height indicator
-	const ImVec2 heightSize = MeasureRadarText(font, labelFontSize, hString.c_str());
+	const ImVec2 heightSize = MeasureRadarText(font, heightIconFontSize, hString.c_str());
 	drawList->AddText(
 		font,
-		labelFontSize,
+		heightIconFontSize,
 		ImVec2(x + markerHalfSize + 4.0f, y - (heightSize.y * 0.5f)),
 		drawColor,
 		hString.c_str());

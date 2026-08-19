@@ -1,6 +1,7 @@
 ﻿#include "headers/questManager.h"
 
 #include "../memory/Memory.h"
+#include "../memory/ScatterReadBatch.h"
 #include "headers/sdk.h"
 #include "headers/unityHelper.h"
 #include "headers/maingame.h"
@@ -15,6 +16,9 @@ QuestManager questManager;
 std::vector<QuestData> questDataActive;
 std::vector<std::string> masterItems;
 std::vector<QuestLocation> masterLocations;
+std::atomic<QuestPublishedSnapshot> g_publishedQuestState{
+    std::make_shared<const QuestPublishedState>()
+};
 
 std::mutex g_questCacheMutex;
 
@@ -247,83 +251,6 @@ namespace
 
     using CompletedConditionEntry = UnityHashSet<MongoID>::MemHashEntry;
 
-    class QuestScatterBatch
-    {
-    public:
-        QuestScatterBatch()
-            : handle_(mem.CreateScatterHandle(false))
-        {
-        }
-
-        ~QuestScatterBatch()
-        {
-            if (handle_)
-                mem.CloseScatterHandle(handle_);
-        }
-
-        QuestScatterBatch(const QuestScatterBatch&) = delete;
-        QuestScatterBatch& operator=(const QuestScatterBatch&) = delete;
-
-        bool valid() const
-        {
-            return handle_ != nullptr;
-        }
-
-        template <typename T>
-        bool Queue(std::uint64_t address, T& destination)
-        {
-            static_assert(
-                std::is_trivially_copyable_v<T>,
-                "Quest scatter destinations must be trivially copyable"
-            );
-
-            return QueueBytes(address, &destination, sizeof(T));
-        }
-
-        bool QueueBytes(
-            std::uint64_t address,
-            void* destination,
-            std::size_t size)
-        {
-            if (!handle_ || !Utils::valid_pointer(address) ||
-                !destination || size == 0)
-            {
-                return false;
-            }
-
-            if (!mem.AddScatterReadRequest(
-                handle_,
-                address,
-                destination,
-                size))
-            {
-                return false;
-            }
-
-            ++queuedReads_;
-            return true;
-        }
-
-        bool Execute(const char* label)
-        {
-            if (!handle_)
-                return false;
-
-            if (queuedReads_ == 0)
-                return true;
-
-            const bool ok =
-                mem.ExecuteReadScatter(handle_, false, label);
-
-            queuedReads_ = 0;
-            return ok;
-        }
-
-    private:
-        VMMDLL_SCATTER_HANDLE handle_ = nullptr;
-        std::size_t queuedReads_ = 0;
-    };
-
     struct LiveQuestRead
     {
         std::size_t snapshotIndex = 0;
@@ -399,7 +326,7 @@ namespace
     }
 
     bool ReadCompletedConditions(
-        QuestScatterBatch& scatter,
+        ScatterReadBatch& scatter,
         std::vector<LiveQuestRead>& liveQuests)
     {
         std::vector<CompletedSetRead> sets;
@@ -425,14 +352,14 @@ namespace
             const std::uint64_t completedPtr =
                 liveQuests[set.liveQuestIndex].completedPtr;
 
-            if (!scatter.Queue(
+            if (!scatter.Add(
                 completedPtr + UnityHashSet<MongoID>::CountOffset,
                 set.count))
             {
                 return false;
             }
 
-            if (!scatter.Queue(
+            if (!scatter.Add(
                 completedPtr + UnityHashSet<MongoID>::ArrOffset,
                 set.entriesArray))
             {
@@ -465,7 +392,7 @@ namespace
             set.entries.resize(entryCount);
             totalEntryCount += entryCount;
 
-            if (!scatter.QueueBytes(
+            if (!scatter.AddBytes(
                 set.entriesArray + UnityHashSet<MongoID>::ArrStartOffset,
                 set.entries.data(),
                 entryCount * sizeof(CompletedConditionEntry)))
@@ -499,7 +426,7 @@ namespace
 
         for (auto& read : conditionStrings)
         {
-            if (!scatter.Queue(read.stringPtr + 0x10, read.charCount))
+            if (!scatter.Add(read.stringPtr + 0x10, read.charCount))
                 return false;
         }
 
@@ -511,10 +438,9 @@ namespace
             if (read.charCount <= 0)
                 continue;
 
-            const int charsToRead =
-                (std::min)(read.charCount, kMaxConditionIdChars);
+            const int charsToRead = (std::min)(read.charCount, kMaxConditionIdChars);
 
-            if (!scatter.QueueBytes(
+            if (!scatter.AddBytes(
                 read.stringPtr + 0x14,
                 read.chars.data(),
                 static_cast<std::size_t>(charsToRead) * sizeof(wchar_t)))
@@ -674,6 +600,7 @@ void QuestManager::initQuestManager()
             questDataActive = std::move(newQuestDataActive);
             masterItems = std::move(newMasterItems);
             masterLocations = std::move(newMasterLocations);
+            PublishQuestStateLocked();
         }
 
         std::cout << "\n[Quest Manager] Active quests: " << questDataActive.size() << "\n";
@@ -722,9 +649,9 @@ void QuestManager::updateAndPruneActiveQuests()
         std::vector<std::string> newMasterItems;
         std::vector<QuestLocation> newMasterLocations;
 
-        QuestScatterBatch scatter;
+        ScatterReadBatch scatter(mem, false, "Quests");
 
-        if (!scatter.valid())
+        if (!scatter.Valid())
             return;
 
         std::vector<LiveQuestRead> liveQuests;
@@ -748,14 +675,14 @@ void QuestManager::updateAndPruneActiveQuests()
 
         for (auto& live : liveQuests)
         {
-            if (!scatter.Queue(
+            if (!scatter.Add(
                 live.questPtr + sdk::QuestsData::Status,
                 live.status))
             {
                 return;
             }
 
-            if (!scatter.Queue(
+            if (!scatter.Add(
                 live.questPtr + sdk::QuestsData::CompletedConditions,
                 live.completedPtr))
             {
@@ -815,6 +742,7 @@ void QuestManager::updateAndPruneActiveQuests()
             questDataActive = std::move(updated);
             masterItems = std::move(newMasterItems);
             masterLocations = std::move(newMasterLocations);
+            PublishQuestStateLocked();
         }
     }
     catch (const std::exception& e)

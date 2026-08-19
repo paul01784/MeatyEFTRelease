@@ -1,7 +1,11 @@
 #pragma once
 
 #include <glm/glm.hpp>
-#include <shared_mutex>
+#include <atomic>
+#include <chrono>
+#include <memory>
+
+#include "transform.h"
 
 struct FireportPose
 {
@@ -16,15 +20,32 @@ struct FireportPose
     const char* pathUsed = nullptr;
 };
 
+using FireportPoseSnapshot = std::shared_ptr<const FireportPose>;
+
 class FireportTracker
 {
 public:
+    FireportTracker();
+
     void update(uint64_t localPlayer);
-    FireportPose snapshot() const;
+    [[nodiscard]] FireportPoseSnapshot
+        getSnapshot() const noexcept;
+    [[nodiscard]] FireportPose snapshot() const noexcept;
 
 private:
-    mutable std::shared_mutex mutex_;
-    FireportPose pose_{};
+    void publish(FireportPose pose);
+    bool refreshMuzzleTransform(
+        uint64_t localPlayer,
+        uint64_t handsController,
+        std::chrono::steady_clock::time_point now);
+    void clearCachedMuzzle() noexcept;
+
+    std::atomic<FireportPoseSnapshot> publishedPose_;
+    std::unique_ptr<UnityTransform> muzzleTransform_;
+    uint64_t cachedLocalPlayer_ = 0;
+    uint64_t cachedHandsController_ = 0;
+    const char* cachedPath_ = nullptr;
+    std::chrono::steady_clock::time_point nextPathRefresh_{};
 };
 
 extern FireportTracker g_fireport;

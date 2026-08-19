@@ -3,10 +3,14 @@
 #include "debug.h"
 
 #include <chrono>
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 struct PerfSample
@@ -15,6 +19,17 @@ struct PerfSample
     std::string detail;
     double durationMs = 0.0;
     double timestampSec = 0.0;
+};
+
+struct PerfMetricSnapshot
+{
+    std::string name;
+    std::string detail;
+    double lastMs = 0.0;
+    double averageMs = 0.0;
+    double peakMs = 0.0;
+    double lastSeenSec = 0.0;
+    std::uint64_t sampleCount = 0;
 };
 
 class PerfMonitor
@@ -46,6 +61,19 @@ public:
                 peakName_ = name;
                 peakDetail_ = detail;
             }
+
+            MetricState& metric = metrics_[name];
+
+            if (metric.sampleCount == 0)
+                metric.averageMs = durationMs;
+            else
+                metric.averageMs = (metric.averageMs * 0.88) + (durationMs * 0.12);
+
+            metric.lastMs = durationMs;
+            metric.peakMs = (std::max)(metric.peakMs, durationMs);
+            metric.lastSeenSec = nowSec;
+            metric.detail = detail;
+            ++metric.sampleCount;
         }
 
         if (durationMs < kSlowTaskMs)
@@ -79,6 +107,47 @@ public:
         return std::vector<PerfSample>(samples_.begin(), samples_.end());
     }
 
+    std::vector<PerfMetricSnapshot> GetTopMetrics(
+        std::string_view prefix,
+        std::size_t maximumCount) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<PerfMetricSnapshot> result;
+        result.reserve(metrics_.size());
+
+        for (const auto& [name, metric] : metrics_)
+        {
+            if (!prefix.empty() && !std::string_view(name).starts_with(prefix))
+                continue;
+
+            result.push_back({
+                name,
+                metric.detail,
+                metric.lastMs,
+                metric.averageMs,
+                metric.peakMs,
+                metric.lastSeenSec,
+                metric.sampleCount
+                });
+        }
+
+        std::sort(
+            result.begin(),
+            result.end(),
+            [](const PerfMetricSnapshot& left, const PerfMetricSnapshot& right)
+            {
+                if (left.averageMs != right.averageMs)
+                    return left.averageMs > right.averageMs;
+
+                return left.peakMs > right.peakMs;
+            });
+
+        if (result.size() > maximumCount)
+            result.resize(maximumCount);
+
+        return result;
+    }
+
     double GetPeakMs() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -103,10 +172,33 @@ public:
         peakMs_ = 0.0;
         peakName_.clear();
         peakDetail_.clear();
+
+        for (auto& [name, metric] : metrics_)
+            metric.peakMs = metric.lastMs;
+    }
+
+    void ResetStatistics()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        samples_.clear();
+        metrics_.clear();
+        peakMs_ = 0.0;
+        peakName_.clear();
+        peakDetail_.clear();
     }
 
 private:
     PerfMonitor() = default;
+
+    struct MetricState
+    {
+        std::string detail;
+        double lastMs = 0.0;
+        double averageMs = 0.0;
+        double peakMs = 0.0;
+        double lastSeenSec = 0.0;
+        std::uint64_t sampleCount = 0;
+    };
 
     static double ElapsedSeconds()
     {
@@ -119,6 +211,7 @@ private:
 
     mutable std::mutex mutex_;
     std::deque<PerfSample> samples_;
+    std::unordered_map<std::string, MetricState> metrics_;
     double peakMs_ = 0.0;
     std::string peakName_;
     std::string peakDetail_;

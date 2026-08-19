@@ -54,6 +54,23 @@ namespace
 		return name;
 	}
 
+	std::string BuildDirectReadLabel(
+		std::string_view callingFunc,
+		const std::source_location& caller)
+	{
+		if (!callingFunc.empty())
+			return std::string(callingFunc);
+
+		std::string_view fileName(caller.file_name());
+		const std::size_t separator = fileName.find_last_of("\\/");
+
+		if (separator != std::string_view::npos)
+			fileName.remove_prefix(separator + 1);
+
+		return std::string(fileName) + ":" +
+			std::to_string(caller.line());
+	}
+
 	void RecordDmaTiming(std::string_view category, std::string_view callingFunc, double durationMs, double thresholdMs, std::string_view detail)
 	{
 		if (durationMs < thresholdMs)
@@ -111,6 +128,24 @@ namespace
 	void MemoryLogInfo(const std::string& message)
 	{
 		LOGS.logInfo("[Memory] " + message);
+	}
+
+	std::string CleanManagedString(std::string value)
+	{
+		const size_t nullPosition = value.find('\0');
+		if (nullPosition != std::string::npos)
+			value.erase(nullPosition);
+
+		while (!value.empty())
+		{
+			const char last = value.back();
+			if (last != ' ' && last != '\r' && last != '\n' && last != '\t')
+				break;
+
+			value.pop_back();
+		}
+
+		return value;
 	}
 }
 
@@ -963,7 +998,7 @@ bool Memory::RefreshProcessInformationNow()
 	bool processOk = false;
 
 	{
-		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+		std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
 
 		if (!vHandle)
 			return false;
@@ -1000,7 +1035,7 @@ bool Memory::RefreshProcessInformationNow()
 
 void Memory::ConfigureRefreshTimings()
 {
-	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+	std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
 
 	if (!vHandle)
 		return;
@@ -1639,7 +1674,7 @@ void Memory::CloseAndReset()
 	}
 
 	{
-		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+		std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
 		scatterQueuedReads.clear();
 		scatterQueuedWrites.clear();
 	}
@@ -2284,7 +2319,13 @@ void Memory::ResetTrafficStats()
 // Read / Write
 // ------------------------------------------------------------
 
-bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache, std::string_view callingFunc) const
+bool Memory::Read(
+	uintptr_t address,
+	void* buffer,
+	size_t size,
+	bool useCache,
+	std::string_view callingFunc,
+	std::source_location caller) const
 {
 	if (!vHandle)
 	{
@@ -2316,7 +2357,7 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache, s
 	DWORD readSize = 0;
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<std::mutex> lock(dmaOpsMutex);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
 	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
 	const auto executeStarted = std::chrono::steady_clock::now();
@@ -2345,9 +2386,8 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache, s
 		executeMs >= PerfMonitor::kSlowScatterMs)
 	{
 		const std::string detail = std::to_string(size) + " bytes";
-		const std::string_view label = callingFunc.empty()
-			? std::string_view("Direct Read")
-			: callingFunc;
+		const std::string label =
+			BuildDirectReadLabel(callingFunc, caller);
 
 		RecordDmaTiming(
 			"dma.lock_wait",
@@ -2369,7 +2409,14 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, bool useCache, s
 	return ok && readSize >= size;
 }
 
-bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool useCache, std::string_view callingFunc) const
+bool Memory::Read(
+	uintptr_t address,
+	void* buffer,
+	size_t size,
+	int pid,
+	bool useCache,
+	std::string_view callingFunc,
+	std::source_location caller) const
 {
 	if (!vHandle)
 	{
@@ -2395,7 +2442,7 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool us
 	DWORD readSize = 0;
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<std::mutex> lock(dmaOpsMutex);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
 	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
 	const auto executeStarted = std::chrono::steady_clock::now();
@@ -2424,9 +2471,8 @@ bool Memory::Read(uintptr_t address, void* buffer, size_t size, int pid, bool us
 		executeMs >= PerfMonitor::kSlowScatterMs)
 	{
 		const std::string detail = std::to_string(size) + " bytes";
-		const std::string_view label = callingFunc.empty()
-			? std::string_view("Direct Read")
-			: callingFunc;
+		const std::string label =
+			BuildDirectReadLabel(callingFunc, caller);
 
 		RecordDmaTiming(
 			"dma.lock_wait",
@@ -2468,7 +2514,7 @@ bool Memory::Write(uintptr_t address, const void* buffer, size_t size) const
 		return false;
 	}
 
-	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+	std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
 
 	const bool ok = VMMDLL_MemWrite(
 		vHandle,
@@ -2684,6 +2730,23 @@ std::string Memory::readUnityString(uintptr_t address, SIZE_T maxChars, bool use
 	return output;
 }
 
+std::string Memory::readUnityStringField(uintptr_t fieldAddress, SIZE_T maxChars, bool useCache)
+{
+	if (!IsValidPointer(fieldAddress))
+		return "";
+
+	uint64_t stringAddress = 0;
+	if (!TryRead(fieldAddress, stringAddress, useCache) ||
+		!IsValidPointer(stringAddress))
+	{
+		return "";
+	}
+
+	return CleanManagedString(
+		readUnityString(stringAddress, maxChars, useCache)
+	);
+}
+
 std::string Memory::readUTF8String(uint64_t address, SIZE_T size, bool useCache)
 {
 	if (!address || size == 0)
@@ -2797,7 +2860,7 @@ VMMDLL_SCATTER_HANDLE Memory::CreateScatterHandle(bool useCache) const
 	}
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<std::mutex> lock(dmaOpsMutex);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
 	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
 	const auto executeStarted = std::chrono::steady_clock::now();
@@ -2850,7 +2913,7 @@ VMMDLL_SCATTER_HANDLE Memory::CreateScatterHandle(int pid, bool useCache) const
 	}
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<std::mutex> lock(dmaOpsMutex);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
 	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
 	const auto executeStarted = std::chrono::steady_clock::now();
@@ -2900,7 +2963,7 @@ void Memory::CloseScatterHandle(VMMDLL_SCATTER_HANDLE handle)
 		return;
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<std::mutex> lock(dmaOpsMutex);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
 	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
 	scatterQueuedReads.erase(handle);
@@ -2943,7 +3006,7 @@ bool Memory::AddScatterReadRequest(
 	}
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<std::mutex> lock(dmaOpsMutex);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
 	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
 	const bool prepared = VMMDLL_Scatter_PrepareEx(
@@ -2997,7 +3060,7 @@ bool Memory::AddScatterWriteRequest(
 	}
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<std::mutex> lock(dmaOpsMutex);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
 	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
 	const bool prepared = VMMDLL_Scatter_PrepareWrite(
@@ -3053,7 +3116,7 @@ bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, bool useCache, std
 	}
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<std::mutex> lock(dmaOpsMutex);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
 	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
 	const auto it = scatterQueuedReads.find(handle);
@@ -3125,11 +3188,108 @@ bool Memory::ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, bool useCache, std
 	return ok && clearOk;
 }
 
-Memory::TryScatterReadResult Memory::TryReadScatter(
-	const ScatterReadRequest* requests,
-	size_t requestCount,
-	bool useCache,
-	std::string_view callingFunc)
+bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount, bool useCache, std::string_view callingFunc)
+{
+	if (!vHandle || !current_process.PID || !requests || requestCount == 0)
+		return false;
+
+	for (size_t index = 0; index < requestCount; ++index)
+	{
+		if (!requests[index].address ||
+			!requests[index].buffer ||
+			requests[index].size == 0)
+		{
+			return false;
+		}
+	}
+
+	const auto lockWaitStarted = std::chrono::steady_clock::now();
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
+	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
+
+	const auto executeStarted = std::chrono::steady_clock::now();
+	const VMMDLL_SCATTER_HANDLE handle = VMMDLL_Scatter_Initialize(
+		vHandle,
+		current_process.PID,
+		BuildScatterFlags(useCache));
+
+	if (!handle)
+	{
+		lock.unlock();
+		MemoryLogError("ReadScatter failed to create scatter handle");
+		return false;
+	}
+
+	bool prepared = true;
+	uint64_t failedAddress = 0;
+
+	for (size_t index = 0; index < requestCount; ++index)
+	{
+		const ScatterReadRequest& request = requests[index];
+
+		if (!VMMDLL_Scatter_PrepareEx(
+			handle,
+			request.address,
+			request.size,
+			static_cast<PBYTE>(request.buffer),
+			nullptr))
+		{
+			prepared = false;
+			failedAddress = request.address;
+			break;
+		}
+
+		RecordScatterReadRequest(request.size);
+	}
+
+	bool executed = false;
+
+	if (prepared)
+	{
+		executed = VMMDLL_Scatter_ExecuteRead(handle);
+		RecordScatterReadExecute(executed);
+	}
+
+	VMMDLL_Scatter_CloseHandle(handle);
+
+	const double executeMs = ElapsedMilliseconds(executeStarted);
+	lock.unlock();
+
+	const std::string_view label = callingFunc.empty()
+		? std::string_view("Scatter Read Batch")
+		: callingFunc;
+
+	const std::string detail = std::to_string(requestCount) + " reads";
+
+	RecordDmaTiming(
+		"dma.lock_wait",
+		label,
+		lockWaitMs,
+		PerfMonitor::kSlowDmaLockWaitMs,
+		detail);
+
+	RecordDmaTiming(
+		"dma.execute",
+		label,
+		executeMs,
+		PerfMonitor::kSlowScatterMs,
+		detail);
+
+	if (!prepared)
+	{
+		MemoryLogError(
+			"ReadScatter failed to prepare read at " +
+			Hex64(failedAddress));
+		return false;
+	}
+
+	if (!executed)
+		MemoryLogError("ReadScatter failed to execute scatter read");
+
+	return executed;
+}
+
+Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, bool useCache, std::string_view callingFunc)
 {
 	if (!vHandle || !current_process.PID || !requests || requestCount == 0)
 		return TryScatterReadResult::Failed;
@@ -3140,7 +3300,7 @@ Memory::TryScatterReadResult Memory::TryReadScatter(
 			return TryScatterReadResult::Failed;
 	}
 
-	std::unique_lock<std::mutex> lock(dmaOpsMutex, std::try_to_lock);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::try_to_lock);
 
 	if (!lock.owns_lock())
 		return TryScatterReadResult::Busy;
@@ -3244,7 +3404,7 @@ bool Memory::ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid, bool use
 		return false;
 	}
 
-	std::lock_guard<std::mutex> lock(dmaOpsMutex);
+	std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
 
 	const auto it = scatterQueuedWrites.find(handle);
 	if (it == scatterQueuedWrites.end() || it->second == 0)

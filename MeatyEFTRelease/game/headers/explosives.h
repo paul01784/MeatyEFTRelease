@@ -1,5 +1,7 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <unordered_set>
 #include <iostream>
 #include <algorithm>
@@ -26,10 +28,14 @@ struct GrenadeList
     bool isDestroyed = false;
 };
 
+using GrenadeCacheCollection = std::vector<GrenadeList>;
+using GrenadeCacheSnapshot =
+    std::shared_ptr<const GrenadeCacheCollection>;
+
 class ExplosiveManager
 {
 public:
-    ExplosiveManager() = default;
+    ExplosiveManager();
     ~ExplosiveManager() = default;
 
     ExplosiveManager(const ExplosiveManager&) = delete;
@@ -41,6 +47,7 @@ public:
     void reset();
 
     [[nodiscard]] std::vector<GrenadeList> getGrenades() const;
+    [[nodiscard]] GrenadeCacheSnapshot getGrenadesSnapshot() const noexcept;
     [[nodiscard]] std::size_t getGrenadeCount() const;
 
     // Debug
@@ -72,6 +79,7 @@ private:
 
     // Protects the published grenade cache.
     mutable std::mutex m_cacheMutex;
+    std::atomic<GrenadeCacheSnapshot> m_publishedGrenades;
 
     std::uint64_t m_localGameWorld = 0;
 
@@ -85,6 +93,8 @@ private:
     bool m_lastUnityListReadSucceeded = false;
 
     std::vector<GrenadeList> m_grenades;
+
+    void publishGrenadesLocked();
 };
 
 extern ExplosiveManager explosiveManager;

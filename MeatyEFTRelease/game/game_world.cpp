@@ -6,6 +6,7 @@
 #include "headers/utils.h"
 #include "../app/debug.h"
 #include "../memory/Memory.h"
+#include "../memory/ScatterReadBatch.h"
 
 #include <Windows.h>
 
@@ -359,12 +360,15 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     std::vector<LinkedListObject> nodes(count);
 
     {
-        auto scatter = mem.CreateScatterHandle();
+        ScatterReadBatch scatter(
+            mem,
+            false,
+            "Game World objects"
+        );
 
-        if (!scatter)
+        if (!scatter.Valid())
         {
-            debug_out =
-                "Game World scan failed: could not open the object read batch";
+            debug_out = "Game World scan failed: could not open the object read batch";
 
             object_dump << "Status: " << debug_out << '\n';
             saveGameWorldObjectDump(object_dump.str());
@@ -373,17 +377,15 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
 
         for (std::size_t i = 0; i < count; ++i)
         {
-            mem.AddScatterReadRequest(
-                scatter,
+            scatter.AddBytes(
                 node_addrs[i],
                 &nodes[i],
                 sizeof(LinkedListObject)
             );
         }
 
-        if (!mem.ExecuteReadScatter(scatter))
+        if (!scatter.Execute())
         {
-            mem.CloseScatterHandle(scatter);
             debug_out =
                 "Game World scan failed: object list read failed";
 
@@ -392,7 +394,6 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
             return false;
         }
 
-        mem.CloseScatterHandle(scatter);
     }
 
     std::vector<std::uint64_t> name_ptrs(count, 0);
@@ -406,12 +407,15 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
             std::fill(name_ptrs.begin(), name_ptrs.end(), 0);
             name_read_error.clear();
 
-            auto scatter = mem.CreateScatterHandle();
+            ScatterReadBatch scatter(
+                mem,
+                false,
+                "Game World names"
+            );
 
-            if (!scatter)
+            if (!scatter.Valid())
             {
-                name_read_error =
-                    "could not open the name read batch";
+                name_read_error = "could not open the name read batch";
                 return false;
             }
 
@@ -424,22 +428,18 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
 
                 has_name_requests = true;
 
-                mem.AddScatterReadRequest(
-                    scatter,
+                scatter.Add(
                     nodes[i].this_object + name_offset,
-                    &name_ptrs[i],
-                    sizeof(std::uint64_t)
+                    name_ptrs[i]
                 );
             }
 
-            if (has_name_requests && !mem.ExecuteReadScatter(scatter))
+            if (has_name_requests && !scatter.Execute())
             {
-                mem.CloseScatterHandle(scatter);
                 name_read_error = "object name pointer read failed";
                 return false;
             }
 
-            mem.CloseScatterHandle(scatter);
             return true;
         };
 

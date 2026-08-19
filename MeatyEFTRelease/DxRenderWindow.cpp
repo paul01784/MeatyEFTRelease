@@ -194,7 +194,10 @@ bool DxRenderWindow::IsDrawCommandSafe(const DxRenderWindow::DrawCommand& cmd) n
     }
 }
 
-DxRenderWindow::DxRenderWindow() = default;
+DxRenderWindow::DxRenderWindow()
+    : m_configSnapshot(std::make_shared<const DxWindowConfig>())
+{
+}
 
 DxRenderWindow::~DxRenderWindow()
 {
@@ -205,10 +208,9 @@ bool DxRenderWindow::Init(const DxWindowConfig& config)
 {
     Shutdown();
 
-    {
-        std::lock_guard<std::mutex> lock(m_configMutex);
-        m_config = config;
-    }
+    m_configSnapshot.store(
+        std::make_shared<const DxWindowConfig>(config),
+        std::memory_order_release);
 
     RefreshMonitorList();
     m_initialized.store(true, std::memory_order_release);
@@ -276,15 +278,7 @@ void DxRenderWindow::Shutdown()
 {
     Stop();
 
-    {
-        std::lock_guard<std::mutex> lock(m_drawMutex);
-        ReleaseDrawStorageUnlocked();
-    }
-
-    m_renderDrawList.clear();
-    m_renderDrawList.shrink_to_fit();
-    m_drawVersion.store(0, std::memory_order_release);
-    m_renderDrawVersion = 0;
+    ReleaseDrawStorageUnlocked();
     m_initialized.store(false, std::memory_order_release);
 }
 
@@ -318,6 +312,89 @@ int DxRenderWindow::GetWindowHeight() const
     return m_windowHeight.load(std::memory_order_acquire);
 }
 
+DxFuserPerformanceSnapshot
+DxRenderWindow::GetPerformanceSnapshot() const noexcept
+{
+    DxFuserPerformanceSnapshot snapshot{};
+
+    snapshot.frameInterval = {
+        m_frameIntervalLastMs.load(std::memory_order_relaxed),
+        m_frameIntervalAverageMs.load(std::memory_order_relaxed),
+        m_frameIntervalPeakMs.load(std::memory_order_relaxed)
+    };
+    snapshot.build = {
+        m_buildLastMs.load(std::memory_order_relaxed),
+        m_buildAverageMs.load(std::memory_order_relaxed),
+        m_buildPeakMs.load(std::memory_order_relaxed)
+    };
+    snapshot.draw = {
+        m_drawLastMs.load(std::memory_order_relaxed),
+        m_drawAverageMs.load(std::memory_order_relaxed),
+        m_drawPeakMs.load(std::memory_order_relaxed)
+    };
+    snapshot.present = {
+        m_presentLastMs.load(std::memory_order_relaxed),
+        m_presentAverageMs.load(std::memory_order_relaxed),
+        m_presentPeakMs.load(std::memory_order_relaxed)
+    };
+    snapshot.presentedFPS = snapshot.frameInterval.averageMs > 0.0
+        ? 1000.0 / snapshot.frameInterval.averageMs
+        : 0.0;
+    snapshot.commandCount =
+        m_lastCommandCount.load(std::memory_order_relaxed);
+    snapshot.frameCount =
+        m_renderedFrameCount.load(std::memory_order_relaxed);
+    snapshot.droppedCommandCount =
+        g_droppedDrawCommands.load(std::memory_order_relaxed);
+
+    return snapshot;
+}
+
+void DxRenderWindow::ResetPerformanceStatistics() noexcept
+{
+    m_frameIntervalLastMs.store(0.0, std::memory_order_relaxed);
+    m_frameIntervalAverageMs.store(0.0, std::memory_order_relaxed);
+    m_frameIntervalPeakMs.store(0.0, std::memory_order_relaxed);
+    m_buildLastMs.store(0.0, std::memory_order_relaxed);
+    m_buildAverageMs.store(0.0, std::memory_order_relaxed);
+    m_buildPeakMs.store(0.0, std::memory_order_relaxed);
+    m_drawLastMs.store(0.0, std::memory_order_relaxed);
+    m_drawAverageMs.store(0.0, std::memory_order_relaxed);
+    m_drawPeakMs.store(0.0, std::memory_order_relaxed);
+    m_presentLastMs.store(0.0, std::memory_order_relaxed);
+    m_presentAverageMs.store(0.0, std::memory_order_relaxed);
+    m_presentPeakMs.store(0.0, std::memory_order_relaxed);
+    m_lastCommandCount.store(0, std::memory_order_relaxed);
+    m_renderedFrameCount.store(0, std::memory_order_relaxed);
+    g_droppedDrawCommands.store(0, std::memory_order_relaxed);
+}
+
+void DxRenderWindow::RecordTiming(
+    double durationMs,
+    std::atomic<double>& last,
+    std::atomic<double>& average,
+    std::atomic<double>& peak) noexcept
+{
+    last.store(durationMs, std::memory_order_relaxed);
+
+    const double currentAverage = average.load(std::memory_order_relaxed);
+    average.store(
+        currentAverage <= 0.0
+        ? durationMs
+        : (currentAverage * 0.90) + (durationMs * 0.10),
+        std::memory_order_relaxed);
+
+    double currentPeak = peak.load(std::memory_order_relaxed);
+    while (durationMs > currentPeak &&
+        !peak.compare_exchange_weak(
+            currentPeak,
+            durationMs,
+            std::memory_order_relaxed,
+            std::memory_order_relaxed))
+    {
+    }
+}
+
 DxWindowConfig DxRenderWindow::GetConfig() const
 {
     return GetConfigSnapshot();
@@ -325,8 +402,9 @@ DxWindowConfig DxRenderWindow::GetConfig() const
 
 void DxRenderWindow::SetConfig(const DxWindowConfig& config)
 {
-    std::lock_guard<std::mutex> lock(m_configMutex);
-    m_config = config;
+    m_configSnapshot.store(
+        std::make_shared<const DxWindowConfig>(config),
+        std::memory_order_release);
 }
 
 bool DxRenderWindow::RefreshMonitorList()
@@ -383,10 +461,9 @@ bool DxRenderWindow::SetMonitor(int monitorIndex)
             return false;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(m_configMutex);
-        m_config.monitorIndex = monitorIndex;
-    }
+    DxWindowConfig config = GetConfigSnapshot();
+    config.monitorIndex = monitorIndex;
+    SetConfig(config);
 
     return true;
 }
@@ -398,35 +475,27 @@ float DxRenderWindow::GetFinalRenderScale() const
 
 void DxRenderWindow::BeginDrawList()
 {
-    std::lock_guard<std::mutex> lock(m_drawMutex);
     m_pendingDrawList.clear();
 }
 
 void DxRenderWindow::SubmitDrawList()
 {
-    std::lock_guard<std::mutex> lock(m_drawMutex);
-
-    if (m_submittedDrawList.capacity() > MAX_RETAINED_DRAW_COMMAND_CAPACITY &&
+    if (m_renderDrawList.capacity() > MAX_RETAINED_DRAW_COMMAND_CAPACITY &&
         m_pendingDrawList.size() < MAX_RETAINED_DRAW_COMMAND_CAPACITY / 2)
     {
-        std::vector<DrawCommand>().swap(m_submittedDrawList);
+        std::vector<DrawCommand>().swap(m_renderDrawList);
     }
 
-    m_submittedDrawList.swap(m_pendingDrawList);
+    m_renderDrawList.swap(m_pendingDrawList);
     m_pendingDrawList.clear();
-    m_drawVersion.fetch_add(1, std::memory_order_release);
+    m_lastCommandCount.store(
+        m_renderDrawList.size(),
+        std::memory_order_relaxed);
 }
 
 void DxRenderWindow::ClearDrawLists()
 {
-    {
-        std::lock_guard<std::mutex> lock(m_drawMutex);
-        ReleaseDrawStorageUnlocked();
-    }
-
-    m_renderDrawList.clear();
-    m_renderDrawList.shrink_to_fit();
-    m_drawVersion.fetch_add(1, std::memory_order_release);
+    ReleaseDrawStorageUnlocked();
 }
 
 void DxRenderWindow::DrawLine(float x1, float y1, float x2, float y2, const glm::vec4& colour, float thickness)
@@ -725,6 +794,12 @@ bool DxRenderWindow::CreateDeviceResources()
     if (FAILED(hr))
         return false;
 
+    // Avoid the default multi-frame render-ahead queue.  On a fuser this is
+    // visible as input/motion latency even while the FPS counter stays high.
+    ComPtr<IDXGIDevice1> dxgiDevice1;
+    if (SUCCEEDED(dxgiDevice.As(&dxgiDevice1)))
+        dxgiDevice1->SetMaximumFrameLatency(1);
+
     ComPtr<IDXGIAdapter> adapter;
     hr = dxgiDevice->GetAdapter(adapter.GetAddressOf());
     if (FAILED(hr))
@@ -893,8 +968,25 @@ void DxRenderWindow::RenderLoop()
     ScopedTimerResolution timerResolution;
     _se_translator_function previousTranslator = _set_se_translator(FuserSehTranslator);
 
+    constexpr DWORD kHighResolutionTimerFlag = 0x00000002;
+    m_frameTimer = CreateWaitableTimerExW(
+        nullptr,
+        nullptr,
+        kHighResolutionTimerFlag,
+        TIMER_ALL_ACCESS);
+
+    if (!m_frameTimer)
+        m_frameTimer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+
     auto cleanupAndExit = [&]()
         {
+            if (m_frameTimer)
+            {
+                CancelWaitableTimer(m_frameTimer);
+                CloseHandle(m_frameTimer);
+                m_frameTimer = nullptr;
+            }
+
             m_windowReady.store(false, std::memory_order_release);
             CleanupDeviceResources();
             DestroyAppWindow();
@@ -923,10 +1015,25 @@ void DxRenderWindow::RenderLoop()
         m_windowReady.store(true, std::memory_order_release);
 
         int consecutiveFailures = 0;
+        auto previousFrameStart =
+            std::chrono::steady_clock::time_point{};
 
         while (!m_stopRequested.load(std::memory_order_acquire))
         {
             const auto frameStart = std::chrono::steady_clock::now();
+
+            if (previousFrameStart !=
+                std::chrono::steady_clock::time_point{})
+            {
+                RecordTiming(
+                    std::chrono::duration<double, std::milli>(
+                        frameStart - previousFrameStart).count(),
+                    m_frameIntervalLastMs,
+                    m_frameIntervalAverageMs,
+                    m_frameIntervalPeakMs);
+            }
+
+            previousFrameStart = frameStart;
             bool activeScene = false;
 
             try
@@ -935,7 +1042,16 @@ void DxRenderWindow::RenderLoop()
                 if (m_stopRequested.load(std::memory_order_acquire))
                     break;
 
+                const auto buildStart =
+                    std::chrono::steady_clock::now();
                 activeScene = BuildFrameDrawList();
+                RecordTiming(
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() -
+                        buildStart).count(),
+                    m_buildLastMs,
+                    m_buildAverageMs,
+                    m_buildPeakMs);
 
                 if (!RenderFrame())
                 {
@@ -949,6 +1065,9 @@ void DxRenderWindow::RenderLoop()
                 else
                 {
                     consecutiveFailures = 0;
+                    m_renderedFrameCount.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
                 }
             }
             catch (const FuserSehException& e)
@@ -1012,13 +1131,13 @@ bool DxRenderWindow::BuildFrameDrawList()
 
 bool DxRenderWindow::RenderFrame()
 {
+    const auto drawStart = std::chrono::steady_clock::now();
+
     if (!m_swapChain || !m_d2dRenderTarget || !m_d3dContext || !m_renderTargetView)
         return false;
 
     const DxWindowConfig cfg = GetConfigSnapshot();
     const float scale = GetFinalScale(cfg);
-
-    UpdateRenderDrawList();
 
     const glm::vec4 clearColour = cfg.transparentBackground
         ? glm::vec4(0.0f, 0.0f, 0.0f, 0.0f)
@@ -1041,6 +1160,13 @@ bool DxRenderWindow::RenderFrame()
     RenderDrawCommands(m_renderDrawList, cfg, scale);
 
     HRESULT hr = m_d2dRenderTarget->EndDraw();
+    RecordTiming(
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - drawStart).count(),
+        m_drawLastMs,
+        m_drawAverageMs,
+        m_drawPeakMs);
+
     if (hr == D2DERR_RECREATE_TARGET)
         return RecreateRenderTargets();
 
@@ -1050,7 +1176,14 @@ bool DxRenderWindow::RenderFrame()
         return RecreateRenderTargets();
     }
 
+    const auto presentStart = std::chrono::steady_clock::now();
     hr = m_swapChain->Present(cfg.useVSync ? 1 : 0, 0);
+    RecordTiming(
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - presentStart).count(),
+        m_presentLastMs,
+        m_presentAverageMs,
+        m_presentPeakMs);
 
     if (hr == DXGI_STATUS_OCCLUDED)
         return true;
@@ -1118,6 +1251,54 @@ void DxRenderWindow::SleepUntil(std::chrono::steady_clock::time_point targetTime
 {
     using namespace std::chrono;
 
+    if (m_frameTimer)
+    {
+        while (!m_stopRequested.load(std::memory_order_acquire))
+        {
+            const auto now = steady_clock::now();
+            if (now >= targetTime)
+                return;
+
+            const auto remaining100ns = duration_cast<
+                duration<long long, std::ratio<1, 10'000'000>>>(
+                    targetTime - now).count();
+
+            LARGE_INTEGER dueTime{};
+            dueTime.QuadPart = -(std::max)(1LL, remaining100ns);
+
+            if (!SetWaitableTimer(
+                m_frameTimer,
+                &dueTime,
+                0,
+                nullptr,
+                nullptr,
+                FALSE))
+            {
+                break;
+            }
+
+            const HANDLE timer = m_frameTimer;
+            const DWORD result = MsgWaitForMultipleObjectsEx(
+                1,
+                &timer,
+                INFINITE,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE);
+
+            if (result == WAIT_OBJECT_0)
+                return;
+
+            if (result == WAIT_OBJECT_0 + 1)
+            {
+                ProcessMessages();
+                continue;
+            }
+
+            break;
+        }
+    }
+
+    // Compatibility fallback if waitable-timer creation or arming fails.
     while (!m_stopRequested.load(std::memory_order_acquire))
     {
         const auto now = steady_clock::now();
@@ -1125,7 +1306,8 @@ void DxRenderWindow::SleepUntil(std::chrono::steady_clock::time_point targetTime
             return;
 
         const auto remaining = duration_cast<milliseconds>(targetTime - now);
-        const DWORD waitMs = static_cast<DWORD>(std::clamp<long long>(remaining.count(), 1, 50));
+        const DWORD waitMs = static_cast<DWORD>(
+            std::clamp<long long>(remaining.count(), 1, 50));
 
         const DWORD result = MsgWaitForMultipleObjectsEx(
             0,
@@ -1179,28 +1361,13 @@ void DxRenderWindow::PushDrawCommand(DrawCommand&& command)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(m_drawMutex);
     m_pendingDrawList.emplace_back(std::move(command));
-}
-
-void DxRenderWindow::UpdateRenderDrawList()
-{
-    const std::uint64_t version = m_drawVersion.load(std::memory_order_acquire);
-    if (version == m_renderDrawVersion)
-        return;
-
-    {
-        std::lock_guard<std::mutex> lock(m_drawMutex);
-        m_renderDrawList = m_submittedDrawList;
-    }
-
-    m_renderDrawVersion = version;
 }
 
 void DxRenderWindow::ReleaseDrawStorageUnlocked()
 {
     std::vector<DrawCommand>().swap(m_pendingDrawList);
-    std::vector<DrawCommand>().swap(m_submittedDrawList);
+    std::vector<DrawCommand>().swap(m_renderDrawList);
 }
 
 void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands, const DxWindowConfig& cfg, float scale)
@@ -1422,8 +1589,10 @@ void DxRenderWindow::RenderMarkerWithTextCommand(const DrawCommand& cmd, const D
 
 DxWindowConfig DxRenderWindow::GetConfigSnapshot() const
 {
-    std::lock_guard<std::mutex> lock(m_configMutex);
-    return m_config;
+    const std::shared_ptr<const DxWindowConfig> snapshot =
+        m_configSnapshot.load(std::memory_order_acquire);
+
+    return snapshot ? *snapshot : DxWindowConfig{};
 }
 
 float DxRenderWindow::GetDpiScaleForWindow(HWND hwnd) const

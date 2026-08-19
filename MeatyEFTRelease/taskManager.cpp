@@ -1,164 +1,215 @@
 #include "app/taskManager.h"
-#include "app/globals.h"
+
 #include "app/debug.h"
+#include "app/globals.h"
 #include "app/perfMonitor.h"
+#include "memory/Memory.h"
 
-bool IsHeavyDmaTask(const std::string& name)
+#include <algorithm>
+#include <cmath>
+#include <thread>
+
+namespace
 {
-    return name == "lootTask" ||
-        name == "questTask" ||
-        name == "ExplosiveManagerTask" ||
-        name == "PlayerEquipmentTask";
+    constexpr auto kMaximumIdleSleep = std::chrono::milliseconds(5);
+    constexpr auto kDeferredDmaRetry = std::chrono::milliseconds(5);
+
+    [[nodiscard]] int PriorityRank(TaskPriority priority) noexcept
+    {
+        return static_cast<int>(priority);
+    }
 }
 
-void TaskManager::addTask(const std::string& name, std::function<void()> func, const double* interval, double phaseOffsetMs) {
-    TimedTask task;
-    task.function = std::move(func);
+void TaskManager::addTask(std::string name, std::function<void()> function, const double* interval, TaskOptions options)
+{
+    auto existing = std::find_if(
+        tasks.begin(),
+        tasks.end(),
+        [&](const TimedTask& task)
+        {
+            return task.name == name;
+        });
+
+    TimedTask task{};
+    task.name = std::move(name);
+    task.function = std::move(function);
     task.interval = interval;
-    task.elapsedTime = -phaseOffsetMs;
-    task.phaseOffsetMs = phaseOffsetMs;
-    tasks[name] = std::move(task);
+    task.options = options;
+
+    if (existing != tasks.end())
+    {
+        task.insertionOrder = existing->insertionOrder;
+        *existing = std::move(task);
+        return;
+    }
+
+    task.insertionOrder = nextInsertionOrder++;
+    tasks.emplace_back(std::move(task));
 }
 
-void TaskManager::removeTask(const std::string& name) {
-    tasks.erase(name);
-}
-
-void TaskManager::run()
+void TaskManager::removeTask(const std::string& name)
 {
-    previousTime = std::chrono::steady_clock::now();
-
-    while (appGlobals::runThreads.load(std::memory_order_acquire))
-    {
-        try
+    std::erase_if(
+        tasks,
+        [&](const TimedTask& task)
         {
-            const auto currentTime = std::chrono::steady_clock::now();
-
-            double deltaTime =
-                std::chrono::duration<double, std::milli>(
-                    currentTime - previousTime
-                ).count();
-
-            previousTime = currentTime;
-
-            deltaTime = std::clamp(deltaTime, 0.0, 100.0);
-
-            updateTasks(deltaTime);
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        catch (const std::exception& e)
-        {
-            LOGS.logError(
-                "Exception caught in TaskManager: " +
-                std::string(e.what()) +
-                ". Retrying..."
-            );
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        catch (...)
-        {
-            LOGS.logError("Unknown exception caught in TaskManager. Retrying...");
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-    }
+            return task.name == name;
+        });
 }
 
-void TaskManager::updateTasks(double deltaTime)
+std::chrono::duration<double, std::milli> TaskManager::GetInterval(const TimedTask& task)
 {
-    auto IsDue = [](const TimedTask& task) -> bool
-        {
-            return task.interval &&
-                task.function &&
-                *task.interval > 0.0 &&
-                task.elapsedTime >= *task.interval;
-        };
+    if (!task.interval || !std::isfinite(*task.interval))
+        return std::chrono::duration<double, std::milli>::zero();
 
-    auto RunTask = [&](const std::string& name, TimedTask& task)
-        {
-            const auto started = std::chrono::steady_clock::now();
+    return std::chrono::duration<double, std::milli>(
+        (std::max)(0.0, *task.interval));
+}
 
-            try
-            {
-                task.function();
-            }
-            catch (const std::exception& e)
-            {
-                LOGS.logError(
-                    "[TaskManager] Task '" + name +
-                    "' threw exception: " + e.what()
-                );
-            }
-            catch (...)
-            {
-                LOGS.logError(
-                    "[TaskManager] Task '" + name +
-                    "' threw an unknown exception."
-                );
-            }
+void TaskManager::RunTask(TimedTask& task)
+{
+    const auto started = Clock::now();
+    const ScopedDmaPriority dmaPriority(task.options.dmaPriority);
 
-            const double durationMs =
-                std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - started
-                ).count();
-
-            PerfMonitor::Instance().Record("task." + name, durationMs);
-
-            // Skip missed cycles rather than running back-to-back trying to catch up
-            task.elapsedTime = 0.0;
-        };
-
-    // First, advance every valid task timer
-    for (auto& [name, task] : tasks)
+    try
     {
-        if (!task.interval || !task.function || *task.interval <= 0.0)
-            continue;
-
-        task.elapsedTime += deltaTime;
+        task.function();
+    }
+    catch (const std::exception& exception)
+    {
+        LOGS.logError(
+            "[TaskManager] Task '" + task.name +
+            "' threw exception: " + exception.what());
+    }
+    catch (...)
+    {
+        LOGS.logError(
+            "[TaskManager] Task '" + task.name +
+            "' threw an unknown exception.");
     }
 
-    // Camera is critical: run it first whenever it is due
-    auto cameraIt = tasks.find("cameraTask");
+    const double durationMs =
+        std::chrono::duration<double, std::milli>(
+            Clock::now() - started).count();
 
-    if (cameraIt != tasks.end() && IsDue(cameraIt->second))
-        RunTask(cameraIt->first, cameraIt->second);
+    PerfMonitor::Instance().Record("task." + task.name, durationMs);
+}
 
-    // Find the single most overdue real heavy task
-    std::string selectedHeavyTask;
-    double highestOverdue = -1.0;
+void TaskManager::ScheduleNextRun(TimedTask& task, Clock::time_point completedAt)
+{
+    const auto interval = GetInterval(task);
 
-    for (auto& [name, task] : tasks)
+    if (interval <= decltype(interval)::zero())
     {
-        if (!IsHeavyDmaTask(name) || !IsDue(task))
-            continue;
-
-        const double overdue = task.elapsedTime - *task.interval;
-
-        if (overdue > highestOverdue)
-        {
-            highestOverdue = overdue;
-            selectedHeavyTask = name;
-        }
+        task.nextRun = completedAt + kMaximumIdleSleep;
+        return;
     }
 
-    // Run all due non-heavy tasks, plus only one due heavy task
-    for (auto& [name, task] : tasks)
+    const auto clockInterval =
+        std::chrono::duration_cast<Clock::duration>(interval);
+
+    // Preserve the task's phase while deliberately skipping missed cycles
+    do
     {
-        if (name == "cameraTask")
-            continue;
+        task.nextRun += clockInterval;
+    }
+    while (task.nextRun <= completedAt);
+}
 
-        if (!IsDue(task))
-            continue;
+void TaskManager::run(std::stop_token stopToken)
+{
+    const auto startedAt = Clock::now();
 
-        if (IsHeavyDmaTask(name) &&
-            !selectedHeavyTask.empty() &&
-            name != selectedHeavyTask)
+    for (TimedTask& task : tasks)
+    {
+        const auto interval = GetInterval(task);
+        const auto phase = std::chrono::duration<double, std::milli>(
+            (std::max)(0.0, task.options.phaseOffsetMs));
+
+        task.nextRun = startedAt +
+            std::chrono::duration_cast<Clock::duration>(interval + phase);
+    }
+
+    while (!stopToken.stop_requested() && appGlobals::runThreads.load(std::memory_order_acquire))
+    {
+        auto now = Clock::now();
+        std::vector<TimedTask*> dueTasks;
+        dueTasks.reserve(tasks.size());
+
+        for (TimedTask& task : tasks)
         {
-            continue;
+            if (!task.function || GetInterval(task).count() <= 0.0)
+                continue;
+
+            if (task.nextRun <= now)
+                dueTasks.emplace_back(&task);
         }
 
-        RunTask(name, task);
+        std::stable_sort(
+            dueTasks.begin(),
+            dueTasks.end(),
+            [](const TimedTask* left, const TimedTask* right)
+            {
+                const int leftPriority = PriorityRank(left->options.priority);
+                const int rightPriority = PriorityRank(right->options.priority);
+
+                if (leftPriority != rightPriority)
+                    return leftPriority < rightPriority;
+
+                if (left->nextRun != right->nextRun)
+                    return left->nextRun < right->nextRun;
+
+                return left->insertionOrder < right->insertionOrder;
+            });
+
+        bool backgroundTaskRan = false;
+
+        for (TimedTask* task : dueTasks)
+        {
+            if (stopToken.stop_requested() ||
+                !appGlobals::runThreads.load(std::memory_order_acquire))
+            {
+                break;
+            }
+
+            now = Clock::now();
+
+            if (task->options.priority == TaskPriority::Background)
+            {
+                if (backgroundTaskRan)
+                {
+                    task->nextRun = now + kDeferredDmaRetry;
+                    continue;
+                }
+
+                if (task->options.deferWhenDmaBusy &&
+                    mem.ShouldDeferDmaWork(task->options.dmaPriority))
+                {
+                    task->nextRun = now + kDeferredDmaRetry;
+                    continue;
+                }
+
+                backgroundTaskRan = true;
+            }
+
+            RunTask(*task);
+            ScheduleNextRun(*task, Clock::now());
+        }
+
+        now = Clock::now();
+        auto wakeAt = now + kMaximumIdleSleep;
+
+        for (const TimedTask& task : tasks)
+        {
+            if (!task.function || GetInterval(task).count() <= 0.0)
+                continue;
+
+            wakeAt = (std::min)(wakeAt, task.nextRun);
+        }
+
+        if (wakeAt > now)
+            std::this_thread::sleep_until(wakeAt);
+        else
+            std::this_thread::yield();
     }
 }

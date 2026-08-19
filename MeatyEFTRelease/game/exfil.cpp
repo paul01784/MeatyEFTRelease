@@ -3,62 +3,55 @@
 #include "../app/debug.h"
 #include "headers/camera.h"
 #include "../memory/Memory.h"
+#include "../memory/ScatterReadBatch.h"
 #include "headers/maingame.h"
 #include "headers/utils.h"
 #include "headers/unityHelper.h"
 #include "headers/unitysdk.h"
 #include "headers/transform.h"
 
+#include <algorithm>
+
+
+Exfil::Exfil()
+	: publishedExfilCache(
+		std::make_shared<const ExfilCacheCollection>())
+{
+}
 
 Exfil exfil;
-
-static std::string CleanString(std::string str)
-{
-	const size_t nullPos = str.find('\0');
-	if (nullPos != std::string::npos)
-		str.erase(nullPos);
-
-	while (!str.empty() && (str.back() == ' ' || str.back() == '\r' || str.back() == '\n' || str.back() == '\t'))
-		str.pop_back();
-
-	return str;
-}
-
-static std::string ReadString(uint64_t namePtr)
-{
-
-	if (!Utils::valid_pointer(namePtr))
-		return "";
-
-	int len = mem.Read<int>(static_cast<SIZE_T>(namePtr) + 0x10);
-	if (len <= 0 || len > 256)
-		return "";
-
-	return CleanString(mem.readUnicodeString(namePtr + 0x14, len));
-}
 
 void Exfil::exfilTask()
 {
 	try
 	{
-		if (!radarGlobals::drawExfils)
+		if (!radarGlobals::drawExfils && !espGlobals::drawExfil)
 			return;
 
 		//update exfil status on timer pass & local hands good
 		if (!Utils::valid_pointer(mainGame.localPlayerHands))
 			return;
 
-		if (exfilList.size() < 1)
-			tryLoadMemoryExfils();
-
-
-
 		auto now = std::chrono::steady_clock::now();
+		constexpr auto kDiscoveryRetryInterval = std::chrono::seconds(8);
+
+		// Discovery can lose a single entry when one dependent read is slow or
+		// invalid.  Keep the existing cache, then periodically merge in anything
+		// missed instead of treating a non-empty list as permanently complete.
+		if (lastExfilDiscovery == std::chrono::steady_clock::time_point{} ||
+			now - lastExfilDiscovery >= kDiscoveryRetryInterval)
+		{
+			lastExfilDiscovery = now;
+			tryLoadMemoryExfils();
+			publishCacheSnapshot();
+		}
+
 		if (now - this->lastExfilStatusUpdate < std::chrono::seconds(4))
 			return;
 		this->lastExfilStatusUpdate = now;
 
 		updateStatus();
+		publishCacheSnapshot();
 	}
 	catch (const std::exception& e) {
 		LOGS.logError("Exception caught in exfilTask: " + std::string(e.what()) + ". Retrying...");
@@ -73,10 +66,24 @@ void Exfil::exfilTask()
 void Exfil::clearCache()
 {
 	this->exfilList.clear();
+	publishCacheSnapshot();
 }
 
-std::vector<exfilsMemory>& Exfil::getCacheExfil() {
-	return exfilList;
+ExfilCacheSnapshot Exfil::getCacheExfilSnapshot() const noexcept {
+	ExfilCacheSnapshot snapshot = publishedExfilCache.load(std::memory_order_acquire);
+
+	if (snapshot)
+		return snapshot;
+
+	static const ExfilCacheSnapshot emptySnapshot = std::make_shared<const ExfilCacheCollection>();
+
+	return emptySnapshot;
+}
+
+void Exfil::publishCacheSnapshot() {
+	publishedExfilCache.store(
+		std::make_shared<const ExfilCacheCollection>(exfilList),
+		std::memory_order_release);
 }
 
 std::vector<exfilsSecret>& Exfil::getCacheSecret() {
@@ -105,7 +112,7 @@ void Exfil::tryLoadMemoryExfils()
 
 		uint64_t exfilArrayAddr = mem.Read<uint64_t>(exfilController + exfilOffset); if (!Utils::valid_pointer(exfilArrayAddr)) return;
 
-		auto exfilArray = UnityArray<uint64_t>(exfilArrayAddr);
+		auto exfilArray = UnityArray<uint64_t>(exfilArrayAddr, "Exfil points");
 
 		for (auto& exfilPointAddr : exfilArray)
 		{
@@ -123,7 +130,7 @@ void Exfil::tryLoadMemoryExfils()
 				if (!Utils::valid_pointer(namePtr))
 					continue;
 
-				std::string exfilName = ReadString(namePtr);
+				std::string exfilName = TrimEFT(mem.readUnityString(namePtr, 256));
 				if (exfilName == "")
 					continue;
 
@@ -138,7 +145,18 @@ void Exfil::tryLoadMemoryExfils()
 				exfilNew.extractName = exfilName;
 				exfilNew.locationWorld = position;
 
-				exfilList.emplace_back(exfilNew);
+				const bool alreadyKnown = std::any_of(
+					exfilList.begin(),
+					exfilList.end(),
+					[exfilPointAddr](const exfilsMemory& existing)
+					{
+						return existing.instance == exfilPointAddr;
+					});
+
+				if (alreadyKnown)
+					continue;
+
+				exfilList.emplace_back(std::move(exfilNew));
 				std::cout << "[EXFIL][MEM] Added exfil: '" + exfilName + "'\n";
 
 
@@ -193,15 +211,22 @@ void Exfil::updateStatus()
 
 	try 
 	{
-		auto handle = mem.CreateScatterHandle();
+		ScatterReadBatch batch(
+			mem,
+			true,
+			"Exfil update"
+		);
+
+		if (!batch.Valid())
+			return;
 
 		for (auto& exfilCache : exfilList)
 		{
-			mem.AddScatterReadRequest(handle, exfilCache.instance + sdk::ExfiltrationPoint::Status, &exfilCache.statusRaw, sizeof(int));
+			batch.Add(exfilCache.instance + sdk::ExfiltrationPoint::Status,exfilCache.statusRaw);
 		}
 
-		mem.ExecuteReadScatter(handle, true, "Exfil update");
-		mem.CloseScatterHandle(handle);
+		if (!batch.Execute())
+			return;
 
 		for (auto& exfilCache : exfilList)
 		{
@@ -227,14 +252,14 @@ void Exfil::LoadEligibleEntryPoints(uint64_t exfilPointAddr)
 		if (!Utils::valid_pointer(arrPtr))
 			return;
 
-		auto arr = UnityArray<uint64_t>(arrPtr);
+		auto arr = UnityArray<uint64_t>(arrPtr, "Exfil requirements");
 		for (auto& strPtr : arr)
 		{
 
 			if (!Utils::valid_pointer(strPtr))
 				continue;
 
-			auto name = ReadString(strPtr);
+			auto name = TrimEFT(mem.readUnityString(strPtr, 256));
 
 			if (name != "")
 				_pmcEntries.emplace_back(name);

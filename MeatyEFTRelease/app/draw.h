@@ -88,7 +88,8 @@ void DrawRadarSubText(int x, int y, ImVec4 color, const char* str)
 void drawPlayers()
 {
 
-    std::vector<PlayerCache> cache = players.getCacheSnapshot();
+    const PlayerCacheSnapshot cacheSnapshot = players.getCacheSnapshot();
+    const PlayerCacheCollection& cache = *cacheSnapshot;
     for (const auto& player : cache)
     {
         if (!Utils::valid_pointer(player.instance))
@@ -111,12 +112,14 @@ void drawPlayers()
                 if (!player.isInBTR)
                 {
                     int aimLineLen = 100;
-                    if (player.groupId != mainGame.localGroupId)
+                    if (player.isFriend)
+                        aimLineLen = radarGlobals::friendAimLine;
+                    else if (player.groupId != mainGame.localGroupId)
                         aimLineLen = radarGlobals::enemyAimLine;
                     else
                         aimLineLen = radarGlobals::friendAimLine;
 
-                    if (mainGame.localGroupId == "")
+                    if (mainGame.localGroupId == "" && !player.isFriend)
                         aimLineLen = radarGlobals::enemyAimLine;
 
                     drawAimLine(
@@ -144,6 +147,31 @@ void drawPlayers()
 
 void drawLocalPlayer()
 {
+    if (!Utils::valid_pointer(mainGame.localPlayerHands) ||
+        (mainGame.localLocation.x == 0.0f &&
+            mainGame.localLocation.y == 0.0f &&
+            mainGame.localLocation.z == 0.0f))
+    {
+        return;
+    }
+
+    const PlayerCacheSnapshot cacheSnapshot = players.getCacheSnapshot();
+
+    for (const PlayerCache& player : *cacheSnapshot)
+    {
+        if (player.isLocal && Utils::valid_pointer(player.P_CorpseClass))
+            return;
+
+        if (player.isLocal &&
+            (!Utils::valid_pointer(player.P_HandsController) ||
+                (player.location.x == 0.0f &&
+                    player.location.y == 0.0f &&
+                    player.location.z == 0.0f)))
+        {
+            return;
+        }
+    }
+
     //localPlayer position on map
     glm::vec3 position = mapControl.getMapPosition(mainGame.localLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
 
@@ -419,7 +447,9 @@ void drawWidgetPlayers()
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoResize;
 
-    std::vector<PlayerCache> playerSnapshot = players.getCacheSnapshot();
+    const PlayerCacheSnapshot playerSnapshotHandle =
+        players.getCacheSnapshot();
+    const PlayerCacheCollection& playerSnapshot = *playerSnapshotHandle;
 
     // Count visible rows from snapshot
     int visibleRows = 0;
@@ -648,49 +678,7 @@ void drawWidgetPlayers()
         }
 
         if (!pendingGroupEdits.empty())
-        {
-            std::lock_guard<std::mutex> lock(playerMutex);
-
-            std::vector<PlayerCache>& liveCache = players.getCache();
-
-            for (const auto& [instance, newGroupId] : pendingGroupEdits)
-            {
-                auto it = std::find_if(
-                    liveCache.begin(),
-                    liveCache.end(),
-                    [&](const PlayerCache& player)
-                    {
-                        return player.instance == instance;
-                    });
-
-                if (it == liveCache.end())
-                    continue;
-
-                if (it->isDead || it->hasExfiled)
-                    continue;
-
-                it->groupId = newGroupId;
-
-                // If editing local player's group, sync mainGame.localGroupId.
-                if (it->isLocal || it->instance == mainGame.localPlayerPtr)
-                {
-                    if (newGroupId.empty() || newGroupId == "0")
-                        mainGame.localGroupId.clear();
-                    else
-                        mainGame.localGroupId = newGroupId;
-                }
-
-                std::ostringstream ss;
-                ss << "[PLAYERS][GROUP EDIT] "
-                    << it->name
-                    << " instance: 0x"
-                    << std::hex << it->instance
-                    << " groupId: "
-                    << (newGroupId.empty() ? "none" : newGroupId);
-
-                LOGS.logInfo(ss.str());
-            }
-        }
+            players.applyGroupEdits(pendingGroupEdits);
     }
 
     ImGui::End();
@@ -701,12 +689,17 @@ void drawQuests()
     if (radarGlobals::drawQuestHelper == FALSE)
         return;
 
-    if (masterLocations.empty())
+    const QuestPublishedSnapshot questSnapshot =
+        GetQuestPublishedSnapshot();
+    const std::vector<QuestLocation>& locations =
+        questSnapshot->masterLocations;
+
+    if (locations.empty())
         return;
 
     const std::string currentMapId = TrimEFT(mainGame.selectedLocation);
 
-    for (auto& loc : masterLocations)
+    for (const auto& loc : locations)
     {
         // Convert id to name
         std::string mapName(MapNames::GetNameFromId(loc.mapNameId));
@@ -733,11 +726,13 @@ void drawExfils() {
     if (radarGlobals::drawExfils == FALSE)
         return;
 
-    std::vector<exfilsMemory>& cache = exfil.getCacheExfil();
+    const ExfilCacheSnapshot cacheSnapshot =
+        exfil.getCacheExfilSnapshot();
+    const ExfilCacheCollection& cache = *cacheSnapshot;
 
     if (appMenu::widgetExfil_Scav == FALSE) // show pmc
     {
-        for (auto& exfil : cache)
+        for (const auto& exfil : cache)
         {
             glm::vec3 location = mapControl.getMapPosition(exfil.locationWorld, currentMap::configX, currentMap::configY, currentMap::configScale);
 
@@ -752,12 +747,13 @@ void drawLoot()
     if (!radarGlobals::drawLoot)
         return;
 
-    std::vector<LootList> cacheLoot = Loot.getCacheLoot();
+    const LootCacheSnapshot cacheSnapshot = Loot.getCacheSnapshot();
+    const LootCacheCollection& cacheLoot = *cacheSnapshot;
 
     if (cacheLoot.size() == 0)
         return;
 
-    for (auto& itemLoot : cacheLoot)
+    for (const auto& itemLoot : cacheLoot)
     {
 
         if (itemLoot.pendingResolve || itemLoot.failed)
@@ -833,7 +829,9 @@ void drawWidgetExfils()
 
     ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
-    std::vector<exfilsMemory>& exfils = exfil.getCacheExfil();
+    const ExfilCacheSnapshot exfilSnapshot =
+        exfil.getCacheExfilSnapshot();
+    const ExfilCacheCollection& exfils = *exfilSnapshot;
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetExfil, flagss))
     {
@@ -847,7 +845,7 @@ void drawWidgetExfils()
             ImGui::TableHeadersRow();
 
 
-            for (auto& cache : exfils)
+            for (const auto& cache : exfils)
             {
 
 
@@ -876,7 +874,9 @@ void drawWidgetExfils()
 
 void drawGrenades()
 {
-    std::vector<GrenadeList> cacheGrenades = explosiveManager.getGrenades();
+    const GrenadeCacheSnapshot grenadeSnapshot =
+        explosiveManager.getGrenadesSnapshot();
+    const GrenadeCacheCollection& cacheGrenades = *grenadeSnapshot;
 
     if (cacheGrenades.empty())
         return;

@@ -606,7 +606,8 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
     if (!drawList)
         return;
 
-    std::vector<PlayerCache>& cache = players.getCache();
+    const PlayerCacheSnapshot cacheSnapshot = players.getCacheSnapshot();
+    const PlayerCacheCollection& cache = *cacheSnapshot;
 
     if (cache.empty())
         return;

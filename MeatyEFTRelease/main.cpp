@@ -75,6 +75,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     std::atomic_bool startupFinished = false;
     std::atomic_bool startupSuccessful = false;
+    std::jthread mainGameThread;
 
     std::exception_ptr startupException;
 
@@ -180,9 +181,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
                 splash.SetStatus(L"Starting application threads...");
 
-                std::thread mainGameThread(&MainGame::mainThread, &mainGame);
-
-                mainGameThread.detach();
+                mainGameThread = std::jthread(
+                    [](std::stop_token stopToken)
+                    {
+                        mainGame.mainThread(stopToken);
+                    });
 
                 splash.SetStatus(L"Ready");
 
@@ -294,6 +297,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
             Sleep(1000);
         }
+    }
+
+    appGlobals::runThreads.store(false, std::memory_order_release);
+    appGlobals::runRadar.store(false, std::memory_order_release);
+
+    if (mainGameThread.joinable())
+    {
+        mainGameThread.request_stop();
+        mainGameThread.join();
     }
 
     return 0;

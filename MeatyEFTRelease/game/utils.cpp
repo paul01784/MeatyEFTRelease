@@ -1,6 +1,9 @@
 ﻿#include "../app/includes.h"
 #include "headers/utils.h"
 #include "../memory/Memory.h"
+#include "../memory/ScatterReadBatch.h"
+
+#include <array>
 
 
 namespace Utils {
@@ -164,24 +167,25 @@ glm::vec3 get_transform_position1(ULONG64 pMatrix, ULONG64 index)
 	uint64_t matrix_list_base = 0;
 	uint64_t dependency_index_table_base = 0;
 
-	auto handlePre = mem.CreateScatterHandle();
+	ScatterReadBatch metadataBatch(
+		mem,
+		false,
+		"Transform metadata"
+	);
 
-	mem.AddScatterReadRequest(handlePre, pMatrix + 0x40, &matrix_list_base, sizeof(matrix_list_base));
-	mem.AddScatterReadRequest(handlePre, pMatrix + 0x68, &dependency_index_table_base, sizeof(dependency_index_table_base));
+	if (!metadataBatch.Add(pMatrix + 0x40, matrix_list_base) ||
+		!metadataBatch.Add(pMatrix + 0x68, dependency_index_table_base) ||
+		!metadataBatch.Execute())
+	{
+		return {};
+	}
 
 	//target.read(pMatrix + 0x18, &matrix_list_base, sizeof(matrix_list_base));
 	//target.read(pMatrix + 0x20, &dependency_index_table_base, sizeof(dependency_index_table_base));
 
-	mem.ExecuteReadScatter(handlePre);
-	mem.CloseScatterHandle(handlePre);
-
 	static auto get_dependency_index = [](uint64_t base, int32_t index) {
 		index = mem.Read<uint32_t>(base + static_cast<unsigned long long>(index) * 4);
 		return index;
-		};
-
-	static auto get_matrix_blob = [](VMMDLL_SCATTER_HANDLE handle, uint64_t base, uint64_t offs, float* blob, uint32_t size) {
-		mem.AddScatterReadRequest(handle, base + offs, blob, size);
 		};
 
 	static auto get_matrix_blob_std = [](uint64_t base, uint64_t offs, float* blob, uint32_t size) {
@@ -191,12 +195,13 @@ glm::vec3 get_transform_position1(ULONG64 pMatrix, ULONG64 index)
 
 	int32_t index_relation = get_dependency_index(dependency_index_table_base, index);
 
-	glm::vec3 ret_value;
+	glm::vec3 ret_value{};
 	{
-		float* base_matrix3x4 = (float*)malloc(64),
-			* matrix3x4_buffer0 = (float*)((uint64_t)base_matrix3x4 + 16),
-			* matrix3x4_buffer1 = (float*)((uint64_t)base_matrix3x4 + 32),
-			* matrix3x4_buffer2 = (float*)((uint64_t)base_matrix3x4 + 48);
+		alignas(16) std::array<float, 16> matrixStorage{};
+		float* base_matrix3x4 = matrixStorage.data();
+		float* matrix3x4_buffer0 = base_matrix3x4 + 4;
+		float* matrix3x4_buffer1 = base_matrix3x4 + 8;
+		float* matrix3x4_buffer2 = base_matrix3x4 + 12;
 
 		get_matrix_blob_std(matrix_list_base, index * 48, base_matrix3x4, 16);
 
@@ -207,18 +212,36 @@ glm::vec3 get_transform_position1(ULONG64 pMatrix, ULONG64 index)
 		while (index_relation >= 0) {
 			uint32_t matrix_relation_index = 6 * index_relation;
 
-			auto handle2 = mem.CreateScatterHandle();
+			ScatterReadBatch matrixBatch(
+				mem,
+				false,
+				"Transform matrix"
+			);
+
+			if (!matrixBatch.Valid())
+				return {};
 
 
-			get_matrix_blob(handle2, matrix_list_base, 8 * static_cast<uint64_t>(matrix_relation_index), matrix3x4_buffer2, 16);
+			matrixBatch.AddBytes(
+				matrix_list_base +
+				8 * static_cast<uint64_t>(matrix_relation_index),
+				matrix3x4_buffer2,
+				16);
 
+			matrixBatch.AddBytes(
+				matrix_list_base +
+				8 * static_cast<uint64_t>(matrix_relation_index) + 32,
+				matrix3x4_buffer0,
+				16);
 
-			get_matrix_blob(handle2, matrix_list_base, 8 * static_cast<uint64_t>(matrix_relation_index) + 32, matrix3x4_buffer0, 16);
+			matrixBatch.AddBytes(
+				matrix_list_base +
+				8 * static_cast<uint64_t>(matrix_relation_index) + 16,
+				matrix3x4_buffer1,
+				16);
 
-
-			get_matrix_blob(handle2, matrix_list_base, 8 * static_cast<uint64_t>(matrix_relation_index) + 16, matrix3x4_buffer1, 16);
-
-			mem.ExecuteReadScatter(handle2);
+			if (!matrixBatch.Execute())
+				return {};
 
 
 
@@ -269,11 +292,8 @@ glm::vec3 get_transform_position1(ULONG64 pMatrix, ULONG64 index)
 
 			index_relation = get_dependency_index(dependency_index_table_base, index_relation);
 
-			mem.CloseScatterHandle(handle2);
-
 		}
 		ret_value = *(glm::vec3*)base_matrix3x4;
-		delete[] base_matrix3x4;
 	}
 
 	return ret_value;

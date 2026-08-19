@@ -8,8 +8,15 @@
 
 
 #include "../memory/memory.h"
+#include "../memory/ScatterReadBatch.h"
 #include "../game/headers/sdk.h"
 
+
+ExplosiveManager::ExplosiveManager()
+    : m_publishedGrenades(
+        std::make_shared<const GrenadeCacheCollection>())
+{
+}
 
 ExplosiveManager explosiveManager;
 
@@ -43,16 +50,31 @@ void ExplosiveManager::reset()
 
 std::vector<GrenadeList> ExplosiveManager::getGrenades() const
 {
-    std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
+    return *getGrenadesSnapshot();
+}
 
-    return m_grenades;
+GrenadeCacheSnapshot ExplosiveManager::getGrenadesSnapshot() const noexcept
+{
+    GrenadeCacheSnapshot snapshot = m_publishedGrenades.load(std::memory_order_acquire);
+
+    if (snapshot)
+        return snapshot;
+
+    static const GrenadeCacheSnapshot emptySnapshot = std::make_shared<const GrenadeCacheCollection>();
+
+    return emptySnapshot;
 }
 
 std::size_t ExplosiveManager::getGrenadeCount() const
 {
-    std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
+    return getGrenadesSnapshot()->size();
+}
 
-    return m_grenades.size();
+void ExplosiveManager::publishGrenadesLocked()
+{
+    m_publishedGrenades.store(
+        std::make_shared<const GrenadeCacheCollection>(m_grenades),
+        std::memory_order_release);
 }
 
 std::uint64_t ExplosiveManager::getLocalGameWorld() const
@@ -256,27 +278,25 @@ void ExplosiveManager::refreshGrenadesUnlocked()
 
     if (!workingGrenades.empty())
     {
-        auto scatterHandle = mem.CreateScatterHandle();
+        ScatterReadBatch scatter(
+            mem,
+            false,
+            "Grenade destroyed state"
+        );
 
-        if (scatterHandle)
+        if (scatter.Valid())
         {
             for (std::size_t i = 0;
                 i < workingGrenades.size();
                 ++i)
             {
-                mem.AddScatterReadRequest(
-                    scatterHandle,
+                scatter.Add(
                     workingGrenades[i].instance +
                     sdk::Throwable::_isDestroyed,
-                    &destroyedResults[i],
-                    sizeof(destroyedResults[i]));
+                    destroyedResults[i]);
             }
 
-            mem.ExecuteReadScatter(scatterHandle);
-
-            destroyedScatterRan = true;
-
-            mem.CloseScatterHandle(scatterHandle);
+            destroyedScatterRan = scatter.Execute();
         }
     }
 
@@ -342,6 +362,7 @@ void ExplosiveManager::refreshGrenadesUnlocked()
     {
         std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
         m_grenades = std::move(workingGrenades);
+        publishGrenadesLocked();
     }
 }
 
@@ -357,6 +378,7 @@ void ExplosiveManager::resetUnlocked()
 
     std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
     m_grenades.clear();
+    publishGrenadesLocked();
 }
 
 bool ExplosiveManager::positionLooksValid(

@@ -161,7 +161,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="app\FileUpdater.h" />
     <ClInclude Include="app\fuserRender.h" />
     <ClInclude Include="app\globals.h" />
-    <ClInclude Include="app\IconsForkAwesome.h" />
+    <ClInclude Include="app\IconsFontAwesome7.h" />
+    <ClInclude Include="app\IconsFontAwesomeCompat.h" />
     <ClInclude Include="app\includes.h" />
     <ClInclude Include="app\makcu.h" />
     <ClInclude Include="app\maps.h" />
@@ -555,8 +556,10 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="libs\skStr.h" />
     <ClInclude Include="libs\vmmdll.h" />
     <ClInclude Include="memory\framework.h" />
+    <ClInclude Include="memory\DmaScheduler.h" />
     <ClInclude Include="memory\InputManager.h" />
     <ClInclude Include="memory\Memory.h" />
+    <ClInclude Include="memory\ScatterReadBatch.h" />
     <ClInclude Include="memory\pch.h" />
     <ClInclude Include="memory\Registry.h" />
     <ClInclude Include="memory\Shellcode.h" />
@@ -608,10 +611,12 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="taskManager.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <Font Include="app\fonts\fa-solid-900.otf" />
     <Font Include="app\fonts\forkawesome-webfont.ttf" />
   </ItemGroup>
   <ItemGroup>
     <None Include="external\glm\detail\func_common.inl" />
+    <None Include="app\fonts\FONT-AWESOME-LICENSE.txt" />
     <None Include="external\glm\detail\func_common_simd.inl" />
     <None Include="external\glm\detail\func_exponential.inl" />
     <None Include="external\glm\detail\func_exponential_simd.inl" />
@@ -776,5 +781,12 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
       <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
     </PropertyGroup>
     <Error Condition="!Exists('..\packages\directxtk_desktop_win10.2026.5.8.1\build\native\directxtk_desktop_win10.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\directxtk_desktop_win10.2026.5.8.1\build\native\directxtk_desktop_win10.targets'))" />
+  </Target>
+  <Target Name="CopyFontAwesomeRuntimeAssets" AfterTargets="Build">
+    <ItemGroup>
+      <FontAwesomeRuntimeAsset Include="$(ProjectDir)app\fonts\fa-solid-900.otf" />
+      <FontAwesomeRuntimeAsset Include="$(ProjectDir)app\fonts\FONT-AWESOME-LICENSE.txt" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FontAwesomeRuntimeAsset)" DestinationFolder="$(OutDir)fonts" SkipUnchangedFiles="true" />
   </Target>
 </Project>

@@ -7,6 +7,11 @@
 
 #include <mutex>
 #include <shared_mutex>
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <utility>
+#include <vector>
 #include "../modules/HandsManager.h"
 
 
@@ -157,6 +162,7 @@ struct PlayerCache {
 	std::string className;
 	std::string name;
 	std::string groupId;
+	std::string groupIdBeforeFriend;
 	std::string accountId;
 	std::string profileId;
 	std::string side;
@@ -195,6 +201,8 @@ struct PlayerCache {
 	bool isPlayerScav;
 	bool isBoss;
 	bool isWatched;
+	bool isFriend;
+	bool friendGroupOverride;
 	bool isBTR;
 	uint64_t btrView;
 	bool isInBTR;
@@ -297,6 +305,7 @@ struct PlayerCache {
 		className(""),
 		name(""),
 		groupId(""),
+		groupIdBeforeFriend(""),
 		accountId(""),
 		profileId(""),
 		side(""),
@@ -323,6 +332,8 @@ struct PlayerCache {
 		isPlayerScav(false),
 		isBoss(false),
 		isWatched(false),
+		isFriend(false),
+		friendGroupOverride(false),
 		isBTR(false),
 		btrView(0),
 		isInBTR(false),
@@ -348,23 +359,44 @@ struct PlayerCache {
 
 };
 
+using PlayerCacheCollection = std::vector<PlayerCache>;
+using PlayerCacheSnapshot = std::shared_ptr<const PlayerCacheCollection>;
+
+struct PlayerSnapshotTelemetry
+{
+	std::uint64_t snapshotVersion = 0;
+	std::uint64_t motionVersion = 0;
+	std::size_t playerCount = 0;
+	double snapshotAgeMs = -1.0;
+	double motionAgeMs = -1.0;
+	double averageMotionIntervalMs = 0.0;
+};
+
 class Players {
 
 public:
+	Players();
 
 	void clearCache();
 
 	void softRestart();
 
 	std::vector<PlayerCache>& getCache();
-	std::vector<PlayerCache> getCacheSnapshot();
+	[[nodiscard]] PlayerCacheSnapshot getCacheSnapshot() const noexcept;
+	[[nodiscard]] PlayerSnapshotTelemetry
+		getSnapshotTelemetry() const noexcept;
+	void publishCacheSnapshot(bool motionUpdated = false);
+	void applyGroupEdits(
+		const std::vector<std::pair<uint64_t, std::string>>& edits);
 	std::vector<PlayerGroups>& getGroupCache();
 
 	int getDistance(glm::vec3 point1, glm::vec3 point2);
 	
 	void playersTask();
+	void positionTask();
 	void boneTask();
 	void playerEquipment();
+	void playerMetadataTask();
 
 	static bool groupIDSet;
 
@@ -378,6 +410,14 @@ private:
 	//vector to store player cache;
 	std::vector<PlayerCache> playerCache;
 	std::vector<PlayerGroups> playerGroups;
+	std::atomic<PlayerCacheSnapshot> publishedPlayerCache;
+	std::atomic<std::uint64_t> publishedSnapshotVersion{ 0 };
+	std::atomic<std::uint64_t> publishedMotionVersion{ 0 };
+	std::atomic<std::int64_t> publishedSnapshotTicks{ 0 };
+	std::atomic<std::int64_t> publishedMotionTicks{ 0 };
+	std::atomic<double> averageMotionIntervalMs{ 0.0 };
+
+	void publishCacheSnapshotLocked(bool motionUpdated = false);
 
 	std::string voice2Name(std::string voiceName);
 

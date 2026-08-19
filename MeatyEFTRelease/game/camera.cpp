@@ -15,6 +15,12 @@
 #include <sstream>
 #include <string>
 
+Camera::Camera()
+    : m_publishedProjection(
+        std::make_shared<const CameraProjectionState>())
+{
+}
+
 Camera camera;
 
 // members
@@ -43,11 +49,80 @@ glm::highp_mat4 Camera::g_viewMatrixOpticRAW{};
 uint64_t Camera::closestPlayer = 0;
 float Camera::closestPlayerDist = 0.0f;
 
+CameraProjectionSnapshot Camera::getProjectionSnapshot() const noexcept
+{
+    CameraProjectionSnapshot snapshot = m_publishedProjection.load(std::memory_order_acquire);
+
+    if (snapshot)
+        return snapshot;
+
+    static const CameraProjectionSnapshot emptySnapshot = std::make_shared<const CameraProjectionState>();
+
+    return emptySnapshot;
+}
+
+std::uint64_t Camera::getBusyReadSkips() const noexcept
+{
+    return m_busyReadSkips.load(std::memory_order_relaxed);
+}
+
+void Camera::publishProjectionSnapshot(bool valid, bool scoped)
+{
+    const auto now = std::chrono::steady_clock::now();
+
+    if (m_lastProjectionPublish != std::chrono::steady_clock::time_point{})
+    {
+        const double intervalMs = std::chrono::duration<double, std::milli>(now - m_lastProjectionPublish).count();
+
+        if (m_averageProjectionIntervalMs <= 0.0)
+            m_averageProjectionIntervalMs = intervalMs;
+        else
+            m_averageProjectionIntervalMs =
+                (m_averageProjectionIntervalMs * 0.88) +
+                (intervalMs * 0.12);
+    }
+
+    m_lastProjectionPublish = now;
+
+    CameraProjectionState state{};
+    state.valid = valid;
+    state.scoped = scoped;
+    state.usingOptic = scoped && localmpCamera;
+    state.viewMatrix = state.usingOptic
+        ? g_viewMatrixOptic
+        : g_viewMatrix;
+    state.fpsViewMatrix = g_viewMatrix;
+    state.opticViewMatrix = g_viewMatrixOptic;
+    state.fpsRawMatrix = g_viewMatrixRAW;
+    state.opticRawMatrix = g_viewMatrixOpticRAW;
+    state.gameFOV = gameFOV;
+    state.gameAspect = gameAspect;
+    state.fpsCamera = fpsCamera;
+    state.fpsMatrixAddress = fpsMatrixAddr;
+    state.opticCamera = opticCamera;
+    state.opticMatrixAddress = opticMatrixAddr;
+    state.cameraEntity = cameraEntity;
+    state.opticCameraMatrix = opticCameraMatrix;
+    state.fpsPointersReady = cameraPointersReady();
+    state.opticPointersReady = opticPointersReady();
+    state.matrixDebug = m_matrixDebug;
+    state.version =
+        m_projectionVersion.fetch_add(1, std::memory_order_relaxed) + 1;
+    state.publishedAt = now;
+    state.averageIntervalMs = m_averageProjectionIntervalMs;
+
+    m_publishedProjection.store(
+        std::make_shared<const CameraProjectionState>(std::move(state)),
+        std::memory_order_release);
+}
+
 // Debug
 
-const Camera::MatrixActivityDebugState& Camera::getMatrixActivityDebug() const
+Camera::MatrixActivityDebugState
+Camera::getMatrixActivityDebug() const noexcept
 {
-    return m_matrixDebug;
+    const CameraProjectionSnapshot snapshot = getProjectionSnapshot();
+    return snapshot ? snapshot->matrixDebug : MatrixActivityDebugState{};
 }
 
 // Cache clear
@@ -82,6 +157,8 @@ void Camera::clearCache()
 
     m_matrixDebug = {};
 
+    publishProjectionSnapshot(false, false);
+
     LOGS.logInfo("[CAMERA][CACHE] Data cleared");
 }
 
@@ -100,6 +177,8 @@ void Camera::clearCameraPointerCacheOnly()
     initedCamera = false;
 
     resetOpticActivity();
+
+    publishProjectionSnapshot(false, false);
 }
 
 // Camera pointers
@@ -736,6 +815,7 @@ void Camera::cameraTask()
             resetOpticActivity();
             m_matrixDebug.localScoped = true;
             localmpCamera = false;
+            publishProjectionSnapshot(matrixLooksValid(g_viewMatrix), true);
         }
 
         if (scopeJustEnded)
@@ -747,6 +827,7 @@ void Camera::cameraTask()
 
             localmpCamera = false;
             m_matrixDebug.usingOpticMatrix = false;
+            publishProjectionSnapshot(matrixLooksValid(g_viewMatrix), false);
         }
 
         if (!cameraPointersReady())
@@ -845,7 +926,10 @@ void Camera::cameraTask()
             readFrameData(frame, lensReadDue);
 
         if (frameReadStatus == FrameReadStatus::Busy)
+        {
+            m_busyReadSkips.fetch_add(1, std::memory_order_relaxed);
             return;
+        }
 
         if (lensReadDue)
             lastLensReadAttempt = std::chrono::steady_clock::now();
@@ -936,6 +1020,7 @@ void Camera::cameraTask()
         localmpCamera = scoped && opticActive;
 
         m_matrixDebug.usingOpticMatrix = localmpCamera;
+        publishProjectionSnapshot(true, scoped);
     }
     catch (const std::exception& e)
     {

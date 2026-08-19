@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.28.5";
+std::string globals::appVersion = "1.0.28.8";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -12,9 +12,11 @@ std::string globals::dogTagAPIKey = "";
 std::string globals::radarSubText = "";
 
 double globals::taskPlayers = 20;
-double globals::taskPlayersBones = 20;
+double globals::taskPlayerPositions = 10;
+double globals::taskPlayersBones = 33;
 double globals::taskGrenades = 100;
 double globals::taskPlayersEquipment = 2000;
+double globals::taskPlayerMetadata = 250;
 double globals::taskExfil = 5000;
 double globals::taskLoot = 250;
 double globals::taskQuest = 7000;
@@ -22,6 +24,7 @@ double globals::taskWishManager = 1000;
 double globals::taskTripWire = 20;
 double globals::taskKeyManager = 25;
 double globals::taskCamera = 8;
+double globals::taskFireport = 16;
 double globals::taskMemoryManager = 1000;
 double globals::taskRaidMonitor = 800;
 double globals::taskAim = 1;
@@ -133,6 +136,7 @@ glm::vec4 coloursGlobals::fovCircle = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::questColour = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::wishListColour = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::valueLootColour = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::containerColour = glm::vec4(1, 1, 1, 1);
 
 WindowsKey keyGlobals::aimKey = WindowsKey::LeftControl;
 WindowsKey keyGlobals::toggleFollow = WindowsKey::Enter;
@@ -143,3 +147,24 @@ bool lootGlobals::enableWishListLoot = false;
 bool lootGlobals::enableValueLoot = false;
 int lootGlobals::valueLootFrom = 500000;
 int lootGlobals::valueLootFromEquip = 500000;
+bool lootGlobals::drawDrawer = false;
+bool lootGlobals::drawDuffle = false;
+bool lootGlobals::drawSafe = false;
+bool lootGlobals::drawWeaponBox = false;
+bool lootGlobals::drawTechCrate = false;
+bool lootGlobals::drawRationCrate = false;
+bool lootGlobals::drawMedicalCrate = false;
+bool lootGlobals::drawJacket = false;
+bool lootGlobals::drawMedPackage = false;
+bool lootGlobals::drawMedBox = false;
+bool lootGlobals::drawToolbox = false;
+bool lootGlobals::drawGrenadeBox = false;
+bool lootGlobals::drawBuriedStash = false;
+bool lootGlobals::drawGroundCache = false;
+bool lootGlobals::drawWoodenCrate = false;
+bool lootGlobals::drawSuitcase = false;
+bool lootGlobals::drawAmmoBox = false;
+bool lootGlobals::drawDeadBody = false;
+bool lootGlobals::drawPCBlock = false;
+bool lootGlobals::drawRegister = false;
+bool lootGlobals::drawAirDrops = false;

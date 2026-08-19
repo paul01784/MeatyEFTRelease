@@ -8,6 +8,7 @@
 #include <vector>
 #include <type_traits>
 #include <span>
+#include <string_view>
 
 //MongoId
 
@@ -49,7 +50,7 @@ struct MongoID
     std::string ReadString(
         MemoryT& memory,
         int maxChars = 128,
-        bool useCache = false
+        bool useCache = true
     ) const
     {
         if (_stringId == 0)
@@ -224,14 +225,21 @@ struct UnityArray
     UnityArray() = default;
 
     // Construct from a Unity/Mono array object: read count + element buffer
-    explicit UnityArray(std::uintptr_t addr)
+    explicit UnityArray(
+        std::uintptr_t addr,
+        std::string_view telemetryLabel = "UnityArray")
         : baseAddr(addr)
     {
         if (!baseAddr)
             return;
 
         // Read count from managed array object
-        count = mem.Read<int>(baseAddr + CountOffset);
+        mem.Read(
+            baseAddr + CountOffset,
+            &count,
+            sizeof(count),
+            false,
+            telemetryLabel);
 
         // Your original guard
         if (count < 0 || count > 4096)
@@ -241,7 +249,12 @@ struct UnityArray
             return;
 
         elements = new T[count]{};
-        mem.Read(baseAddr + ArrBaseOffset, elements, static_cast<std::size_t>(count) * sizeof(T));
+        mem.Read(
+            baseAddr + ArrBaseOffset,
+            elements,
+            static_cast<std::size_t>(count) * sizeof(T),
+            false,
+            telemetryLabel);
     }
 
     // Construct from a raw contiguous buffer (addr points directly to elements)

@@ -23,6 +23,13 @@ public:
         std::string reason;
     };
 
+    struct FriendEntry
+    {
+        std::string dateAdded;
+        std::string profileId;
+        std::string name;
+    };
+
     struct RaidPlayerEntry
     {
         //temporary identity until profileId is available
@@ -39,6 +46,7 @@ public:
 
         bool isLocal = false;
         bool isWatched = false;
+        bool isFriend = false;
         bool isDead = false;
         bool hasExfiled = false;
 
@@ -84,8 +92,10 @@ public:
 
     bool AddPlayer(PlayerCache& player, const std::string& reason);
     bool AddPlayer(const std::string& profileId, const std::string& name, const std::string& reason);
+    bool AddFriend(const std::string& profileId, const std::string& name);
 
     bool RemovePlayer(const std::string& profileId);
+    bool RemoveFriend(const std::string& profileId);
 
     bool UpdateReason(
         const std::string& profileId,
@@ -93,14 +103,17 @@ public:
     );
 
     bool IsWatched(const std::string& profileId) const;
+    bool IsFriend(const std::string& profileId) const;
 
     std::optional<WatchListEntry> GetWatchedPlayer(
         const std::string& profileId
     ) const;
 
     std::vector<WatchListEntry> GetWatchList() const;
+    std::vector<FriendEntry> GetFriends() const;
 
     std::size_t GetWatchListCount() const;
+    std::size_t GetFriendCount() const;
 
     bool ClearWatchList();
 
@@ -133,6 +146,7 @@ private:
     bool SaveWatchListUnlocked() const;
 
     void RebuildWatchIndexUnlocked();
+    void RebuildFriendIndexUnlocked();
 
     bool UpsertRaidPlayerUnlocked(
         PlayerCache& player,
@@ -186,6 +200,10 @@ private:
     std::vector<WatchListEntry> watchList_;
 
     std::unordered_map<std::string, std::size_t> watchIndex_;
+
+    std::vector<FriendEntry> friends_;
+
+    std::unordered_map<std::string, std::size_t> friendIndex_;
 
     std::vector<RaidRecord> raidHistory_;
 

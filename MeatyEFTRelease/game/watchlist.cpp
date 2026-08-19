@@ -40,6 +40,8 @@ bool WatchListManager::LoadWatchList()
         {
             watchList_.clear();
             watchIndex_.clear();
+            friends_.clear();
+            friendIndex_.clear();
             return true;
         }
 
@@ -56,6 +58,7 @@ bool WatchListManager::LoadWatchList()
         input >> root;
 
         const json* playerArray = nullptr;
+        const json* friendArray = nullptr;
 
         if (root.is_object())
         {
@@ -67,6 +70,16 @@ bool WatchListManager::LoadWatchList()
             }
 
             playerArray = &(*playersIt);
+
+            const auto friendsIt = root.find("friends");
+
+            if (friendsIt != root.end())
+            {
+                if (!friendsIt->is_array())
+                    throw std::runtime_error("Watchlist JSON friends must be an array.");
+
+                friendArray = &(*friendsIt);
+            }
         }
         else if (root.is_array())
         {
@@ -79,9 +92,17 @@ bool WatchListManager::LoadWatchList()
 
         std::vector<WatchListEntry> loadedWatchList;
         std::unordered_map<std::string, std::size_t> loadedIndex;
+        std::vector<FriendEntry> loadedFriends;
+        std::unordered_map<std::string, std::size_t> loadedFriendIndex;
 
         loadedWatchList.reserve(playerArray->size());
         loadedIndex.reserve(playerArray->size());
+
+        if (friendArray)
+        {
+            loadedFriends.reserve(friendArray->size());
+            loadedFriendIndex.reserve(friendArray->size());
+        }
 
         for (const json& item : *playerArray)
         {
@@ -115,8 +136,39 @@ bool WatchListManager::LoadWatchList()
             loadedIndex.emplace(loadedWatchList[newIndex].profileId, newIndex);
         }
 
+        if (friendArray)
+        {
+            for (const json& item : *friendArray)
+            {
+                if (!item.is_object())
+                    continue;
+
+                FriendEntry entry;
+                entry.dateAdded = item.value("dateAdded", std::string{});
+                entry.profileId = item.value("profileId", std::string{});
+                entry.name = item.value("name", std::string{});
+
+                if (entry.profileId.empty() ||
+                    loadedFriendIndex.find(entry.profileId) != loadedFriendIndex.end())
+                {
+                    continue;
+                }
+
+                if (entry.dateAdded.empty())
+                    entry.dateAdded = FormatTimestamp(std::chrono::system_clock::now());
+
+                const std::size_t newIndex = loadedFriends.size();
+                loadedFriends.push_back(std::move(entry));
+                loadedFriendIndex.emplace(
+                    loadedFriends[newIndex].profileId,
+                    newIndex);
+            }
+        }
+
         watchList_ = std::move(loadedWatchList);
         watchIndex_ = std::move(loadedIndex);
+        friends_ = std::move(loadedFriends);
+        friendIndex_ = std::move(loadedFriendIndex);
 
         return true;
     }
@@ -146,8 +198,9 @@ bool WatchListManager::SaveWatchListUnlocked() const
     {
         json root;
 
-        root["version"] = 1;
+        root["version"] = 2;
         root["players"] = json::array();
+        root["friends"] = json::array();
 
         for (const WatchListEntry& entry : watchList_)
         {
@@ -157,6 +210,17 @@ bool WatchListManager::SaveWatchListUnlocked() const
                     { "profileId", entry.profileId },
                     { "name", entry.name },
                     { "reason", entry.reason }
+                }
+            );
+        }
+
+        for (const FriendEntry& entry : friends_)
+        {
+            root["friends"].push_back(
+                {
+                    { "dateAdded", entry.dateAdded },
+                    { "profileId", entry.profileId },
+                    { "name", entry.name }
                 }
             );
         }
@@ -335,6 +399,47 @@ bool WatchListManager::AddPlayer(const std::string& profileId, const std::string
     return true;
 }
 
+bool WatchListManager::AddFriend(
+    const std::string& profileId,
+    const std::string& name)
+{
+    if (profileId.empty())
+        return false;
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    lastError_.clear();
+
+    if (friendIndex_.find(profileId) != friendIndex_.end())
+        return false;
+
+    FriendEntry entry;
+    entry.dateAdded = FormatTimestamp(std::chrono::system_clock::now());
+    entry.profileId = profileId;
+    entry.name = name.empty() ? "Unknown Player" : name;
+
+    const std::size_t newIndex = friends_.size();
+    friends_.push_back(std::move(entry));
+    friendIndex_[profileId] = newIndex;
+
+    if (!SaveWatchListUnlocked())
+    {
+        friends_.pop_back();
+        friendIndex_.erase(profileId);
+        return false;
+    }
+
+    for (RaidRecord& raid : raidHistory_)
+    {
+        for (RaidPlayerEntry& raidPlayer : raid.players)
+        {
+            if (raidPlayer.profileId == profileId)
+                raidPlayer.isFriend = true;
+        }
+    }
+
+    return true;
+}
+
 bool WatchListManager::RemovePlayer(const std::string& profileId)
 {
     if (profileId.empty())
@@ -382,6 +487,47 @@ bool WatchListManager::RemovePlayer(const std::string& profileId)
     return true;
 }
 
+bool WatchListManager::RemoveFriend(const std::string& profileId)
+{
+    if (profileId.empty())
+        return false;
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    lastError_.clear();
+
+    const auto indexIt = friendIndex_.find(profileId);
+
+    if (indexIt == friendIndex_.end())
+        return false;
+
+    const std::size_t removedIndex = indexIt->second;
+    const FriendEntry removedEntry = friends_[removedIndex];
+
+    friends_.erase(
+        friends_.begin() + static_cast<std::ptrdiff_t>(removedIndex));
+    RebuildFriendIndexUnlocked();
+
+    if (!SaveWatchListUnlocked())
+    {
+        friends_.insert(
+            friends_.begin() + static_cast<std::ptrdiff_t>(removedIndex),
+            removedEntry);
+        RebuildFriendIndexUnlocked();
+        return false;
+    }
+
+    for (RaidRecord& raid : raidHistory_)
+    {
+        for (RaidPlayerEntry& raidPlayer : raid.players)
+        {
+            if (raidPlayer.profileId == profileId)
+                raidPlayer.isFriend = false;
+        }
+    }
+
+    return true;
+}
+
 bool WatchListManager::UpdateReason(const std::string& profileId, const std::string& newReason)
 {
     if (profileId.empty())
@@ -421,6 +567,15 @@ bool WatchListManager::IsWatched(const std::string& profileId) const
     return watchIndex_.find(profileId) != watchIndex_.end();
 }
 
+bool WatchListManager::IsFriend(const std::string& profileId) const
+{
+    if (profileId.empty())
+        return false;
+
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return friendIndex_.find(profileId) != friendIndex_.end();
+}
+
 std::optional<WatchListManager::WatchListEntry> WatchListManager::GetWatchedPlayer(const std::string& profileId) const
 {
     if (profileId.empty())
@@ -442,10 +597,22 @@ std::vector<WatchListManager::WatchListEntry> WatchListManager::GetWatchList() c
     return watchList_;
 }
 
+std::vector<WatchListManager::FriendEntry> WatchListManager::GetFriends() const
+{
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return friends_;
+}
+
 std::size_t WatchListManager::GetWatchListCount() const
 {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     return watchList_.size();
+}
+
+std::size_t WatchListManager::GetFriendCount() const
+{
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return friends_.size();
 }
 
 bool WatchListManager::ClearWatchList()
@@ -487,7 +654,10 @@ void WatchListManager::UpdateWatchStatus(PlayerCache& player) const
 
     std::shared_lock<std::shared_mutex> lock(mutex_);
 
-    player.isWatched = !profileId.empty() && watchIndex_.find(profileId) != watchIndex_.end();
+    player.isWatched = !profileId.empty() &&
+        watchIndex_.find(profileId) != watchIndex_.end();
+    player.isFriend = !profileId.empty() &&
+        friendIndex_.find(profileId) != friendIndex_.end();
 }
 
 bool WatchListManager::logRaidStart(const std::string& mapName)
@@ -642,6 +812,20 @@ void WatchListManager::RebuildWatchIndexUnlocked()
     }
 }
 
+void WatchListManager::RebuildFriendIndexUnlocked()
+{
+    friendIndex_.clear();
+    friendIndex_.reserve(friends_.size());
+
+    for (std::size_t index = 0; index < friends_.size(); ++index)
+    {
+        const std::string& profileId = friends_[index].profileId;
+
+        if (!profileId.empty())
+            friendIndex_[profileId] = index;
+    }
+}
+
 bool WatchListManager::UpsertRaidPlayerUnlocked(PlayerCache& player, bool requireProfileId)
 {
     if (!activeRaidIndex_.has_value())
@@ -667,7 +851,10 @@ bool WatchListManager::UpsertRaidPlayerUnlocked(PlayerCache& player, bool requir
     if (!raid.active)
         return false;
 
-    player.isWatched = !profileId.empty() && watchIndex_.find(profileId) != watchIndex_.end();
+    player.isWatched = !profileId.empty() &&
+        watchIndex_.find(profileId) != watchIndex_.end();
+    player.isFriend = !profileId.empty() &&
+        friendIndex_.find(profileId) != friendIndex_.end();
 
     const std::optional<std::size_t> instanceIndex = FindRaidPlayerByInstanceUnlocked(raid, player.instance);
 
@@ -763,6 +950,9 @@ void WatchListManager::CopyPlayerDataUnlocked(RaidPlayerEntry& destination, cons
     destination.isWatched =
         !destination.profileId.empty() &&
         watchIndex_.find(destination.profileId) != watchIndex_.end();
+    destination.isFriend =
+        !destination.profileId.empty() &&
+        friendIndex_.find(destination.profileId) != friendIndex_.end();
 
     destination.isDead = player.isDead;
     destination.hasExfiled = player.hasExfiled;
@@ -1003,6 +1193,8 @@ void WatchListManager::RenderWindow()
 
     const std::vector<WatchListEntry> watchListSnapshot = GetWatchList();
 
+    const std::vector<FriendEntry> friendsSnapshot = GetFriends();
+
     const std::vector<RaidRecord> raidHistorySnapshot = GetRaidHistory();
 
     // Window
@@ -1221,6 +1413,107 @@ void WatchListManager::RenderWindow()
 
                                     actionError.clear();
                                     requestRemovePopup = true;
+                                }
+
+                                ImGui::PopID();
+                            }
+
+                            ImGui::EndTable();
+                        }
+                    }
+
+                    ImGui::EndTabItem();
+                }
+
+                // FRIENDS TAB
+
+                const std::string friendsTabName =
+                    "Friends (" +
+                    std::to_string(friendsSnapshot.size()) +
+                    ")";
+
+                if (ImGui::BeginTabItem(friendsTabName.c_str()))
+                {
+                    ImGui::TextDisabled(
+                        "Friends are saved in watchlist.json and always shown as friendly."
+                    );
+
+                    ImGui::Spacing();
+
+                    if (friendsSnapshot.empty())
+                    {
+                        ImGui::TextDisabled(
+                            "Add a friend from the Raid List."
+                        );
+                    }
+                    else
+                    {
+                        const ImGuiTableFlags tableFlags =
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_BordersInnerH |
+                            ImGuiTableFlags_BordersInnerV |
+                            ImGuiTableFlags_Resizable |
+                            ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_SizingStretchProp;
+
+                        if (ImGui::BeginTable(
+                            "##FriendsTable",
+                            4,
+                            tableFlags,
+                            ImVec2(0.0f, ImGui::GetContentRegionAvail().y)))
+                        {
+                            ImGui::TableSetupScrollFreeze(0, 1);
+                            ImGui::TableSetupColumn(
+                                "Player",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                170.0f);
+                            ImGui::TableSetupColumn(
+                                "Profile ID",
+                                ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn(
+                                "Added",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                115.0f);
+                            ImGui::TableSetupColumn(
+                                "Actions",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                85.0f);
+                            ImGui::TableHeadersRow();
+
+                            for (const FriendEntry& entry : friendsSnapshot)
+                            {
+                                ImGui::PushID(entry.profileId.c_str());
+                                ImGui::TableNextRow();
+
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::TextUnformatted(
+                                    entry.name.empty()
+                                    ? "Unknown Player"
+                                    : entry.name.c_str());
+
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::TextWrapped(
+                                    "%s",
+                                    entry.profileId.c_str());
+
+                                ImGui::TableSetColumnIndex(2);
+                                ImGui::TextUnformatted(
+                                    entry.dateAdded.c_str());
+
+                                ImGui::TableSetColumnIndex(3);
+                                if (ImGui::SmallButton("Remove"))
+                                {
+                                    if (!RemoveFriend(entry.profileId))
+                                    {
+                                        actionError = GetLastError();
+
+                                        if (actionError.empty())
+                                            actionError = "The friend could not be removed.";
+                                    }
+                                    else
+                                    {
+                                        actionError.clear();
+                                    }
                                 }
 
                                 ImGui::PopID();
@@ -1548,17 +1841,17 @@ void WatchListManager::RenderWindow()
                                                     );
                                                     ImGui::EndDisabled();
                                                 }
-                                                else if (player.isWatched)
-                                                {
-                                                    ImGui::BeginDisabled();
-                                                    ImGui::SmallButton(
-                                                        "Watched"
-                                                    );
-                                                    ImGui::EndDisabled();
-                                                }
                                                 else
                                                 {
-                                                    if (ImGui::SmallButton(
+                                                    if (player.isWatched)
+                                                    {
+                                                        ImGui::BeginDisabled();
+                                                        ImGui::SmallButton(
+                                                            "Watched"
+                                                        );
+                                                        ImGui::EndDisabled();
+                                                    }
+                                                    else if (ImGui::SmallButton(
                                                         "Add"
                                                     ))
                                                     {
@@ -1576,6 +1869,37 @@ void WatchListManager::RenderWindow()
 
                                                         actionError.clear();
                                                         requestAddPopup = true;
+                                                    }
+
+                                                    if (player.isFriend)
+                                                    {
+                                                        ImGui::BeginDisabled();
+                                                        ImGui::SmallButton(
+                                                            "Friend"
+                                                        );
+                                                        ImGui::EndDisabled();
+                                                    }
+                                                    else if (ImGui::SmallButton(
+                                                        "Add friend"
+                                                    ))
+                                                    {
+                                                        if (!AddFriend(
+                                                            player.profileId,
+                                                            player.name))
+                                                        {
+                                                            actionError =
+                                                                GetLastError();
+
+                                                            if (actionError.empty())
+                                                            {
+                                                                actionError =
+                                                                    "The friend could not be added.";
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            actionError.clear();
+                                                        }
                                                     }
                                                 }
 

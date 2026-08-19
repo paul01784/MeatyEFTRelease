@@ -57,6 +57,55 @@ void LogTransformIssueThrottled(const char* key, const std::string& message)
 
 } // namespace
 
+bool UnityTransform::TryResolveNative(
+    uint64_t transformObject,
+    uint64_t& nativeTransform,
+    bool useCache)
+{
+    nativeTransform = 0;
+
+    if (!Memory::IsValidPointer(transformObject))
+        return false;
+
+    const auto isNativeTransform = [useCache](uint64_t candidate)
+    {
+        if (!Memory::IsValidPointer(candidate))
+            return false;
+
+        const uint64_t hierarchy = mem.Read<uint64_t>(
+            candidate + UnityOffsets::TransformAccess_HierarchyOffset,
+            useCache
+        );
+
+        const int index = mem.Read<int>(
+            candidate + UnityOffsets::TransformAccess_IndexOffset,
+            useCache
+        );
+
+        return Memory::IsValidPointer(hierarchy) &&
+            index >= 0 &&
+            index < kMaxTransformIndex;
+    };
+
+    if (isNativeTransform(transformObject))
+    {
+        nativeTransform = transformObject;
+        return true;
+    }
+
+    constexpr uint64_t kManagedNativePointerOffset = 0x10;
+    const uint64_t candidate = mem.Read<uint64_t>(
+        transformObject + kManagedNativePointerOffset,
+        useCache
+    );
+
+    if (!isNativeTransform(candidate))
+        return false;
+
+    nativeTransform = candidate;
+    return true;
+}
+
 UnityTransform::UnityTransform(
     uint64_t transformInternal,
     bool useCache)
@@ -343,6 +392,74 @@ glm::quat UnityTransform::GetRotation(
     }
 
     return worldRotation;
+}
+
+bool UnityTransform::UpdateWorldPose(
+    glm::vec3& position,
+    glm::quat& rotation)
+{
+    position = _position;
+    rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    if (!_valid || _parentChain.empty() ||
+        !Utils::valid_pointer(VerticesAddr))
+    {
+        return false;
+    }
+
+    std::vector<TrsX> transforms(_parentChain.size());
+    std::vector<Memory::ScatterReadRequest> requests;
+    requests.reserve(_parentChain.size());
+
+    for (size_t i = 0; i < _parentChain.size(); ++i)
+    {
+        const int transformIndex = _parentChain[i];
+
+        if (transformIndex < 0 || transformIndex >= kMaxTransformIndex)
+        {
+            _valid = false;
+            return false;
+        }
+
+        requests.push_back(
+            {
+                VerticesAddr + static_cast<uint64_t>(transformIndex) * sizeof(TrsX),
+                &transforms[i],
+                sizeof(TrsX)
+            });
+    }
+
+    if (!mem.ReadScatter(
+        requests.data(),
+        requests.size(),
+        _useCache,
+        "Transform pose"))
+    {
+        return false;
+    }
+
+    glm::vec3 worldPosition = transforms.front().t;
+    glm::quat worldRotation = transforms.front().q;
+
+    for (size_t i = 1; i < transforms.size(); ++i)
+    {
+        const TrsX& parent = transforms[i];
+        worldPosition = parent.q * worldPosition;
+        worldPosition *= parent.s;
+        worldPosition += parent.t;
+        worldRotation = parent.q * worldRotation;
+    }
+
+    if (IsAbnormal(worldPosition) || IsAbnormal(worldRotation))
+    {
+        _valid = false;
+        return false;
+    }
+
+    _position = worldPosition;
+    position = worldPosition;
+    rotation = worldRotation;
+    return true;
 }
 
 glm::vec3 UnityTransform::GetRootPosition()

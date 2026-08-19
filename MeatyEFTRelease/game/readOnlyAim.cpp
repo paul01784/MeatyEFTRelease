@@ -157,13 +157,6 @@ void ReadOnlyAim::aimTask()
     if (!makcu.IsConnected())
         return;
 
-    // Small sleep for moment testing
-    if (espGlobals::drawFireportLine)
-    {
-        Sleep(20);
-        g_fireport.update(mainGame.localPlayerPtr);
-    }
-
     const bool keyIsHeld = mem.GetKeyboard()->IsKeyDown(static_cast<int>(keyGlobals::aimKey));
 
     if (!camera.cameraPointersReady()) {
@@ -177,7 +170,8 @@ void ReadOnlyAim::aimTask()
                                                : glm::vec2(espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
     const bool fireportReady = aimRefPoint.valid || aimGlobals::aimReference != AimReference::Fireport;
 
-    const std::vector<PlayerCache> snapshot = players.getCacheSnapshot();
+    const PlayerCacheSnapshot snapshotHandle = players.getCacheSnapshot();
+    const PlayerCacheCollection& snapshot = *snapshotHandle;
     if (snapshot.empty()) {
         ClearTargetState(keyIsHeld);
         return;

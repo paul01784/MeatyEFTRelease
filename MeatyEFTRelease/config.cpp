@@ -210,7 +210,10 @@ void to_json(nlohmann::json& j, const globals& r) {
 
 void from_json(const nlohmann::json& j, globals& r) {
     r.appWindowAlpha = j.value("appWindowAlpha", r.appWindowAlpha);
-    r.appRadarMaxFPS = j.value("appRadarMaxFPS", r.appRadarMaxFPS);
+    r.appRadarMaxFPS = std::clamp(
+        j.value("appRadarMaxFPS", r.appRadarMaxFPS),
+        15.0f,
+        240.0f);
     r.dogTagAPIKey = j.value("dogTagAPIKey", r.dogTagAPIKey);
 }
 
@@ -234,7 +237,8 @@ void to_json(nlohmann::json& j, const coloursGlobals&) {
         {"fovCircle", coloursGlobals::fovCircle},
         {"questColour", coloursGlobals::questColour },
         {"wishListColour", coloursGlobals::wishListColour},
-        {"valueLootColour", coloursGlobals::valueLootColour }
+        {"valueLootColour", coloursGlobals::valueLootColour },
+        {"containerColour", coloursGlobals::containerColour }
     };
 }
 
@@ -257,6 +261,7 @@ void from_json(const nlohmann::json& j, coloursGlobals& r) {
     r.questColour = get_vec4_or_default(j, "questColour", r.questColour);
     r.wishListColour = get_vec4_or_default(j, "wishListColour", r.wishListColour);
     r.valueLootColour = get_vec4_or_default(j, "valueLootColour", r.valueLootColour);
+    r.containerColour = get_vec4_or_default(j, "containerColour", r.containerColour);
 }
 
 void to_json(nlohmann::json& j, const DxFontSettings& f)
@@ -541,16 +546,58 @@ void to_json(nlohmann::json& j, const lootGlobals& k) {
         {"enableValueLoot", k.enableValueLoot},
         {"enableWishListLoot", k.enableWishListLoot},
         {"valueLootFrom", k.valueLootFrom},
-        {"valueLootFromEquip", k.valueLootFromEquip}
+        {"valueLootFromEquip", k.valueLootFromEquip},
+        {"drawDrawer", k.drawDrawer},
+        {"drawDuffle", k.drawDuffle},
+        {"drawSafe", k.drawSafe},
+        {"drawWeaponBox", k.drawWeaponBox},
+        {"drawTechCrate", k.drawTechCrate},
+        {"drawRationCrate", k.drawRationCrate},
+        {"drawMedicalCrate", k.drawMedicalCrate},
+        {"drawJacket", k.drawJacket},
+        {"drawMedPackage", k.drawMedPackage},
+        {"drawMedBox", k.drawMedBox},
+        {"drawToolbox", k.drawToolbox},
+        {"drawGrenadeBox", k.drawGrenadeBox},
+        {"drawBuriedStash", k.drawBuriedStash},
+        {"drawGroundCache", k.drawGroundCache},
+        {"drawWoodenCrate", k.drawWoodenCrate},
+        {"drawSuitcase", k.drawSuitcase},
+        {"drawAmmoBox", k.drawAmmoBox},
+        {"drawDeadBody", k.drawDeadBody},
+        {"drawPCBlock", k.drawPCBlock},
+        {"drawRegister", k.drawRegister},
+        {"drawAirDrops", k.drawAirDrops}
     };
 }
 
 void from_json(const nlohmann::json& j, lootGlobals& k) {
-    j.at("enableQuestLoot").get_to(k.enableQuestLoot);
-    j.at("enableValueLoot").get_to(k.enableValueLoot);
-    j.at("enableWishListLoot").get_to(k.enableWishListLoot);
-    j.at("valueLootFrom").get_to(k.valueLootFrom);
-    j.at("valueLootFromEquip").get_to(k.valueLootFromEquip);
+    k.enableQuestLoot = j.value("enableQuestLoot", k.enableQuestLoot);
+    k.enableValueLoot = j.value("enableValueLoot", k.enableValueLoot);
+    k.enableWishListLoot = j.value("enableWishListLoot", k.enableWishListLoot);
+    k.valueLootFrom = j.value("valueLootFrom", k.valueLootFrom);
+    k.valueLootFromEquip = j.value("valueLootFromEquip", k.valueLootFromEquip);
+    k.drawDrawer = j.value("drawDrawer", k.drawDrawer);
+    k.drawDuffle = j.value("drawDuffle", k.drawDuffle);
+    k.drawSafe = j.value("drawSafe", k.drawSafe);
+    k.drawWeaponBox = j.value("drawWeaponBox", k.drawWeaponBox);
+    k.drawTechCrate = j.value("drawTechCrate", k.drawTechCrate);
+    k.drawRationCrate = j.value("drawRationCrate", k.drawRationCrate);
+    k.drawMedicalCrate = j.value("drawMedicalCrate", k.drawMedicalCrate);
+    k.drawJacket = j.value("drawJacket", k.drawJacket);
+    k.drawMedPackage = j.value("drawMedPackage", k.drawMedPackage);
+    k.drawMedBox = j.value("drawMedBox", k.drawMedBox);
+    k.drawToolbox = j.value("drawToolbox", k.drawToolbox);
+    k.drawGrenadeBox = j.value("drawGrenadeBox", k.drawGrenadeBox);
+    k.drawBuriedStash = j.value("drawBuriedStash", k.drawBuriedStash);
+    k.drawGroundCache = j.value("drawGroundCache", k.drawGroundCache);
+    k.drawWoodenCrate = j.value("drawWoodenCrate", k.drawWoodenCrate);
+    k.drawSuitcase = j.value("drawSuitcase", k.drawSuitcase);
+    k.drawAmmoBox = j.value("drawAmmoBox", k.drawAmmoBox);
+    k.drawDeadBody = j.value("drawDeadBody", k.drawDeadBody);
+    k.drawPCBlock = j.value("drawPCBlock", k.drawPCBlock);
+    k.drawRegister = j.value("drawRegister", k.drawRegister);
+    k.drawAirDrops = j.value("drawAirDrops", k.drawAirDrops);
 }
 
 void to_json(nlohmann::json& j, const MakcuConfig& k)

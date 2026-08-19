@@ -3,6 +3,7 @@
 #include "../game/headers/loot.h"
 #include "../app/globals.h"
 #include "../memory/Memory.h"
+#include "../memory/ScatterReadBatch.h"
 #include "../game/headers/utils.h"
 #include "../game/headers/maingame.h"
 #include "../game/headers/sdk.h"
@@ -16,6 +17,12 @@
 #include "headers/dogtag.h"
 #include "headers/players.h"
 
+
+loot::loot()
+    : publishedLootCache(
+        std::make_shared<const LootCacheCollection>())
+{
+}
 
 std::vector<LootFilters> lootFilters;
 loot Loot;
@@ -46,71 +53,6 @@ namespace
         "ArmBand",
         "Pockets",
         "SecuredContainer"
-    };
-
-    class ScatterBatch
-    {
-    public:
-        explicit ScatterBatch(bool useCache = false)
-            : useCache_(useCache)
-        {
-            handle_ = mem.CreateScatterHandle(useCache_);
-        }
-
-        ~ScatterBatch()
-        {
-            if (handle_)
-                mem.CloseScatterHandle(handle_);
-        }
-
-        ScatterBatch(const ScatterBatch&) = delete;
-        ScatterBatch& operator=(const ScatterBatch&) = delete;
-
-        template <typename T>
-        bool add(uint64_t address, T& out)
-        {
-            static_assert(std::is_trivially_copyable_v<T>, "Scatter read type must be trivially copyable");
-
-            if (!handle_)
-                return false;
-
-            if (!Utils::valid_pointer(address))
-                return false;
-
-            const bool added = mem.AddScatterReadRequest(
-                handle_,
-                address,
-                &out,
-                sizeof(T)
-            );
-
-            if (added)
-                queued_ = true;
-            else
-                ok_ = false;
-
-            return added;
-        }
-
-        bool execute()
-        {
-            if (!handle_)
-                return false;
-
-            if (!queued_)
-                return true;
-
-            if (!ok_)
-                return false;
-
-            return mem.ExecuteReadScatter(handle_, useCache_, "Loot Exec");
-        }
-
-    private:
-        VMMDLL_SCATTER_HANDLE handle_ = nullptr;
-        bool useCache_ = false;
-        bool queued_ = false;
-        bool ok_ = true;
     };
 
     struct LootShellRead
@@ -334,8 +276,26 @@ std::string GetQuestItemDisplayName(const std::string& itemId)
 
 std::vector<LootList> loot::getCacheLoot() const
 {
-    std::shared_lock lock(lootMutex);
-    return lootList;
+    return *getCacheSnapshot();
+}
+
+LootCacheSnapshot loot::getCacheSnapshot() const noexcept
+{
+    LootCacheSnapshot snapshot = publishedLootCache.load(std::memory_order_acquire);
+
+    if (snapshot)
+        return snapshot;
+
+    static const LootCacheSnapshot emptySnapshot = std::make_shared<const LootCacheCollection>();
+
+    return emptySnapshot;
+}
+
+void loot::publishCacheSnapshotLocked()
+{
+    publishedLootCache.store(
+        std::make_shared<const LootCacheCollection>(lootList),
+        std::memory_order_release);
 }
 
 void loot::clearCache()
@@ -352,6 +312,7 @@ void loot::clearCache()
 
     nextLootDiscovery = {};
     lastDogTagUpdate = {};
+    publishCacheSnapshotLocked();
     corpseRefreshCursor = 0;
     dogTagRefreshCursor = 0;
 }
@@ -400,6 +361,8 @@ void loot::markLootWanted(
         loot.forceWanted = true;
         loot.color = colour;
     }
+
+    publishCacheSnapshotLocked();
 }
 
 void loot::setLootWanted(const uint64_t instance, const bool wanted, const glm::vec4& colour)
@@ -431,22 +394,26 @@ void loot::setLootWanted(const uint64_t instance, const bool wanted, const glm::
     {
         it->wanted = true;
         it->color = colour;
+        publishCacheSnapshotLocked();
         return;
     }
 
     if (it->pendingResolve || it->failed)
     {
         it->wanted = false;
+        publishCacheSnapshotLocked();
         return;
     }
 
     if (it->isItem || it->isQuestItem)
     {
         applyWantedState(*it, lookup);
+        publishCacheSnapshotLocked();
         return;
     }
 
     it->wanted = false;
+    publishCacheSnapshotLocked();
 }
 
 bool loot::tryUpdateLootPosition(LootList& item, bool markAsFailedOnError)
@@ -835,11 +802,11 @@ bool loot::refreshLootListHeader()
     uint64_t nextLootListPtr = 0;
     int nextLootCount = 0;
 
-    ScatterBatch batch(false);
+    ScatterReadBatch batch(mem, false, "Loot");
 
-    if (!batch.add(lootListP + 0x10, nextLootListPtr) ||
-        !batch.add(lootListP + 0x18, nextLootCount) ||
-        !batch.execute())
+    if (!batch.Add(lootListP + 0x10, nextLootListPtr) ||
+        !batch.Add(lootListP + 0x18, nextLootCount) ||
+        !batch.Execute())
     {
         return false;
     }
@@ -916,12 +883,12 @@ bool loot::buildNewLootItemsScatter(
 
     // MonoBehaviour.
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& shell : shellReads)
-            batch.add(shell.instance + 0x10, shell.monoBehaviour);
+            batch.Add(shell.instance + 0x10, shell.monoBehaviour);
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (auto& item : candidates)
                 markFailed(item, "MonoBehaviour scatter execution failed");
@@ -933,25 +900,25 @@ bool loot::buildNewLootItemsScatter(
 
     // interactive class and GameObject.
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& shell : shellReads)
         {
             if (!Utils::valid_pointer(shell.monoBehaviour))
                 continue;
 
-            batch.add(
+            batch.Add(
                 shell.monoBehaviour + UnityOffsets::Component_ObjectClassOffset,
                 shell.interactiveClass
             );
 
-            batch.add(
+            batch.Add(
                 shell.monoBehaviour + UnityOffsets::Component_GameObjectOffset,
                 shell.gameObject
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (auto& item : candidates)
                 markFailed(item, "Object pointer scatter execution failed");
@@ -963,25 +930,25 @@ bool loot::buildNewLootItemsScatter(
 
     // name pointer and components.
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& shell : shellReads)
         {
             if (!Utils::valid_pointer(shell.gameObject))
                 continue;
 
-            batch.add(
+            batch.Add(
                 shell.gameObject + UnityOffsets::GameObject_NameOffset,
                 shell.gameObjectNamePtr
             );
 
-            batch.add(
+            batch.Add(
                 shell.gameObject + UnityOffsets::GameObject_ComponentsOffset,
                 shell.components
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (auto& item : candidates)
                 markFailed(item, "GameObject scatter execution failed");
@@ -993,17 +960,17 @@ bool loot::buildNewLootItemsScatter(
 
     //transform.
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& shell : shellReads)
         {
             if (!Utils::valid_pointer(shell.components))
                 continue;
 
-            batch.add(shell.components + 0x8, shell.transform);
+            batch.Add(shell.components + 0x8, shell.transform);
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (size_t i = 0; i < candidates.size(); ++i)
                 shellReads[i].transform = 0;
@@ -1149,19 +1116,19 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
         return;
 
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& read : reads)
         {
             LootList& item = items[read.itemIndex];
 
-            batch.add(
+            batch.Add(
                 item.m_interactiveClass + sdk::InteractiveLootItem::Item,
                 read.itemObject
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (const auto& read : reads)
                 markFailed(items[read.itemIndex], "Item object scatter failed");
@@ -1171,20 +1138,20 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& read : reads)
         {
             if (!Utils::valid_pointer(read.itemObject))
                 continue;
 
-            batch.add(
+            batch.Add(
                 read.itemObject + sdk::LootItem::Template,
                 read.itemTemplate
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (const auto& read : reads)
                 markFailed(items[read.itemIndex], "Item template scatter failed");
@@ -1194,25 +1161,25 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& read : reads)
         {
             if (!Utils::valid_pointer(read.itemTemplate))
                 continue;
 
-            batch.add(
+            batch.Add(
                 read.itemTemplate + sdk::ItemTemplate::_id,
                 read.mongoId
             );
 
-            batch.add(
+            batch.Add(
                 read.itemTemplate + sdk::ItemTemplate::QuestItem,
                 read.questItem
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (const auto& read : reads)
                 markFailed(items[read.itemIndex], "Item metadata scatter failed");
@@ -1323,19 +1290,19 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
         return;
 
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& read : reads)
         {
             LootList& item = items[read.itemIndex];
 
-            batch.add(
+            batch.Add(
                 item.m_interactiveClass + sdk::LootableContainer::ItemOwner,
                 read.itemOwner
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (const auto& read : reads)
                 markFailed(items[read.itemIndex], "Container owner scatter failed");
@@ -1345,20 +1312,20 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& read : reads)
         {
             if (!Utils::valid_pointer(read.itemOwner))
                 continue;
 
-            batch.add(
+            batch.Add(
                 read.itemOwner + sdk::LootableContainerItemOwner::RootItem,
                 read.rootItem
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (const auto& read : reads)
                 markFailed(items[read.itemIndex], "Container root item scatter failed");
@@ -1368,20 +1335,20 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& read : reads)
         {
             if (!Utils::valid_pointer(read.rootItem))
                 continue;
 
-            batch.add(
+            batch.Add(
                 read.rootItem + sdk::LootItem::Template,
                 read.itemTemplate
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (const auto& read : reads)
                 markFailed(items[read.itemIndex], "Container template scatter failed");
@@ -1391,20 +1358,20 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterBatch batch(true);
+        ScatterReadBatch batch(mem, true, "Loot");
 
         for (auto& read : reads)
         {
             if (!Utils::valid_pointer(read.itemTemplate))
                 continue;
 
-            batch.add(
+            batch.Add(
                 read.itemTemplate + sdk::ItemTemplate::_id,
                 read.mongoId
             );
         }
 
-        if (!batch.execute())
+        if (!batch.Execute())
         {
             for (const auto& read : reads)
                 markFailed(items[read.itemIndex], "Container ID scatter failed");
@@ -1491,7 +1458,9 @@ loot::WantedLookup loot::buildWantedLookup() const
 
     if (lootGlobals::enableQuestLoot)
     {
-        for (const auto& questItem : masterItems)
+        const std::vector<std::string> questItems = GetMasterItemsSnapshot();
+
+        for (const auto& questItem : questItems)
         {
             if (!questItem.empty())
                 lookup.questIds.insert(questItem);
@@ -1573,27 +1542,27 @@ void loot::applyWantedState(LootList& lootItem, const WantedLookup& lookup) cons
 
 bool loot::isContainerEnabled(const std::string& name) const
 {
-    if (name == "AirDrop")         return drawAirDrops;
-    if (name == "Duffle Bag")      return drawDuffle;
-    if (name == "Drawer")          return drawDrawer;
-    if (name == "Safe")            return drawSafe;
-    if (name == "Weapon Box")      return drawWeaponBox;
-    if (name == "Technical Crate") return drawTechCrate;
-    if (name == "Ration Crate")    return drawRationCrate;
-    if (name == "Medical Crate")   return drawMedicalCrate;
-    if (name == "Jacket")          return drawJacket;
-    if (name == "Med Package")     return drawMedPackage;
-    if (name == "Med Box")         return drawMedBox;
-    if (name == "Toolbox")         return drawToolbox;
-    if (name == "Grenade Box")     return drawGrenadeBox;
-    if (name == "Buried Stash")    return drawBuriedStash;
-    if (name == "Ground Cache")    return drawGroundCache;
-    if (name == "Wooden Crate")    return drawWoodenCrate;
-    if (name == "Suitcase")        return drawSuitcase;
-    if (name == "Ammo Box")        return drawAmmoBox;
-    if (name == "Dead Body")       return drawDeadBody;
-    if (name == "PC Block")        return drawPCBlock;
-    if (name == "Register")        return drawRegister;
+    if (name == "AirDrop")         return lootGlobals::drawAirDrops;
+    if (name == "Duffle Bag")      return lootGlobals::drawDuffle;
+    if (name == "Drawer")          return lootGlobals::drawDrawer;
+    if (name == "Safe")            return lootGlobals::drawSafe;
+    if (name == "Weapon Box")      return lootGlobals::drawWeaponBox;
+    if (name == "Technical Crate") return lootGlobals::drawTechCrate;
+    if (name == "Ration Crate")    return lootGlobals::drawRationCrate;
+    if (name == "Medical Crate")   return lootGlobals::drawMedicalCrate;
+    if (name == "Jacket")          return lootGlobals::drawJacket;
+    if (name == "Med Package")     return lootGlobals::drawMedPackage;
+    if (name == "Med Box")         return lootGlobals::drawMedBox;
+    if (name == "Toolbox")         return lootGlobals::drawToolbox;
+    if (name == "Grenade Box")     return lootGlobals::drawGrenadeBox;
+    if (name == "Buried Stash")    return lootGlobals::drawBuriedStash;
+    if (name == "Ground Cache")    return lootGlobals::drawGroundCache;
+    if (name == "Wooden Crate")    return lootGlobals::drawWoodenCrate;
+    if (name == "Suitcase")        return lootGlobals::drawSuitcase;
+    if (name == "Ammo Box")        return lootGlobals::drawAmmoBox;
+    if (name == "Dead Body")       return lootGlobals::drawDeadBody;
+    if (name == "PC Block")        return lootGlobals::drawPCBlock;
+    if (name == "Register")        return lootGlobals::drawRegister;
 
     return false;
 }
@@ -1659,6 +1628,10 @@ void loot::updateExistingLootItems(
         if (item.isContainer)
         {
             item.wanted = isContainerEnabled(item.shortName);
+
+            if (item.wanted)
+                item.color = coloursGlobals::containerColour;
+
             continue;
         }
 
@@ -1766,10 +1739,10 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
         uint64_t slotsPtr = 0;
 
         {
-            ScatterBatch batch(true);
-            batch.add(interactive + sdk::InteractiveLootItem::Item, itemBase);
+            ScatterReadBatch batch(mem, true, "Loot");
+            batch.Add(interactive + sdk::InteractiveLootItem::Item, itemBase);
 
-            if (!batch.execute())
+            if (!batch.Execute())
                 return;
         }
 
@@ -1777,17 +1750,17 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
             return;
 
         {
-            ScatterBatch batch(true);
-            batch.add(itemBase + sdk::LootItemMod::Slots, slotsPtr);
+            ScatterReadBatch batch(mem, true, "Loot");
+            batch.Add(itemBase + sdk::LootItemMod::Slots, slotsPtr);
 
-            if (!batch.execute())
+            if (!batch.Execute())
                 return;
         }
 
         if (!Utils::valid_pointer(slotsPtr))
             return;
 
-        UnityArray<uint64_t> slotsRead(slotsPtr);
+        UnityArray<uint64_t> slotsRead(slotsPtr, "Loot corpse slots");
 
         if (slotsRead.count <= 0)
             return;
@@ -1810,46 +1783,46 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
         // slot
         {
-            ScatterBatch batch;
+            ScatterReadBatch batch(mem, false, "Loot");
 
             for (auto& read : slotReads)
             {
-                batch.add(read.slotPtr + sdk::Slot::ID, read.namePtr);
-                batch.add(read.slotPtr + sdk::Slot::ContainedItem, read.containedItem);
+                batch.Add(read.slotPtr + sdk::Slot::ID, read.namePtr);
+                batch.Add(read.slotPtr + sdk::Slot::ContainedItem, read.containedItem);
             }
 
-            if (!batch.execute())
+            if (!batch.Execute())
                 return;
         }
 
         // name template.
         {
-            ScatterBatch batch(true);
+            ScatterReadBatch batch(mem, true, "Loot");
 
             for (auto& read : slotReads)
             {
                 if (Utils::valid_pointer(read.namePtr))
-                    batch.add(read.namePtr + 0x10, read.nameLen);
+                    batch.Add(read.namePtr + 0x10, read.nameLen);
 
                 if (Utils::valid_pointer(read.containedItem))
-                    batch.add(read.containedItem + sdk::LootItem::Template, read.inventoryTemplate);
+                    batch.Add(read.containedItem + sdk::LootItem::Template, read.inventoryTemplate);
             }
 
-            if (!batch.execute())
+            if (!batch.Execute())
                 return;
         }
 
         // mongo id.
         {
-            ScatterBatch batch(true);
+            ScatterReadBatch batch(mem, true, "Loot");
 
             for (auto& read : slotReads)
             {
                 if (Utils::valid_pointer(read.inventoryTemplate))
-                    batch.add(read.inventoryTemplate + sdk::ItemTemplate::_id, read.mongoId);
+                    batch.Add(read.inventoryTemplate + sdk::ItemTemplate::_id, read.mongoId);
             }
 
-            if (!batch.execute())
+            if (!batch.Execute())
                 return;
         }
 
@@ -1859,7 +1832,8 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
         bool isPMC = false;
         const WantedLookup wantedLookup = buildWantedLookup();
 
-        const std::vector<PlayerCache> playerCache = players.getCacheSnapshot();
+        const PlayerCacheSnapshot playerCacheSnapshot = players.getCacheSnapshot();
+        const PlayerCacheCollection& playerCache = *playerCacheSnapshot;
 
         for (const auto& player : playerCache)
         {
@@ -2187,6 +2161,7 @@ void loot::lootTask()
             }
 
             lootList = std::move(workingCache);
+            publishCacheSnapshotLocked();
         }
     }
     catch (const std::exception& e)

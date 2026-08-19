@@ -9,7 +9,7 @@
 #include <d3dx9tex.h>
 #include <tchar.h>
 #include <windows.h>
-#include "IconsForkAwesome.h"
+#include "IconsFontAwesomeCompat.h"
 
 // Data
 static LPDIRECT3D9              g_pD3D = nullptr;

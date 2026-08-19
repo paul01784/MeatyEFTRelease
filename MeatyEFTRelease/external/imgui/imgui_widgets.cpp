@@ -738,7 +738,7 @@ bool ImGui::ButtonEx(const char* label, const ImVec2& size_arg, ImGuiButtonFlags
     return pressed;
 }
 
-bool ImGui::ButtonExMenu(const char* label, const ImVec2& size_arg, const ImVec2& size_hack, ImGuiButtonFlags flags)
+bool ImGui::ButtonExMenu(const char* label, const ImVec2& size_arg, const ImVec2& visual_offset, ImGuiButtonFlags flags)
 {
     ImGuiWindow* window = GetCurrentWindow();
     if (window->SkipItems)
@@ -747,7 +747,7 @@ bool ImGui::ButtonExMenu(const char* label, const ImVec2& size_arg, const ImVec2
     ImGuiContext& g = *GImGui;
     const ImGuiStyle& style = g.Style;
     const ImGuiID id = window->GetID(label);
-    const ImVec2 label_size = size_hack;
+    const ImVec2 label_size = CalcTextSize(label, NULL, true);
 
     ImVec2 pos = window->DC.CursorPos;
     if ((flags & ImGuiButtonFlags_AlignTextBaseLine) && style.FramePadding.y < window->DC.CurrLineTextBaseOffset) // Try to vertically align buttons that are smaller/have no padding so that text baseline matches (bit hacky, since it shouldn't be a flag)
@@ -769,7 +769,7 @@ bool ImGui::ButtonExMenu(const char* label, const ImVec2& size_arg, const ImVec2
 
     if (g.LogEnabled)
         LogSetNextTextDecoration("[", "]");
-    RenderTextClipped(bb.Min + style.FramePadding, bb.Max - style.FramePadding, label, NULL, &label_size, style.ButtonTextAlign, &bb);
+    RenderTextClipped(bb.Min + style.FramePadding + visual_offset, bb.Max - style.FramePadding + visual_offset, label, NULL, &label_size, style.ButtonTextAlign, &bb);
 
     // Automatically close popups
     //if (pressed && !(flags & ImGuiButtonFlags_DontClosePopups) && (window->Flags & ImGuiWindowFlags_Popup))
@@ -784,9 +784,9 @@ bool ImGui::Button(const char* label, const ImVec2& size_arg)
     return ButtonEx(label, size_arg, ImGuiButtonFlags_None);
 }
 
-bool ImGui::ButtonMenu(const char* label, const ImVec2& size_arg, const ImVec2& size_hack)
+bool ImGui::ButtonMenu(const char* label, const ImVec2& size_arg, const ImVec2& visual_offset)
 {
-    return ButtonExMenu(label, size_arg, size_hack, ImGuiButtonFlags_None);
+    return ButtonExMenu(label, size_arg, visual_offset, ImGuiButtonFlags_None);
 }
 
 // Small buttons fits within text without additional vertical spacing.

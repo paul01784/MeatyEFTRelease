@@ -936,27 +936,27 @@ static void renderLootFiltersMenu()
 
                 ContainerOption options[] =
                 {
-                    { "Drawer",        &Loot.drawDrawer },
-                    { "Duffle",        &Loot.drawDuffle },
-                    { "Safe",          &Loot.drawSafe },
-                    { "Weapon Box",    &Loot.drawWeaponBox },
-                    { "Tech Crate",    &Loot.drawTechCrate },
-                    { "Ration Crate",  &Loot.drawRationCrate },
-                    { "Medical Crate", &Loot.drawMedicalCrate },
-                    { "Jacket",        &Loot.drawJacket },
-                    { "Med Package",   &Loot.drawMedPackage },
-                    { "Med Box",       &Loot.drawMedBox },
-                    { "Toolbox",       &Loot.drawToolbox },
-                    { "Grenade Box",   &Loot.drawGrenadeBox },
-                    { "Buried Stash",  &Loot.drawBuriedStash },
-                    { "Ground Cache",  &Loot.drawGroundCache },
-                    { "Wooden Crate",  &Loot.drawWoodenCrate },
-                    { "Suitcase",      &Loot.drawSuitcase },
-                    { "Ammo Box",      &Loot.drawAmmoBox },
-                    { "Dead Body",     &Loot.drawDeadBody },
-                    { "PC Block",      &Loot.drawPCBlock },
-                    { "Register",      &Loot.drawRegister },
-                    { "Airdrop",       &Loot.drawAirDrops },
+                    { "Drawer",        &lootGlobals::drawDrawer },
+                    { "Duffle",        &lootGlobals::drawDuffle },
+                    { "Safe",          &lootGlobals::drawSafe },
+                    { "Weapon Box",    &lootGlobals::drawWeaponBox },
+                    { "Tech Crate",    &lootGlobals::drawTechCrate },
+                    { "Ration Crate",  &lootGlobals::drawRationCrate },
+                    { "Medical Crate", &lootGlobals::drawMedicalCrate },
+                    { "Jacket",        &lootGlobals::drawJacket },
+                    { "Med Package",   &lootGlobals::drawMedPackage },
+                    { "Med Box",       &lootGlobals::drawMedBox },
+                    { "Toolbox",       &lootGlobals::drawToolbox },
+                    { "Grenade Box",   &lootGlobals::drawGrenadeBox },
+                    { "Buried Stash",  &lootGlobals::drawBuriedStash },
+                    { "Ground Cache",  &lootGlobals::drawGroundCache },
+                    { "Wooden Crate",  &lootGlobals::drawWoodenCrate },
+                    { "Suitcase",      &lootGlobals::drawSuitcase },
+                    { "Ammo Box",      &lootGlobals::drawAmmoBox },
+                    { "Dead Body",     &lootGlobals::drawDeadBody },
+                    { "PC Block",      &lootGlobals::drawPCBlock },
+                    { "Register",      &lootGlobals::drawRegister },
+                    { "Airdrop",       &lootGlobals::drawAirDrops },
                     // { "Xmas Loot",   &Loot.drawXmas },
                 };
 
@@ -966,11 +966,24 @@ static void renderLootFiltersMenu()
                 ImGui::Text("Container Settings");
                 ImGui::Separator();
 
+                ImGui::TextUnformatted("Colour");
+                ImGui::SameLine();
+                if (ImGui::ColorEdit4(
+                    "##containercolour",
+                    (float*)&coloursGlobals::containerColour,
+                    ImGuiColorEditFlags_Float |
+                    ImGuiColorEditFlags_NoInputs))
+                {
+                    configManager.SaveConfig();
+                }
+
                 
                 if (ImGui::Button("Disable All", ImVec2(120, 0)))
                 {
                     for (int i = 0; i < optionCount; i++)
                         *options[i].value = false;
+
+                    configManager.SaveConfig();
                 }
 
                 ImGui::Separator();
@@ -987,13 +1000,15 @@ static void renderLootFiltersMenu()
                         ImGui::TableSetColumnIndex(0);
                         for (int i = 0; i < splitIndex; i++)
                         {
-                            ImGui::Checkbox(options[i].label, options[i].value);
+                            if (ImGui::Checkbox(options[i].label, options[i].value))
+                                configManager.SaveConfig();
                         }
 
                         ImGui::TableSetColumnIndex(1);
                         for (int i = splitIndex; i < optionCount; i++)
                         {
-                            ImGui::Checkbox(options[i].label, options[i].value);
+                            if (ImGui::Checkbox(options[i].label, options[i].value))
+                                configManager.SaveConfig();
                         }
 
                         ImGui::EndTable();
@@ -1075,6 +1090,10 @@ static void renderLootFiltersMenu()
                 ImGui::SetWindowSize(ImVec2(900, 500));
 
                 std::vector<LootList> cacheLoot = Loot.getCacheLoot();
+                const QuestPublishedSnapshot questSnapshot =
+                    GetQuestPublishedSnapshot();
+                const std::vector<std::string>& questMasterItems =
+                    questSnapshot->masterItems;
 
                 // ---------------------------------------------------------
                 // Search state for Tab 1
@@ -1240,10 +1259,10 @@ static void renderLootFiltersMenu()
                         if (ImGui::BeginChild("##MasterItemsChild", ImVec2(0, -40), true))
                         {
                             std::unordered_set<std::string> seenMasterIds;
-                            seenMasterIds.reserve(masterItems.size());
+                            seenMasterIds.reserve(questMasterItems.size());
 
                             int visibleRows = 0;
-                            for (const auto& rawMasterId : masterItems)
+                            for (const auto& rawMasterId : questMasterItems)
                             {
                                 std::string masterId = TrimEFT(rawMasterId);
                                 if (masterId.empty())
@@ -1271,7 +1290,7 @@ static void renderLootFiltersMenu()
 
                                 seenMasterIds.clear();
 
-                                for (const auto& rawMasterId : masterItems)
+                                for (const auto& rawMasterId : questMasterItems)
                                 {
                                     std::string masterId = TrimEFT(rawMasterId);
                                     if (masterId.empty())
@@ -2847,7 +2866,20 @@ static void renderMenuSettings()
 
                 ImGui::SeparatorText("App Settings");
                 ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Window Alpha", &globals::appWindowAlpha, 0.f, 1.f, "%.1f")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Radar Max FPS", &globals::appRadarMaxFPS, 30.f, 60.f, "%.f")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                ImGui::PushItemWidth(150);
+                if (ImGui::SliderFloat(
+                    " Radar Max FPS",
+                    &globals::appRadarMaxFPS,
+                    15.0f,
+                    240.0f,
+                    "%.0f FPS",
+                    ImGuiSliderFlags_AlwaysClamp))
+                {
+                    configManager.SaveConfig();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Caps the main radar render loop. VSync may impose a lower limit.");
+                ImGui::PopItemWidth();
                 ImGui::PushItemWidth(150); if (showResSelectionBox()) configManager.SaveConfig(); ImGui::PopItemWidth();
 
                 ImGui::NewLine();
@@ -3028,6 +3060,22 @@ static void renderMenuSettings()
                 );
 
                 timingsChanged |= DrawTaskTiming(
+                    "Player Positions",
+                    globals::taskPlayerPositions,
+                    5.0,
+                    100.0,
+                    0.5
+                );
+
+                timingsChanged |= DrawTaskTiming(
+                    "Fireport",
+                    globals::taskFireport,
+                    5.0,
+                    100.0,
+                    1.0
+                );
+
+                timingsChanged |= DrawTaskTiming(
                     "Player Bones",
                     globals::taskPlayersBones,
                     5.0,
@@ -3049,6 +3097,14 @@ static void renderMenuSettings()
                     100.0,
                     30000.0,
                     100.0
+                );
+
+                timingsChanged |= DrawTaskTiming(
+                    "Player Metadata",
+                    globals::taskPlayerMetadata,
+                    50.0,
+                    5000.0,
+                    25.0
                 );
 
                 timingsChanged |= DrawTaskTiming(
@@ -3127,6 +3183,7 @@ static void renderMenuSettings()
                 if (ImGui::ColorEdit4(" Crosshair", (float*)&coloursGlobals::crosshair, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
                 if (ImGui::ColorEdit4(" FOV Circle", (float*)&coloursGlobals::fovCircle, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
                 if (ImGui::ColorEdit4(" Quest Markers", (float*)&coloursGlobals::questMarker, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Containers", (float*)&coloursGlobals::containerColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
 
 
                 ImGui::EndTabItem();
@@ -3195,19 +3252,6 @@ std::string messageLevelToString(MessageLevel level) {
     default:
         return "UNKNOWN";
     }
-}
-
-// Helper function to export messages to a text file
-void exportMessagesToFile(const std::vector<Message>& messages, const std::string& filename) {
-    std::ofstream file(filename);
-    if (!file.is_open()) return;
-
-    for (const auto& msg : messages) {
-        file << "Timestamp: " << msg.timestamp << "s, Type: " << messageLevelToString(msg.level).c_str()
-            << ", Message: " << msg.text << std::endl;
-    }
-
-    file.close();
 }
 
 int CountNonZeroEntries(const uint64_t* buffer, int size) {
@@ -3311,250 +3355,560 @@ static void renderDebugWindow()
 
     ImGui::SetNextWindowSize(ImVec2(900, 500), ImGuiCond_FirstUseEver);
 
-    static bool showInfo = true;
-    static bool showWarn = true;
-    static bool showError = true;
-
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetDebug, flagss))
     {
         if (ImGui::BeginTabBar("##Tabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
         {
             if (ImGui::BeginTabItem("Console"))
             {
+                static bool showInfo = true;
+                static bool showWarn = true;
+                static bool showError = true;
+                static bool pauseConsole = false;
+                static bool autoScroll = true;
+                static ImGuiTextFilter consoleFilter;
+                static std::vector<Message> displayMessages;
 
-                ImGui::Checkbox("Show Info", &showInfo); ImGui::SameLine(); ImGui::Checkbox("Show Warn", &showWarn); ImGui::SameLine(); ImGui::Checkbox("Show Error", &showError);
+                if (!pauseConsole || displayMessages.empty())
+                    displayMessages = LOGS.getMessages();
 
-                if (ImGui::Button("Export to file")) {
-                    exportMessagesToFile(LOGS.getMessages(), "debug_log.txt");
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Clear Logs")) {
-                    LOGS.clearLog();
-                }
+                std::size_t infoCount = 0;
+                std::size_t warnCount = 0;
+                std::size_t errorCount = 0;
 
-                ImGui::Separator();
-
-                // Setup table
-                if (ImGui::BeginTable("DebugTable", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
-                    ImGui::TableSetupColumn("Timestamp", ImGuiTableColumnFlags_WidthFixed);
-                    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed);
-                    ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
-                    ImGui::TableHeadersRow();
-
-                    const auto& messages = LOGS.getMessages();
-
-                    if (messages.size() > 3000)
-                        LOGS.clearLog();
-
-                    for (const auto& msg : messages) {
-                        bool showMessage = false;
-                        ImVec4 color;
-
-                        switch (msg.level) {
-                        case MessageLevel::INFO:
-                            showMessage = showInfo;
-                            color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-                            break;
-                        case MessageLevel::WARN:
-                            showMessage = showWarn;
-                            color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
-                            break;
-                        case MessageLevel::ERR:
-                            showMessage = showError;
-                            color = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
-                            break;
-                        }
-
-                        if (showMessage) {
-                            ImGui::TableNextRow();
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::Text("%.2fs", msg.timestamp);
-
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::TextColored(color, "%s", messageLevelToString(msg.level).c_str());
-
-
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::TextColored(color, "%s", msg.text.c_str());
-                        }
-                    }
-
-                    ImGui::SetScrollHereY(1.0f);
-                }
-                ImGui::EndTable();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Performance"))
-            {
-                static bool freezeList = false;
-                static bool newestFirst = false;
-                static bool jumpToNewest = false;
-
-                static auto displaySamples = PerfMonitor::Instance().GetRecent();
-
-                static auto lastRefresh = std::chrono::steady_clock::time_point{};
-
-                const auto now = std::chrono::steady_clock::now();
-
-                // Only refresh the table data four times per second unless frozen
-                if (!freezeList &&
-                    (lastRefresh == std::chrono::steady_clock::time_point{} ||
-                        now - lastRefresh >= std::chrono::milliseconds(250)))
+                for (const Message& message : displayMessages)
                 {
-                    displaySamples = PerfMonitor::Instance().GetRecent();
-                    lastRefresh = now;
-                }
-
-                const double peakMs = PerfMonitor::Instance().GetPeakMs();
-                const std::string peakName = PerfMonitor::Instance().GetPeakName();
-                const std::string peakDetail = PerfMonitor::Instance().GetPeakDetail();
-
-                ImGui::Text("Peak spike: %.1f ms", peakMs);
-
-                if (!peakName.empty())
-                    ImGui::Text("Source: %s", peakName.c_str());
-
-                if (!peakDetail.empty())
-                    ImGui::Text("Detail: %s", peakDetail.c_str());
-
-                if (ImGui::Button("Reset peak"))
-                    PerfMonitor::Instance().ResetPeak();
-
-                ImGui::SameLine();
-
-                if (ImGui::Button("Refresh now"))
-                {
-                    displaySamples = PerfMonitor::Instance().GetRecent();
-                    lastRefresh = now;
-                }
-
-                ImGui::Separator();
-
-                if (ImGui::Checkbox("Freeze list", &freezeList))
-                {
-                    // Capture a final stable snapshot at the instant it is frozen
-                    if (freezeList)
+                    switch (message.level)
                     {
-                        displaySamples = PerfMonitor::Instance().GetRecent();
-                        lastRefresh = now;
+                    case MessageLevel::INFO:
+                        ++infoCount;
+                        break;
+                    case MessageLevel::WARN:
+                        ++warnCount;
+                        break;
+                    case MessageLevel::ERR:
+                        ++errorCount;
+                        break;
                     }
                 }
 
+                ImGui::Checkbox("Info", &showInfo);
+                ImGui::SameLine();
+                ImGui::Checkbox("Warnings", &showWarn);
+                ImGui::SameLine();
+                ImGui::Checkbox("Errors", &showError);
+                ImGui::SameLine();
+                ImGui::Checkbox("Pause", &pauseConsole);
+                ImGui::SameLine();
+                ImGui::Checkbox("Auto-scroll", &autoScroll);
+
+                consoleFilter.Draw("Filter", 260.0f);
                 ImGui::SameLine();
 
-                if (ImGui::Checkbox("Newest first", &newestFirst))
-                    jumpToNewest = true;
+                if (ImGui::Button("Clear Console"))
+                {
+                    LOGS.clearLog();
+                    displayMessages.clear();
+                }
 
-                ImGui::SameLine();
+                ImGui::Text(
+                    "%zu info  |  %zu warnings  |  %zu errors  |  %zu retained",
+                    infoCount,
+                    warnCount,
+                    errorCount,
+                    displayMessages.size());
 
-                if (ImGui::Button("Jump to newest"))
-                    jumpToNewest = true;
+                const std::string logPath = LOGS.getErrorLogPath().string();
+                ImGui::TextDisabled(
+                    "Saved automatically: %s",
+                    logPath.empty() ? "<log path unavailable>" : logPath.c_str());
 
-                ImGui::TextWrapped(
-                    "DMA timing is split by cause: dma.lock_wait means a task queued behind "
-                    "another DMA operation; dma.execute means the VMM/device call itself was "
-                    "slow. Task entries include both. Slow samples appear below at ~25-35ms."
-                );
+                ImGui::Separator();
 
                 if (ImGui::BeginTable(
-                    "PerfTable",
-                    4,
+                    "DebugTable",
+                    3,
                     ImGuiTableFlags_RowBg |
                     ImGuiTableFlags_ScrollY |
                     ImGuiTableFlags_BordersInnerV,
-                    ImVec2(0, 360)))
+                    ImVec2(0.0f, 0.0f)))
                 {
                     ImGui::TableSetupColumn(
                         "Time",
                         ImGuiTableColumnFlags_WidthFixed,
-                        75.0f
-                    );
-
+                        70.0f);
                     ImGui::TableSetupColumn(
-                        "ms",
+                        "Level",
                         ImGuiTableColumnFlags_WidthFixed,
-                        55.0f
-                    );
-
+                        70.0f);
                     ImGui::TableSetupColumn(
-                        "Name",
-                        ImGuiTableColumnFlags_WidthFixed,
-                        180.0f
-                    );
-
-                    ImGui::TableSetupColumn(
-                        "Detail",
-                        ImGuiTableColumnFlags_WidthStretch
-                    );
-
+                        "Message",
+                        ImGuiTableColumnFlags_WidthStretch);
                     ImGui::TableHeadersRow();
 
-                    auto drawSample = [](const auto& sample)
+                    for (const Message& message : displayMessages)
+                    {
+                        bool visible = false;
+                        ImVec4 colour{};
+
+                        switch (message.level)
+                        {
+                        case MessageLevel::INFO:
+                            visible = showInfo;
+                            colour = ImVec4(0.88f, 0.90f, 0.94f, 1.0f);
+                            break;
+                        case MessageLevel::WARN:
+                            visible = showWarn;
+                            colour = ImVec4(1.0f, 0.75f, 0.20f, 1.0f);
+                            break;
+                        case MessageLevel::ERR:
+                            visible = showError;
+                            colour = ImVec4(1.0f, 0.32f, 0.32f, 1.0f);
+                            break;
+                        }
+
+                        if (!visible || !consoleFilter.PassFilter(message.text.c_str()))
+                            continue;
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("%.2fs", message.timestamp);
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextColored(
+                            colour,
+                            "%s",
+                            messageLevelToString(message.level).c_str());
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextColored(
+                            colour,
+                            "%s",
+                            message.text.c_str());
+                    }
+
+                    if (autoScroll && !pauseConsole)
+                        ImGui::SetScrollHereY(1.0f);
+
+                    ImGui::EndTable();
+                }
+
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Performance"))
+            {
+                static bool freezeRecent = false;
+                static bool newestFirst = true;
+                static std::vector<PerfSample> recentSamples;
+                static std::vector<PerfMetricSnapshot> topTasks;
+                static std::vector<PerfMetricSnapshot> topDma;
+                static MemoryTrafficStats traffic{};
+                static DxFuserPerformanceSnapshot fuserPerformance{};
+                static PlayerSnapshotTelemetry playerTelemetry{};
+                static CameraProjectionSnapshot cameraProjection;
+                static double cameraAgeMs = -1.0;
+                static std::uint64_t cameraBusySkips = 0;
+                static auto lastRefresh =
+                    std::chrono::steady_clock::time_point{};
+
+                const auto now = std::chrono::steady_clock::now();
+
+                if (lastRefresh == std::chrono::steady_clock::time_point{} ||
+                    now - lastRefresh >= std::chrono::milliseconds(250))
+                {
+                    topTasks =
+                        PerfMonitor::Instance().GetTopMetrics("task.", 5);
+                    topDma =
+                        PerfMonitor::Instance().GetTopMetrics("dma.", 5);
+                    traffic = mem.GetTrafficStats();
+                    fuserPerformance =
+                        g_DxWindow.GetPerformanceSnapshot();
+                    playerTelemetry = players.getSnapshotTelemetry();
+                    cameraProjection = camera.getProjectionSnapshot();
+                    cameraBusySkips = camera.getBusyReadSkips();
+
+                    cameraAgeMs = -1.0;
+                    if (cameraProjection &&
+                        cameraProjection->publishedAt !=
+                        std::chrono::steady_clock::time_point{})
+                    {
+                        cameraAgeMs =
+                            std::chrono::duration<double, std::milli>(
+                                now - cameraProjection->publishedAt).count();
+                    }
+
+                    if (!freezeRecent)
+                        recentSamples = PerfMonitor::Instance().GetRecent();
+
+                    lastRefresh = now;
+                }
+
+                const bool schedulerRunning =
+                    appGlobals::runThreads.load(std::memory_order_acquire);
+                const bool dmaReady = mem.IsDmaOperational();
+                const double peakMs = PerfMonitor::Instance().GetPeakMs();
+                const std::string peakName =
+                    PerfMonitor::Instance().GetPeakName();
+                const std::string peakDetail =
+                    PerfMonitor::Instance().GetPeakDetail();
+
+                ImGui::TextColored(
+                    schedulerRunning
+                    ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                    : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
+                    "Scheduler: %s",
+                    schedulerRunning ? "RUNNING" : "IDLE");
+
+                ImGui::SameLine();
+                ImGui::TextColored(
+                    dmaReady
+                    ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                    : ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+                    "DMA: %s",
+                    dmaReady ? "READY" : "NOT READY");
+
+                ImGui::SameLine();
+                ImGui::Text(
+                    "Read %.0f ops/s | %.0f requests/s | %s",
+                    traffic.readOperationsPerSecond,
+                    traffic.readRequestsPerSecond,
+                    formatDataRate(static_cast<std::size_t>(
+                        traffic.readBytesRequestedPerSecond)).c_str());
+
+                ImGui::Text(
+                    "Peak: %.1f ms%s%s",
+                    peakMs,
+                    peakName.empty() ? "" : " | ",
+                    peakName.empty() ? "" : peakName.c_str());
+
+                if (!peakDetail.empty())
+                {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%s)", peakDetail.c_str());
+                }
+
+                if (ImGui::Button("Reset performance history"))
+                {
+                    PerfMonitor::Instance().ResetStatistics();
+                    g_DxWindow.ResetPerformanceStatistics();
+                    topTasks.clear();
+                    topDma.clear();
+                    recentSamples.clear();
+                }
+
+                ImGui::SameLine();
+
+                if (ImGui::Button("Reset DMA counters"))
+                {
+                    mem.ResetTrafficStats();
+                    traffic = {};
+                }
+
+                auto taskBudget = [](std::string_view name) -> double
+                    {
+                        if (name == "task.cameraTask")
+                            return globals::taskCamera;
+                        if (name == "task.fireportTask")
+                            return globals::taskFireport;
+                        if (name == "task.readOnlyAim")
+                            return globals::taskAim;
+                        if (name == "task.keyManager")
+                            return globals::taskKeyManager;
+                        if (name == "task.playersTask")
+                            return globals::taskPlayers;
+                        if (name == "task.playerPositionTask")
+                            return globals::taskPlayerPositions;
+                        if (name == "task.playersBoneTask")
+                            return globals::taskPlayersBones;
+                        if (name == "task.raidMonitor")
+                            return globals::taskRaidMonitor;
+                        if (name == "task.ExplosiveManagerTask")
+                            return globals::taskGrenades;
+                        if (name == "task.exfilTask")
+                            return globals::taskExfil;
+                        if (name == "task.lootTask")
+                            return globals::taskLoot;
+                        if (name == "task.PlayerEquipmentTask")
+                            return globals::taskPlayersEquipment;
+                        if (name == "task.PlayerMetadataTask")
+                            return globals::taskPlayerMetadata;
+                        if (name == "task.questTask")
+                            return globals::taskQuest;
+                        if (name == "task.wishManagerTask")
+                            return globals::taskWishManager;
+
+                        return 0.0;
+                    };
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Fuser Frame Pipeline");
+
+                ImGui::Text(
+                    "Fuser: %s | %.1f FPS | %zu commands | %llu dropped",
+                    g_DxWindow.IsRunning() ? "RUNNING" : "STOPPED",
+                    fuserPerformance.presentedFPS,
+                    fuserPerformance.commandCount,
+                    static_cast<unsigned long long>(
+                        fuserPerformance.droppedCommandCount));
+
+                if (ImGui::BeginTable(
+                    "FuserPipelineTimings",
+                    4,
+                    ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_BordersInnerV |
+                    ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn("Stage");
+                    ImGui::TableSetupColumn("Last", 0, 0.7f);
+                    ImGui::TableSetupColumn("Rolling", 0, 0.7f);
+                    ImGui::TableSetupColumn("Peak", 0, 0.7f);
+                    ImGui::TableHeadersRow();
+
+                    const auto drawTimingRow = [](
+                        const char* label,
+                        const DxTimingSnapshot& timing)
                         {
                             ImGui::TableNextRow();
-
                             ImGui::TableSetColumnIndex(0);
-                            ImGui::Text("%.1fs", sample.timestampSec);
-
+                            ImGui::TextUnformatted(label);
                             ImGui::TableSetColumnIndex(1);
-
-                            if (sample.durationMs >= 100.0)
-                            {
-                                ImGui::TextColored(
-                                    ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                                    "%.0f",
-                                    sample.durationMs
-                                );
-                            }
-                            else if (sample.durationMs >= 50.0)
-                            {
-                                ImGui::TextColored(
-                                    ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
-                                    "%.0f",
-                                    sample.durationMs
-                                );
-                            }
-                            else
-                            {
-                                ImGui::Text("%.0f", sample.durationMs);
-                            }
-
+                            ImGui::Text("%.2f ms", timing.lastMs);
                             ImGui::TableSetColumnIndex(2);
-                            ImGui::TextUnformatted(sample.name.c_str());
-
+                            ImGui::Text("%.2f ms", timing.averageMs);
                             ImGui::TableSetColumnIndex(3);
-                            ImGui::TextUnformatted(sample.detail.c_str());
+                            ImGui::Text("%.2f ms", timing.peakMs);
                         };
 
-                    if (newestFirst)
-                    {
-                        // Latest event at the top.
-                        for (auto it = displaySamples.rbegin();
-                            it != displaySamples.rend();
-                            ++it)
-                        {
-                            drawSample(*it);
-                        }
+                    drawTimingRow(
+                        "Frame interval",
+                        fuserPerformance.frameInterval);
+                    drawTimingRow("Build snapshots", fuserPerformance.build);
+                    drawTimingRow("Direct2D draw", fuserPerformance.draw);
+                    drawTimingRow("Swap-chain present", fuserPerformance.present);
 
-                        if (jumpToNewest)
-                        {
-                            ImGui::SetScrollY(0.0f);
-                            jumpToNewest = false;
-                        }
-                    }
-                    else
-                    {
-                        for (const auto& sample : displaySamples)
-                            drawSample(sample);
+                    ImGui::EndTable();
+                }
 
-                        if (jumpToNewest)
-                        {
-                            ImGui::SetScrollHereY(1.0f);
-                            jumpToNewest = false;
-                        }
+                ImGui::Spacing();
+                ImGui::SeparatorText("Fuser Data Freshness");
+
+                const auto freshnessColour = [](
+                    double ageMs,
+                    double targetMs)
+                    {
+                        if (ageMs < 0.0)
+                            return ImVec4(0.60f, 0.62f, 0.68f, 1.0f);
+                        if (ageMs <= targetMs * 2.0)
+                            return ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+                        if (ageMs <= targetMs * 4.0)
+                            return ImVec4(1.0f, 0.72f, 0.20f, 1.0f);
+                        return ImVec4(1.0f, 0.30f, 0.30f, 1.0f);
+                    };
+
+                ImGui::TextColored(
+                    cameraProjection && cameraProjection->valid
+                    ? freshnessColour(cameraAgeMs, globals::taskCamera)
+                    : ImVec4(1.0f, 0.30f, 0.30f, 1.0f),
+                    "Camera (%s): %.1f ms old | rolling %.1f ms | v%llu | busy skips %llu",
+                    cameraProjection && cameraProjection->valid
+                    ? "VALID"
+                    : "INVALID",
+                    cameraAgeMs,
+                    cameraProjection
+                    ? cameraProjection->averageIntervalMs
+                    : 0.0,
+                    static_cast<unsigned long long>(
+                        cameraProjection ? cameraProjection->version : 0),
+                    static_cast<unsigned long long>(cameraBusySkips));
+
+                ImGui::TextColored(
+                    freshnessColour(
+                        playerTelemetry.motionAgeMs,
+                        globals::taskPlayerPositions),
+                    "Player motion: %.1f ms old | rolling %.1f ms | v%llu | %zu players",
+                    playerTelemetry.motionAgeMs,
+                    playerTelemetry.averageMotionIntervalMs,
+                    static_cast<unsigned long long>(
+                        playerTelemetry.motionVersion),
+                    playerTelemetry.playerCount);
+
+                ImGui::TextDisabled(
+                    "Smooth test scene + stale motion means the data feed is limiting; a high Present time usually means VSync/refresh pacing.");
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("Top 5 Scheduled Tasks");
+
+                if (topTasks.empty())
+                {
+                    ImGui::TextDisabled(
+                        "No task samples yet. Enter a raid to populate timings.");
+                }
+                else if (ImGui::BeginTable(
+                    "TopTaskTimings",
+                    6,
+                    ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_BordersInnerV |
+                    ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn("Task");
+                    ImGui::TableSetupColumn("Last", 0, 0.7f);
+                    ImGui::TableSetupColumn("Rolling", 0, 0.7f);
+                    ImGui::TableSetupColumn("Peak", 0, 0.7f);
+                    ImGui::TableSetupColumn("Budget", 0, 0.7f);
+                    ImGui::TableSetupColumn("Load", 0, 0.7f);
+                    ImGui::TableHeadersRow();
+
+                    for (const PerfMetricSnapshot& metric : topTasks)
+                    {
+                        std::string_view displayName(metric.name);
+
+                        if (displayName.starts_with("task."))
+                            displayName.remove_prefix(5);
+
+                        const double budget = taskBudget(metric.name);
+                        const double loadPercent = budget > 0.0
+                            ? (metric.averageMs / budget) * 100.0
+                            : 0.0;
+
+                        ImVec4 loadColour(0.35f, 0.90f, 0.45f, 1.0f);
+
+                        if (loadPercent >= 100.0)
+                            loadColour = ImVec4(1.0f, 0.30f, 0.30f, 1.0f);
+                        else if (loadPercent >= 60.0)
+                            loadColour = ImVec4(1.0f, 0.72f, 0.20f, 1.0f);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(displayName.data(), displayName.data() + displayName.size());
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.2f ms", metric.lastMs);
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%.2f ms", metric.averageMs);
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%.2f ms", metric.peakMs);
+
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::Text(budget > 0.0 ? "%.1f ms" : "-", budget);
+
+                        ImGui::TableSetColumnIndex(5);
+                        ImGui::TextColored(loadColour, budget > 0.0 ? "%.0f%%" : "-", loadPercent);
                     }
 
                     ImGui::EndTable();
+                }
+
+                ImGui::TextDisabled("Rolling is an exponential average. Load compares task runtime with its configured interval.");
+
+                ImGui::Spacing();
+                ImGui::SeparatorText("DMA Contention and Execution");
+
+                if (topDma.empty())
+                {
+                    ImGui::TextDisabled("No DMA timing samples yet.");
+                }
+                else if (ImGui::BeginTable(
+                    "TopDmaTimings",
+                    4,
+                    ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_BordersInnerV |
+                    ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn("Operation");
+                    ImGui::TableSetupColumn("Last", 0, 0.7f);
+                    ImGui::TableSetupColumn("Rolling", 0, 0.7f);
+                    ImGui::TableSetupColumn("Peak", 0, 0.7f);
+                    ImGui::TableHeadersRow();
+
+                    for (const PerfMetricSnapshot& metric : topDma)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(metric.name.c_str());
+
+                        if (!metric.detail.empty() &&
+                            ImGui::IsItemHovered(
+                                ImGuiHoveredFlags_DelayShort))
+                        {
+                            ImGui::SetTooltip("%s", metric.detail.c_str());
+                        }
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.2f ms", metric.lastMs);
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%.2f ms", metric.averageMs);
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%.2f ms", metric.peakMs);
+                    }
+
+                    ImGui::EndTable();
+                }
+
+                ImGui::TextDisabled("dma.lock_wait is scheduler contention; dma.execute is device/VMM time.");
+
+                if (ImGui::CollapsingHeader("Recent timing events"))
+                {
+                    ImGui::Checkbox("Freeze", &freezeRecent);
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Newest first", &newestFirst);
+
+                    if (ImGui::BeginTable(
+                        "RecentPerfEvents",
+                        4,
+                        ImGuiTableFlags_RowBg |
+                        ImGuiTableFlags_ScrollY |
+                        ImGuiTableFlags_BordersInnerV,
+                        ImVec2(0.0f, 220.0f)))
+                    {
+                        ImGui::TableSetupColumn(
+                            "Time",
+                            ImGuiTableColumnFlags_WidthFixed,
+                            70.0f);
+                        ImGui::TableSetupColumn(
+                            "ms",
+                            ImGuiTableColumnFlags_WidthFixed,
+                            65.0f);
+                        ImGui::TableSetupColumn(
+                            "Name",
+                            ImGuiTableColumnFlags_WidthFixed,
+                            190.0f);
+                        ImGui::TableSetupColumn(
+                            "Detail",
+                            ImGuiTableColumnFlags_WidthStretch);
+                        ImGui::TableHeadersRow();
+
+                        auto drawSample = [](const PerfSample& sample)
+                            {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::Text("%.1fs", sample.timestampSec);
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::Text("%.2f", sample.durationMs);
+                                ImGui::TableSetColumnIndex(2);
+                                ImGui::TextUnformatted(sample.name.c_str());
+                                ImGui::TableSetColumnIndex(3);
+                                ImGui::TextUnformatted(sample.detail.c_str());
+                            };
+
+                        if (newestFirst)
+                        {
+                            for (auto sample = recentSamples.rbegin();
+                                sample != recentSamples.rend();
+                                ++sample)
+                            {
+                                drawSample(*sample);
+                            }
+                        }
+                        else
+                        {
+                            for (const PerfSample& sample : recentSamples)
+                                drawSample(sample);
+                        }
+
+                        ImGui::EndTable();
+                    }
                 }
 
                 ImGui::EndTabItem();
@@ -3563,44 +3917,368 @@ static void renderDebugWindow()
             {
                 if (ImGui::BeginTabBar("##Tabsmemory", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
-                    if (ImGui::BeginTabItem("mainGame"))
+                    if (ImGui::BeginTabItem("Overview"))
                     {
-                        ImGui::Text("gameObjectManager: %llu", mainGame.gameObjectManager);
+                        static MemoryConnectionStats connection{};
+                        static MemoryTrafficStats traffic{};
+                        static auto lastStatsRefresh =
+                            std::chrono::steady_clock::time_point{};
 
-                        ImGui::Text("gameWorld: %llu", mainGame.gameWorld);
-                        ImGui::Text("localGameWorld: %llu", mainGame.localGameWorld);
+                        const auto now = std::chrono::steady_clock::now();
 
-                        ImGui::Text("registeredPlayers: %llu", mainGame.registeredPlayers);
-                        ImGui::Text("registeredPlayersList: %llu", mainGame.registeredPlayersList);
-                        ImGui::Text("registeredPlayersCount: %d", mainGame.registeredPlayersCount);
+                        if (lastStatsRefresh ==
+                                std::chrono::steady_clock::time_point{} ||
+                            now - lastStatsRefresh >=
+                                std::chrono::milliseconds(500))
+                        {
+                            connection = mem.GetConnectionStats();
+                            traffic = mem.GetTrafficStats();
+                            lastStatsRefresh = now;
+                        }
 
-                        int playerBufferCount = CountNonZeroEntries(mainGame.player_buffer, 127);
-                        ImGui::Text("player_buffer entries: %d", playerBufferCount);
-
-                        ImGui::Text("selectedLocation: %s", mainGame.selectedLocation.c_str());
-
-                        ImGui::EndTabItem();
-                    }
-                    if (ImGui::BeginTabItem("local"))
-                    {
-                        
-                        ImGui::Text("localPlayerPtr: %llu", mainGame.localPlayerPtr);
-                        ImGui::Text("localPlayerHands: %llu", mainGame.localPlayerHands);
-                        ImGui::Text("localPlayerPWA: %llu", mainGame.localPlayerPWA);
-                        ImGui::Text("localplayerProfile: %llu", mainGame.localplayerProfile);
-
-                        ImGui::Text("worldLocation: (%.2f, %.2f, %.2f)", mainGame.localLocation.x, mainGame.localLocation.y, mainGame.localLocation.z);
-                        ImGui::Text("rotation: (%.2f, %.2f)", mainGame.localRotation.x, mainGame.localRotation.y);
-
-                        ImGui::Text("groupid: %s", mainGame.localGroupId.c_str());
-                        if (mainGame.localIsScoped) ImGui::Text("isScoped: TRUE"); else ImGui::Text("isScoped: FALSE");
-
-                        ImGui::EndTabItem();
-                    }
-                    if (ImGui::BeginTabItem("player"))
-                    {
-                        const std::vector<PlayerCache> cache =
+                        const bool dmaReady = mem.IsDmaOperational();
+                        const bool worldReady =
+                            Utils::valid_pointer(mainGame.gameWorld) &&
+                            Utils::valid_pointer(mainGame.localGameWorld);
+                        const bool localReady =
+                            Utils::valid_pointer(mainGame.localPlayerPtr);
+                        const bool schedulerRunning =
+                            appGlobals::runThreads.load(
+                                std::memory_order_acquire);
+                        const PlayerCacheSnapshot playerSnapshot =
                             players.getCacheSnapshot();
+
+                        ImGui::SeparatorText("Health");
+
+                        ImGui::TextColored(
+                            dmaReady
+                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                            : ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+                            "DMA %s",
+                            dmaReady ? "READY" : "NOT READY");
+
+                        ImGui::SameLine();
+                        ImGui::TextColored(
+                            worldReady
+                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                            : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
+                            "| World %s",
+                            worldReady ? "READY" : "WAITING");
+
+                        ImGui::SameLine();
+                        ImGui::TextColored(
+                            localReady
+                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                            : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
+                            "| Local %s",
+                            localReady ? "READY" : "WAITING");
+
+                        ImGui::SameLine();
+                        ImGui::TextColored(
+                            schedulerRunning
+                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                            : ImVec4(0.70f, 0.70f, 0.70f, 1.0f),
+                            "| Workers %s",
+                            schedulerRunning ? "RUNNING" : "IDLE");
+
+                        ImGui::SeparatorText("Target");
+
+                        ImGui::Text(
+                            "%s | PID %u | Base 0x%016llX | %s",
+                            connection.processName.empty()
+                            ? "<no process>"
+                            : connection.processName.c_str(),
+                            connection.processId,
+                            static_cast<unsigned long long>(
+                                connection.targetBaseAddress),
+                            mainGame.selectedLocation.empty()
+                            ? "no map"
+                            : mainGame.selectedLocation.c_str());
+
+                        ImGui::Text(
+                            "Registered: %d | Buffered: %d | Cached: %zu",
+                            mainGame.registeredPlayersCount,
+                            CountNonZeroEntries(
+                                mainGame.player_buffer,
+                                static_cast<int>(
+                                    std::size(mainGame.player_buffer))),
+                            playerSnapshot->size());
+
+                        ImGui::SeparatorText("DMA Traffic");
+
+                        ImGui::Text(
+                            "Reads: %.0f ops/s | %.0f requests/s | %s",
+                            traffic.readOperationsPerSecond,
+                            traffic.readRequestsPerSecond,
+                            formatDataRate(static_cast<std::size_t>(
+                                traffic.readBytesRequestedPerSecond)).c_str());
+
+                        ImGui::Text(
+                            "Writes: %.0f ops/s | %.0f requests/s | %s",
+                            traffic.writeOperationsPerSecond,
+                            traffic.writeRequestsPerSecond,
+                            formatDataRate(static_cast<std::size_t>(
+                                traffic.writeBytesRequestedPerSecond)).c_str());
+
+                        ImGui::Text(
+                            "Failures: %llu read | %llu write | %llu scatter clear",
+                            static_cast<unsigned long long>(
+                                traffic.readFailures),
+                            static_cast<unsigned long long>(
+                                traffic.writeFailures),
+                            static_cast<unsigned long long>(
+                                traffic.scatterClearFailures));
+
+                        if (ImGui::Button("Reset DMA counters"))
+                        {
+                            mem.ResetTrafficStats();
+                            traffic = {};
+                        }
+
+                        if (ImGui::CollapsingHeader(
+                            "World pointers and state"))
+                        {
+                            DebugTextPtr(
+                                "Game Object Manager",
+                                mainGame.gameObjectManager);
+                            DebugTextPtr("Game World", mainGame.gameWorld);
+                            DebugTextPtr(
+                                "Local Game World",
+                                mainGame.localGameWorld);
+                            DebugTextPtr(
+                                "Registered Players",
+                                mainGame.registeredPlayers);
+                            DebugTextPtr(
+                                "Registered Player List",
+                                mainGame.registeredPlayersList);
+
+                            ImGui::Text(
+                                "Online raid: %s | Radar: %s | Tasks: %s",
+                                mainGame.onlineRaid ? "YES" : "NO",
+                                appGlobals::runRadar.load(
+                                    std::memory_order_acquire)
+                                ? "RUNNING"
+                                : "STOPPED",
+                                schedulerRunning ? "RUNNING" : "STOPPED");
+                        }
+
+                        if (ImGui::CollapsingHeader(
+                            "Connection and hardware details"))
+                        {
+                            ImGui::Text(
+                                "VMM handle: 0x%016llX | %s",
+                                static_cast<unsigned long long>(
+                                    connection.vmmHandleAddress),
+                                connection.vmmHandleValid
+                                ? "VALID"
+                                : "INVALID");
+
+                            ImGui::Text(
+                                "Libraries: VMM %s | LeechCore %s | FTD3XX %s",
+                                connection.vmmLibraryLoaded ? "OK" : "MISSING",
+                                connection.leechCoreLibraryLoaded
+                                ? "OK"
+                                : "MISSING",
+                                connection.ftd3xxLibraryLoaded
+                                ? "OK"
+                                : "MISSING");
+
+                            ImGui::Text(
+                                "Target size: %llu bytes",
+                                static_cast<unsigned long long>(
+                                    connection.targetBaseSize));
+
+                            if (connection.fpgaInfoAvailable)
+                            {
+                                ImGui::Text(
+                                    "FPGA 0x%llX | Device 0x%llX | Firmware %llu.%llu",
+                                    static_cast<unsigned long long>(
+                                        connection.fpgaId),
+                                    static_cast<unsigned long long>(
+                                        connection.deviceId),
+                                    static_cast<unsigned long long>(
+                                        connection.firmwareMajor),
+                                    static_cast<unsigned long long>(
+                                        connection.firmwareMinor));
+                            }
+                            else
+                            {
+                                ImGui::TextDisabled(
+                                    "FPGA details unavailable.");
+                            }
+
+                            if (connection.cacheInfoAvailable)
+                            {
+                                ImGui::Text(
+                                    "Cache ticks: process %llu/%llu | read %llu | TLB %llu",
+                                    static_cast<unsigned long long>(
+                                        connection.processCachePartialTicks),
+                                    static_cast<unsigned long long>(
+                                        connection.processCacheTotalTicks),
+                                    static_cast<unsigned long long>(
+                                        connection.readCacheTicks),
+                                    static_cast<unsigned long long>(
+                                        connection.tlbCacheTicks));
+                            }
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("Local"))
+                    {
+                        const PlayerCacheSnapshot snapshot =
+                            players.getCacheSnapshot();
+                        const PlayerCache* localPlayer = nullptr;
+
+                        for (const PlayerCache& player : *snapshot)
+                        {
+                            if (player.isLocal ||
+                                (Utils::valid_pointer(
+                                    mainGame.localPlayerPtr) &&
+                                    player.instance ==
+                                        mainGame.localPlayerPtr))
+                            {
+                                localPlayer = &player;
+                                break;
+                            }
+                        }
+
+                        const bool localPointerReady =
+                            Utils::valid_pointer(mainGame.localPlayerPtr);
+                        const bool handsReady =
+                            Utils::valid_pointer(mainGame.localPlayerHands);
+
+                        ImGui::SeparatorText("Status");
+
+                        ImGui::TextColored(
+                            localPointerReady
+                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                            : ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
+                            "Player pointer: %s",
+                            localPointerReady ? "READY" : "MISSING");
+
+                        ImGui::SameLine();
+                        ImGui::TextColored(
+                            handsReady
+                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                            : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
+                            "| Hands: %s",
+                            handsReady ? "READY" : "WAITING");
+
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "| Scoped: %s",
+                            mainGame.localIsScoped ? "YES" : "NO");
+
+                        if (localPlayer)
+                        {
+                            ImGui::SeparatorText("Published Player State");
+
+                            ImGui::Text(
+                                "%s | %s | Group %s",
+                                localPlayer->name.empty()
+                                ? "Local Player"
+                                : localPlayer->name.c_str(),
+                                localPlayer->side.empty()
+                                ? "unknown side"
+                                : localPlayer->side.c_str(),
+                                localPlayer->groupId.empty()
+                                ? "-"
+                                : localPlayer->groupId.c_str());
+
+                            ImGui::Text(
+                                "Position: %.2f, %.2f, %.2f",
+                                localPlayer->location.x,
+                                localPlayer->location.y,
+                                localPlayer->location.z);
+
+                            ImGui::Text(
+                                "Rotation: %.2f, %.2f | Health tag: %d",
+                                localPlayer->rotation.x,
+                                localPlayer->rotation.y,
+                                localPlayer->healthETAG);
+
+                            ImGui::Text(
+                                "Hands: %s | Ammo: %s (%d/%d)",
+                                localPlayer->observedHandsInfo.itemName.empty()
+                                ? "-"
+                                : localPlayer->observedHandsInfo.itemName.c_str(),
+                                localPlayer->observedHandsInfo.ammoName.empty()
+                                ? "-"
+                                : localPlayer->observedHandsInfo.ammoName.c_str(),
+                                localPlayer->observedHandsInfo.chamberCount,
+                                localPlayer->observedHandsInfo.magazineCount);
+                        }
+                        else
+                        {
+                            ImGui::TextDisabled(
+                                "The local player has not been published to the player snapshot yet.");
+                        }
+
+                        if (ImGui::CollapsingHeader(
+                            "MainGame local values",
+                            ImGuiTreeNodeFlags_DefaultOpen))
+                        {
+                            ImGui::Text(
+                                "Position: %.3f, %.3f, %.3f",
+                                mainGame.localLocation.x,
+                                mainGame.localLocation.y,
+                                mainGame.localLocation.z);
+
+                            ImGui::Text(
+                                "Rotation: %.3f, %.3f",
+                                mainGame.localRotation.x,
+                                mainGame.localRotation.y);
+
+                            ImGui::Text(
+                                "Group: %s | Savage: %s | Scoped: %s",
+                                mainGame.localGroupId.empty()
+                                ? "-"
+                                : mainGame.localGroupId.c_str(),
+                                mainGame.localIsSavage ? "YES" : "NO",
+                                mainGame.localIsScoped ? "YES" : "NO");
+                        }
+
+                        if (ImGui::CollapsingHeader("Pointers"))
+                        {
+                            DebugTextPtr(
+                                "Local Player",
+                                mainGame.localPlayerPtr);
+                            DebugTextPtr(
+                                "Local Hands",
+                                mainGame.localPlayerHands);
+                            DebugTextPtr(
+                                "Local PWA",
+                                mainGame.localPlayerPWA);
+                            DebugTextPtr(
+                                "Local Profile",
+                                mainGame.localplayerProfile);
+
+                            if (localPlayer)
+                            {
+                                ImGui::Separator();
+                                DebugTextPtr(
+                                    "Movement Context",
+                                    localPlayer->P_MovementContext);
+                                DebugTextPtr(
+                                    "Rotation Address",
+                                    localPlayer->P_RotationAddress);
+                                DebugTextPtr(
+                                    "Hands Controller Address",
+                                    localPlayer->P_HandsControllerAddr);
+                                DebugTextPtr(
+                                    "Bone Matrix",
+                                    localPlayer->playerBoneMatrixPtr);
+                            }
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("Players"))
+                    {
+                        const PlayerCacheSnapshot cacheSnapshot =
+                            players.getCacheSnapshot();
+                        const PlayerCacheCollection& cache = *cacheSnapshot;
 
                         static ImGuiTextFilter playerFilter;
                         static bool showDead = true;
@@ -4352,7 +5030,7 @@ static void renderDebugWindow()
 
                         ImGui::BeginChild(
                             "##PlayerInspector",
-                            ImVec2(0.0f, 260.0f),
+                            ImVec2(0.0f, 220.0f),
                             true
                         );
 
@@ -4437,8 +5115,7 @@ static void renderDebugWindow()
                             }
 
                             if (ImGui::CollapsingHeader(
-                                "Equipment Cache",
-                                ImGuiTreeNodeFlags_DefaultOpen))
+                                "Equipment Cache"))
                             {
                                 ImGui::Text(
                                     "Initialised: %s",
@@ -4492,8 +5169,7 @@ static void renderDebugWindow()
                             }
 
                             if (ImGui::CollapsingHeader(
-                                "Pointers",
-                                ImGuiTreeNodeFlags_DefaultOpen))
+                                "Pointers"))
                             {
                                 DrawPointerLine(
                                     "Bone Matrix",
@@ -4567,8 +5243,7 @@ static void renderDebugWindow()
                             }
 
                             if (ImGui::CollapsingHeader(
-                                "Bones",
-                                ImGuiTreeNodeFlags_DefaultOpen))
+                                "Bones"))
                             {
                                 ImGui::Text(
                                     "Bone Pointers: %zu / %zu",
@@ -4677,196 +5352,396 @@ static void renderDebugWindow()
 
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem("camera"))
+                    if (ImGui::BeginTabItem("Camera"))
                     {
-                        const auto& matrixDebug = camera.getMatrixActivityDebug();
+                        const CameraProjectionSnapshot cameraSnapshot =
+                            camera.getProjectionSnapshot();
+                        const CameraProjectionState& cameraState =
+                            *cameraSnapshot;
+                        const auto& matrixDebug = cameraState.matrixDebug;
+                        const bool fpsReady = cameraState.fpsPointersReady;
+                        const bool opticReady = cameraState.opticPointersReady;
+                        const bool fovValid =
+                            std::isfinite(cameraState.gameFOV) &&
+                            cameraState.gameFOV > 1.0f &&
+                            cameraState.gameFOV < 180.0f;
+                        const bool aspectValid =
+                            std::isfinite(cameraState.gameAspect) &&
+                            cameraState.gameAspect > 0.1f &&
+                            cameraState.gameAspect < 10.0f;
+                        const bool activeMatrixValid =
+                            cameraState.usingOptic
+                            ? matrixDebug.opticMatrixValid
+                            : matrixDebug.fpsMatrixValid;
+                        const bool cameraHealthy =
+                            cameraState.valid && fpsReady && fovValid &&
+                            aspectValid && activeMatrixValid;
 
-                        const bool fpsCameraValid = Utils::valid_pointer(camera.fpsCamera);
-                        const bool opticCameraValid = Utils::valid_pointer(camera.opticCamera);
-                        const bool fpsMatrixPtrValid = Utils::valid_pointer(camera.fpsMatrixAddr);
-                        const bool opticMatrixPtrValid = Utils::valid_pointer(camera.opticMatrixAddr);
+                        ImGui::SeparatorText("Status");
+                        ImGui::TextColored(
+                            cameraHealthy
+                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                            : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
+                            "Camera %s",
+                            cameraHealthy ? "READY" : "NEEDS ATTENTION");
+                        ImGui::SameLine();
+                        ImGui::Text(
+                            "| Active %s | FOV %.2f | Aspect %.3f",
+                            cameraState.usingOptic ? "OPTIC" : "FPS",
+                            cameraState.gameFOV,
+                            cameraState.gameAspect);
+                        ImGui::Text(
+                            "FPS path: %s | Optic path: %s | Scoped: %s",
+                            fpsReady ? "READY" : "MISSING",
+                            opticReady ? "READY" : "MISSING",
+                            mainGame.localIsScoped ? "YES" : "NO");
 
-                        const bool fpsRawValid = DebugMatrixLooksValid(camera.g_viewMatrixRAW);
-                        const bool fpsTransValid = DebugMatrixLooksValid(camera.g_viewMatrix);
-                        const bool opticRawValid = DebugMatrixLooksValid(camera.g_viewMatrixOpticRAW);
-                        const bool opticTransValid = DebugMatrixLooksValid(camera.g_viewMatrixOptic);
+                        if (mainGame.localIsScoped && !opticReady)
+                        {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.65f, 0.20f, 1.0f),
+                                "Warning: scoped, but the optic camera path is unavailable.");
+                        }
+                        if (!activeMatrixValid)
+                        {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                                "Warning: the active view matrix is invalid.");
+                        }
+                        if (!fovValid || !aspectValid)
+                        {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                                "Warning: lens values are outside their expected range.");
+                        }
+                        if (matrixDebug.localScoped &&
+                            matrixDebug.opticMatrixActive &&
+                            !cameraState.usingOptic)
+                        {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.65f, 0.20f, 1.0f),
+                                "Warning: optic activity was detected, but FPS is selected.");
+                        }
+                        if (!matrixDebug.opticMatrixActive &&
+                            cameraState.usingOptic)
+                        {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.65f, 0.20f, 1.0f),
+                                "Warning: optic is selected while its matrix is inactive.");
+                        }
 
-                        ImGui::Text("Camera Debug");
-                        ImGui::Separator();
-
-                        if (ImGui::Button("Refresh Camera Pointers"))
+                        if (ImGui::Button("Refresh pointers"))
                         {
                             camera.getCameraPtrs();
                             camera.getMatrixPtrs();
                         }
-
                         ImGui::SameLine();
-
-                        if (ImGui::Button("Clear Camera Cache"))
-                        {
+                        if (ImGui::Button("Clear camera cache"))
                             camera.clearCache();
-                        }
 
-                        ImGui::Spacing();
-                        ImGui::Separator();
-
-                        ImGui::Text("Main State");
-
-                        DebugTextBool("Camera Inited", camera.initedCamera);
-                        DebugTextBool("Raid Started", mainGame.checkIfRaidStarted());
-                        DebugTextBool("mainGame.localIsScoped", mainGame.localIsScoped);
-                        DebugTextBool("camera.localmpCamera / Using Optic Matrix", camera.localmpCamera);
-
-                        if (camera.localmpCamera)
-                            ImGui::Text("Active Matrix: OPTIC");
-                        else
-                            ImGui::Text("Active Matrix: FPS");
-
-                        ImGui::Spacing();
-                        ImGui::Separator();
-
-                        ImGui::Text("Camera Pointers");
-
-                        DebugTextPtr("fpsCamera", camera.fpsCamera);
-                        DebugTextPtr("opticCamera", camera.opticCamera);
-                        DebugTextPtr("fpsMatrixAddr", camera.fpsMatrixAddr);
-                        DebugTextPtr("opticMatrixAddr", camera.opticMatrixAddr);
-                        DebugTextPtr("cameraEntity", camera.cameraEntity);
-                        DebugTextPtr("opticCameraMatrix", camera.opticCameraMatrix);
-
-                        ImGui::Spacing();
-
-                        DebugTextBool("fpsCamera Valid", fpsCameraValid);
-                        DebugTextBool("opticCamera Valid", opticCameraValid);
-                        DebugTextBool("fpsMatrixAddr Valid", fpsMatrixPtrValid);
-                        DebugTextBool("opticMatrixAddr Valid", opticMatrixPtrValid);
-
-                        const bool allCameraPtrsReady =
-                            fpsCameraValid &&
-                            opticCameraValid &&
-                            fpsMatrixPtrValid &&
-                            opticMatrixPtrValid;
-
-                        DebugTextBool("All Camera Pointers Ready", allCameraPtrsReady);
-
-                        ImGui::Spacing();
-                        ImGui::Separator();
-
-                        ImGui::Text("Camera Values");
-
-                        ImGui::Text("gameFOV: %.3f", camera.gameFOV);
-                        ImGui::Text("gameAspect: %.3f", camera.gameAspect);
-
-                        DebugTextBool(
-                            "FOV Looks Valid",
-                            std::isfinite(camera.gameFOV) && camera.gameFOV > 1.0f && camera.gameFOV < 180.0f
-                        );
-
-                        DebugTextBool(
-                            "Aspect Looks Valid",
-                            std::isfinite(camera.gameAspect) && camera.gameAspect > 0.1f && camera.gameAspect < 10.0f
-                        );
-
-                        ImGui::Spacing();
-                        ImGui::Separator();
-
-                        ImGui::Text("Matrix Activity Debug");
-
-                        DebugTextBool("Local Scoped", matrixDebug.localScoped);
-
-                        ImGui::Spacing();
-
-                        DebugTextBool("FPS Matrix Valid", matrixDebug.fpsMatrixValid);
-                        DebugTextBool("Optic Matrix Valid", matrixDebug.opticMatrixValid);
-
-                        ImGui::Spacing();
-
-                        DebugTextBool("Optic Matrix Changed", matrixDebug.opticMatrixChanged);
-                        DebugTextBool("Optic Matrix Active", matrixDebug.opticMatrixActive);
-                        DebugTextBool("Using Optic Matrix", matrixDebug.usingOpticMatrix);
-
-                        ImGui::Spacing();
-
-                        ImGui::Text("activityTick: %d", matrixDebug.activityTick);
-                        ImGui::Text("noChangeSamples: %d", matrixDebug.noChangeSamples);
-                        ImGui::Text("opticMatrixDiff: %.8f", matrixDebug.opticMatrixDiff);
-
-                        ImGui::Spacing();
-
-                        if (matrixDebug.localScoped && matrixDebug.opticMatrixActive)
+                        if (ImGui::CollapsingHeader("Optic selection details"))
                         {
-                            ImGui::Text("Decision: scoped + optic matrix active = OPTIC");
+                            DebugTextBool("Local scoped", matrixDebug.localScoped);
+                            DebugTextBool("FPS matrix valid", matrixDebug.fpsMatrixValid);
+                            DebugTextBool("Optic matrix valid", matrixDebug.opticMatrixValid);
+                            DebugTextBool("Optic matrix changed", matrixDebug.opticMatrixChanged);
+                            DebugTextBool("Optic matrix active", matrixDebug.opticMatrixActive);
+                            DebugTextBool("Using optic matrix", matrixDebug.usingOpticMatrix);
+                            ImGui::Text(
+                                "Tick: %d | Static samples: %d | Diff: %.8f",
+                                matrixDebug.activityTick,
+                                matrixDebug.noChangeSamples,
+                                matrixDebug.opticMatrixDiff);
+                            ImGui::TextDisabled(
+                                "%s",
+                                matrixDebug.localScoped &&
+                                    matrixDebug.opticMatrixActive
+                                ? "Decision: scoped with active optic matrix."
+                                : matrixDebug.localScoped
+                                ? "Decision: scoped, optic static; using FPS."
+                                : "Decision: not scoped; using FPS.");
                         }
-                        else if (matrixDebug.localScoped && !matrixDebug.opticMatrixActive)
+
+                        if (ImGui::CollapsingHeader("Pointer details"))
                         {
-                            ImGui::Text("Decision: scoped but optic matrix static = FPS");
+                            DebugTextPtr("FPS camera", cameraState.fpsCamera);
+                            DebugTextPtr("FPS matrix address", cameraState.fpsMatrixAddress);
+                            DebugTextPtr("Optic camera", cameraState.opticCamera);
+                            DebugTextPtr("Optic matrix address", cameraState.opticMatrixAddress);
+                            DebugTextPtr("Camera entity", cameraState.cameraEntity);
+                            DebugTextPtr("Optic camera matrix", cameraState.opticCameraMatrix);
                         }
-                        else
+
+                        if (ImGui::CollapsingHeader("Matrix validation"))
                         {
-                            ImGui::Text("Decision: not scoped = FPS");
+                            DebugMatrixSummary("FPS raw", cameraState.fpsRawMatrix);
+                            DebugMatrixSummary("FPS transposed", cameraState.fpsViewMatrix);
+                            DebugMatrixSummary("Optic raw", cameraState.opticRawMatrix);
+                            DebugMatrixSummary("Optic transposed", cameraState.opticViewMatrix);
                         }
-
-                        ImGui::Spacing();
-
-                        if (matrixDebug.localScoped && matrixDebug.opticMatrixActive && !camera.localmpCamera)
-                        {
-                            ImGui::Text("WARNING: Optic matrix active but camera.localmpCamera is FALSE");
-                        }
-
-                        if (!matrixDebug.opticMatrixActive && camera.localmpCamera)
-                        {
-                            ImGui::Text("WARNING: camera.localmpCamera is TRUE but optic matrix is not active");
-                        }
-
-                        if (!matrixDebug.fpsMatrixValid)
-                        {
-                            ImGui::Text("WARNING: FPS matrix invalid");
-                        }
-
-                        if (!matrixDebug.opticMatrixValid)
-                        {
-                            ImGui::Text("WARNING: Optic matrix invalid");
-                        }
-
-                        ImGui::Spacing();
-                        ImGui::Separator();
-
-                        ImGui::Text("Matrix Validation");
-
-                        DebugTextBool("FPS RAW Valid", fpsRawValid);
-                        DebugTextBool("FPS Transposed Valid", fpsTransValid);
-                        DebugTextBool("Optic RAW Valid", opticRawValid);
-                        DebugTextBool("Optic Transposed Valid", opticTransValid);
-
-                        ImGui::Spacing();
-                        ImGui::Separator();
-
-                        ImGui::Text("Matrices");
-
-                        DebugMatrixSummary("fpsCamera RAW", camera.g_viewMatrixRAW);
-                        DebugMatrixSummary("fpsCamera Transposed", camera.g_viewMatrix);
-                        DebugMatrixSummary("opticCamera RAW", camera.g_viewMatrixOpticRAW);
-                        DebugMatrixSummary("opticCamera Transposed", camera.g_viewMatrixOptic);
-
-                        ImGui::Spacing();
-                        ImGui::Separator();
-
-                        ImGui::Text("Closest Player");
-
-                        DebugTextPtr("closestPlayer", camera.closestPlayer);
-                        ImGui::Text("closestPlayerDist: %.2f", camera.closestPlayerDist);
 
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem("aim"))
+                    if (ImGui::BeginTabItem("Aim"))
                     {
-                        
+                        const std::optional<TargetResult> liveTarget =
+                            readOnlyAim.GetLiveTarget();
+                        const std::optional<TargetResult> activeTarget =
+                            readOnlyAim.GetActiveTarget();
+                        const AimReferencePoint aimReference =
+                            readOnlyAim.resolveAimReference();
+                        const bool cameraReady =
+                            camera.cameraPointersReady();
+                        const bool deviceReady = makcu.IsConnected();
+                        const bool referenceReady =
+                            aimGlobals::aimReference !=
+                                AimReference::Fireport ||
+                            aimReference.valid;
+
+                        ImGui::SeparatorText("Pipeline");
+                        ImGui::Text(
+                            "Enabled: %s | Worker: %s | Camera: %s | Device: %s",
+                            aimGlobals::aimEnabled ? "YES" : "NO",
+                            appGlobals::runThreads.load(
+                                std::memory_order_acquire)
+                            ? "RUNNING"
+                            : "IDLE",
+                            cameraReady ? "READY" : "MISSING",
+                            deviceReady ? "CONNECTED" : "DISCONNECTED");
+                        ImGui::Text(
+                            "Reference: %s at %.1f, %.1f | %s",
+                            aimGlobals::aimReference ==
+                                AimReference::Fireport
+                            ? "FIREPORT"
+                            : "CROSSHAIR",
+                            aimReference.pos.x,
+                            aimReference.pos.y,
+                            referenceReady ? "VALID" : "INVALID");
+
+                        if (aimGlobals::aimEnabled &&
+                            (!cameraReady ||
+                                !deviceReady ||
+                                !referenceReady))
+                        {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.55f, 0.20f, 1.0f),
+                                "Aim is enabled, but its input pipeline is not ready.");
+                        }
+
+                        ImGui::SeparatorText("Selection");
+                        ImGui::Text(
+                            "Mode: %s | Lock: %s | FOV: %.0f px | Range: %d m",
+                            aimGlobals::targetMode == TargetMode::CQB
+                            ? "CQB"
+                            : "FOV",
+                            aimGlobals::targetLock ? "ON" : "OFF",
+                            aimGlobals::aimFOV,
+                            aimGlobals::aimDistance);
+                        ImGui::Text(
+                            "Smoothing: %.2f | AI bone: %d | PMC bone: %d",
+                            aimGlobals::aimSmooth,
+                            static_cast<int>(aimGlobals::aiBone),
+                            static_cast<int>(aimGlobals::pmcBone));
+
+                        auto drawTarget = [&](const char* label,
+                            const std::optional<TargetResult>& target)
+                            {
+                                ImGui::SeparatorText(label);
+                                if (!target)
+                                {
+                                    ImGui::TextDisabled("No valid target");
+                                    return;
+                                }
+
+                                const float errorX =
+                                    target->screenPos.x - aimReference.pos.x;
+                                const float errorY =
+                                    target->screenPos.y - aimReference.pos.y;
+                                ImGui::Text(
+                                    "%s | %s | %.1f m | %.1f px",
+                                    target->player.name.empty()
+                                    ? "<unnamed>"
+                                    : target->player.name.c_str(),
+                                    target->player.isAi ? "AI" : "PLAYER",
+                                    std::sqrt(target->worldDistanceSq),
+                                    std::sqrt(target->screenDistanceSq));
+                                ImGui::Text(
+                                    "Bone %d | Screen %.1f, %.1f | Error %.1f, %.1f px",
+                                    static_cast<int>(target->selectedBone),
+                                    target->screenPos.x,
+                                    target->screenPos.y,
+                                    errorX,
+                                    errorY);
+
+                                ImGui::PushID(label);
+                                if (ImGui::CollapsingHeader("Details"))
+                                {
+                                    ImGui::Text(
+                                        "Instance: 0x%016llX",
+                                        static_cast<unsigned long long>(
+                                            target->player.instance));
+                                    ImGui::Text(
+                                        "World bone: %.2f, %.2f, %.2f",
+                                        target->boneWorldPos.x,
+                                        target->boneWorldPos.y,
+                                        target->boneWorldPos.z);
+                                }
+                                ImGui::PopID();
+                            };
+
+                        drawTarget("Best candidate", liveTarget);
+                        drawTarget("Locked / active target", activeTarget);
+                        ImGui::TextDisabled(
+                            "Configure aim in the MAKCU Aim tab; this page is runtime diagnostics.");
+
                         ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem("features"))
+                    if (ImGui::BeginTabItem("Features"))
                     {
+                        const PlayerCacheSnapshot featurePlayers =
+                            players.getCacheSnapshot();
+                        const std::vector<LootList> lootCache =
+                            Loot.getCacheLoot();
+                        const std::size_t grenadeCount =
+                            explosiveManager.getGrenadeCount();
+                        const std::vector<QuestData> activeQuests =
+                            GetQuestDataActiveSnapshot();
+                        const std::size_t equipmentReady =
+                            static_cast<std::size_t>(std::count_if(
+                                featurePlayers->begin(),
+                                featurePlayers->end(),
+                                [](const PlayerCache& player)
+                                {
+                                    return player.equipInited;
+                                }));
 
-                        ImGui::SeparatorText("Exfils");
+                        ImGui::SeparatorText("Cache overview");
+                        if (ImGui::BeginTable(
+                            "FeatureCacheOverview",
+                            5,
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_BordersInnerV |
+                            ImGuiTableFlags_SizingStretchProp))
+                        {
+                            ImGui::TableSetupColumn("Feature");
+                            ImGui::TableSetupColumn("Requested");
+                            ImGui::TableSetupColumn("Cached");
+                            ImGui::TableSetupColumn("Interval");
+                            ImGui::TableSetupColumn("Lane");
+                            ImGui::TableHeadersRow();
+
+                            auto drawFeatureRow = [](
+                                const char* name,
+                                const char* requested,
+                                std::size_t cached,
+                                double intervalMs,
+                                const char* lane)
+                                {
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::TextUnformatted(name);
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::TextUnformatted(requested);
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::Text("%zu", cached);
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::Text("%.0f ms", intervalMs);
+                                    ImGui::TableSetColumnIndex(4);
+                                    ImGui::TextUnformatted(lane);
+                                };
+
+                            drawFeatureRow(
+                                "Equipment",
+                                radarGlobals::getPlayerEquip ? "RADAR" : "OFF",
+                                equipmentReady,
+                                globals::taskPlayersEquipment,
+                                "BACKGROUND");
+                            drawFeatureRow(
+                                "Loot",
+                                radarGlobals::drawLoot && espGlobals::drawLoot
+                                ? "RADAR + ESP"
+                                : radarGlobals::drawLoot
+                                ? "RADAR"
+                                : espGlobals::drawLoot ? "ESP" : "OFF",
+                                lootCache.size(),
+                                globals::taskLoot,
+                                "BACKGROUND");
+                            drawFeatureRow(
+                                "Grenades",
+                                radarGlobals::drawGrenades &&
+                                    espGlobals::drawGrenades
+                                ? "RADAR + ESP"
+                                : radarGlobals::drawGrenades
+                                ? "RADAR"
+                                : espGlobals::drawGrenades ? "ESP" : "OFF",
+                                grenadeCount,
+                                globals::taskGrenades,
+                                "HIGH");
+                            drawFeatureRow(
+                                "Quests",
+                                radarGlobals::drawQuestHelper &&
+                                    espGlobals::drawQuestHelper
+                                ? "RADAR + ESP"
+                                : radarGlobals::drawQuestHelper
+                                ? "RADAR"
+                                : espGlobals::drawQuestHelper ? "ESP" : "OFF",
+                                activeQuests.size(),
+                                globals::taskQuest,
+                                "BACKGROUND");
+                            drawFeatureRow(
+                                "Exfils",
+                                radarGlobals::drawExfils &&
+                                    espGlobals::drawExfil
+                                ? "RADAR + ESP"
+                                : radarGlobals::drawExfils
+                                ? "RADAR"
+                                : espGlobals::drawExfil ? "ESP" : "OFF",
+                                0,
+                                globals::taskExfil,
+                                "NORMAL");
+                            ImGui::EndTable();
+                        }
+
+                        ImGui::TextDisabled(
+                            "Exfil count is omitted until its legacy cache exposes a safe snapshot.");
+
+                        if (ImGui::CollapsingHeader("Feature switches"))
+                        {
+                            ImGui::Text(
+                                "Radar: players %s | loot %s | grenades %s | quests %s | exfils %s",
+                                radarGlobals::drawPlayers ? "ON" : "OFF",
+                                radarGlobals::drawLoot ? "ON" : "OFF",
+                                radarGlobals::drawGrenades ? "ON" : "OFF",
+                                radarGlobals::drawQuestHelper ? "ON" : "OFF",
+                                radarGlobals::drawExfils ? "ON" : "OFF");
+                            ImGui::Text(
+                                "ESP: %s | players %s | loot %s | grenades %s | quests %s | exfils %s",
+                                espGlobals::espEnabled ? "ON" : "OFF",
+                                espGlobals::drawPlayers ? "ON" : "OFF",
+                                espGlobals::drawLoot ? "ON" : "OFF",
+                                espGlobals::drawGrenades ? "ON" : "OFF",
+                                espGlobals::drawQuestHelper ? "ON" : "OFF",
+                                espGlobals::drawExfil ? "ON" : "OFF");
+                        }
+
+                        if (ImGui::CollapsingHeader("Grenade source details"))
+                        {
+                            DebugTextPtr(
+                                "Local game world",
+                                explosiveManager.getLocalGameWorld());
+                            DebugTextPtr(
+                                "Controller",
+                                explosiveManager.getGrenadesController());
+                            DebugTextPtr(
+                                "Unity list",
+                                explosiveManager.getGrenadesListPointer());
+                            ImGui::Text(
+                                "Last list count: %zu | Read: %s",
+                                explosiveManager.getLastUnityListCount(),
+                                explosiveManager.lastUnityListReadSucceeded()
+                                ? "OK"
+                                : "FAILED / NOT RUN");
+                        }
 
                         ImGui::EndTabItem();
                     }
@@ -5595,7 +6470,7 @@ static void renderLeftIcons()
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - viewport->Size.x + 10.f), 10.f });
 
-    if (ImGui::ButtonMenu(followIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10)))
+    if (ImGui::ButtonMenu(followIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.5f)))
     {
         mapGlobals::followLocal = !mapGlobals::followLocal;
         mapGlobals::focusPoint = { 0.f, 0.f, 0.f };
@@ -5635,7 +6510,7 @@ static void renderMenuIcons()
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 10.f });
 
     // Settings Icon
-    if (ImGui::ButtonMenu(settingIcon.c_str(), ImVec2(40, 40), ImVec2(60, 10)))
+    if (ImGui::ButtonMenu(settingIcon.c_str(), ImVec2(40, 40), ImVec2(-3.0f, 3.5f)))
     {
         appMenu::appSettings = !appMenu::appSettings;
         closeSettingWindows("settings");
@@ -5651,7 +6526,7 @@ static void renderMenuIcons()
     }
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 55.f });
-    if (ImGui::ButtonMenu(fuserIcon.c_str(), ImVec2(40, 40), ImVec2(22, 10))) {
+    if (ImGui::ButtonMenu(fuserIcon.c_str(), ImVec2(40, 40), ImVec2(-1.5f, 2.5f))) {
         appMenu::appFuser = !appMenu::appFuser;
         closeSettingWindows("fuser");
     }
@@ -5667,7 +6542,7 @@ static void renderMenuIcons()
 
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 100.f });
-    if (ImGui::ButtonMenu(makcuIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) {
+    if (ImGui::ButtonMenu(makcuIcon.c_str(), ImVec2(40, 40), ImVec2(-1.5f, 3.5f))) {
         appMenu::appMakcu = !appMenu::appMakcu;
         closeSettingWindows("makcu");
     }
@@ -5682,7 +6557,7 @@ static void renderMenuIcons()
     }
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 145.f });
-    if (ImGui::ButtonMenu(filterIcon.c_str(), ImVec2(40, 40), ImVec2(17, 10))) {
+    if (ImGui::ButtonMenu(filterIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.0f))) {
         appMenu::appLootFilters = !appMenu::appLootFilters;
         closeSettingWindows("lootfilters");
     }
@@ -5697,7 +6572,7 @@ static void renderMenuIcons()
     }
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 190.f });
-    if (ImGui::ButtonMenu(questsIcon.c_str(), ImVec2(40, 40), ImVec2(20, 10))) {
+    if (ImGui::ButtonMenu(questsIcon.c_str(), ImVec2(40, 40), ImVec2(0.5f, 3.5f))) {
         appMenu::appQuests = !appMenu::appQuests;
         closeSettingWindows("quests");
     }
@@ -5712,7 +6587,7 @@ static void renderMenuIcons()
     }
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 235.f });
-    if (ImGui::ButtonMenu(watchlistIcon.c_str(), ImVec2(40, 40), ImVec2(20, 10))) {
+    if (ImGui::ButtonMenu(watchlistIcon.c_str(), ImVec2(40, 40), ImVec2(0.5f, 3.0f))) {
         appMenu::appWatchList = !appMenu::appWatchList;
         closeSettingWindows("watchlist");
     }
@@ -5732,7 +6607,7 @@ static void renderMenuIcons()
 
 
     ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 300.f });
-    if (ImGui::ButtonMenu(widgetDebugIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) { appMenu::widgetDebug = !appMenu::widgetDebug; }
+    if (ImGui::ButtonMenu(widgetDebugIcon.c_str(), ImVec2(40, 40), ImVec2(-2.5f, 3.0f))) { appMenu::widgetDebug = !appMenu::widgetDebug; }
 
 
 
@@ -5741,13 +6616,13 @@ static void renderMenuIcons()
     {
 
         ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 350.f });
-        if (ImGui::ButtonMenu(widgetExitIcon.c_str(), ImVec2(40, 40), ImVec2(15, 10))) { appMenu::widgetExfil = !appMenu::widgetExfil; }
+        if (ImGui::ButtonMenu(widgetExitIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.5f))) { appMenu::widgetExfil = !appMenu::widgetExfil; }
 
         ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 400.f });
-        if (ImGui::ButtonMenu(widgetLootIcon.c_str(), ImVec2(40, 40), ImVec2(30, 10))) { appMenu::widgetTopLoot = !appMenu::widgetTopLoot; }
+        if (ImGui::ButtonMenu(widgetLootIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.5f))) { appMenu::widgetTopLoot = !appMenu::widgetTopLoot; }
 
         ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 450.f });
-        if (ImGui::ButtonMenu(widgetPlayersIcon.c_str(), ImVec2(40, 40), ImVec2(30, 10))) { appMenu::widgetPlayers = !appMenu::widgetPlayers; }
+        if (ImGui::ButtonMenu(widgetPlayersIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.5f))) { appMenu::widgetPlayers = !appMenu::widgetPlayers; }
 
 
     }
@@ -5846,7 +6721,27 @@ static void renderMainScreen()
             ImVec2 centerScreen = viewport->GetWorkCenter();
 
             DrawRadarMainText(centerScreen.x, centerScreen.y, { 1,0,0,1 }, Text);
-            DrawRadarSubText(centerScreen.x, centerScreen.y + 45, { 1,0,0,1 }, globals::radarSubText.c_str());
+
+            const bool showDmaConnectionHint =
+                !dmaConnected && !working && !stopping;
+            const float statusTextY = showDmaConnectionHint
+                ? centerScreen.y + 72.0f
+                : centerScreen.y + 45.0f;
+
+            if (showDmaConnectionHint)
+            {
+                DrawRadarSubText(
+                    centerScreen.x,
+                    centerScreen.y + 42.0f,
+                    { 1,1,1,1 },
+                    "Connect from Settings menu -->");
+            }
+
+            DrawRadarSubText(
+                centerScreen.x,
+                statusTextY,
+                { 1,0,0,1 },
+                globals::radarSubText.c_str());
 
             setCurrentMapSpecs = false;
 
@@ -5999,13 +6894,27 @@ bool renderThread()
     //io.Fonts->AddFontFromMemoryTTF((void*)Font, sizeof(Font), 16.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
     io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesCyrillic());
 
-    // Font Awesome
+    // Font Awesome 7 Free (solid). Legacy ICON_FK_* names are mapped in
+    // IconsFontAwesomeCompat.h so radar markers retain their established glyphs.
     float iconFontSize = 24.f; //24
-    static const ImWchar icons_ranges[] = { ICON_MIN_FK, ICON_MAX_16_FK, 0 };
+    static const ImWchar icons_ranges[] = {
+        ICON_MIN_FA,
+        ICON_MAX_16_FA,
+        0
+    };
     ImFontConfig icons_config;
     icons_config.MergeMode = true;
     icons_config.PixelSnapH = true;
-    io.Fonts->AddFontFromFileTTF(FONT_ICON_FILE_NAME_FK, iconFontSize, &icons_config, icons_ranges);
+    if (!io.Fonts->AddFontFromFileTTF(
+        FONT_ICON_FILE_NAME_FAS,
+        iconFontSize,
+        &icons_config,
+        icons_ranges))
+    {
+        LOGS.logError(
+            "Unable to load Font Awesome 7 from "
+            FONT_ICON_FILE_NAME_FAS);
+    }
 
 
 
@@ -6019,6 +6928,9 @@ bool renderThread()
 
     while (!done)
     {
+        const auto radarFrameStart =
+            std::chrono::steady_clock::now();
+
         // Poll and handle messages (inputs, window resize, etc.)
         // See the WndProc() function below for our to dispatch events to the Win32 backend.
         MSG msg;
@@ -6099,7 +7011,18 @@ bool renderThread()
         if (result == D3DERR_DEVICELOST)
             g_DeviceLost = true;
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        const double radarFpsLimit = std::clamp(
+            static_cast<double>(globals::appRadarMaxFPS),
+            15.0,
+            240.0);
+        const auto radarFrameDuration =
+            std::chrono::duration<double>(1.0 / radarFpsLimit);
+
+        std::this_thread::sleep_until(
+            radarFrameStart +
+            std::chrono::duration_cast<
+                std::chrono::steady_clock::duration>(
+                    radarFrameDuration));
     }
 
     // Cleanup

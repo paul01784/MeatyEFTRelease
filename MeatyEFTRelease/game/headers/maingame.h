@@ -1,6 +1,7 @@
 #pragma once
 #include <shared_mutex>
 #include <array>
+#include <stop_token>
 #include <glm/glm.hpp>
 
 class MainGame {
@@ -40,16 +41,12 @@ public:
 
 	//functions
 
-	void mainThread();
+	void mainThread(std::stop_token stopToken = {});
 	bool checkIfRaidStarted();
 	void updateLocalPlayerPtr();
 	bool updatePlayerList();
 	void getPlayerListDetails();
-	void getGameWorldDetails();
-
-	void cameraAndAimWorker();
-
-	void featuresTaskWorker();
+	bool getGameWorldDetails(std::stop_token stopToken = {});
 
 	void keyManagerTask();
 

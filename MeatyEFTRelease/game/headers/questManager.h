@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -130,6 +132,16 @@ struct ActiveQuestState
     std::vector<QuestData> activeQuests;
 };
 
+struct QuestPublishedState
+{
+    std::vector<QuestData> activeQuests;
+    std::vector<std::string> masterItems;
+    std::vector<QuestLocation> masterLocations;
+};
+
+using QuestPublishedSnapshot =
+    std::shared_ptr<const QuestPublishedState>;
+
 class QuestManager
 {
     public:
@@ -147,12 +159,34 @@ extern QuestManager questManager;
 extern std::vector<QuestData> questDataActive;
 extern std::vector<std::string> masterItems;
 extern std::vector<QuestLocation> masterLocations;
-
 extern std::mutex g_questCacheMutex;
+extern std::atomic<QuestPublishedSnapshot> g_publishedQuestState;
 
-extern std::vector<QuestData> questDataActive;
-extern std::vector<std::string> masterItems;
-extern std::vector<QuestLocation> masterLocations;
+inline void PublishQuestStateLocked()
+{
+    QuestPublishedState state{};
+    state.activeQuests = questDataActive;
+    state.masterItems = masterItems;
+    state.masterLocations = masterLocations;
+
+    g_publishedQuestState.store(
+        std::make_shared<const QuestPublishedState>(std::move(state)),
+        std::memory_order_release);
+}
+
+inline QuestPublishedSnapshot GetQuestPublishedSnapshot()
+{
+    QuestPublishedSnapshot snapshot =
+        g_publishedQuestState.load(std::memory_order_acquire);
+
+    if (snapshot)
+        return snapshot;
+
+    static const QuestPublishedSnapshot emptySnapshot =
+        std::make_shared<const QuestPublishedState>();
+
+    return emptySnapshot;
+}
 
 inline void ClearPublishedQuestState()
 {
@@ -161,23 +195,21 @@ inline void ClearPublishedQuestState()
     questDataActive.clear();
     masterItems.clear();
     masterLocations.clear();
+    PublishQuestStateLocked();
 }
 
 inline std::vector<QuestLocation> GetMasterLocationsSnapshot()
 {
-    //std::lock_guard<std::mutex> lock(g_questCacheMutex);
-    return masterLocations;
+    return GetQuestPublishedSnapshot()->masterLocations;
 }
 
 inline std::vector<std::string> GetMasterItemsSnapshot()
 {
-    //std::lock_guard<std::mutex> lock(g_questCacheMutex);
-    return masterItems;
+    return GetQuestPublishedSnapshot()->masterItems;
 }
 
 inline std::vector<QuestData> GetQuestDataActiveSnapshot()
 {
-    std::lock_guard<std::mutex> lock(g_questCacheMutex);
-    return questDataActive;
+    return GetQuestPublishedSnapshot()->activeQuests;
 }
 

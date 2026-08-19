@@ -4,6 +4,7 @@
 #include "Registry.h"
 #include "Shellcode.h"
 #include "structs.h"
+#include "DmaScheduler.h"
 
 #include <atomic>
 #include <optional>
@@ -11,6 +12,7 @@
 #include <limits>
 #include <thread>
 #include <mutex>
+#include <source_location>
 #include <string_view>
 #include <unordered_map>
 
@@ -232,7 +234,7 @@ private:
     mutable std::chrono::steady_clock::time_point trafficStatsLastSample{};
 
     mutable std::mutex handleMutex;
-    mutable std::mutex dmaOpsMutex;
+    mutable PriorityDmaMutex dmaOpsMutex;
     mutable std::unordered_map<VMMDLL_SCATTER_HANDLE, uint32_t> scatterQueuedReads;
     mutable std::unordered_map<VMMDLL_SCATTER_HANDLE, uint32_t> scatterQueuedWrites;
 
@@ -279,6 +281,10 @@ public:
 
     bool IsInitRunning() const;
     bool IsDmaOperational() const;
+    [[nodiscard]] bool ShouldDeferDmaWork(DmaPriority priority) const
+    {
+        return dmaOpsMutex.ShouldDefer(priority);
+    }
 
     DWORD GetPidFromName(const std::string& process_name);
     std::vector<int> GetPidListFromName(const std::string& process_name);
@@ -336,12 +342,29 @@ public:
         return Write(address, &value, sizeof(T));
     }
 
-    bool Read(uintptr_t address, void* buffer, size_t size, bool useCache = false, std::string_view callingFunc = {}) const;
+    bool Read(
+        uintptr_t address,
+        void* buffer,
+        size_t size,
+        bool useCache = false,
+        std::string_view callingFunc = {},
+        std::source_location caller = std::source_location::current()) const;
 
-    bool Read(uintptr_t address, void* buffer, size_t size, int pid, bool useCache = false, std::string_view callingFunc = {}) const;
+    bool Read(
+        uintptr_t address,
+        void* buffer,
+        size_t size,
+        int pid,
+        bool useCache = false,
+        std::string_view callingFunc = {},
+        std::source_location caller = std::source_location::current()) const;
 
     template <typename T>
-    [[nodiscard]] bool TryRead(uint64_t address, T& out, bool useCache = false) const
+    [[nodiscard]] bool TryRead(
+        uint64_t address,
+        T& out,
+        bool useCache = false,
+        std::source_location caller = std::source_location::current()) const
     {
         static_assert(std::is_trivially_copyable_v<T>, "TryRead<T> requires trivially copyable type");
 
@@ -350,52 +373,69 @@ public:
         if (!address)
             return false;
 
-        return Read(address, &out, sizeof(T), useCache);
+        return Read(address, &out, sizeof(T), useCache, {}, caller);
     }
 
     template <typename T>
-    [[nodiscard]] std::optional<T> ReadOpt(uint64_t address, bool useCache = false) const
+    [[nodiscard]] std::optional<T> ReadOpt(
+        uint64_t address,
+        bool useCache = false,
+        std::source_location caller = std::source_location::current()) const
     {
         T value{};
 
-        if (!TryRead(address, value, useCache))
+        if (!TryRead(address, value, useCache, caller))
             return std::nullopt;
 
         return value;
     }
 
     template <typename T>
-    [[nodiscard]] T ReadOr(uint64_t address, T fallback, bool useCache = false) const
+    [[nodiscard]] T ReadOr(
+        uint64_t address,
+        T fallback,
+        bool useCache = false,
+        std::source_location caller = std::source_location::current()) const
     {
         T value{};
 
-        if (!TryRead(address, value, useCache))
+        if (!TryRead(address, value, useCache, caller))
             return fallback;
 
         return value;
     }
 
     template <typename T>
-    [[nodiscard]] T Read(uint64_t address, bool useCache = false) const
+    [[nodiscard]] T Read(
+        uint64_t address,
+        bool useCache = false,
+        std::source_location caller = std::source_location::current()) const
     {
         static_assert(std::is_trivially_copyable_v<T>, "Read<T> requires trivially copyable type");
 
         T value;
         std::memset(&value, 0, sizeof(T));
 
-        Read(address, &value, sizeof(T), useCache);
+        Read(address, &value, sizeof(T), useCache, {}, caller);
 
         return value;
     }
 
     template <typename T>
-    [[nodiscard]] T Read(void* address, bool useCache = false) const
+    [[nodiscard]] T Read(
+        void* address,
+        bool useCache = false,
+        std::source_location caller = std::source_location::current()) const
     {
-        return Read<T>(reinterpret_cast<uint64_t>(address), useCache);
+        return Read<T>(reinterpret_cast<uint64_t>(address), useCache, caller);
     }
 
     template <typename T>
-    [[nodiscard]] std::vector<T> ReadVector(uint64_t address, size_t count, bool useCache = false) const
+    [[nodiscard]] std::vector<T> ReadVector(
+        uint64_t address,
+        size_t count,
+        bool useCache = false,
+        std::source_location caller = std::source_location::current()) const
     {
         static_assert(std::is_trivially_copyable_v<T>, "ReadVector<T> requires trivially copyable type");
 
@@ -413,22 +453,30 @@ public:
         std::vector<T> buffer(count);
         const size_t bytes = count * sizeof(T);
 
-        if (!Read(address, buffer.data(), bytes, useCache))
+        if (!Read(address, buffer.data(), bytes, useCache, {}, caller))
             return {};
 
         return buffer;
     }
 
     template <typename T>
-    [[nodiscard]] std::vector<T> read_vec_new(uint64_t address, size_t count, bool useCache = false) const
+    [[nodiscard]] std::vector<T> read_vec_new(
+        uint64_t address,
+        size_t count,
+        bool useCache = false,
+        std::source_location caller = std::source_location::current()) const
     {
-        return ReadVector<T>(address, count, useCache);
+        return ReadVector<T>(address, count, useCache, caller);
     }
 
     template <typename T>
-    [[nodiscard]] std::vector<T> read_vec(uint64_t address, size_t count, bool useCache = false) const
+    [[nodiscard]] std::vector<T> read_vec(
+        uint64_t address,
+        size_t count,
+        bool useCache = false,
+        std::source_location caller = std::source_location::current()) const
     {
-        return ReadVector<T>(address, count, useCache);
+        return ReadVector<T>(address, count, useCache, caller);
     }
 
     [[nodiscard]] bool ReadChain(
@@ -450,6 +498,7 @@ public:
     }
 
     std::string readUnityString(uintptr_t address, SIZE_T maxChars = 128, bool useCache = false);
+    std::string readUnityStringField(uintptr_t fieldAddress, SIZE_T maxChars = 128, bool useCache = false);
     std::string readUTF8String(uint64_t address, SIZE_T size, bool useCache = false);
     std::string readString(uint64_t address, size_t size, bool useCache = false);
     std::wstring readWideString(uintptr_t address, SIZE_T size, bool useCache = false);
@@ -476,13 +525,15 @@ public:
 
     bool ExecuteReadScatter(VMMDLL_SCATTER_HANDLE handle, bool useCache = false, std::string_view callingFunc = {});
 
+    bool ReadScatter(const ScatterReadRequest* requests, size_t requestCount, bool useCache = false, std::string_view callingFunc = {});
+
     TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, bool useCache = false, std::string_view callingFunc = {});
 
     bool ExecuteWriteScatter(VMMDLL_SCATTER_HANDLE handle, int pid = 0, bool useCache = false);
 
     [[nodiscard]] static bool IsValidPointer(uintptr_t pointer)
     {
-        return pointer > 0x10000 && pointer < 0x0000800000000000;
+        return pointer > 0xFFFFFF && pointer < 0x0000800000000000;
     }
 
     void doDMADisconnect();

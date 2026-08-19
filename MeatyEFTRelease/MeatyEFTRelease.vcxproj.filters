@@ -15,7 +15,10 @@
     <ClInclude Include="app\includes.h">
       <Filter>app</Filter>
     </ClInclude>
-    <ClInclude Include="app\IconsForkAwesome.h">
+    <ClInclude Include="app\IconsFontAwesome7.h">
+      <Filter>app</Filter>
+    </ClInclude>
+    <ClInclude Include="app\IconsFontAwesomeCompat.h">
       <Filter>app</Filter>
     </ClInclude>
     <ClInclude Include="external\imgui\backends\imgui_impl_dx9.h" />
@@ -368,8 +371,10 @@
     <ClInclude Include="game\headers\utils.h" />
     <ClInclude Include="app\taskManager.h" />
     <ClInclude Include="memory\framework.h" />
+    <ClInclude Include="memory\DmaScheduler.h" />
     <ClInclude Include="memory\InputManager.h" />
     <ClInclude Include="memory\Memory.h" />
+    <ClInclude Include="memory\ScatterReadBatch.h" />
     <ClInclude Include="memory\pch.h" />
     <ClInclude Include="memory\Registry.h" />
     <ClInclude Include="memory\Shellcode.h" />
@@ -470,9 +475,11 @@
     <ClCompile Include="aimview.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <Font Include="app\fonts\fa-solid-900.otf" />
     <Font Include="app\fonts\forkawesome-webfont.ttf" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="app\fonts\FONT-AWESOME-LICENSE.txt" />
     <None Include="external\glm\detail\func_common.inl" />
     <None Include="external\glm\detail\func_common_simd.inl" />
     <None Include="external\glm\detail\func_exponential.inl" />

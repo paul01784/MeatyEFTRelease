@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -85,6 +86,25 @@ struct DxMonitorInfo
     bool primary = false;
 };
 
+struct DxTimingSnapshot
+{
+    double lastMs = 0.0;
+    double averageMs = 0.0;
+    double peakMs = 0.0;
+};
+
+struct DxFuserPerformanceSnapshot
+{
+    DxTimingSnapshot frameInterval;
+    DxTimingSnapshot build;
+    DxTimingSnapshot draw;
+    DxTimingSnapshot present;
+    double presentedFPS = 0.0;
+    std::size_t commandCount = 0;
+    std::uint64_t frameCount = 0;
+    std::uint64_t droppedCommandCount = 0;
+};
+
 class DxRenderWindow
 {
 public:
@@ -106,6 +126,9 @@ public:
     HWND GetHWND() const;
     int GetWindowWidth() const;
     int GetWindowHeight() const;
+    [[nodiscard]] DxFuserPerformanceSnapshot
+        GetPerformanceSnapshot() const noexcept;
+    void ResetPerformanceStatistics() noexcept;
 
     DxWindowConfig GetConfig() const;
     void SetConfig(const DxWindowConfig& config);
@@ -242,7 +265,6 @@ private:
     void OnResize(UINT width, UINT height);
 
     void PushDrawCommand(DrawCommand&& command);
-    void UpdateRenderDrawList();
     void ReleaseDrawStorageUnlocked();
 
     void RenderDrawCommands(const std::vector<DrawCommand>& commands, const DxWindowConfig& cfg, float scale);
@@ -254,6 +276,12 @@ private:
     float GetFinalScale(const DxWindowConfig& cfg) const;
     int GetTargetFPS(const DxWindowConfig& cfg) const;
 
+    static void RecordTiming(
+        double durationMs,
+        std::atomic<double>& last,
+        std::atomic<double>& average,
+        std::atomic<double>& peak) noexcept;
+
     IDWriteTextFormat* GetTextFormat(const std::wstring& fontName, float size, bool bold, bool italic);
 
     static std::wstring Utf8ToWide(const std::string& text);
@@ -263,8 +291,7 @@ private:
     static BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData);
 
 private:
-    mutable std::mutex m_configMutex;
-    DxWindowConfig m_config;
+    std::atomic<std::shared_ptr<const DxWindowConfig>> m_configSnapshot;
 
     mutable std::mutex m_monitorMutex;
     std::vector<DxMonitorInfo> m_monitors;
@@ -284,15 +311,27 @@ private:
     std::atomic<float> m_dpiScale = 1.0f;
 
     std::chrono::steady_clock::time_point m_nextFrameTime{};
+    HANDLE m_frameTimer = nullptr;
     bool m_frameLimiterPrimed = false;
     int m_lastFrameLimitFPS = 0;
 
-    mutable std::mutex m_drawMutex;
     std::vector<DrawCommand> m_pendingDrawList;
-    std::vector<DrawCommand> m_submittedDrawList;
     std::vector<DrawCommand> m_renderDrawList;
-    std::atomic<std::uint64_t> m_drawVersion = 0;
-    std::uint64_t m_renderDrawVersion = 0;
+
+    std::atomic<double> m_frameIntervalLastMs{ 0.0 };
+    std::atomic<double> m_frameIntervalAverageMs{ 0.0 };
+    std::atomic<double> m_frameIntervalPeakMs{ 0.0 };
+    std::atomic<double> m_buildLastMs{ 0.0 };
+    std::atomic<double> m_buildAverageMs{ 0.0 };
+    std::atomic<double> m_buildPeakMs{ 0.0 };
+    std::atomic<double> m_drawLastMs{ 0.0 };
+    std::atomic<double> m_drawAverageMs{ 0.0 };
+    std::atomic<double> m_drawPeakMs{ 0.0 };
+    std::atomic<double> m_presentLastMs{ 0.0 };
+    std::atomic<double> m_presentAverageMs{ 0.0 };
+    std::atomic<double> m_presentPeakMs{ 0.0 };
+    std::atomic<std::size_t> m_lastCommandCount{ 0 };
+    std::atomic<std::uint64_t> m_renderedFrameCount{ 0 };
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_d3dDevice;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_d3dContext;
