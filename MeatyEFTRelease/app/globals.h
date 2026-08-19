@@ -126,6 +126,10 @@ struct aimGlobals {
     static TargetMode targetMode;
     static bool targetLock;
     static float aimSmooth;
+    static float aimSpeedPixelsPerSecond;
+    static float aimDeadzonePixels;
+    static float aimOffsetX;
+    static float aimOffsetY;
     static AimReference aimReference;
     static bool showAimFovRing;
     static bool drawFireportLine;

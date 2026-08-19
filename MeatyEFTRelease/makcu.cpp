@@ -102,6 +102,16 @@ namespace
         return ToUpperAscii(value).find(ToUpperAscii(std::string(needle))) != std::string::npos;
     }
 
+    void ShowSettingsTooltip(const char* text)
+    {
+        if (!ImGui::IsItemHovered())
+            return;
+
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(text);
+        ImGui::EndTooltip();
+    }
+
     bool IsComPortName(const std::string& value)
     {
         if (value.size() < 4)
@@ -1466,6 +1476,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             );
 
             ImGui::BeginDisabled(!aimGlobals::aimEnabled);
+            ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
 
             configChanged |= ImGui::DragFloat(
                 "Aim FOV",
@@ -1474,6 +1485,9 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 1.0f,
                 200.0f,
                 "%.0f px"
+            );
+            ShowSettingsTooltip(
+                "Maximum screen-pixel radius used to find a target from the selected aim reference."
             );
 
             static constexpr const char* aimReferenceOptions[] =
@@ -1507,28 +1521,29 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
                 configChanged = true;
             }
+            ShowSettingsTooltip(
+                "Crosshair uses the screen centre. Fireport uses the projected barrel/fireport ray endpoint."
+            );
 
             configChanged |= ImGui::Checkbox(
                 "Show aim FOV ring",
                 &aimGlobals::showAimFovRing
+            );
+            ShowSettingsTooltip(
+                "Draw the configured FOV circle around the active aim reference while aim is enabled and MAKCU is connected."
             );
 
             configChanged |= ImGui::Checkbox(
                 "Draw fireport line",
                 &aimGlobals::drawFireportLine
             );
-
-            ImGui::TextDisabled(
-                "Crosshair draws barrel to screen centre; Fireport draws barrel to the fireport ray."
+            ShowSettingsTooltip(
+                "Draw a line from the barrel to the selected aim reference. It only updates when aim is enabled and MAKCU is connected."
             );
 
             if (aimGlobals::aimReference ==
                 AimReference::Fireport)
             {
-                ImGui::TextDisabled(
-                    "FOV + aim move from barrel ray endpoint."
-                );
-
                 const FireportPose pose =
                     g_fireport.snapshot();
 
@@ -1556,6 +1571,9 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 2000,
                 "%d m"
             );
+            ShowSettingsTooltip(
+                "Maximum world distance at which targets may be selected."
+            );
 
             configChanged |= ImGui::DragFloat(
                 "Aim smoothing",
@@ -1565,9 +1583,56 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 100.0f,
                 "%.1f"
             );
+            ShowSettingsTooltip(
+                "Response divisor. Lower values react more sharply; the separate speed limit prevents large jumps."
+            );
 
-            ImGui::TextDisabled(
-                "FOV is the pixel radius from the selected aim reference."
+            configChanged |= ImGui::DragFloat(
+                "Aim speed",
+                &aimGlobals::aimSpeedPixelsPerSecond,
+                25.0f,
+                50.0f,
+                5000.0f,
+                "%.0f px/s"
+            );
+            ShowSettingsTooltip(
+                "Maximum aim movement in screen pixels per second. Lower this to slow the approach without changing calibration."
+            );
+
+            configChanged |= ImGui::DragFloat(
+                "Aim deadzone",
+                &aimGlobals::aimDeadzonePixels,
+                0.25f,
+                0.1f,
+                25.0f,
+                "%.1f px"
+            );
+            ShowSettingsTooltip(
+                "Aim stops correcting when the desired point is inside this radius, allowing a small amount of float."
+            );
+
+            configChanged |= ImGui::DragFloat(
+                "Aim offset X",
+                &aimGlobals::aimOffsetX,
+                0.5f,
+                -200.0f,
+                200.0f,
+                "%.1f px"
+            );
+            ShowSettingsTooltip(
+                "Horizontal offset applied to the desired bone point. Positive values move the point right."
+            );
+
+            configChanged |= ImGui::DragFloat(
+                "Aim offset Y (positive raises)",
+                &aimGlobals::aimOffsetY,
+                0.5f,
+                -200.0f,
+                200.0f,
+                "%.1f px"
+            );
+            ShowSettingsTooltip(
+                "Vertical offset applied to the desired bone point. Positive values raise the aim point."
             );
 
             ImGui::Spacing();
@@ -1581,6 +1646,9 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 5.0f,
                 "%.4f"
             );
+            ShowSettingsTooltip(
+                "Horizontal MAKCU conversion factor: screen pixels multiplied by this value become hardware movement units."
+            );
 
             configChanged |= ImGui::DragFloat(
                 "Y units per screen pixel",
@@ -1590,6 +1658,9 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 5.0f,
                 "%.4f"
             );
+            ShowSettingsTooltip(
+                "Vertical MAKCU conversion factor: screen pixels multiplied by this value become hardware movement units."
+            );
 
             if (ImGui::Button("Reset mouse calibration"))
             {
@@ -1597,13 +1668,8 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 makcu.mouseUnitsPerScreenPixelY = 1.0f;
                 configChanged = true;
             }
-
-            ImGui::TextDisabled(
-                "Start at 1.0000. Raise a value if movement is too slow."
-            );
-
-            ImGui::TextDisabled(
-                "X and Y may need slightly different values."
+            ShowSettingsTooltip(
+                "Reset both calibration values to 1.0000. Use calibration for hardware sensitivity differences, not aim speed."
             );
 
             ImGui::Spacing();
@@ -1637,15 +1703,16 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
                 configChanged = true;
             }
+            ShowSettingsTooltip(
+                "FOV selects the target nearest the aim reference. CQB selects the nearest target in world distance."
+            );
 
             configChanged |= ImGui::Checkbox(
                 "Lock target while key is held",
                 &aimGlobals::targetLock
             );
-
-            ImGui::TextDisabled(
-                "When enabled, the first valid target remains selected\n"
-                "until the key is released or it becomes invalid."
+            ShowSettingsTooltip(
+                "When enabled, the first valid target remains selected until the key is released or the target becomes invalid."
             );
 
             ImGui::Spacing();
@@ -1655,16 +1722,19 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 aimGlobals::aiBone,
                 "AI target bone"
             );
+            ShowSettingsTooltip(
+                "Bone used when the selected target is an AI player."
+            );
 
             configChanged |= ShowBoneSelectionBox(
                 aimGlobals::pmcBone,
                 "PMC target bone"
             );
-
-            ImGui::TextDisabled(
-                "AI and PMC targets can use different bones."
+            ShowSettingsTooltip(
+                "Bone used when the selected target is a PMC player."
             );
 
+            ImGui::PopItemWidth();
             ImGui::EndDisabled();
 
             if (configChanged && onConfigChanged)
@@ -1724,6 +1794,18 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             ImGui::Text(
                 "Aim smoothing: %.2f",
                 aimGlobals::aimSmooth
+            );
+
+            ImGui::Text(
+                "Aim speed/deadzone: %.0f px/s | %.1f px",
+                aimGlobals::aimSpeedPixelsPerSecond,
+                aimGlobals::aimDeadzonePixels
+            );
+
+            ImGui::Text(
+                "Aim offset: X %.1f px | Y %.1f px",
+                aimGlobals::aimOffsetX,
+                aimGlobals::aimOffsetY
             );
 
             ImGui::Text(

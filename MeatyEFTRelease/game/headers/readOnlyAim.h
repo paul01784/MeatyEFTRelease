@@ -5,6 +5,7 @@
 #endif
 
 #include <optional>
+#include <chrono>
 #include <glm/glm.hpp>
 #include "players.h"
 #include "../../app/render.h"
@@ -63,6 +64,8 @@ private:
     std::optional<TargetResult> m_activeTarget;
 
     bool m_wasKeyHeld = false;
+    glm::vec2 m_moveRemainder{};
+    std::chrono::steady_clock::time_point m_lastMoveTime{};
 
 };
 

@@ -5541,6 +5541,12 @@ static void renderDebugWindow()
                             aimGlobals::aimSmooth,
                             static_cast<int>(aimGlobals::aiBone),
                             static_cast<int>(aimGlobals::pmcBone));
+                        ImGui::Text(
+                            "Speed: %.0f px/s | Deadzone: %.1f px | Offset: %.1f, %.1f",
+                            aimGlobals::aimSpeedPixelsPerSecond,
+                            aimGlobals::aimDeadzonePixels,
+                            aimGlobals::aimOffsetX,
+                            aimGlobals::aimOffsetY);
 
                         auto drawTarget = [&](const char* label,
                             const std::optional<TargetResult>& target)

@@ -2,11 +2,29 @@
 #include "headers/camera.h"
 #include "headers/fireport.h"
 #include "../app/globals.h"
+#include <algorithm>
+#include <chrono>
 #include <limits>
 #include <cmath>
 #include "../app/makcu.h"
 
 ReadOnlyAim readOnlyAim;
+
+namespace
+{
+    glm::vec2 ApplyAimOffset(const glm::vec2& screenPosition)
+    {
+        const float offsetX = std::isfinite(aimGlobals::aimOffsetX)
+            ? std::clamp(aimGlobals::aimOffsetX, -1000.0f, 1000.0f)
+            : 0.0f;
+        const float offsetY = std::isfinite(aimGlobals::aimOffsetY)
+            ? std::clamp(aimGlobals::aimOffsetY, -1000.0f, 1000.0f)
+            : 0.0f;
+
+        // Screen Y grows downwards, so a positive Y offset means "raise aim".
+        return {screenPosition.x + offsetX, screenPosition.y - offsetY};
+    }
+}
 
 AimReferencePoint ReadOnlyAim::resolveAimReference() const
 {
@@ -51,7 +69,8 @@ std::optional<TargetResult> ReadOnlyAim::BuildTargetResult(const PlayerCache& en
     if (!std::isfinite(selectedBoneScreenPos.x) || !std::isfinite(selectedBoneScreenPos.y))
         return std::nullopt;
 
-    const glm::vec2 screenDelta = selectedBoneScreenPos - aimRef;
+    const glm::vec2 adjustedScreenPos = ApplyAimOffset(selectedBoneScreenPos);
+    const glm::vec2 screenDelta = adjustedScreenPos - aimRef;
     const float screenDistanceSq = glm::dot(screenDelta, screenDelta);
     const float fovRadiusSq = fovRadiusPx * fovRadiusPx;
 
@@ -62,7 +81,7 @@ std::optional<TargetResult> ReadOnlyAim::BuildTargetResult(const PlayerCache& en
     result.player = entity;
     result.selectedBone = selectedBone;
     result.boneWorldPos = selectedBoneWorldPos;
-    result.screenPos = selectedBoneScreenPos;
+    result.screenPos = adjustedScreenPos;
     result.worldDistanceSq = worldDistanceSq;
     result.screenDistanceSq = screenDistanceSq;
     return result;
@@ -150,12 +169,17 @@ void ReadOnlyAim::ClearTargetState(bool keyIsHeld)
     m_liveTarget.reset();
     m_activeTarget.reset();
     m_wasKeyHeld = keyIsHeld;
+    m_moveRemainder = {};
+    m_lastMoveTime = {};
 }
 
 void ReadOnlyAim::aimTask()
 {
     if (!makcu.IsConnected())
+    {
+        ClearTargetState(false);
         return;
+    }
 
     if (!aimGlobals::aimEnabled)
     {
@@ -224,12 +248,21 @@ void ReadOnlyAim::aimTask()
 
     if (keyIsHeld && fireportReady && targetToMove.has_value())
         MoveToTargetBone(*targetToMove, aimRef);
+    else
+    {
+        m_moveRemainder = {};
+        m_lastMoveTime = {};
+    }
 }
 
 bool ReadOnlyAim::MoveToTargetBone(const TargetResult& target, const glm::vec2& aimRef)
 {
     if (!aimGlobals::aimEnabled || !makcu.IsConnected())
+    {
+        m_moveRemainder = {};
+        m_lastMoveTime = {};
         return false;
+    }
 
     const float errorX = target.screenPos.x - aimRef.x;
     const float errorY = target.screenPos.y - aimRef.y;
@@ -237,26 +270,80 @@ bool ReadOnlyAim::MoveToTargetBone(const TargetResult& target, const glm::vec2& 
     if (!std::isfinite(errorX) || !std::isfinite(errorY))
         return false;
 
-    constexpr float deadZonePixels = 1.0f;
-    if ((errorX * errorX) + (errorY * errorY) <= (deadZonePixels * deadZonePixels))
+    const float errorDistanceSq = (errorX * errorX) + (errorY * errorY);
+    if (!std::isfinite(errorDistanceSq))
         return false;
 
-    const float smooth = std::max(1.0f, aimGlobals::aimSmooth);
+    const float deadZonePixels = std::isfinite(aimGlobals::aimDeadzonePixels)
+        ? std::clamp(aimGlobals::aimDeadzonePixels, 0.1f, 1000.0f)
+        : 1.0f;
+    if (errorDistanceSq <= (deadZonePixels * deadZonePixels))
+    {
+        m_moveRemainder = {};
+        m_lastMoveTime = {};
+        return false;
+    }
 
-    float moveX = (errorX / smooth) * makcu.mouseUnitsPerScreenPixelX;
-    float moveY = (errorY / smooth) * makcu.mouseUnitsPerScreenPixelY;
+    const float smooth = std::isfinite(aimGlobals::aimSmooth)
+        ? std::clamp(aimGlobals::aimSmooth, 1.0f, 1000.0f)
+        : 1.0f;
+    const float speedPixelsPerSecond = std::isfinite(aimGlobals::aimSpeedPixelsPerSecond)
+        ? std::clamp(aimGlobals::aimSpeedPixelsPerSecond, 1.0f, 10000.0f)
+        : 1200.0f;
 
-    constexpr float maxMovePerTick = 127.0f;
-    moveX = std::clamp(moveX, -maxMovePerTick, maxMovePerTick);
-    moveY = std::clamp(moveY, -maxMovePerTick, maxMovePerTick);
+    const auto now = std::chrono::steady_clock::now();
+    float deltaSeconds = 0.01f;
+    if (m_lastMoveTime != std::chrono::steady_clock::time_point{})
+    {
+        deltaSeconds = std::chrono::duration<float>(now - m_lastMoveTime).count();
+        if (!std::isfinite(deltaSeconds))
+            deltaSeconds = 0.01f;
+    }
+    m_lastMoveTime = now;
 
-    const int dx = static_cast<int>(std::lround(moveX));
-    const int dy = static_cast<int>(std::lround(moveY));
+    // Limit the effect of a stalled task
+    deltaSeconds = std::clamp(deltaSeconds, 0.001f, 0.05f);
+
+    const float errorDistance = std::sqrt(errorDistanceSq);
+    const float responseDistance = errorDistance / smooth;
+    const float maxStepPixels = speedPixelsPerSecond * deltaSeconds;
+    const float stepDistance = std::min(responseDistance, maxStepPixels);
+
+    if (!std::isfinite(stepDistance) || stepDistance <= 0.0f)
+        return false;
+
+    const glm::vec2 screenMove = glm::vec2(errorX, errorY) * (stepDistance / errorDistance);
+    const float calibrationX = std::isfinite(makcu.mouseUnitsPerScreenPixelX)
+        ? std::max(0.001f, makcu.mouseUnitsPerScreenPixelX)
+        : 1.0f;
+    const float calibrationY = std::isfinite(makcu.mouseUnitsPerScreenPixelY)
+        ? std::max(0.001f, makcu.mouseUnitsPerScreenPixelY)
+        : 1.0f;
+
+    glm::vec2 hardwareMove = {
+        screenMove.x * calibrationX + m_moveRemainder.x,
+        screenMove.y * calibrationY + m_moveRemainder.y
+    };
+
+    constexpr float maxMovePerCommand = 127.0f;
+    hardwareMove.x = std::clamp(hardwareMove.x, -maxMovePerCommand, maxMovePerCommand);
+    hardwareMove.y = std::clamp(hardwareMove.y, -maxMovePerCommand, maxMovePerCommand);
+
+    const int dx = static_cast<int>(std::lround(hardwareMove.x));
+    const int dy = static_cast<int>(std::lround(hardwareMove.y));
+    const glm::vec2 nextRemainder = hardwareMove - glm::vec2(dx, dy);
 
     if (dx == 0 && dy == 0)
+    {
+        m_moveRemainder = nextRemainder;
+        return false;
+    }
+
+    if (!makcu.Move(dx, dy, 10))
         return false;
 
-    return makcu.Move(dx, dy, 10);
+    m_moveRemainder = nextRemainder;
+    return true;
 }
 
 std::optional<TargetResult> ReadOnlyAim::GetLiveTarget() const
