@@ -5511,11 +5511,21 @@ static void renderDebugWindow()
                             "Reference: %s at %.1f, %.1f | %s",
                             aimGlobals::aimReference ==
                                 AimReference::Fireport
-                            ? "FIREPORT"
+                            ? aimReference.fallbackToCrosshair
+                                ? "FIREPORT -> CROSSHAIR"
+                                : "FIREPORT"
                             : "CROSSHAIR",
                             aimReference.pos.x,
                             aimReference.pos.y,
                             referenceReady ? "VALID" : "INVALID");
+
+                        if (aimGlobals::aimEnabled &&
+                            aimReference.fallbackToCrosshair)
+                        {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.70f, 0.25f, 1.0f),
+                                "Fireport unavailable for this weapon; using screen centre fallback.");
+                        }
 
                         if (aimGlobals::aimEnabled &&
                             (!cameraReady ||

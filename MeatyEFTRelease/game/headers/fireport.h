@@ -48,6 +48,7 @@ private:
     uint64_t cachedLocalPlayer_ = 0;
     uint64_t cachedHandsController_ = 0;
     const char* cachedPath_ = nullptr;
+    bool cachedPathIsFallback_ = false;
     std::chrono::steady_clock::time_point nextPathRefresh_{};
 };
 

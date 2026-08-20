@@ -1558,7 +1558,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 {
                     ImGui::TextColored(
                         ImVec4(1.0f, 0.55f, 0.31f, 1.0f),
-                        "Fireport not resolved"
+                        "Fireport unavailable; aim uses screen centre fallback"
                     );
                 }
             }

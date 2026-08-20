@@ -34,9 +34,12 @@ AimReferencePoint ReadOnlyAim::resolveAimReference() const
 
     const FireportPose pose = g_fireport.snapshot();
     if (pose.aimRefOk)
-        return {pose.screenEnd, true, true};
+        return {pose.screenEnd, true, true, false};
 
-    return {screenCentre, false, true};
+    // Some weapons do not expose a usable fireport, and the projected ray
+    // can also leave the screen. Keep aim usable by falling back to the
+    // crosshair reference until a valid fireport is available again
+    return {screenCentre, true, true, true};
 }
 
 std::optional<TargetResult> ReadOnlyAim::BuildTargetResult(const PlayerCache& entity, float maxDistance,
@@ -198,7 +201,7 @@ void ReadOnlyAim::aimTask()
     const AimReferencePoint aimRefPoint = resolveAimReference();
     const glm::vec2 aimRef = aimRefPoint.valid ? aimRefPoint.pos
                                                : glm::vec2(espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
-    const bool fireportReady = aimRefPoint.valid || aimGlobals::aimReference != AimReference::Fireport;
+    const bool fireportReady = aimRefPoint.valid;
 
     const PlayerCacheSnapshot snapshotHandle = players.getCacheSnapshot();
     const PlayerCacheCollection& snapshot = *snapshotHandle;

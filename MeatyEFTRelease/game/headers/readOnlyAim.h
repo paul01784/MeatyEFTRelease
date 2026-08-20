@@ -28,6 +28,7 @@ struct AimReferencePoint
     glm::vec2 pos{};
     bool valid = true;
     bool fireportMode = false;
+    bool fallbackToCrosshair = false;
 };
 
 class ReadOnlyAim

@@ -659,10 +659,8 @@ namespace fuserRender
 
         if (aimGlobals::aimReference == AimReference::Fireport)
         {
-            if (!pose.aimRefOk)
-                return;
-
-            screenEnd = pose.screenEnd;
+            if (pose.aimRefOk)
+                screenEnd = pose.screenEnd;
         }
 
         static const glm::vec4 kFireportLine{1.0f, 0.86f, 0.24f, 0.95f};
@@ -691,13 +689,7 @@ namespace fuserRender
         };
 
         if (aimGlobals::aimReference == AimReference::Fireport)
-        {
-            const FireportPose& pose = *g_frameFireportSnapshot;
-            if (!pose.valid || !pose.aimRefOk)
-                return;
-
-            ringCenter = pose.screenEnd;
-        }
+            ringCenter = readOnlyAim.resolveAimReference().pos;
 
         g_DxWindow.DrawCircle(
             ringCenter.x,

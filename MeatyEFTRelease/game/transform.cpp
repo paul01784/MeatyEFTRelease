@@ -87,22 +87,23 @@ bool UnityTransform::TryResolveNative(
             index < kMaxTransformIndex;
     };
 
-    if (isNativeTransform(transformObject))
-    {
-        nativeTransform = transformObject;
-        return true;
-    }
-
     constexpr uint64_t kManagedNativePointerOffset = 0x10;
     const uint64_t candidate = mem.Read<uint64_t>(
         transformObject + kManagedNativePointerOffset,
         useCache
     );
 
-    if (!isNativeTransform(candidate))
+    if (isNativeTransform(candidate))
+    {
+        nativeTransform = candidate;
+        return true;
+    }
+
+    // Some callers already hold the native TransformAccess pointer
+    if (!isNativeTransform(transformObject))
         return false;
 
-    nativeTransform = candidate;
+    nativeTransform = transformObject;
     return true;
 }
 

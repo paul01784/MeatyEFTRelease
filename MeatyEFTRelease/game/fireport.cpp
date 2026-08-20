@@ -8,6 +8,7 @@
 #include "../memory/Memory.h"
 
 #include <cmath>
+#include <cstring>
 #include <utility>
 
 extern Memory mem;
@@ -20,6 +21,9 @@ FireportTracker::FireportTracker()
 FireportTracker g_fireport;
 
 namespace {
+
+constexpr auto kFallbackPathRefreshInterval = std::chrono::seconds(3);
+constexpr auto kFailedPathRefreshInterval = std::chrono::seconds(2);
 
 bool isGoodVec3(const glm::vec3& v)
 {
@@ -47,7 +51,7 @@ std::unique_ptr<UnityTransform> makeMuzzleTransformFromBifacial(
         return nullptr;
 
     uint64_t native = 0;
-    if (!UnityTransform::TryResolveNative(original, native))
+    if (!UnityTransform::TryResolveNative(original, native, true))
         return nullptr;
 
     return makeMuzzleTransform(native);
@@ -57,7 +61,7 @@ std::unique_ptr<UnityTransform> makeMuzzleTransformFromManaged(
     uint64_t managed)
 {
     uint64_t native = 0;
-    if (!UnityTransform::TryResolveNative(managed, native))
+    if (!UnityTransform::TryResolveNative(managed, native, true))
         return nullptr;
 
     return makeMuzzleTransform(native);
@@ -102,6 +106,7 @@ void FireportTracker::clearCachedMuzzle() noexcept
 {
     muzzleTransform_.reset();
     cachedPath_ = nullptr;
+    cachedPathIsFallback_ = false;
 }
 
 bool FireportTracker::refreshMuzzleTransform(
@@ -114,7 +119,7 @@ bool FireportTracker::refreshMuzzleTransform(
     // every 16 ms fireport tick.
     // Only retry a failed lookup. A valid path stays valid until the player
     // pipeline reports a hands-controller change.
-    nextPathRefresh_ = now + std::chrono::milliseconds(500);
+    nextPathRefresh_ = now + kFailedPathRefreshInterval;
 
     auto chooseBifacial = [&](uint64_t bifacial,
         const char* path) -> std::unique_ptr<UnityTransform>
@@ -123,7 +128,25 @@ bool FireportTracker::refreshMuzzleTransform(
             makeMuzzleTransformFromBifacial(bifacial);
 
         if (transform)
+        {
             cachedPath_ = path;
+            cachedPathIsFallback_ = false;
+        }
+
+        return transform;
+    };
+
+    auto chooseManagedTransform = [&](uint64_t transformObject,
+        const char* path) -> std::unique_ptr<UnityTransform>
+    {
+        std::unique_ptr<UnityTransform> transform =
+            makeMuzzleTransformFromManaged(transformObject);
+
+        if (transform)
+        {
+            cachedPath_ = path;
+            cachedPathIsFallback_ = std::strcmp(path, "firearm.gun_base_transform") == 0;
+        }
 
         return transform;
     };
@@ -161,13 +184,27 @@ bool FireportTracker::refreshMuzzleTransform(
 
     if (!replacement)
     {
+        // A number of weapon controllers do not expose a usable Fireport
+        // bifacial, but still expose the gun base transform. It is a less
+        // precise muzzle origin, but it keeps the line and reference usable
+        // while the weapon-specific fireport is unavailable
+        replacement = chooseManagedTransform(mem.Read<uint64_t>(handsController + sdk::FirearmController::GunBaseTransform),
+            "firearm.gun_base_transform");
+    }
+
+    if (!replacement)
+    {
         const uint64_t pwa = mem.Read<uint64_t>(
             localPlayer + sdk::Player::ProceduralWeaponAnimation);
 
-        if (Utils::valid_pointer(pwa))
+        const uint64_t cachedPwa = mainGame.localPlayerPWA;
+        const uint64_t pwaToUse = Utils::valid_pointer(pwa)
+            ? pwa
+            : cachedPwa;
+
+        if (Utils::valid_pointer(pwaToUse))
         {
-            const uint64_t handsSpring = mem.Read<uint64_t>(
-                pwa + sdk::ProceduralWeaponAnimation::HandsContainer);
+            const uint64_t handsSpring = mem.Read<uint64_t>(pwaToUse + sdk::ProceduralWeaponAnimation::HandsContainer);
 
             if (Utils::valid_pointer(handsSpring))
             {
@@ -176,7 +213,10 @@ bool FireportTracker::refreshMuzzleTransform(
                         handsSpring + sdk::PlayerSpring::Fireport));
 
                 if (replacement)
+                {
                     cachedPath_ = "pwa.spring.fireport";
+                    cachedPathIsFallback_ = false;
+                }
             }
         }
     }
@@ -186,8 +226,9 @@ bool FireportTracker::refreshMuzzleTransform(
         muzzleTransform_ = std::move(replacement);
         cachedLocalPlayer_ = localPlayer;
         cachedHandsController_ = handsController;
-        nextPathRefresh_ =
-            (std::chrono::steady_clock::time_point::max)();
+        nextPathRefresh_ = cachedPathIsFallback_
+            ? now + kFallbackPathRefreshInterval
+            : (std::chrono::steady_clock::time_point::max)();
         return true;
     }
 
@@ -233,7 +274,8 @@ void FireportTracker::update(uint64_t localPlayer)
     const bool pathRefreshDue =
         cachedLocalPlayer_ != localPlayer ||
         cachedHandsController_ != handsCtrl ||
-        (!muzzleTransform_ && now >= nextPathRefresh_);
+        ((!muzzleTransform_ || cachedPathIsFallback_) &&
+            now >= nextPathRefresh_);
 
     if (pathRefreshDue)
     {
@@ -252,7 +294,7 @@ void FireportTracker::update(uint64_t localPlayer)
         rotation))
     {
         clearCachedMuzzle();
-        nextPathRefresh_ = now + std::chrono::milliseconds(500);
+        nextPathRefresh_ = now + kFailedPathRefreshInterval;
         publish(std::move(pose));
         return;
     }
@@ -264,6 +306,8 @@ void FireportTracker::update(uint64_t localPlayer)
         !isGoodVec3(pose.worldOrigin) ||
         !isGoodVec3(pose.worldForward))
     {
+        clearCachedMuzzle();
+        nextPathRefresh_ = now + kFailedPathRefreshInterval;
         publish(std::move(pose));
         return;
     }
