@@ -219,6 +219,10 @@ struct PlayerCache {
 	bool hasExfiled;
 
 	bool isAiming;
+	bool aimLineTargetConfirmed{ false };
+	bool aimLineTargetIsLocal{ false };
+	glm::vec3 aimLineTargetLocation{};
+	std::chrono::steady_clock::time_point aimLineTargetSince{};
 
 	std::chrono::steady_clock::time_point nextCorpseRead{};
 	std::chrono::steady_clock::time_point nextHealthRead{};

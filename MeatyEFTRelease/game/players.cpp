@@ -1,6 +1,7 @@
 ﻿#include "../app/includes.h"
 #include "headers/players.h"
 #include "../app/globals.h"
+#include "../app/aimLineTargeting.h"
 
 #include "../memory/Memory.h"
 #include "../memory/ScatterReadBatch.h"
@@ -3232,6 +3233,45 @@ namespace
             player.colour = coloursGlobals::playerLocal;
         }
     }
+
+    void ResetAimLineTarget(PlayerCache& player)
+    {
+        player.aimLineTargetConfirmed = false;
+        player.aimLineTargetIsLocal = false;
+        player.aimLineTargetLocation = {};
+        player.aimLineTargetSince = {};
+    }
+
+    void UpdateAimLineTarget(PlayerCache& player, const PlayerCacheCollection& cache, std::chrono::steady_clock::time_point now)
+    {
+        glm::vec3 targetLocation{};
+        bool targetIsLocal = false;
+
+        if (!AimLineTargeting::FindLookedAtTarget(
+            player,
+            cache,
+            mainGame.localLocation,
+            mainGame.localGroupId,
+            radarGlobals::aimLineTargetAngle,
+            targetLocation,
+            targetIsLocal))
+        {
+            ResetAimLineTarget(player);
+            return;
+        }
+
+        player.aimLineTargetLocation = targetLocation;
+        player.aimLineTargetIsLocal = targetIsLocal;
+
+        if (player.aimLineTargetSince == std::chrono::steady_clock::time_point{})
+        {
+            player.aimLineTargetSince = now;
+            player.aimLineTargetConfirmed = false;
+            return;
+        }
+
+        player.aimLineTargetConfirmed = now - player.aimLineTargetSince >= std::chrono::seconds(1);
+    }
 }
 
 void Players::updateEntity()
@@ -3575,6 +3615,23 @@ void Players::updateEntity()
                 mainGame.localPlayerPWA = player.P_PWA;
                 player.colour = coloursGlobals::playerLocal;
             }
+        }
+
+        for (PlayerCache& player : playerCache)
+        {
+            if (!Utils::valid_pointer(player.instance) ||
+                player.isLocal ||
+                player.isBTR ||
+                player.isInBTR ||
+                player.isDead ||
+                player.hasExfiled ||
+                player.isZombie)
+            {
+                ResetAimLineTarget(player);
+                continue;
+            }
+
+            UpdateAimLineTarget(player, playerCache, now);
         }
     }
 }

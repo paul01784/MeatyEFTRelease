@@ -1312,7 +1312,7 @@ namespace fuserRender
     {
         const PlayerCacheCollection& cache = *g_framePlayerSnapshot;
 
-        if (!AimLineTargeting::IsLocalBeingLookedAt(cache, g_frameLocalLocation, radarGlobals::aimLineTargetAngle))
+        if (!AimLineTargeting::IsLocalBeingLookedAt(cache))
         {
             return;
         }

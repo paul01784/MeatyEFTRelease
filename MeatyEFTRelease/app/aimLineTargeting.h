@@ -59,8 +59,10 @@ namespace AimLineTargeting
         return FacingDot(source, targetLocation) >= minimumDot;
     }
 
-    inline bool FindLookedAtTarget(const PlayerCache& source, const PlayerCacheCollection& players, const glm::vec3& localLocation, std::string_view localGroupId, float targetAngleDegrees, glm::vec3& targetLocation)
+    inline bool FindLookedAtTarget(const PlayerCache& source, const PlayerCacheCollection& players, const glm::vec3& localLocation, std::string_view localGroupId, float targetAngleDegrees, glm::vec3& targetLocation, bool& targetIsLocal)
     {
+        targetIsLocal = false;
+
         if (source.isLocal ||
             !IsValidTarget(source) ||
             !HasValidLocation(source.location) ||
@@ -74,7 +76,7 @@ namespace AimLineTargeting
         float bestDot = minimumDot;
         bool foundTarget = false;
 
-        const auto considerTarget = [&](const glm::vec3& candidateLocation)
+        const auto considerTarget = [&](const glm::vec3& candidateLocation, bool candidateIsLocal)
             {
                 const float facingDot = FacingDot(source, candidateLocation);
                 if (facingDot < bestDot)
@@ -82,11 +84,12 @@ namespace AimLineTargeting
 
                 bestDot = facingDot;
                 targetLocation = candidateLocation;
+                targetIsLocal = candidateIsLocal;
                 foundTarget = true;
             };
 
         // Local is always eligible, regardless of whether they have a group.
-        considerTarget(localLocation);
+        considerTarget(localLocation, true);
 
         // An empty group id is not a real group and must never match everyone.
         if (localGroupId.empty())
@@ -103,25 +106,19 @@ namespace AimLineTargeting
                 continue;
             }
 
-            considerTarget(candidate.location);
+            considerTarget(candidate.location, false);
         }
 
         return foundTarget;
     }
 
-    inline bool IsLocalBeingLookedAt(const PlayerCacheCollection& players, const glm::vec3& localLocation, float targetAngleDegrees)
+    inline bool IsLocalBeingLookedAt(const PlayerCacheCollection& players)
     {
-        if (!HasValidLocation(localLocation))
-            return false;
-
         for (const PlayerCache& player : players)
         {
             if (!player.isLocal &&
-                !player.isBTR &&
-                !player.isInBTR &&
-                IsValidTarget(player) &&
-                HasValidLocation(player.location) &&
-                IsFacingTarget(player, localLocation, targetAngleDegrees))
+                player.aimLineTargetConfirmed &&
+                player.aimLineTargetIsLocal)
             {
                 return true;
             }
