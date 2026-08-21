@@ -1,6 +1,7 @@
 #pragma once
 #include "../game/headers/questManager.h"
 #include "text.h"
+#include "aimLineTargeting.h"
 #include "../game/headers/utils.h"
 #include "../game/headers/players.h"
 #include "../game/headers/explosives.h"
@@ -122,12 +123,23 @@ void drawPlayers()
                     if (mainGame.localGroupId == "" && !player.isFriend)
                         aimLineLen = radarGlobals::enemyAimLine;
 
-                    drawAimLine(
-                        glm::vec2(position.x, position.y),
-                        player.rotation,
-                        aimLineLen,
-                        player.colour
-                    );
+                    glm::vec3 targetLocation{};
+                    if (AimLineTargeting::FindLookedAtTarget(
+                        player,
+                        cache,
+                        mainGame.localLocation,
+                        mainGame.localGroupId,
+                        radarGlobals::aimLineTargetAngle,
+                        targetLocation))
+                    {
+                        const glm::vec3 targetPosition = mapControl.getMapPosition(targetLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
+
+                        DrawLine(position.x, position.y, targetPosition.x, targetPosition.y, player.colour, 3);
+                    }
+                    else
+                    {
+                        drawAimLine(glm::vec2(position.x, position.y), player.rotation, aimLineLen, player.colour);
+                    }
                 }
 
                 drawGroupLine(position, player);

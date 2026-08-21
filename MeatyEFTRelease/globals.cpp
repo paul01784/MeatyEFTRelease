@@ -75,6 +75,7 @@ bool radarGlobals::drawExfils = false;
 int radarGlobals::localAimLine = 100;
 int radarGlobals::friendAimLine = 100;
 int radarGlobals::enemyAimLine = 100;
+float radarGlobals::aimLineTargetAngle = 7.5f;
 bool radarGlobals::getPlayerEquip = false;
 bool radarGlobals::getPlayerStats = false;
 float radarGlobals::textScale = 1.0f;

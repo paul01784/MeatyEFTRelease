@@ -88,6 +88,7 @@ struct radarGlobals {
     static int localAimLine;
     static int friendAimLine;
     static int enemyAimLine;
+    static float aimLineTargetAngle;
     static bool getPlayerEquip;
     static bool getPlayerStats;
     static float textScale;

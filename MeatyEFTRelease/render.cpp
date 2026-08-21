@@ -3387,6 +3387,7 @@ static void renderMenuSettings()
                 ImGui::Text("Local AimLine     "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##localAimLine", &radarGlobals::localAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 ImGui::Text("Friend AimLine    "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##friendAimLine", &radarGlobals::friendAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 ImGui::Text("Enemy AimLine   "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##enemyAimLine", &radarGlobals::enemyAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                ImGui::Text("Aim Target Line Angle"); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderFloat("##aimTargetAngle", &radarGlobals::aimLineTargetAngle, 1.0f, 20.0f, "%.1f deg")) configManager.SaveConfig(); ImGui::PopItemWidth();
 
 
                 ImGui::SeparatorText("Fuser/ESP Settings");

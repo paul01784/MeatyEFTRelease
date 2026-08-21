@@ -379,6 +379,7 @@ void to_json(nlohmann::json& j, const radarGlobals& r) {
         {"localAimLine", r.localAimLine},
         {"friendAimLine", r.friendAimLine},
         {"enemyAimLine", r.enemyAimLine},
+        {"aimLineTargetAngle", r.aimLineTargetAngle},
         {"getPlayerEquip", r.getPlayerEquip},
         {"getPlayerStats", r.getPlayerStats},
         {"textScale", r.textScale}
@@ -395,6 +396,7 @@ void from_json(const nlohmann::json& j, radarGlobals& r) {
     r.localAimLine = j.value("localAimLine", r.localAimLine);
     r.friendAimLine = j.value("friendAimLine", r.friendAimLine);
     r.enemyAimLine = j.value("enemyAimLine", r.enemyAimLine);
+    r.aimLineTargetAngle = std::clamp(j.value("aimLineTargetAngle", r.aimLineTargetAngle), 1.0f, 20.0f);
     r.getPlayerEquip = j.value("getPlayerEquip", r.getPlayerEquip);
     r.getPlayerStats = j.value("getPlayerStats", r.getPlayerStats);
     r.textScale = std::clamp(j.value("textScale", r.textScale), 0.75f, 2.0f);

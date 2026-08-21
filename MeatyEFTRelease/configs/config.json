@@ -179,6 +179,7 @@
         "enemyAimLine": 100,
         "friendAimLine": 100,
         "getPlayerStats": false,
-        "localAimLine": 100
+        "localAimLine": 100,
+        "aimLineTargetAngle": 7.5
     }
 }

@@ -19,6 +19,7 @@
 #include "game/headers/camera.h"
 #include "game/headers/fireport.h"
 #include "game/headers/readOnlyAim.h"
+#include "aimLineTargeting.h"
 #include "../app/makcu.h"
 #include "../app/globals.h"
 #include "../game/headers/exfil.h"
@@ -1307,6 +1308,34 @@ namespace fuserRender
         }
     }
 
+    static inline void RenderLocalLookedAtAlert()
+    {
+        const PlayerCacheCollection& cache = *g_framePlayerSnapshot;
+
+        if (!AimLineTargeting::IsLocalBeingLookedAt(cache, g_frameLocalLocation, radarGlobals::aimLineTargetAngle))
+        {
+            return;
+        }
+
+        constexpr float padding = 8.0f;
+        const float pulse = Wave01(NowSeconds() * 31.4159265359f);
+        const glm::vec4 warningColour =
+        {
+            1.0f,
+            0.38f,
+            0.0f,
+            0.30f + (pulse * 0.70f)
+        };
+
+        g_DxWindow.DrawRect(
+            padding,
+            padding,
+            ScreenWidth() - (padding * 2.0f),
+            ScreenHeight() - (padding * 2.0f),
+            warningColour,
+            2.0f);
+    }
+
     static inline void RenderMainScene()
     {
         SafeRenderStage("RenderHUD", []()
@@ -1357,6 +1386,11 @@ namespace fuserRender
         SafeRenderStage("RenderExfils", []()
             {
                 RenderExfil();
+            });
+
+        SafeRenderStage("RenderLocalLookedAtAlert", []()
+            {
+                RenderLocalLookedAtAlert();
             });
     }
 
