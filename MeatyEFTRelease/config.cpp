@@ -556,6 +556,11 @@ void to_json(nlohmann::json& j, const lootGlobals& k) {
         {"enableQuestLoot", k.enableQuestLoot},
         {"enableValueLoot", k.enableValueLoot},
         {"enableWishListLoot", k.enableWishListLoot},
+        {"showLootValue", k.showLootValue},
+        {"lootValuePriceSource", k.lootValuePriceSource},
+        {"selectedLootCategories", k.selectedLootCategories},
+        {"categoryLootColour", k.categoryLootColour},
+        {"hideSearched", k.hideSearched},
         {"valueLootFrom", k.valueLootFrom},
         {"valueLootFromEquip", k.valueLootFromEquip},
         {"drawDrawer", k.drawDrawer},
@@ -586,6 +591,19 @@ void from_json(const nlohmann::json& j, lootGlobals& k) {
     k.enableQuestLoot = j.value("enableQuestLoot", k.enableQuestLoot);
     k.enableValueLoot = j.value("enableValueLoot", k.enableValueLoot);
     k.enableWishListLoot = j.value("enableWishListLoot", k.enableWishListLoot);
+    k.showLootValue = j.value("showLootValue", k.showLootValue);
+    k.lootValuePriceSource = std::clamp(
+        j.value("lootValuePriceSource", k.lootValuePriceSource),
+        0,
+        1);
+    k.selectedLootCategories = j.value(
+        "selectedLootCategories",
+        k.selectedLootCategories);
+    k.categoryLootColour = get_vec4_or_default(
+        j,
+        "categoryLootColour",
+        k.categoryLootColour);
+    k.hideSearched = j.value("hideSearched", k.hideSearched);
     k.valueLootFrom = j.value("valueLootFrom", k.valueLootFrom);
     k.valueLootFromEquip = j.value("valueLootFromEquip", k.valueLootFromEquip);
     k.drawDrawer = j.value("drawDrawer", k.drawDrawer);

@@ -24,6 +24,7 @@
 #include "game/headers/watchList.h"
 #include "app/aimview.h"
 
+#include <cctype>
 
 ConfigManager configManager("config.json", "lootFilters.json");
 
@@ -885,7 +886,7 @@ static void renderLootFiltersMenu()
             ImGui::SetCursorPos(ImVec2(10, 45));
 
             // draw window frame
-            CustomChildWindowWithTitle(" Loot Filter Settings ", ImVec2(250, 300));
+            CustomChildWindowWithTitle(" Loot Filter Settings ", ImVec2(250, 355));
 
             //draw inside window
             ImGui::SetCursorPos(ImVec2(20, 60));
@@ -905,6 +906,21 @@ static void renderLootFiltersMenu()
             if (ImGui::Checkbox(" Show Value Loot", &lootGlobals::enableValueLoot)) configManager.SaveConfig();
             ImGui::SameLine(); ImGui::SetCursorPosX(200);
             if (ImGui::ColorEdit4("##valuelistcolour", (float*)&coloursGlobals::valueLootColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+
+            ImGui::SetCursorPosX(20);
+            if (ImGui::Checkbox(" Show Loot Value", &lootGlobals::showLootValue)) configManager.SaveConfig();
+
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(185.0f);
+            ImGui::PushItemWidth(70.0f);
+            ImGui::BeginDisabled(!lootGlobals::showLootValue);
+            if (ImGui::Combo("##LootValuePriceSource", &lootGlobals::lootValuePriceSource, "Market\0Trader\0")) configManager.SaveConfig();
+            ImGui::EndDisabled();
+            ImGui::PopItemWidth();
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Price source used in loot labels");
+
             ImGui::SetCursorPosX(20);
             ImGui::PushItemWidth(150);
             if (ImGui::SliderInt("R LOOT", &lootGlobals::valueLootFrom, 0, 1000000, "%d")) configManager.SaveConfig();
@@ -915,13 +931,26 @@ static void renderLootFiltersMenu()
             ImGui::PopItemWidth();
             
 
-            ImGui::SetCursorPos(ImVec2(20, 230));
+            ImGui::SetCursorPos(ImVec2(20, 270));
             static bool containerPopupOpen = false;
 
-            if (ImGui::Button("Container Options"))
+            if (ImGui::Button("Containers", ImVec2(105, 0)))
             {
                 containerPopupOpen = true;
                 ImGui::OpenPopup("Container Settings");
+            }
+
+            ImGui::SameLine();
+            static bool categoryPopupOpen = false;
+            const std::string categoryButtonLabel =
+                "Categories (" +
+                std::to_string(lootGlobals::selectedLootCategories.size()) +
+                ")";
+
+            if (ImGui::Button(categoryButtonLabel.c_str(), ImVec2(125, 0)))
+            {
+                categoryPopupOpen = true;
+                ImGui::OpenPopup("Loot Category Settings");
             }
 
             if (ImGui::BeginPopupModal("Container Settings", &containerPopupOpen, ImGuiWindowFlags_NoResize))
@@ -977,7 +1006,11 @@ static void renderLootFiltersMenu()
                     configManager.SaveConfig();
                 }
 
-                
+                ImGui::SameLine();
+                if (ImGui::Checkbox("Hide searched", &lootGlobals::hideSearched))
+                    configManager.SaveConfig();
+
+                ImGui::SameLine();
                 if (ImGui::Button("Disable All", ImVec2(120, 0)))
                 {
                     for (int i = 0; i < optionCount; i++)
@@ -1018,6 +1051,228 @@ static void renderLootFiltersMenu()
                 }
 
                
+
+                ImGui::EndPopup();
+            }
+
+            if (ImGui::BeginPopupModal("Loot Category Settings", &categoryPopupOpen, ImGuiWindowFlags_NoResize))
+            {
+                ImGui::SetWindowSize(ImVec2(520, 350), ImGuiCond_Always);
+
+                ImGui::TextUnformatted("Category Colour");
+                ImGui::SameLine();
+                if (ImGui::ColorEdit4(
+                    "##categorylootcolour",
+                    (float*)&lootGlobals::categoryLootColour,
+                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs))
+                {
+                    configManager.SaveConfig();
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Clear All", ImVec2(100, 0)))
+                {
+                    lootGlobals::selectedLootCategories.clear();
+                    configManager.SaveConfig();
+                }
+
+                ImGui::SameLine();
+                ImGui::Text("%zu selected", lootGlobals::selectedLootCategories.size());
+
+                struct LootCategoryGroup
+                {
+                    const char* name;
+                    std::vector<const char*> categories;
+                };
+
+                static const std::vector<LootCategoryGroup> categoryGroups =
+                {
+                    { "Meds", {
+                        "med supplies", "Medical supplies", "medical item", "meds", "medikit", "drug"
+                    } },
+                    { "Food", { "food" } },
+                    { "Drink", { "drink" } },
+                    { "Stims", { "stimulant" } },
+                    { "Backpack", { "backpack" } },
+                    { "Weapons", {
+                        "assault carbine", "assault rifle", "ubgl", "weapon", "throwable weapon",
+                        "shotgun", "sniper rifle", "smg", "rocket launcher", "marksman rifle",
+                        "machinegun", "grenade launcher", "knife", "handgun", "revolver",
+                        "volumetric throw weapon"
+                    } },
+                    { "Ammo", { "ammo", "ammo container", "rocket" } },
+                    { "Attachments", {
+                        "special scope", "sights", "assault scopes", "auxiliary mod", "barrel", "bipod",
+                        "charging handle", "comb. muzzle device", "comb. tact device", "compact reflex sight",
+                        "cylinder magazine", "essential mod", "flashhider", "foregrip", "functional mod",
+                        "handguard", "mount", "magazine", "ironsight", "portable range finder",
+                        "reflex sight", "scope", "receiver", "pistol grip", "silencer", "weapon mod",
+                        "stock", "spring driven cylinder", "gas block", "muzzle device", "flashlight",
+                        "thermal vision"
+                    } },
+                    { "Wearables", {
+                        "gear mod", "headphones", "headwear", "night vision", "arm band", "armored equipment",
+                        "armor", "chest rig", "face cover", "armor plate", "equipment", "vis. observ. device"
+                    } },
+                    { "Barter", {
+                        "barter item", "household goods", "multitools", "building material", "tool", "battery",
+                        "electronics", "jewelry", "lubricant", "other"
+                    } },
+                    { "Fuel", { "fuel" } },
+                    { "Money", { "money" } },
+                    { "Keys", { "keycard", "key", "mechanical key" } },
+                    { "Quest Misc", {
+                        "tapes", "notes", "info", "completable", "dialog item", "flyer", "map",
+                        "mark of the unheard", "radio transmitter", "recorder"
+                    } },
+                    { "Repair Kits", { "repair kits" } },
+                    { "Battle Pass", { "battle pass doc", "Battle Pass Document" } },
+                    { "Others", {} }
+                };
+
+                auto normalizeCategoryName = [](const std::string& value)
+                {
+                    std::string normalized;
+                    normalized.reserve(value.size());
+
+                    for (const unsigned char character : value)
+                    {
+                        if (std::isalnum(character))
+                            normalized.push_back(static_cast<char>(std::tolower(character)));
+                    }
+
+                    if (normalized.size() > 1 && normalized.back() == 's')
+                        normalized.pop_back();
+
+                    return normalized;
+                };
+
+                auto findCategory = [&normalizeCategoryName](const char* name) -> const gameCatList*
+                {
+                    const std::string normalizedName = normalizeCategoryName(name);
+                    const auto it = std::find_if(
+                        catList.begin(),
+                        catList.end(),
+                        [&normalizeCategoryName, &normalizedName](const gameCatList& category)
+                        {
+                            return normalizeCategoryName(category.categoryName) == normalizedName;
+                        });
+
+                    return it == catList.end() ? nullptr : &(*it);
+                };
+
+                auto isCategorySelected = [](const std::string& name)
+                {
+                    return std::find(
+                        lootGlobals::selectedLootCategories.begin(),
+                        lootGlobals::selectedLootCategories.end(),
+                        name) != lootGlobals::selectedLootCategories.end();
+                };
+
+                auto setCategorySelected = [](const std::string& name, bool selected)
+                {
+                    const auto it = std::find(
+                        lootGlobals::selectedLootCategories.begin(),
+                        lootGlobals::selectedLootCategories.end(),
+                        name);
+
+                    if (selected)
+                    {
+                        if (it == lootGlobals::selectedLootCategories.end())
+                            lootGlobals::selectedLootCategories.push_back(name);
+                    }
+                    else if (it != lootGlobals::selectedLootCategories.end())
+                    {
+                        lootGlobals::selectedLootCategories.erase(it);
+                    }
+                };
+
+                if (ImGui::BeginChild("##loot_category_settings_child", ImVec2(0, -42), true))
+                {
+                    std::unordered_set<std::string> groupedCategoryNames;
+                    bool selectionChanged = false;
+
+                    const bool categoryGridOpen = ImGui::BeginTable(
+                        "##loot_category_group_grid",
+                        3,
+                        ImGuiTableFlags_SizingStretchSame);
+
+                    for (size_t groupIndex = 0; groupIndex < categoryGroups.size(); ++groupIndex)
+                    {
+                        const LootCategoryGroup& group = categoryGroups[groupIndex];
+                        std::vector<const gameCatList*> groupCategories;
+
+                        auto addCategory = [&groupCategories, &groupedCategoryNames](const gameCatList* category)
+                        {
+                            if (!category || category->categoryName.empty() || category->categoryName == "None")
+                                return;
+
+                            if (groupedCategoryNames.insert(category->categoryName).second)
+                                groupCategories.push_back(category);
+                        };
+
+                        if (group.categories.empty())
+                        {
+                            for (const auto& category : catList)
+                            {
+                                if (category.categoryName.empty() ||
+                                    category.categoryName == "None" ||
+                                    groupedCategoryNames.contains(category.categoryName))
+                                {
+                                    continue;
+                                }
+
+                                groupCategories.push_back(&category);
+                            }
+                        }
+                        else
+                        {
+                            for (const char* categoryName : group.categories)
+                                addCategory(findCategory(categoryName));
+                        }
+
+                        if (groupCategories.empty())
+                            continue;
+
+                        if (categoryGridOpen)
+                            ImGui::TableNextColumn();
+
+                        bool allSelected = std::all_of(
+                            groupCategories.begin(),
+                            groupCategories.end(),
+                            [isCategorySelected](const gameCatList* category)
+                            {
+                                return isCategorySelected(category->categoryName);
+                            });
+
+                        ImGui::PushID(static_cast<int>(groupIndex));
+                        if (ImGui::Checkbox(group.name, &allSelected))
+                        {
+                            for (const gameCatList* category : groupCategories)
+                                setCategorySelected(category->categoryName, allSelected);
+
+                            selectionChanged = true;
+                        }
+                        ImGui::PopID();
+                    }
+
+                    if (categoryGridOpen)
+                        ImGui::EndTable();
+
+                    if (selectionChanged)
+                        configManager.SaveConfig();
+
+                    if (catList.size() <= 1)
+                        ImGui::TextDisabled("No Tarkov Dev categories are available yet.");
+
+                    ImGui::EndChild();
+                }
+
+                if (ImGui::Button("Close", ImVec2(100, 0)))
+                {
+                    categoryPopupOpen = false;
+                    ImGui::CloseCurrentPopup();
+                }
 
                 ImGui::EndPopup();
             }
@@ -1487,22 +1742,22 @@ static void renderLootFiltersMenu()
         //bottom
         {
             //set position
-            ImGui::SetCursorPos(ImVec2(10, 360));
+            ImGui::SetCursorPos(ImVec2(10, 435));
 
             // draw window frame
-            CustomChildWindowWithTitle(" Loot Filter Items ", ImVec2(ImGui::GetWindowSize().x - 20, ImGui::GetWindowSize().y - 365));
+            CustomChildWindowWithTitle(" Loot Filter Items ", ImVec2(ImGui::GetWindowSize().x - 20, ImGui::GetWindowSize().y - 440));
 
             if (selectedLootFilterID != -1)
             {
                 
-                ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 110, 370)); // top right corner
+                ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 110, 445)); // top right corner
 
                 if (ImGui::Button("+ Add Loot", ImVec2(90, 29))) {
                     addLootPopupOpen = true;
                 }
 
                 //position for table
-                ImGui::SetCursorPos(ImVec2(20, 410)); // top right corner
+                ImGui::SetCursorPos(ImVec2(20, 485)); // top right corner
 
                 ImVec2 tableSize = ImVec2(ImGui::GetWindowSize().x - 40, (ImGui::GetWindowSize().y - ImGui::GetCursorPosY()) - 15); // Set the desired size for the table
 

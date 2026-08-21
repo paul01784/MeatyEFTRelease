@@ -1283,7 +1283,7 @@ namespace fuserRender
                 : loot.color;
 
             std::string lootText =
-                loot.shortName +
+                GetLootDisplayName(loot) +
                 " " +
                 std::to_string(distance) +
                 "m";

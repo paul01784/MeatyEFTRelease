@@ -308,6 +308,7 @@ namespace sdk
 
 	namespace LootableContainer
 	{
+		constexpr uint64_t InteractingPlayer = 0x160; //WorldInteractiveObject _InteractingPlayer_k__BackingField
 		constexpr uint64_t ItemOwner = 0x178; //
 	}
 

@@ -3,6 +3,7 @@
 #include "../game/headers/exfil.h"
 #include "../game/headers/explosives.h"
 #include "../game/headers/utils.h"
+#include "../game/headers/loot.h"
 
 #define PI 3.141592653589793
 
@@ -841,8 +842,9 @@ void DrawLootItemMarker(float x, float y, glm::vec4 color, float zoomLevel, cons
 		drawColor,
 		hString.c_str());
 
-	//item name
-	DrawCenteredRadarText(drawList, font, labelFontSize, x, y + markerHalfSize + labelGap, drawColor, loot.shortName.c_str());
+    //item name and optional price
+    const std::string displayName = GetLootDisplayName(loot);
+    DrawCenteredRadarText(drawList, font, labelFontSize, x, y + markerHalfSize + labelGap, drawColor, displayName.c_str());
 }
 
 void DrawGrenade(int x, int y, float zoomLevel, GrenadeList grenade)

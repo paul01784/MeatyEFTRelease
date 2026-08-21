@@ -1002,7 +1002,7 @@ void AimViewWidget::DrawLoot(ImDrawList* drawList) {
                 )
             );
 
-        std::string lootName = CleanText(loot.shortName);
+        std::string lootName = CleanText(GetLootDisplayName(loot));
 
         if (lootName.empty())
             continue;

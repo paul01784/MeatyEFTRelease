@@ -17,6 +17,8 @@
 #include "headers/dogtag.h"
 #include "headers/players.h"
 
+#include <iomanip>
+#include <sstream>
 
 loot::loot()
     : publishedLootCache(
@@ -26,6 +28,49 @@ loot::loot()
 
 std::vector<LootFilters> lootFilters;
 loot Loot;
+
+long GetLootDisplayPrice(const LootList& lootItem)
+{
+    return lootGlobals::lootValuePriceSource == 1
+        ? lootItem.traderPrice
+        : lootItem.avgMarketPrice;
+}
+
+std::string FormatLootPrice(const long price)
+{
+    if (price <= 0)
+        return {};
+
+    if (price < 1000)
+        return std::to_string(price);
+
+    if (price < 1000000)
+    {
+        const long roundedThousands = (price + 500L) / 1000L;
+        return std::to_string(roundedThousands) + "k";
+    }
+
+    const double millions = static_cast<double>(price) / 1000000.0;
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(millions >= 10.0 ? 0 : 1) << millions << "m";
+    return stream.str();
+}
+
+std::string GetLootDisplayName(const LootList& lootItem)
+{
+    const std::string& itemName = lootItem.shortName.empty()
+        ? lootItem.longName
+        : lootItem.shortName;
+
+    if (!lootGlobals::showLootValue)
+        return itemName;
+
+    const std::string formattedPrice = FormatLootPrice(GetLootDisplayPrice(lootItem));
+    if (formattedPrice.empty())
+        return itemName;
+
+    return itemName + " (" + formattedPrice + ")";
+}
 
 constexpr std::uint8_t MAX_LOOT_RESOLVE_ATTEMPTS = 20;
 
@@ -87,6 +132,12 @@ namespace
         uint64_t itemTemplate = 0;
 
         MongoID mongoId{};
+    };
+
+    struct ContainerOpenedRead
+    {
+        size_t itemIndex = 0;
+        uint64_t interactingPlayer = 0;
     };
 
     struct CorpseSlotRead
@@ -1490,6 +1541,29 @@ loot::WantedLookup loot::buildWantedLookup() const
         }
     }
 
+    if (!lootGlobals::selectedLootCategories.empty())
+    {
+        const std::unordered_set<std::string> selectedCategories(
+            lootGlobals::selectedLootCategories.begin(),
+            lootGlobals::selectedLootCategories.end());
+
+        lookup.categoryLootIds.reserve(marketList.size());
+
+        for (const auto& marketItem : marketList)
+        {
+            const bool categoryMatches = std::any_of(
+                marketItem.bsgCategory.begin(),
+                marketItem.bsgCategory.end(),
+                [&selectedCategories](const std::string& category)
+                {
+                    return selectedCategories.contains(category);
+                });
+
+            if (categoryMatches)
+                lookup.categoryLootIds.insert(marketItem.bsgid);
+        }
+    }
+
     return lookup;
 }
 
@@ -1532,6 +1606,13 @@ void loot::applyWantedState(LootList& lootItem, const WantedLookup& lookup) cons
         return;
     }
 
+    if (lookup.categoryLootIds.contains(lootItem.bsgId))
+    {
+        lootItem.wanted = true;
+        lootItem.color = lootGlobals::categoryLootColour;
+        return;
+    }
+
     if (lootGlobals::enableValueLoot &&
         lootItem.avgMarketPrice > lootGlobals::valueLootFrom)
     {
@@ -1567,8 +1648,52 @@ bool loot::isContainerEnabled(const std::string& name) const
     return false;
 }
 
-void loot::updateExistingLootItems(
-    std::vector<LootList>& workingCache)
+void loot::updateLootableContainerStates(std::vector<LootList>& workingCache)
+{
+    std::vector<ContainerOpenedRead> reads;
+    reads.reserve(workingCache.size());
+
+    for (size_t i = 0; i < workingCache.size(); ++i)
+    {
+        LootList& item = workingCache[i];
+
+        if (item.failed || !item.isContainer || item.isAirdrop)
+            continue;
+
+        if (!Utils::valid_pointer(item.m_interactiveClass))
+        {
+            item.containerOpened = false;
+            continue;
+        }
+
+        ContainerOpenedRead read{};
+        read.itemIndex = i;
+        reads.emplace_back(read);
+    }
+
+    if (reads.empty())
+        return;
+
+    ScatterReadBatch batch(mem, true, "Loot");
+
+    for (auto& read : reads)
+    {
+        const LootList& item = workingCache[read.itemIndex];
+
+        batch.Add(
+            item.m_interactiveClass + sdk::LootableContainer::InteractingPlayer,
+            read.interactingPlayer
+        );
+    }
+
+    if (!batch.Execute())
+        return;
+
+    for (const auto& read : reads)
+        workingCache[read.itemIndex].containerOpened = read.interactingPlayer != 0;
+}
+
+void loot::updateExistingLootItems(std::vector<LootList>& workingCache)
 {
     const WantedLookup lookup = buildWantedLookup();
     const auto now = std::chrono::steady_clock::now();
@@ -1629,6 +1754,9 @@ void loot::updateExistingLootItems(
         {
             item.wanted = isContainerEnabled(item.shortName);
 
+            if (lootGlobals::hideSearched && item.containerOpened)
+                item.wanted = false;
+
             if (item.wanted)
                 item.color = coloursGlobals::containerColour;
 
@@ -1664,8 +1792,7 @@ void loot::updateExistingLootItems(
     }
 }
 
-void loot::updateCorpseRequirements(
-    std::vector<LootList>& workingCache)
+void loot::updateCorpseRequirements(std::vector<LootList>& workingCache)
 {
     if (workingCache.empty())
         return;
@@ -1695,22 +1822,15 @@ void loot::updateCorpseRequirements(
             continue;
         }
 
-        scanCorpseEquipment(
-            item.m_interactiveClass,
-            item,
-            true
-        );
+        scanCorpseEquipment(item.m_interactiveClass, item, true);
 
-        item.corpseValue =
-            calculateCorpseValue(item.corpseEquip);
+        item.corpseValue = calculateCorpseValue(item.corpseEquip);
 
         ++updated;
     }
 }
 
-void loot::cleanupMissingLoot(
-    std::vector<LootList>& workingCache,
-    const std::unordered_set<uint64_t>& livePointers) const
+void loot::cleanupMissingLoot(std::vector<LootList>& workingCache, const std::unordered_set<uint64_t>& livePointers) const
 {
     workingCache.erase(
         std::remove_if(
@@ -1889,8 +2009,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
             corpseEquipment corpseEq{};
 
-            if (const CachedMarketItem* marketItem =
-                findMarketItem(id))
+            if (const CachedMarketItem* marketItem = findMarketItem(id))
             {
                 corpseEq.equipmentName = marketItem->shortName;
                 corpseEq.value = (marketItem->marketPrice == 0)
@@ -1903,9 +2022,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
                 wantedLookup.questIds.contains(id) ||
                 wantedLookup.wishlistIds.contains(id);
 
-            if (!corpseEq.wanted &&
-                lootGlobals::enableValueLoot &&
-                corpseEq.value > lootGlobals::valueLootFrom)
+            if (!corpseEq.wanted && lootGlobals::enableValueLoot && corpseEq.value > lootGlobals::valueLootFrom)
             {
                 corpseEq.wanted = true;
             }
@@ -1946,10 +2063,7 @@ void loot::lootTask()
         if (now < lootBackoffUntil)
             return;
 
-        const bool discoveryDue =
-            nextLootDiscovery ==
-                std::chrono::steady_clock::time_point{} ||
-            now >= nextLootDiscovery;
+        const bool discoveryDue = nextLootDiscovery == std::chrono::steady_clock::time_point{} || now >= nextLootDiscovery;
 
         if (discoveryDue)
         {
@@ -2121,6 +2235,7 @@ void loot::lootTask()
             );
         }
 
+        updateLootableContainerStates(workingCache);
         updateCorpseRequirements(workingCache);
         updateExistingLootItems(workingCache);
         cleanupMissingLoot(workingCache, livePointers);

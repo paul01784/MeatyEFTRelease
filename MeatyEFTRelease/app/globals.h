@@ -1,4 +1,6 @@
 #pragma once
+#include <vector>
+
 #include "render.h"
 #include "../external/glm/glm.hpp"
 
@@ -170,6 +172,11 @@ struct lootGlobals {
     static bool enableQuestLoot;
     static bool enableWishListLoot;
     static bool enableValueLoot;
+    static bool showLootValue;
+    static int lootValuePriceSource;
+    static std::vector<std::string> selectedLootCategories;
+    static glm::vec4 categoryLootColour;
+    static bool hideSearched;
     static int valueLootFrom;
     static int valueLootFromEquip;
     static bool drawDrawer;

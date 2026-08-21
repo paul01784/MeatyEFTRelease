@@ -5,7 +5,9 @@
 #include <shared_mutex>
 #include <string>
 #include <glm/glm.hpp>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include <chrono>
 
 struct corpseEquipment
@@ -63,6 +65,7 @@ struct LootList
 
     bool isItem = false;
     bool isContainer = false;
+    bool containerOpened = false;
     bool isQuestItem = false;
     bool isCorpse = false;
     bool isAirdrop = false;
@@ -115,6 +118,7 @@ private:
         std::unordered_set<std::string> questIds;
         std::unordered_set<std::string> wishlistIds;
         std::unordered_map<std::string, glm::vec4> activeFilterItems;
+        std::unordered_set<std::string> categoryLootIds;
     };
 
 private:
@@ -132,6 +136,7 @@ private:
     void classifyCorpseLootItems(std::vector<LootList>& items);
 
     void updateExistingLootItems(std::vector<LootList>& workingCache);
+    void updateLootableContainerStates(std::vector<LootList>& workingCache);
     void updateCorpseRequirements(std::vector<LootList>& workingCache);
 
     void scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool update = false);
@@ -180,6 +185,10 @@ private:
 };
 
 extern loot Loot;
+
+long GetLootDisplayPrice(const LootList& lootItem);
+std::string FormatLootPrice(long price);
+std::string GetLootDisplayName(const LootList& lootItem);
 
 std::string getContainerName(const std::string& bsgid);
 std::string GetQuestItemDisplayName(const std::string& itemId);
