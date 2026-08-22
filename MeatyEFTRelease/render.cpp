@@ -25,6 +25,7 @@
 #include "app/aimview.h"
 
 #include <cctype>
+#include <chrono>
 
 ConfigManager configManager("config.json", "lootFilters.json");
 
@@ -221,6 +222,46 @@ bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, i
     *out_width = (int)my_image_desc.Width;
     *out_height = (int)my_image_desc.Height;
     return true;
+}
+
+static void EnsureSelectedMapLoaded()
+{
+    static std::string loadedMapId;
+    static std::string failedMapId;
+    static std::chrono::steady_clock::time_point lastFailureAt{};
+    static constexpr std::chrono::seconds retryDelay{ 5 };
+
+    if (!appGlobals::runRadar.load(std::memory_order_acquire))
+    {
+        loadedMapId.clear();
+        failedMapId.clear();
+        return;
+    }
+
+    const std::string selectedMap = mainGame.selectedLocation;
+
+    if (selectedMap.empty() || selectedMap == loadedMapId)
+        return;
+
+    // Bound retry attempts so a broken map cannot hammer disk/driver every frame.
+    if (selectedMap == failedMapId &&
+        std::chrono::steady_clock::now() - lastFailureAt < retryDelay)
+        return;
+
+    setCurrentMapSpecs = false;
+
+    if (!loadMaps(selectedMap))
+    {
+        failedMapId = selectedMap;
+        lastFailureAt = std::chrono::steady_clock::now();
+        LOGS.logError("[MAP] Failed to load map textures for: " + selectedMap);
+        return;
+    }
+
+    loadedMapId = selectedMap;
+    failedMapId.clear();
+
+    LOGS.logInfo("[MAP] Loaded map textures for: " + selectedMap);
 }
 
 static void renderMapDetails()
@@ -7036,6 +7077,7 @@ static void renderMainScreen()
         else
         {
             // consider in raid? render what we only have access to in raid!
+            EnsureSelectedMapLoaded();
             renderMapDetails();
 
             //render what we want on map as runRadar is true
@@ -7337,7 +7379,7 @@ bool CreateDeviceD3D(HWND hWnd)
     g_d3dpp.AutoDepthStencilFormat = D3DFMT_D16;
     g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_ONE;           // Present with vsync
     //g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;   // Present without vsync, maximum unthrottled framerate
-    if (g_pD3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hWnd, D3DCREATE_HARDWARE_VERTEXPROCESSING, &g_d3dpp, &g_pd3dDevice) < 0)
+    if (g_pD3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hWnd, D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_MULTITHREADED, &g_d3dpp, &g_pd3dDevice) < 0)
         return false;
 
     return true;

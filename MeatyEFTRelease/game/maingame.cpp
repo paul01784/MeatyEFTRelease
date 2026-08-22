@@ -736,8 +736,6 @@ void MainGame::mainThread(std::stop_token stopToken)
         if (!getGameWorldDetails(stopToken))
             break;
 
-        //load required map to memory
-        loadMaps(this->selectedLocation.c_str());
         appGlobals::runRadar = true;
         mapGlobals::followLocal = true;
 
