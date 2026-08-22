@@ -24,14 +24,34 @@ namespace
 {
     constexpr std::uint64_t GrenadesListOffset = 0x18;
     constexpr std::size_t MaxReasonableGrenades = 512;
+    constexpr std::size_t MaxReasonableTripwires = 512;
+
+    bool grenadesEnabled() noexcept
+    {
+        return espGlobals::drawGrenades || radarGlobals::drawGrenades;
+    }
+
+    bool tripwiresEnabled() noexcept
+    {
+        return espGlobals::drawTripwires || radarGlobals::drawTripwires;
+    }
+
+    bool isTripwireActive(const std::int32_t state) noexcept
+    {
+        // ETripwireState.Wait and ETripwireState.Active.
+        return state == 1 || state == 2;
+    }
 }
 
 void ExplosiveManager::initManager()
 {
-    if (!espGlobals::drawGrenades && !radarGlobals::drawGrenades)
-        return;
-
     std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
+
+    if (!grenadesEnabled())
+    {
+        clearExplosivesOfTypeUnlocked(ExplosiveType::Grenade);
+        return;
+    }
 
     if (!Utils::valid_pointer(mainGame.localGameWorld))
         return;
@@ -39,6 +59,24 @@ void ExplosiveManager::initManager()
     m_localGameWorld = mainGame.localGameWorld;
 
     refreshGrenadesUnlocked();
+}
+
+void ExplosiveManager::refreshTripwires()
+{
+    std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
+
+    if (!tripwiresEnabled())
+    {
+        clearExplosivesOfTypeUnlocked(ExplosiveType::Tripwire);
+        return;
+    }
+
+    if (!Utils::valid_pointer(mainGame.localGameWorld))
+        return;
+
+    m_localGameWorld = mainGame.localGameWorld;
+
+    refreshTripwiresUnlocked();
 }
 
 void ExplosiveManager::reset()
@@ -67,7 +105,28 @@ GrenadeCacheSnapshot ExplosiveManager::getGrenadesSnapshot() const noexcept
 
 std::size_t ExplosiveManager::getGrenadeCount() const
 {
-    return getGrenadesSnapshot()->size();
+    const GrenadeCacheSnapshot snapshot = getGrenadesSnapshot();
+
+    return static_cast<std::size_t>(std::count_if(
+        snapshot->begin(),
+        snapshot->end(),
+        [](const GrenadeList& explosive)
+        {
+            return explosive.type == ExplosiveType::Grenade;
+        }));
+}
+
+std::size_t ExplosiveManager::getTripwireCount() const
+{
+    const GrenadeCacheSnapshot snapshot = getGrenadesSnapshot();
+
+    return static_cast<std::size_t>(std::count_if(
+        snapshot->begin(),
+        snapshot->end(),
+        [](const GrenadeList& explosive)
+        {
+            return explosive.type == ExplosiveType::Tripwire;
+        }));
 }
 
 void ExplosiveManager::publishGrenadesLocked()
@@ -199,6 +258,71 @@ bool ExplosiveManager::readGrenadeAddressesUnlocked(
     }
 }
 
+bool ExplosiveManager::readTripwireAddressesUnlocked(std::vector<std::uint64_t>& addresses)
+{
+    addresses.clear();
+
+    if (!Utils::valid_pointer(m_localGameWorld))
+        return false;
+
+    try
+    {
+        const std::uint64_t logicProcessor = mem.Read<std::uint64_t>(m_localGameWorld + sdk::GameWorld::SynchronizableObjectLogicProcessor);
+
+        if (!Utils::valid_pointer(logicProcessor))
+        {
+            m_synchronizableObjectLogicProcessor = 0;
+            m_synchronizableObjectsListPointer = 0;
+            return false;
+        }
+
+        const std::uint64_t synchronizableObjects = mem.Read<std::uint64_t>(logicProcessor + sdk::SynchronizableObjectLogicProcessor::_activeSynchronizableObjects);
+
+        if (!Utils::valid_pointer(synchronizableObjects))
+        {
+            m_synchronizableObjectLogicProcessor = logicProcessor;
+            m_synchronizableObjectsListPointer = 0;
+            return false;
+        }
+
+        m_synchronizableObjectLogicProcessor = logicProcessor;
+        m_synchronizableObjectsListPointer = synchronizableObjects;
+
+        const auto synchronizableObjectList = UnityList<std::uint64_t>::Create(synchronizableObjects);
+
+        std::unordered_set<std::uint64_t> uniqueAddresses;
+        uniqueAddresses.reserve(synchronizableObjectList.count());
+
+        for (const std::uint64_t objectAddress : synchronizableObjectList)
+        {
+            if (!Utils::valid_pointer(objectAddress))
+                continue;
+
+            if (mem.Read<std::int32_t>(objectAddress + sdk::SynchronizableObject::Type) != 2)
+            {
+                continue;
+            }
+
+            uniqueAddresses.insert(objectAddress);
+
+            if (uniqueAddresses.size() > MaxReasonableTripwires)
+                return false;
+        }
+
+        addresses.reserve(uniqueAddresses.size());
+
+        for (const std::uint64_t objectAddress : uniqueAddresses)
+            addresses.push_back(objectAddress);
+
+        return true;
+    }
+    catch (...)
+    {
+        m_synchronizableObjectsListPointer = 0;
+        return false;
+    }
+}
+
 void ExplosiveManager::refreshGrenadesUnlocked()
 {
     std::vector<std::uint64_t> liveAddresses;
@@ -217,13 +341,15 @@ void ExplosiveManager::refreshGrenadesUnlocked()
         workingGrenades = m_grenades;
     }
 
-    // Remove invalid entries and grenades that are no longer present
     workingGrenades.erase(
         std::remove_if(
             workingGrenades.begin(),
             workingGrenades.end(),
             [&liveSet](const GrenadeList& grenade)
             {
+                if (grenade.type != ExplosiveType::Grenade)
+                    return false;
+
                 if (!Utils::valid_pointer(grenade.instance))
                     return true;
 
@@ -231,7 +357,7 @@ void ExplosiveManager::refreshGrenadesUnlocked()
             }),
         workingGrenades.end());
 
-    workingGrenades.reserve(liveAddresses.size());
+    workingGrenades.reserve(workingGrenades.size() + liveAddresses.size());
 
     //Discover grenades
     for (const std::uint64_t grenadeAddress : liveAddresses)
@@ -265,6 +391,7 @@ void ExplosiveManager::refreshGrenadesUnlocked()
         grenade.instance = grenadeAddress;
         grenade.transformInternal = transformInternal;
         grenade.isDestroyed = false;
+        grenade.isActive = true;
 
         workingGrenades.emplace_back(std::move(grenade));
     }
@@ -275,6 +402,7 @@ void ExplosiveManager::refreshGrenadesUnlocked()
         0);
 
     bool destroyedScatterRan = false;
+    bool queuedDestroyedReads = false;
 
     if (!workingGrenades.empty())
     {
@@ -290,13 +418,19 @@ void ExplosiveManager::refreshGrenadesUnlocked()
                 i < workingGrenades.size();
                 ++i)
             {
+                if (workingGrenades[i].type != ExplosiveType::Grenade)
+                    continue;
+
                 scatter.Add(
                     workingGrenades[i].instance +
                     sdk::Throwable::_isDestroyed,
                     destroyedResults[i]);
+
+                queuedDestroyedReads = true;
             }
 
-            destroyedScatterRan = scatter.Execute();
+            if (queuedDestroyedReads)
+                destroyedScatterRan = scatter.Execute();
         }
     }
 
@@ -306,6 +440,9 @@ void ExplosiveManager::refreshGrenadesUnlocked()
         ++i)
     {
         GrenadeList& grenade = workingGrenades[i];
+
+        if (grenade.type != ExplosiveType::Grenade)
+            continue;
 
         if (destroyedScatterRan)
         {
@@ -354,7 +491,8 @@ void ExplosiveManager::refreshGrenadesUnlocked()
             workingGrenades.end(),
             [](const GrenadeList& grenade)
             {
-                return grenade.isDestroyed;
+                return grenade.type == ExplosiveType::Grenade &&
+                    grenade.isDestroyed;
             }),
         workingGrenades.end());
 
@@ -366,12 +504,133 @@ void ExplosiveManager::refreshGrenadesUnlocked()
     }
 }
 
+void ExplosiveManager::refreshTripwiresUnlocked()
+{
+    std::vector<std::uint64_t> liveAddresses;
+
+    if (!readTripwireAddressesUnlocked(liveAddresses))
+        return;
+
+    const std::unordered_set<std::uint64_t> liveSet(
+        liveAddresses.begin(),
+        liveAddresses.end());
+
+    std::vector<GrenadeList> workingExplosives;
+
+    {
+        std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
+        workingExplosives = m_grenades;
+    }
+
+    // A tripwire is no longer usable once its synchronizable object disappears.
+    workingExplosives.erase(
+        std::remove_if(
+            workingExplosives.begin(),
+            workingExplosives.end(),
+            [&liveSet](const GrenadeList& explosive)
+            {
+                if (explosive.type != ExplosiveType::Tripwire)
+                    return false;
+
+                return !Utils::valid_pointer(explosive.instance) ||
+                    !liveSet.contains(explosive.instance);
+            }),
+        workingExplosives.end());
+
+    workingExplosives.reserve(workingExplosives.size() + liveAddresses.size());
+
+    for (const std::uint64_t tripwireAddress : liveAddresses)
+    {
+        if (findGrenade(workingExplosives, tripwireAddress) != nullptr)
+            continue;
+
+        GrenadeList tripwire{};
+        tripwire.type = ExplosiveType::Tripwire;
+        tripwire.instance = tripwireAddress;
+
+        workingExplosives.emplace_back(std::move(tripwire));
+    }
+
+    for (GrenadeList& tripwire : workingExplosives)
+    {
+        if (tripwire.type != ExplosiveType::Tripwire)
+            continue;
+
+        const std::int32_t state = mem.Read<std::int32_t>(tripwire.instance + sdk::TripwireSynchronizableObject::_tripwireState);
+
+        tripwire.isActive = isTripwireActive(state);
+
+        if (!tripwire.isActive)
+            continue;
+
+        glm::vec3 toPosition = mem.Read<glm::vec3>(
+            tripwire.instance +
+            sdk::TripwireSynchronizableObject::ToPosition);
+        glm::vec3 fromPosition = mem.Read<glm::vec3>(
+            tripwire.instance +
+            sdk::TripwireSynchronizableObject::FromPosition);
+
+        // The game stores both anchor points slightly below the visible wire.
+        toPosition.y += 0.175f;
+        fromPosition.y += 0.175f;
+
+        if (!positionLooksValid(toPosition) ||
+            !positionLooksValid(fromPosition))
+        {
+            tripwire.isActive = false;
+            continue;
+        }
+
+        tripwire.worldLocation = toPosition;
+        tripwire.fromWorldLocation = fromPosition;
+    }
+
+    workingExplosives.erase(
+        std::remove_if(
+            workingExplosives.begin(),
+            workingExplosives.end(),
+            [](const GrenadeList& explosive)
+            {
+                return explosive.type == ExplosiveType::Tripwire &&
+                    !explosive.isActive;
+            }),
+        workingExplosives.end());
+
+    {
+        std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
+        m_grenades = std::move(workingExplosives);
+        publishGrenadesLocked();
+    }
+}
+
+void ExplosiveManager::clearExplosivesOfTypeUnlocked(const ExplosiveType type)
+{
+    std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
+
+    const auto previousSize = m_grenades.size();
+
+    m_grenades.erase(
+        std::remove_if(
+            m_grenades.begin(),
+            m_grenades.end(),
+            [type](const GrenadeList& explosive)
+            {
+                return explosive.type == type;
+            }),
+        m_grenades.end());
+
+    if (m_grenades.size() != previousSize)
+        publishGrenadesLocked();
+}
+
 void ExplosiveManager::resetUnlocked()
 {
     m_localGameWorld = 0;
 
     m_grenadesController = 0;
     m_grenadesListPointer = 0;
+    m_synchronizableObjectLogicProcessor = 0;
+    m_synchronizableObjectsListPointer = 0;
 
     m_lastUnityListCount = 0;
     m_lastUnityListReadSucceeded = false;

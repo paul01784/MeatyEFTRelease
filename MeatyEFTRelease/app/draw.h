@@ -878,6 +878,9 @@ void drawWidgetExfils()
 
 void drawGrenades()
 {
+    if (!radarGlobals::drawGrenades)
+        return;
+
     const GrenadeCacheSnapshot grenadeSnapshot =
         explosiveManager.getGrenadesSnapshot();
     const GrenadeCacheCollection& cacheGrenades = *grenadeSnapshot;
@@ -887,9 +890,60 @@ void drawGrenades()
 
     for (const GrenadeList& grenade : cacheGrenades)
     {
+        if (grenade.type != ExplosiveType::Grenade)
+            continue;
+
         glm::vec3 locationMap = mapControl.getMapPosition(grenade.worldLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
 
         DrawGrenade(locationMap.x, locationMap.y, mapControl.zoomLevel, grenade);
 
+    }
+}
+
+void drawTripwires()
+{
+    if (!radarGlobals::drawTripwires)
+        return;
+
+    const GrenadeCacheSnapshot explosiveSnapshot = explosiveManager.getGrenadesSnapshot();
+    const GrenadeCacheCollection& explosives = *explosiveSnapshot;
+
+    for (const GrenadeList& tripwire : explosives)
+    {
+        if (tripwire.type != ExplosiveType::Tripwire ||
+            !tripwire.isActive ||
+            !Utils::isGoodVec3(tripwire.worldLocation) ||
+            !Utils::isGoodVec3(tripwire.fromWorldLocation))
+        {
+            continue;
+        }
+
+        const glm::vec3 toMap = mapControl.getMapPosition(
+            tripwire.worldLocation,
+            currentMap::configX,
+            currentMap::configY,
+            currentMap::configScale);
+        const glm::vec3 fromMap = mapControl.getMapPosition(
+            tripwire.fromWorldLocation,
+            currentMap::configX,
+            currentMap::configY,
+            currentMap::configScale);
+
+        if (radarGlobals::drawTripwireLine)
+        {
+            DrawLine(
+                fromMap.x,
+                fromMap.y,
+                toMap.x,
+                toMap.y,
+                coloursGlobals::tripwires,
+                2.0f);
+        }
+
+        DrawTripWire(
+            static_cast<int>(toMap.x),
+            static_cast<int>(toMap.y),
+            coloursGlobals::tripwires,
+            mapControl.zoomLevel);
     }
 }

@@ -860,13 +860,12 @@ void DrawGrenade(int x, int y, float zoomLevel, GrenadeList grenade)
 
 void DrawTripWire(int x, int y, glm::vec4 color, float zoomLevel)
 {
-	float fontSize = std::clamp(20.f / zoomLevel, 8.f, 10.f);
+	const float radius = std::clamp(5.0f / zoomLevel, 2.5f, 5.0f);
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const ImU32 drawColor = ImColor(color.x, color.y, color.z, color.w);
 
-	//draw list
-	ImDrawList* draw_list = ImGui::GetWindowDrawList();
-
-	std::string string = ICON_FK_WIRE;
-	//main marker
-	draw_list->AddText(ImGui::GetFont(), fontSize + 6, ImVec2(x - 3, y), ImColor(color.x, color.y, color.z, color.w), string.c_str(), 0, 0.0f, 0);
-
+	// The wire itself is drawn between its two anchors. This marker just makes
+	// the armed endpoint easy to distinguish at low zoom levels.
+	drawList->AddCircleFilled(ImVec2(x, y), radius, drawColor);
+	drawList->AddCircle(ImVec2(x, y), radius + 1.0f, IM_COL32(0, 0, 0, 220), 12, 1.0f);
 }

@@ -44,6 +44,12 @@
             "g": 1.0,
             "r": 1.0
         },
+        "tripwires": {
+            "a": 1.0,
+            "b": 0.0,
+            "g": 0.3,
+            "r": 1.0
+        },
         "playerAI": {
             "a": 1.0,
             "b": 1.0,
@@ -111,6 +117,9 @@
         "drawCrosshair": false,
         "drawGrenades": false,
         "drawGrenadesDist": 100,
+        "drawTripwires": false,
+        "drawTripwiresDist": 100,
+        "drawTripwireLine": true,
         "drawHeadDot": false,
         "drawHealthPlayers": false,
         "drawLoot": false,
@@ -173,6 +182,8 @@
     "radarGlobals": {
         "drawExfils": false,
         "drawGrenades": false,
+        "drawTripwires": false,
+        "drawTripwireLine": true,
         "drawLoot": false,
         "drawPlayers": false,
         "drawQuestHelper": false,

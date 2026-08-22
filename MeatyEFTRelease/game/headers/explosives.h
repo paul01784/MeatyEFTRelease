@@ -13,7 +13,7 @@
 enum class ExplosiveType : std::uint8_t
 {
     Grenade = 0,
-
+    Tripwire = 1,
 };
 
 struct GrenadeList
@@ -24,8 +24,10 @@ struct GrenadeList
     std::uint64_t transformInternal = 0;
 
     glm::vec3 worldLocation{ 0.0f, 0.0f, 0.0f };
+    glm::vec3 fromWorldLocation{ 0.0f, 0.0f, 0.0f };
 
     bool isDestroyed = false;
+    bool isActive = false;
 };
 
 using GrenadeCacheCollection = std::vector<GrenadeList>;
@@ -43,12 +45,17 @@ public:
 
     void initManager();
 
+    // Kept separate from grenades so tripwires can be refreshed at a lower
+    // latency without increasing the grenade polling rate.
+    void refreshTripwires();
+
     // Called when leaving the raid.
     void reset();
 
     [[nodiscard]] std::vector<GrenadeList> getGrenades() const;
     [[nodiscard]] GrenadeCacheSnapshot getGrenadesSnapshot() const noexcept;
     [[nodiscard]] std::size_t getGrenadeCount() const;
+    [[nodiscard]] std::size_t getTripwireCount() const;
 
     // Debug
     [[nodiscard]] std::uint64_t getLocalGameWorld() const;
@@ -64,8 +71,14 @@ private:
     bool readGrenadeAddressesUnlocked(
         std::vector<std::uint64_t>& addresses);
 
+    bool readTripwireAddressesUnlocked(
+        std::vector<std::uint64_t>& addresses);
+
     void refreshGrenadesUnlocked();
+    void refreshTripwiresUnlocked();
     void resetUnlocked();
+
+    void clearExplosivesOfTypeUnlocked(ExplosiveType type);
 
     static bool positionLooksValid(const glm::vec3& position);
 
@@ -88,6 +101,13 @@ private:
 
     // grenadesController + 0x18
     std::uint64_t m_grenadesListPointer = 0;
+
+    // localGameWorld + GameWorld::SynchronizableObjectLogicProcessor
+    std::uint64_t m_synchronizableObjectLogicProcessor = 0;
+
+    // synchronizableObjectLogicProcessor +
+    // SynchronizableObjectLogicProcessor::_activeSynchronizableObjects
+    std::uint64_t m_synchronizableObjectsListPointer = 0;
 
     std::size_t m_lastUnityListCount = 0;
     bool m_lastUnityListReadSucceeded = false;

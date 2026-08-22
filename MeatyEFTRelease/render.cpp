@@ -3425,6 +3425,14 @@ static void renderMenuSettings()
                     10.0
                 );
 
+                timingsChanged |= DrawTaskTiming(
+                    "Tripwires",
+                    globals::taskTripWire,
+                    10.0,
+                    5000.0,
+                    10.0
+                );
+
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Settings"))
@@ -3432,6 +3440,7 @@ static void renderMenuSettings()
                 ImGui::SeparatorText("Radar Settings");
                 if (ImGui::Checkbox(" Draw Players", &radarGlobals::drawPlayers)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Grenades", &radarGlobals::drawGrenades)) configManager.SaveConfig();
+                if (ImGui::Checkbox(" Draw Tripwires", &radarGlobals::drawTripwires)) configManager.SaveConfig(); ImGui::SameLine(); if (ImGui::Checkbox("Show lines##radarTripwire", &radarGlobals::drawTripwireLine)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Exfils", &radarGlobals::drawExfils)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Loot", &radarGlobals::drawLoot)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Quest Helper", &radarGlobals::drawQuestHelper)) configManager.SaveConfig();
@@ -3449,6 +3458,7 @@ static void renderMenuSettings()
 
                 if (ImGui::Checkbox(" Draw Players        ", &espGlobals::drawPlayers)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##player", &espGlobals::drawPlayerDist, 10, 1000, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 if (ImGui::Checkbox(" Draw Grenades    ", &espGlobals::drawGrenades)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##grenade", &espGlobals::drawGrenadesDist, 10, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
+                if (ImGui::Checkbox(" Draw Tripwires  ", &espGlobals::drawTripwires)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##tripwire", &espGlobals::drawTripwiresDist, 10, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth(); ImGui::SameLine(); if (ImGui::Checkbox("Show lines##espTripwire", &espGlobals::drawTripwireLine)) configManager.SaveConfig();
                 if (ImGui::Checkbox(" Draw Loot             ", &espGlobals::drawLoot)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##loot", &espGlobals::drawLootDist, 5, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 if (ImGui::Checkbox(" Draw Corpse          ", &espGlobals::drawCorpse)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##corpse", &espGlobals::drawCorpseDist, 5, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
                 if (ImGui::Checkbox(" Draw Box's", &espGlobals::drawBoxPlayers)) configManager.SaveConfig();
@@ -3489,6 +3499,7 @@ static void renderMenuSettings()
                 if (ImGui::ColorEdit4(" Player GroupLine", (float*)&coloursGlobals::playerGroupLine, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
                 if (ImGui::ColorEdit4(" Player Corpse", (float*)&coloursGlobals::playerCorpse, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
                 if (ImGui::ColorEdit4(" Grenades", (float*)&coloursGlobals::grenades, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+                if (ImGui::ColorEdit4(" Tripwires", (float*)&coloursGlobals::tripwires, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
                 if (ImGui::ColorEdit4(" Exfils", (float*)&coloursGlobals::exfils, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
                 if (ImGui::ColorEdit4(" Crosshair", (float*)&coloursGlobals::crosshair, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
                 if (ImGui::ColorEdit4(" FOV Circle", (float*)&coloursGlobals::fovCircle, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
@@ -7085,6 +7096,7 @@ static void renderMainScreen()
             drawPlayers();
             drawExfils();
             drawGrenades();
+            drawTripwires();
             drawLoot();
 
             drawQuests();

@@ -84,6 +84,8 @@ struct radarGlobals {
     static bool drawLoot;
     static bool drawQuestHelper;
     static bool drawGrenades;
+    static bool drawTripwires;
+    static bool drawTripwireLine;
     static bool drawExfils;
     static int localAimLine;
     static int friendAimLine;
@@ -102,6 +104,9 @@ struct espGlobals {
     static int drawCorpseDist;
     static bool drawGrenades;
     static int drawGrenadesDist;
+    static bool drawTripwires;
+    static int drawTripwiresDist;
+    static bool drawTripwireLine;
     static bool drawLoot;
     static bool drawCorpse;
     static bool drawQuestHelper;
@@ -151,6 +156,7 @@ struct coloursGlobals {
     static glm::vec4 playerCorpse;
     static glm::vec4 playerGroupLine;
     static glm::vec4 grenades;
+    static glm::vec4 tripwires;
     static glm::vec4 exfils;
     static glm::vec4 questMarker;
     static glm::vec4 crosshair;

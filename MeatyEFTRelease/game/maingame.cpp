@@ -145,10 +145,12 @@ void MainGame::SetBattleMode(bool enabled)
         battleModeSavedState.radarDrawLoot = radarGlobals::drawLoot;
         battleModeSavedState.radarDrawQuestHelper = radarGlobals::drawQuestHelper;
         battleModeSavedState.radarDrawGrenades = radarGlobals::drawGrenades;
+        battleModeSavedState.radarDrawTripwires = radarGlobals::drawTripwires;
         battleModeSavedState.radarDrawExfils = radarGlobals::drawExfils;
         battleModeSavedState.espDrawLoot = espGlobals::drawLoot;
         battleModeSavedState.espDrawCorpse = espGlobals::drawCorpse;
         battleModeSavedState.espDrawQuestHelper = espGlobals::drawQuestHelper;
+        battleModeSavedState.espDrawTripwires = espGlobals::drawTripwires;
         battleModeSavedState.espDrawExfil = espGlobals::drawExfil;
         battleModeSavedState.valid = true;
 
@@ -156,11 +158,13 @@ void MainGame::SetBattleMode(bool enabled)
         radarGlobals::drawLoot = false;
         radarGlobals::drawQuestHelper = false;
         radarGlobals::drawGrenades = false;
+        radarGlobals::drawTripwires = false;
         radarGlobals::drawExfils = false;
 
         espGlobals::drawLoot = false;
         espGlobals::drawCorpse = false;
         espGlobals::drawQuestHelper = false;
+        espGlobals::drawTripwires = false;
         espGlobals::drawExfil = false;
 
         battleModeEnabled = true;
@@ -175,10 +179,12 @@ void MainGame::SetBattleMode(bool enabled)
             radarGlobals::drawLoot = battleModeSavedState.radarDrawLoot;
             radarGlobals::drawQuestHelper = battleModeSavedState.radarDrawQuestHelper;
             radarGlobals::drawGrenades = battleModeSavedState.radarDrawGrenades;
+            radarGlobals::drawTripwires = battleModeSavedState.radarDrawTripwires;
             radarGlobals::drawExfils = battleModeSavedState.radarDrawExfils;
             espGlobals::drawLoot = battleModeSavedState.espDrawLoot;
             espGlobals::drawCorpse = battleModeSavedState.espDrawCorpse;
             espGlobals::drawQuestHelper = battleModeSavedState.espDrawQuestHelper;
+            espGlobals::drawTripwires = battleModeSavedState.espDrawTripwires;
             espGlobals::drawExfil = battleModeSavedState.espDrawExfil;
         }
 
@@ -794,6 +800,12 @@ void MainGame::mainThread(std::stop_token stopToken)
             std::bind(&ExplosiveManager::initManager, &explosiveManager),
             &globals::taskGrenades,
             { TaskPriority::High, DmaPriority::High, false, 100.0 });
+
+        manager.addTask(
+            "TripwireManagerTask",
+            std::bind(&ExplosiveManager::refreshTripwires, &explosiveManager),
+            &globals::taskTripWire,
+            { TaskPriority::High, DmaPriority::High, false, 20.0 });
 
         manager.addTask(
             "raidMonitor",

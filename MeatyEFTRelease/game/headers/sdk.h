@@ -6,7 +6,7 @@ namespace sdk
 	namespace GameWorld
 	{
 		constexpr uint64_t Location = 0xE8;
-		
+		constexpr uint64_t SynchronizableObjectLogicProcessor = 0x278; // object
 	}
 
 	namespace ClientLocalGameWorld
@@ -16,7 +16,6 @@ namespace sdk
 		constexpr uint64_t MainPlayer = 0x230;
 		constexpr uint64_t Grenades = 0x2B8;
 		constexpr uint64_t ExfiltrationController = 0x68;
-		constexpr uint64_t SynchronizableObjectLogicProcessor = 0x278; // object
 		constexpr uint64_t btrController = 0x28;
 	}
 
@@ -46,12 +45,13 @@ namespace sdk
 	
 	namespace SynchronizableObjectLogicProcessor
 	{
-		constexpr uint64_t _staticSynchronizableObjects = 0x18; // object
+		constexpr uint64_t _activeSynchronizableObjects = 0x18; // object
 	}
 
 	namespace TripwireSynchronizableObject
 	{
 		constexpr uint64_t _tripwireState = 0xE4; // object
+		constexpr uint64_t FromPosition = 0x14C; // Vector3
 		constexpr uint64_t ToPosition = 0x158; // object
 	}
 

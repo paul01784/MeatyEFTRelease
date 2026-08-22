@@ -60,11 +60,13 @@ private:
 		bool radarDrawLoot = false;
 		bool radarDrawQuestHelper = false;
 		bool radarDrawGrenades = false;
+		bool radarDrawTripwires = false;
 		bool radarDrawExfils = false;
 
 		bool espDrawLoot = false;
 		bool espDrawCorpse = false;
 		bool espDrawQuestHelper = false;
+		bool espDrawTripwires = false;
 		bool espDrawExfil = false;
 
 		bool valid = false;

@@ -858,6 +858,9 @@ namespace fuserRender
 
     static inline void RenderNades()
     {
+        if (!espGlobals::drawGrenades)
+            return;
+
         const GrenadeCacheCollection& nadeCache = *g_frameGrenadeSnapshot;
 
         if (nadeCache.empty())
@@ -870,6 +873,9 @@ namespace fuserRender
 
         for (const GrenadeList& nade : nadeCache)
         {
+            if (nade.type != ExplosiveType::Grenade)
+                continue;
+
             if (!Utils::valid_pointer(nade.instance))
                 continue;
 
@@ -914,6 +920,67 @@ namespace fuserRender
                 screenH - 60.0f,
                 18.0f,
                 glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
+                true,
+                true);
+        }
+    }
+
+    static inline void RenderTripwires()
+    {
+        if (!espGlobals::drawTripwires)
+            return;
+
+        const GrenadeCacheCollection& explosiveCache = *g_frameGrenadeSnapshot;
+
+        if (explosiveCache.empty())
+            return;
+
+        for (const GrenadeList& tripwire : explosiveCache)
+        {
+            if (tripwire.type != ExplosiveType::Tripwire ||
+                !tripwire.isActive ||
+                !Utils::valid_pointer(tripwire.instance) ||
+                !Utils::isGoodVec3(tripwire.worldLocation) ||
+                !Utils::isGoodVec3(tripwire.fromWorldLocation))
+            {
+                continue;
+            }
+
+            const float distance = glm::distance(g_frameLocalLocation, tripwire.worldLocation);
+
+            if (distance > espGlobals::drawTripwiresDist)
+                continue;
+
+            glm::vec2 toScreen{};
+
+            if (!ProjectWorldToScreen(tripwire.worldLocation, &toScreen))
+                continue;
+
+            if (espGlobals::drawTripwireLine)
+            {
+                glm::vec2 fromScreen{};
+
+                if (ProjectWorldToScreen(tripwire.fromWorldLocation, &fromScreen))
+                {
+                    g_DxWindow.DrawLine(
+                        fromScreen.x,
+                        fromScreen.y,
+                        toScreen.x,
+                        toScreen.y,
+                        coloursGlobals::tripwires,
+                        2.0f);
+                }
+            }
+
+            const std::string label = "TRIPWIRE " +
+                std::to_string(static_cast<int>(distance)) + "m";
+
+            g_DxWindow.DrawString(
+                label.c_str(),
+                toScreen.x,
+                toScreen.y + 3.0f,
+                14.0f,
+                coloursGlobals::tripwires,
                 true,
                 true);
         }
@@ -1371,6 +1438,11 @@ namespace fuserRender
         SafeRenderStage("RenderNades", []()
             {
                 RenderNades();
+            });
+
+        SafeRenderStage("RenderTripwires", []()
+            {
+                RenderTripwires();
             });
 
         SafeRenderStage("RenderLoot", []()

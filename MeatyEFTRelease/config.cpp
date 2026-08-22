@@ -231,6 +231,7 @@ void to_json(nlohmann::json& j, const coloursGlobals&) {
         {"playerCorpse", coloursGlobals::playerCorpse},
         {"playerGroupLine", coloursGlobals::playerGroupLine},
         {"grenades", coloursGlobals::grenades},
+        {"tripwires", coloursGlobals::tripwires},
         {"exfils", coloursGlobals::exfils},
         {"questMarker", coloursGlobals::questMarker},
         {"crosshair", coloursGlobals::crosshair},
@@ -254,6 +255,7 @@ void from_json(const nlohmann::json& j, coloursGlobals& r) {
     r.playerCorpse = get_vec4_or_default(j, "playerCorpse", r.playerCorpse);
     r.playerGroupLine = get_vec4_or_default(j, "playerGroupLine", r.playerGroupLine);
     r.grenades = get_vec4_or_default(j, "grenades", r.grenades);
+    r.tripwires = get_vec4_or_default(j, "tripwires", r.tripwires);
     r.exfils = get_vec4_or_default(j, "exfils", r.exfils);
     r.questMarker = get_vec4_or_default(j, "questMarker", r.questMarker);
     r.crosshair = get_vec4_or_default(j, "crosshair", r.crosshair);
@@ -374,6 +376,8 @@ void to_json(nlohmann::json& j, const radarGlobals& r) {
         {"drawPlayers", r.drawPlayers},
         {"drawLoot", r.drawLoot},
         {"drawGrenades", r.drawGrenades},
+        {"drawTripwires", r.drawTripwires},
+        {"drawTripwireLine", r.drawTripwireLine},
         {"drawExfils", r.drawExfils},
         {"drawQuestHelper", r.drawQuestHelper},
         {"localAimLine", r.localAimLine},
@@ -391,6 +395,8 @@ void from_json(const nlohmann::json& j, radarGlobals& r) {
     r.drawPlayers = j.value("drawPlayers", r.drawPlayers);
     r.drawLoot = j.value("drawLoot", r.drawLoot);
     r.drawGrenades = j.value("drawGrenades", r.drawGrenades);
+    r.drawTripwires = j.value("drawTripwires", r.drawTripwires);
+    r.drawTripwireLine = j.value("drawTripwireLine", r.drawTripwireLine);
     r.drawExfils = j.value("drawExfils", r.drawExfils);
     r.drawQuestHelper = j.value("drawQuestHelper", r.drawQuestHelper);
     r.localAimLine = j.value("localAimLine", r.localAimLine);
@@ -411,6 +417,9 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"drawPlayerDist", e.drawPlayerDist},
         {"drawGrenades", e.drawGrenades},
         {"drawGrenadesDist", e.drawGrenadesDist},
+        {"drawTripwires", e.drawTripwires},
+        {"drawTripwiresDist", e.drawTripwiresDist},
+        {"drawTripwireLine", e.drawTripwireLine},
         {"drawLoot", e.drawLoot},
         {"drawLootDist", e.drawLootDist},
         {"drawQuestHelper", e.drawQuestHelper},
@@ -436,6 +445,9 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
     e.drawPlayerDist = j.value("drawPlayerDist", e.drawPlayerDist);
     e.drawGrenades = j.value("drawGrenades", e.drawGrenades);
     e.drawGrenadesDist = j.value("drawGrenadesDist", e.drawGrenadesDist);
+    e.drawTripwires = j.value("drawTripwires", e.drawTripwires);
+    e.drawTripwiresDist = j.value("drawTripwiresDist", e.drawTripwiresDist);
+    e.drawTripwireLine = j.value("drawTripwireLine", e.drawTripwireLine);
     e.drawLoot = j.value("drawLoot", e.drawLoot);
     e.drawLootDist = j.value("drawLootDist", e.drawLootDist);
     e.drawQuestHelper = j.value("drawQuestHelper", e.drawQuestHelper);

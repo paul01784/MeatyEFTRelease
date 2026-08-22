@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.28.13";
+std::string globals::appVersion = "1.0.28.14";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -71,6 +71,8 @@ bool radarGlobals::drawPlayers = false;
 bool radarGlobals::drawLoot = false;
 bool radarGlobals::drawQuestHelper = false;
 bool radarGlobals::drawGrenades = false;
+bool radarGlobals::drawTripwires = false;
+bool radarGlobals::drawTripwireLine = true;
 bool radarGlobals::drawExfils = false;
 int radarGlobals::localAimLine = 100;
 int radarGlobals::friendAimLine = 100;
@@ -86,6 +88,9 @@ int espGlobals::drawPlayerDist = 200;
 int espGlobals::drawCorpseDist = 100;
 bool espGlobals::drawGrenades = false;
 int espGlobals::drawGrenadesDist = 100;
+bool espGlobals::drawTripwires = false;
+int espGlobals::drawTripwiresDist = 100;
+bool espGlobals::drawTripwireLine = true;
 bool espGlobals::drawLoot = false;
 bool espGlobals::drawCorpse = false;
 int espGlobals::drawLootDist = 40;
@@ -133,6 +138,7 @@ glm::vec4 coloursGlobals::playerSkeleton = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::playerCorpse = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::playerGroupLine = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::grenades = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::tripwires = glm::vec4(1, 0.3f, 0, 1);
 glm::vec4 coloursGlobals::exfils = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::questMarker = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::crosshair = glm::vec4(1, 1, 1, 1);
