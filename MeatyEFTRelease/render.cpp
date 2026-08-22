@@ -394,6 +394,20 @@ static void renderMapDetails()
         map_orgH = gz_orgH;
         texture = gz_texture0;
     }
+    else if (mainGame.selectedLocation == "Labyrinth")
+    {
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = labyrinth_configX;
+            currentMap::configY = labyrinth_configY;
+            currentMap::configScale = labyrinth_configScale;
+            setCurrentMapSpecs = true;
+        }
+
+        map_orgW = labyrinth_orgW;
+        map_orgH = labyrinth_orgH;
+        texture = labyrinth_texture;
+    }
     else if (mainGame.selectedLocation == "Icebreaker")
     {
         if (!setCurrentMapSpecs)

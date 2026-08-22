@@ -152,6 +152,17 @@ float gz_configX = 1322.f;
 float gz_configY = 3424.f;
 float gz_configScale = 10.41f;
 
+// Labyrinth
+
+PDIRECT3DTEXTURE9 labyrinth_texture = NULL;
+
+int labyrinth_orgW = 514;
+int labyrinth_orgH = 554;
+
+float labyrinth_configX = 256.f;
+float labyrinth_configY = 374.f;
+float labyrinth_configScale = 5.f;
+
 // Icebreaker
 
 PDIRECT3DTEXTURE9 ib_texture1 = NULL;
@@ -366,6 +377,20 @@ bool loadMaps(std::string mapToLoad)
 
         bool gz_ground = LoadTextureFromFile(file_pathgz0CStr, &gz_texture0, &currentMap::mapSizeX, &currentMap::mapSizeY);
         IM_ASSERT(gz_ground);
+    }
+
+    if (mapToLoad == "Labyrinth")
+    {
+        std::filesystem::path file_path_labyrinth = cwd / "Maps" / "Labyrinth.png";
+        std::string labyrinth_file_path = file_path_labyrinth.string();
+
+        bool labyrinth_loaded = LoadTextureFromFile(
+            labyrinth_file_path.c_str(),
+            &labyrinth_texture,
+            &currentMap::mapSizeX,
+            &currentMap::mapSizeY
+        );
+        IM_ASSERT(labyrinth_loaded);
     }
 
     if (mapToLoad == "Icebreaker")

@@ -181,6 +181,16 @@ extern float gz_configX;
 extern float gz_configY;
 extern float gz_configScale;
 
+// Labyrinth
+
+extern PDIRECT3DTEXTURE9 labyrinth_texture;
+extern int labyrinth_orgW;
+extern int labyrinth_orgH;
+
+extern float labyrinth_configX;
+extern float labyrinth_configY;
+extern float labyrinth_configScale;
+
 // Icebreaker
 
 extern PDIRECT3DTEXTURE9 ib_texture1;
