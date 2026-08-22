@@ -412,6 +412,7 @@
     <ClInclude Include="game\headers\explosives.h" />
     <ClInclude Include="game\headers\dogtag.h" />
     <ClInclude Include="game\headers\exfil.h" />
+    <ClInclude Include="game\headers\transitLocations.h" />
     <ClInclude Include="app\DogTagAPI.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="app\DxRenderWindow.h" />

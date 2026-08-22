@@ -703,7 +703,7 @@ void DrawQuest(float x, float y, float zoom, QuestLocation qloc)
 
 }
 
-void DrawExfil(int x, int y, float zoomLevel, exfilsMemory exfil)
+void DrawExfil(int x, int y, float zoomLevel, const exfilsMemory& exfil)
 {
 	float fontSize = std::clamp(30.f / zoomLevel, 12.f, 14.f);
 	std::string string = ICON_FK_SIGN_OUT;
@@ -715,9 +715,17 @@ void DrawExfil(int x, int y, float zoomLevel, exfilsMemory exfil)
 
 
 	//color 
-	ImVec4 color;
+	ImVec4 color = { 1, 1, 1, 1 };
 
-	if (exfil.status.find("Open") != std::string::npos)
+	if (exfil.type == ExfilType::Transit)
+	{
+		color = { 0.2f, 0.8f, 1.0f, 1.0f };
+	}
+	else if (exfil.type == ExfilType::Secret)
+	{
+		color = { 0.85f, 0.35f, 1.0f, 1.0f };
+	}
+	else if (exfil.status.find("Open") != std::string::npos)
 	{
 		color = { 0,1,0,1 }; // green
 	}

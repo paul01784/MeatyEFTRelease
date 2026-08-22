@@ -534,6 +534,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="game\headers\dogtag.h" />
     <ClInclude Include="game\headers\exfil.h" />
     <ClInclude Include="game\headers\explosives.h" />
+    <ClInclude Include="game\headers\transitLocations.h" />
     <ClInclude Include="game\headers\loot.h" />
     <ClInclude Include="game\headers\maingame.h" />
     <ClInclude Include="game\headers\players.h" />

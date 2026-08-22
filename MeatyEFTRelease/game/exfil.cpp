@@ -86,12 +86,38 @@ void Exfil::publishCacheSnapshot() {
 		std::memory_order_release);
 }
 
-std::vector<exfilsSecret>& Exfil::getCacheSecret() {
-	return exfilSecret;
-}
+void Exfil::loadStaticTransits()
+{
+	if (mainGame.selectedLocation.empty())
+		return;
 
-std::vector<exfilsTransit>& Exfil::getCacheTransit() {
-	return exfilTransit;
+	for (const TransitDefinition& definition : kTransitDefinitions)
+	{
+		if (definition.sourceMapId != mainGame.selectedLocation)
+			continue;
+
+		const bool alreadyKnown = std::any_of(
+			exfilList.begin(),
+			exfilList.end(),
+			[&definition](const exfilsMemory& existing)
+			{
+				return existing.type == ExfilType::Transit &&
+					existing.transitId == definition.id;
+			});
+
+		if (alreadyKnown)
+			continue;
+
+		exfilsMemory transit{};
+		transit.locationWorld = definition.worldPosition;
+		transit.extractName = "Transit to " + std::string(definition.destinationName);
+		transit.status = "Transit";
+		transit.distance = getDistance(mainGame.localLocation, transit.locationWorld);
+		transit.type = ExfilType::Transit;
+		transit.transitId = definition.id;
+
+		exfilList.emplace_back(std::move(transit));
+	}
 }
 
 void Exfil::tryLoadMemoryExfils()
@@ -99,51 +125,41 @@ void Exfil::tryLoadMemoryExfils()
 	if (!Utils::valid_pointer(mainGame.localGameWorld))
 		return;
 
+	loadStaticTransits();
+
 	try
 	{
+		const uint64_t exfilController = mem.Read<uint64_t>(mainGame.localGameWorld + sdk::ClientLocalGameWorld::ExfiltrationController);
 
-		uint64_t exfilController = mem.Read<uint64_t>(mainGame.localGameWorld + sdk::ClientLocalGameWorld::ExfiltrationController); if (!Utils::valid_pointer(exfilController)) return;
+		if (!Utils::valid_pointer(exfilController))
+			return;
 
-		uint64_t exfilOffset = 0x0;
-		if (mainGame.localIsSavage)
-			exfilOffset = sdk::ExfiltrationController::ScavExfiltrationPoints;
-		else
-			exfilOffset = sdk::ExfiltrationController::ExfiltrationPoints;
-
-		uint64_t exfilArrayAddr = mem.Read<uint64_t>(exfilController + exfilOffset); if (!Utils::valid_pointer(exfilArrayAddr)) return;
-
-		auto exfilArray = UnityArray<uint64_t>(exfilArrayAddr, "Exfil points");
-
-		for (auto& exfilPointAddr : exfilArray)
+		auto addExfil = [this](const uint64_t exfilPointAddr, const ExfilType type)
 		{
 			if (!Utils::valid_pointer(exfilPointAddr))
-				continue;
+				return;
 
-			try 
+			try
 			{
+				const uint64_t settingsAddr = mem.Read<uint64_t>(exfilPointAddr + sdk::ExfiltrationPoint::Settings);
 
-				uint64_t settingsAddr = mem.Read<uint64_t>(exfilPointAddr + sdk::ExfiltrationPoint::Settings);
 				if (!Utils::valid_pointer(settingsAddr))
-					continue;
+					return;
 
-				uint64_t namePtr = mem.Read<uint64_t>(settingsAddr + sdk::ExitSettings::Name);
+				const uint64_t namePtr = mem.Read<uint64_t>(settingsAddr + sdk::ExitSettings::Name);
+
 				if (!Utils::valid_pointer(namePtr))
-					continue;
+					return;
 
-				std::string exfilName = TrimEFT(mem.readUnityString(namePtr, 256));
-				if (exfilName == "")
-					continue;
+				const std::string exfilName = TrimEFT(mem.readUnityString(namePtr, 256));
 
-				auto ti = mem.ReadChain(exfilPointAddr, TransformChain);
-				if (!Utils::valid_pointer(ti))
-					continue;
-				auto transform = UnityTransform(ti);
-				auto position = transform.UpdatePosition();
+				if (exfilName.empty())
+					return;
 
-				exfilsMemory exfilNew;
-				exfilNew.instance = exfilPointAddr;
-				exfilNew.extractName = exfilName;
-				exfilNew.locationWorld = position;
+				const uint64_t transformInternal = mem.ReadChain(exfilPointAddr, TransformChain);
+
+				if (!Utils::valid_pointer(transformInternal))
+					return;
 
 				const bool alreadyKnown = std::any_of(
 					exfilList.begin(),
@@ -154,24 +170,54 @@ void Exfil::tryLoadMemoryExfils()
 					});
 
 				if (alreadyKnown)
-					continue;
+					return;
+
+				UnityTransform transform(transformInternal);
+
+				exfilsMemory exfilNew{};
+				exfilNew.instance = exfilPointAddr;
+				exfilNew.locationWorld = transform.UpdatePosition();
+				exfilNew.extractName = type == ExfilType::Secret
+					? "Secret: " + exfilName
+					: exfilName;
+				exfilNew.type = type;
 
 				exfilList.emplace_back(std::move(exfilNew));
-				std::cout << "[EXFIL][MEM] Added exfil: '" + exfilName + "'\n";
-
-
 			}
 			catch (...)
 			{
-				//skip entry on error
+				// A single exfil may disappear while the array is being read
 			}
+		};
+
+		const uint64_t exfilOffset = mainGame.localIsSavage
+			? sdk::ExfiltrationController::ScavExfiltrationPoints
+			: sdk::ExfiltrationController::ExfiltrationPoints;
+		const uint64_t exfilArrayAddr = mem.Read<uint64_t>(exfilController + exfilOffset);
+
+		if (Utils::valid_pointer(exfilArrayAddr))
+		{
+			UnityArray<uint64_t> exfilArray(exfilArrayAddr, "Exfil points");
+
+			for (const uint64_t exfilPointAddr : exfilArray)
+				addExfil(exfilPointAddr, ExfilType::Regular);
 		}
 
+		const uint64_t secretArrayAddr = mem.Read<uint64_t>(exfilController + sdk::ExfiltrationController::MSecretExfiltrationPoints);
 
+		if (Utils::valid_pointer(secretArrayAddr))
+		{
+			UnityArray<uint64_t> secretArray(
+				secretArrayAddr,
+				"Secret exfil points");
+
+			for (const uint64_t exfilPointAddr : secretArray)
+				addExfil(exfilPointAddr, ExfilType::Secret);
+		}
 	}
 	catch (...)
 	{
-
+		// The controller is rebuilt as a raid starts; discovery will retry
 	}
 }
 
@@ -220,17 +266,31 @@ void Exfil::updateStatus()
 		if (!batch.Valid())
 			return;
 
+		bool queuedStatusReads = false;
+
 		for (auto& exfilCache : exfilList)
 		{
+			if (exfilCache.type == ExfilType::Transit)
+				continue;
+
 			batch.Add(exfilCache.instance + sdk::ExfiltrationPoint::Status,exfilCache.statusRaw);
+			queuedStatusReads = true;
 		}
 
-		if (!batch.Execute())
+		if (queuedStatusReads && !batch.Execute())
 			return;
 
 		for (auto& exfilCache : exfilList)
 		{
-			exfilCache.status = getExfilStatusText(exfilCache.statusRaw);
+			if (exfilCache.type == ExfilType::Transit)
+			{
+				exfilCache.status = "Transit";
+			}
+			else
+			{
+				exfilCache.status = getExfilStatusText(exfilCache.statusRaw);
+			}
+
 			exfilCache.distance = getDistance(mainGame.localLocation, exfilCache.locationWorld);
 		}
 

@@ -777,8 +777,11 @@ namespace fuserRender
 
         for (const exfilsMemory& currentExfil : exfilCache)
         {
-            if (!Utils::valid_pointer(currentExfil.instance))
+            if (currentExfil.type != ExfilType::Transit &&
+                !Utils::valid_pointer(currentExfil.instance))
+            {
                 continue;
+            }
 
             if (!Utils::isGoodVec3(currentExfil.locationWorld))
                 continue;
@@ -802,44 +805,58 @@ namespace fuserRender
                 continue;
             }
 
-            const std::string statusText = exfil.getExfilStatusText(currentExfil.statusRaw);
+            const std::string statusText =
+                currentExfil.type == ExfilType::Transit
+                ? "Transit"
+                : exfil.getExfilStatusText(currentExfil.statusRaw);
 
             glm::vec4 statusColour = coloursGlobals::exfils;
 
-            switch (currentExfil.statusRaw)
+            if (currentExfil.type == ExfilType::Transit)
             {
-            case 1: // Closed
-                statusColour = glm::vec4(
-                    1.0f,
-                    0.2f,
-                    0.2f,
-                    1.0f
-                );
-                break;
+                statusColour = glm::vec4(0.2f, 0.8f, 1.0f, 1.0f);
+            }
+            else if (currentExfil.type == ExfilType::Secret)
+            {
+                statusColour = glm::vec4(0.85f, 0.35f, 1.0f, 1.0f);
+            }
+            else
+            {
+                switch (currentExfil.statusRaw)
+                {
+                case 1: // Closed
+                    statusColour = glm::vec4(
+                        1.0f,
+                        0.2f,
+                        0.2f,
+                        1.0f
+                    );
+                    break;
 
-            case 4: // Open
-                statusColour = glm::vec4(
-                    0.2f,
-                    1.0f,
-                    0.2f,
-                    1.0f
-                );
-                break;
+                case 4: // Open
+                    statusColour = glm::vec4(
+                        0.2f,
+                        1.0f,
+                        0.2f,
+                        1.0f
+                    );
+                    break;
 
-            case 2: // Req
-            case 3: // Countdown
-            case 5: // Pending
-            case 6: // Await. Manual
-                statusColour = glm::vec4(
-                    1.0f,
-                    0.65f,
-                    0.0f,
-                    1.0f
-                );
-                break;
+                case 2: // Req
+                case 3: // Countdown
+                case 5: // Pending
+                case 6: // Await. Manual
+                    statusColour = glm::vec4(
+                        1.0f,
+                        0.65f,
+                        0.0f,
+                        1.0f
+                    );
+                    break;
 
-            default:
-                break;
+                default:
+                    break;
+                }
             }
 
             const std::string exfilText = currentExfil.extractName + " [" + statusText + "]" + " " + std::to_string(distance) + "m";

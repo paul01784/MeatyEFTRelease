@@ -1,10 +1,20 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
 #include <chrono>
 #include <vector>
+
+#include "transitLocations.h"
+
+enum class ExfilType : std::uint8_t
+{
+	Regular,
+	Secret,
+	Transit,
+};
 
 struct exfilsMemory {
 
@@ -14,53 +24,8 @@ struct exfilsMemory {
 	std::string status;
 	int distance;
 	int statusRaw;
-
-	exfilsMemory()
-		: instance(0),
-		locationWorld(glm::vec3()),
-		extractName(""),
-		status(""),
-		distance(0),
-		statusRaw(0) {
-	}
-};
-
-struct exfilsSecret {
-
-	uint64_t instance;
-	glm::vec3 locationWorld;
-	std::string extractName;
-	std::string status;
-	int distance;
-	int statusRaw;
-
-	exfilsSecret()
-		: instance(0),
-		locationWorld(glm::vec3()),
-		extractName(""),
-		status(""),
-		distance(0),
-		statusRaw(0) {
-	}
-};
-
-struct exfilsTransit {
-
-	uint64_t instance;
-	glm::vec3 locationWorld;
-	std::string extractName;
-	std::string status;
-	int distance;
-	int statusRaw;
-
-	exfilsTransit()
-		: instance(0),
-		locationWorld(glm::vec3()),
-		extractName(""),
-		status(""),
-		distance(0),
-		statusRaw(0) {
-	}
+	ExfilType type = ExfilType::Regular;
+	TransitId transitId = TransitId::Unknown;
 };
 
 using ExfilCacheCollection = std::vector<exfilsMemory>;
@@ -72,8 +37,6 @@ public:
 	Exfil();
 
 	[[nodiscard]] ExfilCacheSnapshot getCacheExfilSnapshot() const noexcept;
-	std::vector<exfilsSecret>& getCacheSecret();
-	std::vector<exfilsTransit>& getCacheTransit();
 
 	void exfilTask();
 
@@ -86,8 +49,6 @@ private:
 
 	std::vector<exfilsMemory> exfilList;
 	std::atomic<ExfilCacheSnapshot> publishedExfilCache;
-	std::vector<exfilsSecret> exfilSecret;
-	std::vector<exfilsTransit> exfilTransit;
 
 	std::vector<std::string> _pmcEntries;
 	std::vector<std::string> _scavIds;
@@ -96,6 +57,7 @@ private:
 	std::chrono::steady_clock::time_point lastExfilDiscovery;
 
 	void tryLoadMemoryExfils();
+	void loadStaticTransits();
 	void publishCacheSnapshot();
 	
 	int getDistance(glm::vec3 point1, glm::vec3 point2);
