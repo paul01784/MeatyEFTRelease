@@ -10,6 +10,7 @@ struct DogTagEntry
     std::string profileId;
     std::string accountId;
     std::string nickname;
+    int lvl = 0;
     long long createdAt = 0;
     long long updatedAt = 0;
 };
@@ -39,7 +40,8 @@ public:
 
     bool post(const std::string& profileId,
         const std::string& accountId,
-        const std::string& nickname);
+        const std::string& nickname,
+        int lvl);
 
 private:
     std::string baseUrl;

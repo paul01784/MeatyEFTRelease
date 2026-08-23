@@ -68,6 +68,7 @@ struct LootList
     bool containerOpened = false;
     bool isQuestItem = false;
     bool isCorpse = false;
+    bool corpseOwnerResolved = false;
     bool isAirdrop = false;
 
     std::vector<corpseEquipment> corpseEquip;

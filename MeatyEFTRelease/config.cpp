@@ -224,6 +224,7 @@ void to_json(nlohmann::json& j, const coloursGlobals&) {
         {"playerAI", coloursGlobals::playerAI},
         {"playerScav", coloursGlobals::playerScav},
         {"playerBoss", coloursGlobals::playerBoss},
+        {"playerBlackDiv", coloursGlobals::playerBlackDiv},
         {"aiBTR", coloursGlobals::aiBTR},
         {"playerWatched", coloursGlobals::playerWatched},
         {"playerFriendly", coloursGlobals::playerFriendly},
@@ -248,6 +249,7 @@ void from_json(const nlohmann::json& j, coloursGlobals& r) {
     r.playerAI = get_vec4_or_default(j, "playerAI", r.playerAI);
     r.playerScav = get_vec4_or_default(j, "playerScav", r.playerScav);
     r.playerBoss = get_vec4_or_default(j, "playerBoss", r.playerBoss);
+    r.playerBlackDiv = get_vec4_or_default(j, "playerBlackDiv", r.playerBlackDiv);
     r.aiBTR = get_vec4_or_default(j, "aiBTR", r.aiBTR);
     r.playerWatched = get_vec4_or_default(j, "playerWatched", r.playerWatched);
     r.playerFriendly = get_vec4_or_default(j, "playerFriendly", r.playerFriendly);
@@ -379,6 +381,8 @@ void to_json(nlohmann::json& j, const radarGlobals& r) {
         {"drawTripwires", r.drawTripwires},
         {"drawTripwireLine", r.drawTripwireLine},
         {"drawExfils", r.drawExfils},
+        {"drawSecretExfils", r.drawSecretExfils},
+        {"drawTransitExfils", r.drawTransitExfils},
         {"drawQuestHelper", r.drawQuestHelper},
         {"localAimLine", r.localAimLine},
         {"friendAimLine", r.friendAimLine},
@@ -398,6 +402,8 @@ void from_json(const nlohmann::json& j, radarGlobals& r) {
     r.drawTripwires = j.value("drawTripwires", r.drawTripwires);
     r.drawTripwireLine = j.value("drawTripwireLine", r.drawTripwireLine);
     r.drawExfils = j.value("drawExfils", r.drawExfils);
+    r.drawSecretExfils = j.value("drawSecretExfils", r.drawSecretExfils);
+    r.drawTransitExfils = j.value("drawTransitExfils", r.drawTransitExfils);
     r.drawQuestHelper = j.value("drawQuestHelper", r.drawQuestHelper);
     r.localAimLine = j.value("localAimLine", r.localAimLine);
     r.friendAimLine = j.value("friendAimLine", r.friendAimLine);
@@ -415,11 +421,11 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"espEnabled", e.espEnabled},
         {"drawPlayers", e.drawPlayers},
         {"drawPlayerDist", e.drawPlayerDist},
+        {"aimOverlayAlert", e.aimOverlayAlert},
         {"drawGrenades", e.drawGrenades},
         {"drawGrenadesDist", e.drawGrenadesDist},
         {"drawTripwires", e.drawTripwires},
         {"drawTripwiresDist", e.drawTripwiresDist},
-        {"drawTripwireLine", e.drawTripwireLine},
         {"drawLoot", e.drawLoot},
         {"drawLootDist", e.drawLootDist},
         {"drawQuestHelper", e.drawQuestHelper},
@@ -430,12 +436,15 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"gameRes", e.gameRes},
         {"gameResInt", e.gameResInt},
         {"drawSkeletons", e.drawSkeletons},
-        {"skeletonsOnlyClosest", e.skeletonsOnlyClosest},
         {"drawCrosshair", e.drawCrosshair},
+        {"crosshairType", e.crosshairType},
+        {"crosshairSize", e.crosshairSize},
         {"headDotSize", e.headDotSize},
         {"drawHeadDot", e.drawHeadDot},
         {"drawExfilDist", e.drawExfilDist},
-        {"drawExfil", e.drawExfil}
+        {"drawExfil", e.drawExfil},
+        {"drawSecretExfils", e.drawSecretExfils},
+        {"drawTransitExfils", e.drawTransitExfils}
     };
 }
 
@@ -443,11 +452,14 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
     e.espEnabled = j.value("espEnabled", e.espEnabled);
     e.drawPlayers = j.value("drawPlayers", e.drawPlayers);
     e.drawPlayerDist = j.value("drawPlayerDist", e.drawPlayerDist);
+    e.aimOverlayAlert = std::clamp(
+        j.value("aimOverlayAlert", e.aimOverlayAlert),
+        0,
+        2);
     e.drawGrenades = j.value("drawGrenades", e.drawGrenades);
     e.drawGrenadesDist = j.value("drawGrenadesDist", e.drawGrenadesDist);
     e.drawTripwires = j.value("drawTripwires", e.drawTripwires);
     e.drawTripwiresDist = j.value("drawTripwiresDist", e.drawTripwiresDist);
-    e.drawTripwireLine = j.value("drawTripwireLine", e.drawTripwireLine);
     e.drawLoot = j.value("drawLoot", e.drawLoot);
     e.drawLootDist = j.value("drawLootDist", e.drawLootDist);
     e.drawQuestHelper = j.value("drawQuestHelper", e.drawQuestHelper);
@@ -458,8 +470,15 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
     e.gameRes = get_vec2_or_default(j, "gameRes", e.gameRes);
     e.gameResInt = j.value("gameResInt", e.gameResInt);
     e.drawSkeletons = j.value("drawSkeletons", e.drawSkeletons);
-    e.skeletonsOnlyClosest = j.value("skeletonsOnlyClosest", e.skeletonsOnlyClosest);
     e.drawCrosshair = j.value("drawCrosshair", e.drawCrosshair);
+    e.crosshairType = std::clamp(
+        j.value("crosshairType", e.crosshairType),
+        0,
+        1);
+    e.crosshairSize = std::clamp(
+        j.value("crosshairSize", e.crosshairSize),
+        1,
+        20);
     e.drawHeadDot = j.value("drawHeadDot", e.drawHeadDot);
     e.headDotSize = j.value("headDotSize", e.headDotSize);
     if (j.contains("drawFireportLine"))
@@ -469,6 +488,8 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
     }
     e.drawExfilDist = j.value("drawExfilDist", e.drawExfilDist);
     e.drawExfil = j.value("drawExfil", e.drawExfil);
+    e.drawSecretExfils = j.value("drawSecretExfils", e.drawSecretExfils);
+    e.drawTransitExfils = j.value("drawTransitExfils", e.drawTransitExfils);
 }
 
 // Custom serialization for aimGlobals

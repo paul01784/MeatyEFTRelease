@@ -184,12 +184,14 @@ std::optional<DogTagKeyStatus> DogTagAPI::getKeyStatus()
 
 bool DogTagAPI::post(const std::string& profileId,
     const std::string& accountId,
-    const std::string& nickname)
+    const std::string& nickname,
+    int lvl)
 {
     json payload = {
         {"profileId", profileId},
         {"accountId", accountId},
-        {"nickname", nickname}
+        {"nickname", nickname},
+        {"lvl", lvl}
     };
 
     auto res = httpPostJson(baseUrl + "/dogtag", payload.dump());
@@ -226,6 +228,11 @@ std::optional<DogTagEntry> DogTagAPI::getByProfile(const std::string& profileId)
         e.profileId = j.value("profileId", "");
         e.accountId = j.value("accountId", "");
         e.nickname = j.value("nickname", "");
+        if (const auto lvl = j.find("lvl");
+            lvl != j.end() && lvl->is_number_integer())
+        {
+            e.lvl = lvl->get<int>();
+        }
         e.createdAt = j.value("createdAt", 0LL);
         e.updatedAt = j.value("updatedAt", 0LL);
 
@@ -273,6 +280,11 @@ std::optional<DogTagEntry> DogTagAPI::getByAccount(const std::string& accountId)
         e.profileId = j.value("profileId", "");
         e.accountId = j.value("accountId", "");
         e.nickname = j.value("nickname", "");
+        if (const auto lvl = j.find("lvl");
+            lvl != j.end() && lvl->is_number_integer())
+        {
+            e.lvl = lvl->get<int>();
+        }
         e.createdAt = j.value("createdAt", 0LL);
         e.updatedAt = j.value("updatedAt", 0LL);
 

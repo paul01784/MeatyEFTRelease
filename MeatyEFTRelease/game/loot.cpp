@@ -29,11 +29,20 @@ loot::loot()
 std::vector<LootFilters> lootFilters;
 loot Loot;
 
+long GetLootValueFilterPrice(const LootList& lootItem)
+{
+    return lootItem.avgMarketPrice > 0
+        ? lootItem.avgMarketPrice
+        : lootItem.traderPrice;
+}
+
 long GetLootDisplayPrice(const LootList& lootItem)
 {
-    return lootGlobals::lootValuePriceSource == 1
-        ? lootItem.traderPrice
-        : lootItem.avgMarketPrice;
+    if (lootGlobals::lootValuePriceSource == 1)
+        return lootItem.traderPrice;
+
+    
+    return GetLootValueFilterPrice(lootItem);
 }
 
 std::string FormatLootPrice(const long price)
@@ -187,11 +196,11 @@ namespace
     const CachedMarketItem* findMarketItem(const std::string& bsgid)
     {
         static std::unordered_map<std::string, CachedMarketItem> itemById;
-        static const gameItemList* indexedData = nullptr;
-        static size_t indexedSize = 0;
+        static std::uint64_t indexedRevision = 0;
+        static bool hasIndex = false;
+        const std::uint64_t marketRevision = marketListRevision.load(std::memory_order_acquire);
 
-        if (indexedData != marketList.data() ||
-            indexedSize != marketList.size())
+        if (!hasIndex || indexedRevision != marketRevision)
         {
             itemById.clear();
             itemById.reserve(marketList.size());
@@ -212,8 +221,8 @@ namespace
                 );
             }
 
-            indexedData = marketList.data();
-            indexedSize = marketList.size();
+            indexedRevision = marketRevision;
+            hasIndex = true;
         }
 
         const auto it = itemById.find(bsgid);
@@ -1614,7 +1623,7 @@ void loot::applyWantedState(LootList& lootItem, const WantedLookup& lookup) cons
     }
 
     if (lootGlobals::enableValueLoot &&
-        lootItem.avgMarketPrice > lootGlobals::valueLootFrom)
+        GetLootValueFilterPrice(lootItem) >= lootGlobals::valueLootFrom)
     {
         lootItem.wanted = true;
         lootItem.color = coloursGlobals::valueLootColour;
@@ -1798,6 +1807,39 @@ void loot::updateCorpseRequirements(std::vector<LootList>& workingCache)
         return;
 
     const auto now = std::chrono::steady_clock::now();
+    const PlayerCacheSnapshot playerCacheSnapshot =
+        players.getCacheSnapshot();
+    const PlayerCacheCollection& playerCache = *playerCacheSnapshot;
+
+    const auto resolveCorpseOwner = [&playerCache](LootList& item)
+    {
+        if (item.corpseOwnerResolved)
+            return;
+
+        for (const PlayerCache& player : playerCache)
+        {
+            if (item.m_interactiveClass != player.P_CorpseClass)
+                continue;
+
+            if (player.isPlayer || player.isBoss)
+            {
+                if (!player.name.empty())
+                {
+                    item.longName = player.name;
+                    item.corpseOwnerResolved = true;
+                }
+            }
+            else
+            {
+                // This corpse belongs to a non-boss AI, which intentionally has
+                // no player-name label.
+                item.corpseOwnerResolved = true;
+            }
+
+            break;
+        }
+    };
+
     size_t updated = 0;
 
     for (size_t checked = 0;
@@ -1815,6 +1857,10 @@ void loot::updateCorpseRequirements(std::vector<LootList>& workingCache)
 
         if (!item.isCorpse)
             continue;
+
+        // This pointer match is independent of inventory/equipment reads, so a
+        // player or boss name is shown even for an empty or unreadable corpse.
+        resolveCorpseOwner(item);
 
         if (now - item.lastCorpseEquipmentUpdate <
             std::chrono::seconds(20))
@@ -1855,6 +1901,37 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
     try
     {
+        bool isPMC = false;
+        const PlayerCacheSnapshot playerCacheSnapshot =
+            players.getCacheSnapshot();
+        const PlayerCacheCollection& playerCache = *playerCacheSnapshot;
+
+        // Resolve the corpse owner before reading equipment. Equipment reads can
+        // legitimately fail or be empty, but the corpse pointer is still enough
+        // to label a dead PMC or boss.
+        for (const PlayerCache& player : playerCache)
+        {
+            if (interactive != player.P_CorpseClass)
+                continue;
+
+            isPMC = player.isPlayer;
+
+            if (player.isPlayer || player.isBoss)
+            {
+                if (!player.name.empty())
+                {
+                    lootItem.longName = player.name;
+                    lootItem.corpseOwnerResolved = true;
+                }
+            }
+            else
+            {
+                lootItem.corpseOwnerResolved = true;
+            }
+
+            break;
+        }
+
         uint64_t itemBase = 0;
         uint64_t slotsPtr = 0;
 
@@ -1949,25 +2026,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
         std::vector<corpseEquipment> newCorpseEquip;
         newCorpseEquip.reserve(slotReads.size());
 
-        bool isPMC = false;
         const WantedLookup wantedLookup = buildWantedLookup();
-
-        const PlayerCacheSnapshot playerCacheSnapshot = players.getCacheSnapshot();
-        const PlayerCacheCollection& playerCache = *playerCacheSnapshot;
-
-        for (const auto& player : playerCache)
-        {
-            if (interactive != player.P_CorpseClass)
-                continue;
-
-            if (player.isPlayer)
-                isPMC = true;
-
-            if (player.isPlayer || player.isBoss)
-                lootItem.longName = player.name;
-
-            break;
-        }
 
         for (auto& read : slotReads)
         {
@@ -2022,7 +2081,9 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
                 wantedLookup.questIds.contains(id) ||
                 wantedLookup.wishlistIds.contains(id);
 
-            if (!corpseEq.wanted && lootGlobals::enableValueLoot && corpseEq.value > lootGlobals::valueLootFrom)
+            if (!corpseEq.wanted &&
+                lootGlobals::enableValueLoot &&
+                corpseEq.value >= lootGlobals::valueLootFromEquip)
             {
                 corpseEq.wanted = true;
             }

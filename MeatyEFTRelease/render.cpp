@@ -21,6 +21,7 @@
 #include "game/headers/wishlist.h"
 #include "app/DogTagAPI.h"
 #include "app/makcu.h"
+#include "app/menuLayout.h"
 #include "game/headers/watchList.h"
 #include "app/aimview.h"
 
@@ -152,7 +153,18 @@ bool showResSelectionBox()
     // Resolution options
     const char* resolutionOptions[] = { "1920x1080", "2560x1440", "3440x1440" };
 
-    if (ImGui::Combo(" Game Resolution", &espGlobals::gameResInt, resolutionOptions, IM_ARRAYSIZE(resolutionOptions))) {
+    const float rowStartX = ImGui::GetCursorPosX();
+    const float controlX = menuLayout::ControlColumnX(
+        rowStartX,
+        ImGui::GetContentRegionAvail().x
+    );
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Game resolution");
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), controlX));
+    ImGui::SetNextItemWidth(220.0f);
+
+    if (ImGui::Combo("##gameResolution", &espGlobals::gameResInt, resolutionOptions, IM_ARRAYSIZE(resolutionOptions))) {
         // Update resolution based on selection
         switch (espGlobals::gameResInt)
         {
@@ -191,12 +203,15 @@ bool ShowKeySelectionBox(WindowsKey& aimKey, std::string selection_name) {
     int currentItem = std::distance(keys.begin(), std::find(keys.begin(), keys.end(), aimKey));
 
 
+    bool changed = false;
+
     if (ImGui::BeginCombo(selection_name.c_str(), items[currentItem])) {
         for (int i = 0; i < items.size(); i++) {
             bool isSelected = (currentItem == i);
             if (ImGui::Selectable(items[i], isSelected)) {
                 currentItem = i;
                 aimKey = IndexToWindowsKey(i); // Map selection to enum
+                changed = true;
             }
             if (isSelected) {
                 ImGui::SetItemDefaultFocus();
@@ -204,7 +219,7 @@ bool ShowKeySelectionBox(WindowsKey& aimKey, std::string selection_name) {
         }
         ImGui::EndCombo();
     }
-    return true;
+    return changed;
 }
 
 bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, int* out_width, int* out_height)
@@ -549,9 +564,11 @@ void CustomChildWindowWithTitle(const char* title, const ImVec2& size) {
     ImVec2 title_size = ImGui::CalcTextSize(title);
     draw_list->AddRectFilled(title_pos, ImVec2(title_pos.x + title_size.x, title_pos.y + title_height), ImGui::GetColorU32(ImGuiCol_WindowBg));
 
-    // Draw the title background
+    // Draw the title in the shared section-heading colour.
     ImGui::SetCursorScreenPos(ImVec2(pos.x + 7, pos.y + 6 - title_height / 2));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.94f, 0.22f, 0.25f, 1.0f));
     ImGui::Text("%s", title);
+    ImGui::PopStyleColor();
 
 }
 char filterName[128] = "";
@@ -919,14 +936,20 @@ static void renderLootFiltersMenu()
 
     std::string windowNameMain = "Loot Filters";
 
-    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse;
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(ImVec2((viewport->Pos.x + viewport->Size.x) - 810, viewport->Pos.y + 10));
-
-    ImGui::SetNextWindowSize(ImVec2(750, viewport->Size.y - 50));
-    //ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->Pos.x + 30.0f, viewport->Pos.y + 30.0f),
+        ImGuiCond_FirstUseEver
+    );
+    ImGui::SetNextWindowSize(ImVec2(930.0f, 720.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(760.0f, 560.0f),
+        ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
+    );
+    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
     static bool addFilterPopupOpen = false;
     static bool addLootPopupOpen = false;
@@ -935,74 +958,114 @@ static void renderLootFiltersMenu()
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appLootFilters, flagss))
     {
+        constexpr float panelMargin = 10.0f;
+        constexpr float topPanelY = 45.0f;
+        constexpr float leftPanelWidth = 250.0f;
+        constexpr float panelGap = 20.0f;
+        constexpr float topPanelHeight = 355.0f;
+        const ImVec2 windowSize = ImGui::GetWindowSize();
+        const float rightPanelX = panelMargin + leftPanelWidth + panelGap;
+        const float rightPanelWidth = windowSize.x - rightPanelX - panelMargin;
+        const float bottomPanelY = topPanelY + topPanelHeight + panelGap;
+        const float bottomPanelHeight = windowSize.y - bottomPanelY - panelMargin;
+        constexpr float leftContentX = 26.0f;
+        constexpr float leftToggleX = 145.0f;
+        constexpr float leftColourX = 226.0f;
+        constexpr float leftValueX = 116.0f;
+        constexpr float leftActionY = 235.0f;
+        constexpr float leftButtonWidth = 105.0f;
+        constexpr float leftButtonGap = 8.0f;
+        const float leftSecondButtonX = leftContentX + leftButtonWidth + leftButtonGap;
+
         //left top
         {
             //set position
-            ImGui::SetCursorPos(ImVec2(10, 45));
+            ImGui::SetCursorPos(ImVec2(panelMargin, topPanelY));
 
             // draw window frame
-            CustomChildWindowWithTitle(" Loot Filter Settings ", ImVec2(250, 355));
+            CustomChildWindowWithTitle(" Display & price ", ImVec2(leftPanelWidth, topPanelHeight));
 
             //draw inside window
-            ImGui::SetCursorPos(ImVec2(20, 60));
+            ImGui::SetCursorPos(ImVec2(leftContentX, 60.0f));
 
-            if (ImGui::Checkbox(" Show Quest Loot", &lootGlobals::enableQuestLoot)) configManager.SaveConfig();
-            ImGui::SameLine(); ImGui::SetCursorPosX(200);
-            if (ImGui::ColorEdit4("##questcolour", (float*)&coloursGlobals::questColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-            
-            ImGui::SetCursorPosX(20);
-            
-            if (ImGui::Checkbox(" Show WishList Loot", &lootGlobals::enableWishListLoot)) configManager.SaveConfig();
-            ImGui::SameLine(); ImGui::SetCursorPosX(200);
-            if (ImGui::ColorEdit4("##wishlistcolour", (float*)&coloursGlobals::wishListColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+            const auto lootToggleWithColour = [&](const char* label, const char* id, bool* value, const char* colourId, float* colour)
+            {
+                ImGui::SetCursorPosX(leftContentX);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(label);
+                ImGui::SameLine(0.0f, 0.0f);
+                ImGui::SetCursorPosX(leftToggleX);
+                const bool toggleChanged = ImGui::Checkbox(id, value);
+                ImGui::SameLine(0.0f, 0.0f);
+                ImGui::SetCursorPosX(leftColourX);
+                const bool colourChanged = ImGui::ColorEdit4(
+                    colourId,
+                    colour,
+                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs
+                );
+                return toggleChanged || colourChanged;
+            };
 
-            ImGui::SetCursorPosX(20);
+            if (lootToggleWithColour("Show Quest Loot", "##showQuestLoot", &lootGlobals::enableQuestLoot, "##questcolour", (float*)&coloursGlobals::questColour))
+                configManager.SaveConfig();
+            if (lootToggleWithColour("Show WishList Loot", "##showWishListLoot", &lootGlobals::enableWishListLoot, "##wishlistcolour", (float*)&coloursGlobals::wishListColour))
+                configManager.SaveConfig();
+            if (lootToggleWithColour("Show Value Loot", "##showValueLoot", &lootGlobals::enableValueLoot, "##valuelistcolour", (float*)&coloursGlobals::valueLootColour))
+                configManager.SaveConfig();
 
-            if (ImGui::Checkbox(" Show Value Loot", &lootGlobals::enableValueLoot)) configManager.SaveConfig();
-            ImGui::SameLine(); ImGui::SetCursorPosX(200);
-            if (ImGui::ColorEdit4("##valuelistcolour", (float*)&coloursGlobals::valueLootColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
+            ImGui::SetCursorPosX(leftContentX);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Show Loot Value");
+            ImGui::SameLine(0.0f, 0.0f);
+            ImGui::SetCursorPosX(leftToggleX);
+            if (ImGui::Checkbox("##showLootValue", &lootGlobals::showLootValue))
+                configManager.SaveConfig();
 
-            ImGui::SetCursorPosX(20);
-            if (ImGui::Checkbox(" Show Loot Value", &lootGlobals::showLootValue)) configManager.SaveConfig();
-
-            ImGui::SameLine();
-            ImGui::SetCursorPosX(185.0f);
-            ImGui::PushItemWidth(70.0f);
+            ImGui::SameLine(0.0f, 0.0f);
+            ImGui::SetCursorPosX(leftToggleX + 31.0f);
+            ImGui::PushItemWidth(74.0f);
             ImGui::BeginDisabled(!lootGlobals::showLootValue);
             if (ImGui::Combo("##LootValuePriceSource", &lootGlobals::lootValuePriceSource, "Market\0Trader\0")) configManager.SaveConfig();
             ImGui::EndDisabled();
             ImGui::PopItemWidth();
 
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Price source used in loot labels");
+                ImGui::SetTooltip("Price used in loot labels. Market falls back to Trader when unavailable.");
 
-            ImGui::SetCursorPosX(20);
-            ImGui::PushItemWidth(150);
-            if (ImGui::SliderInt("R LOOT", &lootGlobals::valueLootFrom, 0, 1000000, "%d")) configManager.SaveConfig();
-            ImGui::PopItemWidth();
-            ImGui::SetCursorPosX(20);
-            ImGui::PushItemWidth(150);
-            if (ImGui::SliderInt("R EQUIP", &lootGlobals::valueLootFromEquip, 0, 1000000, "%d")) configManager.SaveConfig();
-            ImGui::PopItemWidth();
+            const auto lootValueSlider = [&](const char* label, const char* id, int* value)
+            {
+                ImGui::SetCursorPosX(leftContentX);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(label);
+                ImGui::SameLine();
+                ImGui::SetCursorPosX(leftValueX);
+                ImGui::SetNextItemWidth(110.0f);
+                return ImGui::SliderInt(id, value, 0, 1000000, "%d");
+            };
+
+            if (lootValueSlider("Loot value", "##lootValueThreshold", &lootGlobals::valueLootFrom))
+                configManager.SaveConfig();
+            if (lootValueSlider("Equipment", "##equipmentValueThreshold", &lootGlobals::valueLootFromEquip))
+                configManager.SaveConfig();
             
 
-            ImGui::SetCursorPos(ImVec2(20, 270));
+            ImGui::SetCursorPos(ImVec2(leftContentX, leftActionY));
             static bool containerPopupOpen = false;
 
-            if (ImGui::Button("Containers", ImVec2(105, 0)))
+            if (ImGui::Button("Containers", ImVec2(leftButtonWidth, 0)))
             {
                 containerPopupOpen = true;
                 ImGui::OpenPopup("Container Settings");
             }
 
-            ImGui::SameLine();
             static bool categoryPopupOpen = false;
             const std::string categoryButtonLabel =
                 "Categories (" +
                 std::to_string(lootGlobals::selectedLootCategories.size()) +
                 ")";
 
-            if (ImGui::Button(categoryButtonLabel.c_str(), ImVec2(125, 0)))
+            ImGui::SetCursorPos(ImVec2(leftSecondButtonX, leftActionY));
+            if (ImGui::Button(categoryButtonLabel.c_str(), ImVec2(leftButtonWidth, 0)))
             {
                 categoryPopupOpen = true;
                 ImGui::OpenPopup("Loot Category Settings");
@@ -1333,10 +1396,10 @@ static void renderLootFiltersMenu()
             }
 
 
-            ImGui::SetCursorPosX(20);
+            ImGui::SetCursorPos(ImVec2(leftContentX, leftActionY + 29.0f));
             //wishlist items
             static bool wishListPopupOpen = false;
-            if (ImGui::Button("Wishlist Items"))
+            if (ImGui::Button("Wishlist Items", ImVec2(leftButtonWidth, 0)))
             {
                 wishListPopupOpen = true;
                 ImGui::OpenPopup("WishList");
@@ -1385,11 +1448,11 @@ static void renderLootFiltersMenu()
             }
 
             //questloot items etc
-            ImGui::SetCursorPosX(20);
+            ImGui::SetCursorPos(ImVec2(leftSecondButtonX, leftActionY + 29.0f));
             
             static bool questLootPopupOpen = false;
 
-            if (ImGui::Button("Quest Loot"))
+            if (ImGui::Button("Quest Loot", ImVec2(leftButtonWidth, 0)))
             {
                 questLootPopupOpen = true;
                 ImGui::OpenPopup("Quest Loot Manager");
@@ -1645,11 +1708,10 @@ static void renderLootFiltersMenu()
 
                 ImGui::EndPopup();
             }
-            ImGui::SameLine();
-            ImGui::SetCursorPosX(125);
+            ImGui::SetCursorPos(ImVec2(leftContentX, leftActionY + 58.0f));
             //fullLootListPopupOpen items
             static bool fullLootListPopupOpen = false;
-            if (ImGui::Button("Debug LootList"))
+            if (ImGui::Button("Debug Loot", ImVec2(leftButtonWidth, 0)))
             {
                 fullLootListPopupOpen = true;
                 ImGui::OpenPopup("lootList");
@@ -1709,14 +1771,13 @@ static void renderLootFiltersMenu()
 
         //right top
         {
-            // Set position
-            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 480, 45));
+            ImGui::SetCursorPos(ImVec2(rightPanelX, topPanelY));
 
             // Draw window frame
-            CustomChildWindowWithTitle(" Loot Filters ", ImVec2(470, 300));
+            CustomChildWindowWithTitle(" Saved filters ", ImVec2(rightPanelWidth, topPanelHeight));
 
             // Draw inside window
-            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 110, 55)); // Top right corner
+            ImGui::SetCursorPos(ImVec2(rightPanelX + rightPanelWidth - 100.0f, topPanelY + 10.0f));
 
             // Button to open the add filter popup
             if (ImGui::Button("+ Add Filter", ImVec2(90, 29))) {
@@ -1724,19 +1785,19 @@ static void renderLootFiltersMenu()
             }
 
             // Position for filter list
-            ImVec2 tableSize = ImVec2(450.0f, 250.0f); // Set the desired size for the table
+            ImVec2 tableSize = ImVec2(rightPanelWidth - 20.0f, topPanelHeight - 55.0f);
 
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(3, 2));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, 2));
 
-            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 470, 90));
+            ImGui::SetCursorPos(ImVec2(rightPanelX + 10.0f, topPanelY + 45.0f));
 
             if (ImGui::BeginTable("##LootFiltersTable", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, tableSize)) {
                 // Set up the table headers
                 ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 1.f);
                 ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 30.f);
                 ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 30.f);
-                ImGui::TableSetupColumn("Filter Name", ImGuiTableColumnFlags_WidthFixed, 320.f);
+                ImGui::TableSetupColumn("Filter Name", ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 30.f);
 
 
@@ -1797,27 +1858,27 @@ static void renderLootFiltersMenu()
         //bottom
         {
             //set position
-            ImGui::SetCursorPos(ImVec2(10, 435));
+            ImGui::SetCursorPos(ImVec2(panelMargin, bottomPanelY));
 
             // draw window frame
-            CustomChildWindowWithTitle(" Loot Filter Items ", ImVec2(ImGui::GetWindowSize().x - 20, ImGui::GetWindowSize().y - 440));
+            CustomChildWindowWithTitle(" Items in selected filter ", ImVec2(windowSize.x - (panelMargin * 2.0f), bottomPanelHeight));
 
             if (selectedLootFilterID != -1)
             {
                 
-                ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 110, 445)); // top right corner
+                ImGui::SetCursorPos(ImVec2(windowSize.x - 100.0f, bottomPanelY + 10.0f));
 
                 if (ImGui::Button("+ Add Loot", ImVec2(90, 29))) {
                     addLootPopupOpen = true;
                 }
 
                 //position for table
-                ImGui::SetCursorPos(ImVec2(20, 485)); // top right corner
+                ImGui::SetCursorPos(ImVec2(panelMargin + 10.0f, bottomPanelY + 45.0f));
 
-                ImVec2 tableSize = ImVec2(ImGui::GetWindowSize().x - 40, (ImGui::GetWindowSize().y - ImGui::GetCursorPosY()) - 15); // Set the desired size for the table
+                ImVec2 tableSize = ImVec2(windowSize.x - 40.0f, bottomPanelHeight - 55.0f);
 
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(3, 2));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, 2));
 
                 if (ImGui::BeginTable("##LootInFilter", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable, tableSize)) {
                     // Set up the table columns
@@ -1940,15 +2001,21 @@ static bool QuestTextMatches(
 
 static void renderQuestsWindow()
 {
-    static ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    static ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
     static int questFilter = 0; // 0 = All, 1 = Active
     static char questSearch[192] = "";
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(
-        (viewport->Pos.x + viewport->Size.x) - 810,
-        viewport->Pos.y + 10));
-    ImGui::SetNextWindowSize(ImVec2(750, viewport->Size.y - 50));
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->Pos.x + 30.0f, viewport->Pos.y + 30.0f),
+        ImGuiCond_FirstUseEver
+    );
+    ImGui::SetNextWindowSize(ImVec2(900.0f, 680.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(680.0f, 480.0f),
+        ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
+    );
+    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
     if (!ImGui::Begin("Quest Manager", &appMenu::appQuests, flags))
     {
@@ -2714,29 +2781,8 @@ static void RestartAndSaveFuserWindow(DxWindowConfig& cfg)
 
 static void renderFuserWindow()
 {
-    std::string windowNameMain = "Fuser";
-
-    static ImGuiWindowFlags flagss =
-        ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_AlwaysAutoResize;
-
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-
-    ImGui::SetNextWindowPos(
-        ImVec2((viewport->Pos.x + viewport->Size.x) - 410, viewport->Pos.y + 10)
-    );
-
-    const float windowWidth = 350.0f;
-    const float maxWindowHeight = viewport->Size.y - 20.0f;
-
-    ImGui::SetNextWindowSizeConstraints(
-        ImVec2(windowWidth, 0.0f),
-        ImVec2(windowWidth, maxWindowHeight)
-    );
-
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
-
+    enum class FuserPage : int { Control, Window, Render, Diagnostics };
+    static FuserPage activePage = FuserPage::Control;
     static bool firstLoad = true;
 
     if (firstLoad)
@@ -2745,786 +2791,615 @@ static void renderFuserWindow()
         firstLoad = false;
     }
 
-    DxWindowConfig editorConfig = g_DxWindow.GetConfig();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 30.0f, viewport->Pos.y + 30.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(760.0f, 610.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(620.0f, 450.0f), ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f));
+    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
-    if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appFuser, flagss))
+    if (!ImGui::Begin("Fuser", &appMenu::appFuser, ImGuiWindowFlags_NoCollapse))
     {
-        if (ImGui::BeginTabBar("##fuserTabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+        ImGui::End();
+        return;
+    }
+
+    DxWindowConfig editorConfig = g_DxWindow.GetConfig();
+    ImGui::BeginChild("##fuserNavigation", ImVec2(0.0f, 42.0f), false);
+    const auto nav = [&](const char* icon, const char* label, FuserPage page)
+    {
+        if (menuLayout::TopTabButton(icon, label, activePage == page))
+            activePage = page;
+        ImGui::SameLine();
+    };
+    nav(ICON_FA_DISPLAY, "Control", FuserPage::Control);
+    nav(ICON_FA_DESKTOP, "Window", FuserPage::Window);
+    nav(ICON_FA_EYE, "Render", FuserPage::Render);
+    nav(ICON_FA_BUG, "Diagnostics", FuserPage::Diagnostics);
+    ImGui::EndChild();
+    ImGui::BeginChild("##fuserContent", ImVec2(0.0f, 0.0f), false);
+    menuLayout::PushContentInset();
+    if (activePage == FuserPage::Control)
+    {
+        const bool running = g_DxWindow.IsRunning();
+        if (menuLayout::Section("Fuser window"))
         {
-            // -------------------------------------------------
-            // CONTROL TAB
-            // -------------------------------------------------
-            if (ImGui::BeginTabItem("Control"))
+            if (ImGui::Button(running ? "Stop" : "Launch", ImVec2(130.0f, 30.0f)))
             {
-                ImGui::SeparatorText("Fuser Control");
-
-                const bool isRunning = g_DxWindow.IsRunning();
-
-                if (!isRunning)
-                {
-                    if (ImGui::Button("Launch", ImVec2(140, 30)))
-                    {
-                        g_DxWindow.Init(editorConfig);
-                        g_DxWindow.Start();
-                    }
-                }
+                if (running)
+                    g_DxWindow.Stop();
                 else
                 {
-                    if (ImGui::Button("Stop", ImVec2(140, 30)))
-                    {
-                        g_DxWindow.Stop();
-                    }
+                    g_DxWindow.Init(editorConfig);
+                    g_DxWindow.Start();
                 }
-
-                ImGui::Spacing();
-
-                ImGui::SeparatorText("Status");
-
-                if (isRunning)
-                {
-                    ImGui::TextColored(
-                        ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
-                        "Current State: Running"
-                    );
-                }
-                else
-                {
-                    ImGui::TextColored(
-                        ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                        "Current State: Stopped"
-                    );
-                }
-
-                ImGui::EndTabItem();
             }
+            ImGui::SameLine();
+            ImGui::TextColored(
+                running ? ImVec4(0.2f, 1.0f, 0.35f, 1.0f) : ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                running ? "Running" : "Stopped"
+            );
+        }
+    }
+    else if (activePage == FuserPage::Window)
+    {
+        bool changed = false;
+        if (menuLayout::Section("Monitor"))
+        {
+            if (ImGui::Button("Refresh monitors", ImVec2(150.0f, 26.0f)))
+                g_DxWindow.RefreshMonitorList();
 
-            // -------------------------------------------------
-            // MONITOR TAB
-            // -------------------------------------------------
-            if (ImGui::BeginTabItem("Monitor"))
+            std::vector<DxMonitorInfo> monitors = g_DxWindow.GetMonitors();
+            if (monitors.empty())
             {
-                bool changed = false;
-
-                ImGui::SeparatorText("Monitor");
-
-                if (ImGui::Button("Refresh Monitors", ImVec2(160, 26)))
-                {
-                    g_DxWindow.RefreshMonitorList();
-                }
-
-                std::vector<DxMonitorInfo> monitors = g_DxWindow.GetMonitors();
-
-                if (monitors.empty())
-                {
-                    g_DxWindow.RefreshMonitorList();
-                    monitors = g_DxWindow.GetMonitors();
-                }
-
-                if (!monitors.empty())
-                {
-                    if (editorConfig.monitorIndex < 0 ||
-                        editorConfig.monitorIndex >= static_cast<int>(monitors.size()))
-                    {
-                        editorConfig.monitorIndex = 0;
-                        changed = true;
-                    }
-
-                    std::vector<std::string> monitorLabels;
-                    monitorLabels.reserve(monitors.size());
-
-                    for (const auto& monitor : monitors)
-                        monitorLabels.push_back(BuildMonitorLabel(monitor));
-
-                    const char* preview =
-                        editorConfig.monitorIndex >= 0 &&
-                        editorConfig.monitorIndex < static_cast<int>(monitorLabels.size())
-                        ? monitorLabels[editorConfig.monitorIndex].c_str()
-                        : "Select";
-
-                    ImGui::Text("Selected Monitor");
-
-                    if (ImGui::BeginCombo("##MonitorCombo", preview))
-                    {
-                        for (size_t i = 0; i < monitorLabels.size(); ++i)
-                        {
-                            const bool selected = editorConfig.monitorIndex == static_cast<int>(i);
-
-                            if (ImGui::Selectable(monitorLabels[i].c_str(), selected))
-                            {
-                                editorConfig.monitorIndex = static_cast<int>(i);
-                                changed = true;
-                            }
-
-                            if (selected)
-                                ImGui::SetItemDefaultFocus();
-                        }
-
-                        ImGui::EndCombo();
-                    }
-                }
-                else
-                {
-                    ImGui::TextUnformatted("No monitors found");
-                }
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Window");
-
-                changed |= ImGui::Checkbox("Auto Start", &editorConfig.autoStart);
-                changed |= ImGui::Checkbox("Fullscreen", &editorConfig.fullscreen);
-
-                if (editorConfig.fullscreen)
-                {
-                    if (!editorConfig.borderless)
-                    {
-                        editorConfig.borderless = true;
-                        changed = true;
-                    }
-
-                    if (!editorConfig.useMonitorSize)
-                    {
-                        editorConfig.useMonitorSize = true;
-                        changed = true;
-                    }
-                }
-                else
-                {
-                    if (editorConfig.useMonitorSize)
-                    {
-                        editorConfig.useMonitorSize = false;
-                        changed = true;
-                    }
-                }
-
-                changed |= ImGui::Checkbox("Borderless", &editorConfig.borderless);
-                changed |= ImGui::Checkbox("Top Most", &editorConfig.topMost);
-                changed |= ImGui::Checkbox("Show In Taskbar", &editorConfig.showInTaskbar);
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Background");
-
-                changed |= ImGui::Checkbox("Transparent Background", &editorConfig.transparentBackground);
-
-                if (!editorConfig.transparentBackground)
-                {
-                    changed |= ImGui::ColorEdit4(
-                        "Background",
-                        (float*)&editorConfig.backgroundColour,
-                        ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs
-                    );
-                }
-
-                if (changed)
-                {
-                    ApplyAndSaveFuserConfig(editorConfig);
-                }
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Apply");
-
-                if (ImGui::Button("Restart Window", ImVec2(160, 28)))
-                {
-                    RestartAndSaveFuserWindow(editorConfig);
-                }
-
-                ImGui::TextWrapped(
-                    "Fullscreen uses the selected monitor size. "
-                    "Restart after monitor, window or transparency changes."
-                );
-
-                ImGui::EndTabItem();
+                g_DxWindow.RefreshMonitorList();
+                monitors = g_DxWindow.GetMonitors();
             }
-
-            // -------------------------------------------------
-            // RENDER TAB
-            // -------------------------------------------------
-            if (ImGui::BeginTabItem("Render"))
+            if (monitors.empty())
             {
-                bool changed = false;
-
-                ImGui::SeparatorText("Frame Timing");
-
-                changed |= ImGui::Checkbox("Use VSync", &editorConfig.useVSync);
-                changed |= ImGui::Checkbox("Use Monitor Refresh", &editorConfig.useMonitorRefreshRate);
-
-                if (!editorConfig.useVSync && !editorConfig.useMonitorRefreshRate)
+                ImGui::TextDisabled("No monitors found.");
+            }
+            else
+            {
+                if (editorConfig.monitorIndex < 0 || editorConfig.monitorIndex >= static_cast<int>(monitors.size()))
                 {
-                    changed |= ImGui::SliderInt("Max FPS", &editorConfig.maxFPS, 30, 360);
+                    editorConfig.monitorIndex = 0;
+                    changed = true;
                 }
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Scale / Quality");
-
-                changed |= ImGui::Checkbox("Anti Aliasing", &editorConfig.antiAliasing);
-                changed |= ImGui::Checkbox("Use DPI Scale", &editorConfig.useDpiScale);
-
-                changed |= ImGui::SliderFloat(
-                    "Render Scale",
-                    &editorConfig.renderScale,
-                    0.50f,
-                    2.50f,
-                    "%.2f"
-                );
-
-                editorConfig.renderScale = std::clamp(editorConfig.renderScale, 0.05f, 5.0f);
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Font");
-
-                int selectedFontIndex = GetFontIndexFromName(editorConfig.defaultFont.name);
-
-                if (ImGui::BeginCombo("Font", GetFontPreviewName(selectedFontIndex)))
+                std::vector<std::string> labels;
+                labels.reserve(monitors.size());
+                for (const auto& monitor : monitors)
+                    labels.push_back(BuildMonitorLabel(monitor));
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo("Selected monitor", labels[editorConfig.monitorIndex].c_str()))
                 {
-                    for (int i = 0; i < 5; ++i)
+                    for (int i = 0; i < static_cast<int>(labels.size()); ++i)
                     {
-                        const bool selected = selectedFontIndex == i;
-
-                        if (ImGui::Selectable(GetFontPreviewName(i), selected))
+                        const bool selected = editorConfig.monitorIndex == i;
+                        if (ImGui::Selectable(labels[i].c_str(), selected))
                         {
-                            selectedFontIndex = i;
-                            editorConfig.defaultFont.name = GetFontNameFromIndex(i);
+                            editorConfig.monitorIndex = i;
                             changed = true;
                         }
-
                         if (selected)
                             ImGui::SetItemDefaultFocus();
                     }
-
                     ImGui::EndCombo();
                 }
-
-                changed |= ImGui::Checkbox("Bold", &editorConfig.defaultFont.bold);
-
-                if (changed)
-                {
-                    ApplyAndSaveFuserConfig(editorConfig);
-                }
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Apply");
-
-                if (ImGui::Button("Apply Live", ImVec2(140, 28)))
-                {
-                    ApplyAndSaveFuserConfig(editorConfig);
-                }
-
-                ImGui::SameLine();
-
-                if (ImGui::Button("Restart Window", ImVec2(150, 28)))
-                {
-                    RestartAndSaveFuserWindow(editorConfig);
-                }
-
-                ImGui::TextWrapped(
-                    "Use Render Scale to control text and drawing size."
-                );
-
-                ImGui::EndTabItem();
             }
-
-            // -------------------------------------------------
-            // DEBUG TAB
-            // -------------------------------------------------
-            if (ImGui::BeginTabItem("Debug"))
+        }
+        if (menuLayout::BeginTwoColumns("##fuserWindowColumns"))
+        {
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Behaviour"))
             {
-                ImGui::SeparatorText("Debug Rendering");
-
-                bool testSceneEnabled = fuserRender::IsTestSceneEnabled();
-
-                if (ImGui::Checkbox("Render Test Scene", &testSceneEnabled))
+                changed |= menuLayout::ToggleRow("Start automatically", "fuserAutoStart", &editorConfig.autoStart);
+                changed |= menuLayout::ToggleRow("Fullscreen", "fuserFullscreen", &editorConfig.fullscreen);
+                if (editorConfig.fullscreen)
                 {
-                    fuserRender::SetTestSceneEnabled(testSceneEnabled);
-
-                }
-
-                ImGui::TextWrapped(
-                    "Shows moving boxes, text, circles, lines, markers and FPS on the fuser window."
-                );
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Selected Monitor Details");
-
-                std::vector<DxMonitorInfo> monitors = g_DxWindow.GetMonitors();
-
-                if (monitors.empty())
-                {
-                    ImGui::TextUnformatted("No monitor data loaded");
-                }
-                else if (editorConfig.monitorIndex < 0 ||
-                    editorConfig.monitorIndex >= static_cast<int>(monitors.size()))
-                {
-                    ImGui::TextUnformatted("Invalid selected monitor index");
+                    editorConfig.borderless = true;
+                    editorConfig.useMonitorSize = true;
                 }
                 else
                 {
-                    const DxMonitorInfo& selectedMonitor = monitors[editorConfig.monitorIndex];
-
-                    ImGui::Text("Name: %s", WideToUtf8(selectedMonitor.name).c_str());
-                    ImGui::Text("Device: %s", WideToUtf8(selectedMonitor.deviceName).c_str());
-                    ImGui::Text("Position: %d, %d", selectedMonitor.x, selectedMonitor.y);
-                    ImGui::Text("Size: %d x %d", selectedMonitor.width, selectedMonitor.height);
-                    ImGui::Text("Refresh: %d Hz", selectedMonitor.refreshRate);
-                    ImGui::Text("Primary: %s", selectedMonitor.primary ? "Yes" : "No");
+                    editorConfig.useMonitorSize = false;
                 }
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Runtime");
-
-                ImGui::Text("Window Ready: %s", g_DxWindow.IsWindowReady() ? "Yes" : "No");
-                ImGui::Text("Window Size: %d x %d", g_DxWindow.GetWindowWidth(), g_DxWindow.GetWindowHeight());
-                ImGui::Text("Final Scale: %.2f", g_DxWindow.GetFinalRenderScale());
-                ImGui::Text("HWND: %s", g_DxWindow.GetHWND() ? "Valid" : "None");
-
-                ImGui::EndTabItem();
+                changed |= menuLayout::ToggleRow("Borderless", "fuserBorderless", &editorConfig.borderless);
+                changed |= menuLayout::ToggleRow("Always on top", "fuserTopMost", &editorConfig.topMost);
+                changed |= menuLayout::ToggleRow("Show in taskbar", "fuserTaskbar", &editorConfig.showInTaskbar);
             }
-
-            ImGui::EndTabBar();
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Background"))
+            {
+                changed |= menuLayout::ToggleRow("Transparent", "fuserTransparent", &editorConfig.transparentBackground);
+                if (!editorConfig.transparentBackground)
+                    changed |= menuLayout::ColourRow("Colour", "fuserBackground", (float*)&editorConfig.backgroundColour);
+            }
+            menuLayout::EndTwoColumns();
         }
-
-        ImGui::End();
+        if (changed)
+            ApplyAndSaveFuserConfig(editorConfig);
+        if (ImGui::Button("Restart window", ImVec2(150.0f, 28.0f)))
+            RestartAndSaveFuserWindow(editorConfig);
     }
+    else if (activePage == FuserPage::Render)
+    {
+        bool changed = false;
+        if (menuLayout::BeginTwoColumns("##fuserRenderColumns"))
+        {
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Frame timing"))
+            {
+                changed |= menuLayout::ToggleRow("Use VSync", "fuserVsync", &editorConfig.useVSync);
+                changed |= menuLayout::ToggleRow("Use monitor refresh", "fuserMonitorRefresh", &editorConfig.useMonitorRefreshRate);
+                if (!editorConfig.useVSync && !editorConfig.useMonitorRefreshRate)
+                    changed |= menuLayout::SliderIntRow("Maximum FPS", "fuserMaxFps", &editorConfig.maxFPS, 30, 360, "%d FPS");
+            }
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Scale & quality"))
+            {
+                changed |= menuLayout::ToggleRow("Anti-aliasing", "fuserAa", &editorConfig.antiAliasing);
+                changed |= menuLayout::ToggleRow("Use DPI scale", "fuserDpi", &editorConfig.useDpiScale);
+                changed |= menuLayout::SliderFloatRow("Render scale", "fuserScale", &editorConfig.renderScale, 0.50f, 2.50f, "%.2fx");
+                editorConfig.renderScale = std::clamp(editorConfig.renderScale, 0.05f, 5.0f);
+            }
+            menuLayout::EndTwoColumns();
+        }
+        if (menuLayout::Section("Font"))
+        {
+            int selectedFontIndex = GetFontIndexFromName(editorConfig.defaultFont.name);
+            ImGui::SetNextItemWidth(220.0f);
+            if (ImGui::BeginCombo("Default font", GetFontPreviewName(selectedFontIndex)))
+            {
+                for (int i = 0; i < 5; ++i)
+                {
+                    const bool selected = selectedFontIndex == i;
+                    if (ImGui::Selectable(GetFontPreviewName(i), selected))
+                    {
+                        editorConfig.defaultFont.name = GetFontNameFromIndex(i);
+                        changed = true;
+                    }
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            changed |= menuLayout::ToggleRow("Bold", "fuserBold", &editorConfig.defaultFont.bold);
+        }
+        if (changed)
+            ApplyAndSaveFuserConfig(editorConfig);
+        if (ImGui::Button("Apply live", ImVec2(120.0f, 28.0f)))
+            ApplyAndSaveFuserConfig(editorConfig);
+        ImGui::SameLine();
+        if (ImGui::Button("Restart window", ImVec2(150.0f, 28.0f)))
+            RestartAndSaveFuserWindow(editorConfig);
+    }
+    else
+    {
+        if (menuLayout::Section("Test scene"))
+        {
+            bool testScene = fuserRender::IsTestSceneEnabled();
+            if (menuLayout::ToggleRow("Render test scene", "fuserTestScene", &testScene))
+                fuserRender::SetTestSceneEnabled(testScene);
+        }
+        if (menuLayout::Section("Selected monitor"))
+        {
+            const std::vector<DxMonitorInfo> monitors = g_DxWindow.GetMonitors();
+            if (editorConfig.monitorIndex >= 0 && editorConfig.monitorIndex < static_cast<int>(monitors.size()))
+            {
+                const DxMonitorInfo& monitor = monitors[editorConfig.monitorIndex];
+                ImGui::Text("Name: %s", WideToUtf8(monitor.name).c_str());
+                ImGui::Text("Device: %s", WideToUtf8(monitor.deviceName).c_str());
+                ImGui::Text("Position: %d, %d", monitor.x, monitor.y);
+                ImGui::Text("Size: %d x %d @ %d Hz", monitor.width, monitor.height, monitor.refreshRate);
+            }
+            else
+            {
+                ImGui::TextDisabled("No selected monitor data.");
+            }
+        }
+        if (menuLayout::Section("Runtime"))
+        {
+            ImGui::Text("Window ready: %s", g_DxWindow.IsWindowReady() ? "Yes" : "No");
+            ImGui::Text("Window size: %d x %d", g_DxWindow.GetWindowWidth(), g_DxWindow.GetWindowHeight());
+            ImGui::Text("Final scale: %.2f", g_DxWindow.GetFinalRenderScale());
+            ImGui::Text("Window handle: %s", g_DxWindow.GetHWND() ? "Valid" : "None");
+        }
+    }
+    menuLayout::PopContentInset();
+    ImGui::EndChild();
+    ImGui::End();
 }
 
 static void renderMenuSettings()
 {
+    enum class SettingsPage : int
+    {
+        App,
+        Settings,
+        Appearance,
+        Keybinds,
+        Advanced
+    };
 
-
-    std::string windowNameMain = "App Settings";
-
-    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    static SettingsPage activePage = SettingsPage::App;
+    static char apiKeyBuffer[256]{};
+    static bool apiKeyLoaded = false;
+    static bool apiKeyChecked = false;
+    static bool apiKeyValid = false;
+    static std::string apiKeyStatus = "Not checked";
+    static std::string apiKeyError;
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-
-    ImGui::SetNextWindowPos(ImVec2((viewport->Pos.x + viewport->Size.x) - 410, viewport->Pos.y + 10));
-
-    ImGui::SetNextWindowSize(ImVec2(350, viewport->Size.y - 50));
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->Pos.x + 20.0f, viewport->Pos.y + 20.0f),
+        ImGuiCond_FirstUseEver
+    );
+    ImGui::SetNextWindowSize(ImVec2(900.0f, 720.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(720.0f, 500.0f),
+        ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
+    );
     ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
-
-
-    if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appSettings, flagss))
+    if (!ImGui::Begin("Meaty Settings", &appMenu::appSettings, ImGuiWindowFlags_NoCollapse))
     {
+        ImGui::End();
+        return;
+    }
 
-        if (ImGui::BeginTabBar("##Tabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+    const auto saveIfChanged = [](bool changed)
+    {
+        if (changed)
+            configManager.SaveConfig();
+    };
+
+    ImGui::BeginChild("##settingsNavigation", ImVec2(0.0f, 42.0f), false);
+
+    const auto navigationItem = [&](const char* icon, const char* label, SettingsPage page)
+    {
+        if (menuLayout::TopTabButton(icon, label, activePage == page))
+            activePage = page;
+        ImGui::SameLine();
+    };
+
+    navigationItem(ICON_FA_DISPLAY, "App", SettingsPage::App);
+    navigationItem(ICON_FA_GEARS, "Settings", SettingsPage::Settings);
+    navigationItem(ICON_FA_PALETTE, "Appearance", SettingsPage::Appearance);
+    navigationItem(ICON_FA_KEY, "Keybinds", SettingsPage::Keybinds);
+    navigationItem(ICON_FA_SLIDERS, "Advanced", SettingsPage::Advanced);
+    ImGui::EndChild();
+    ImGui::BeginChild("##settingsContent", ImVec2(0.0f, 0.0f), false);
+    menuLayout::PushContentInset();
+    if (activePage == SettingsPage::App)
+    {
+        const bool dmaConnected = memoryGlobals::dmaConnected.load(std::memory_order_acquire);
+        const bool processFound = memoryGlobals::processFound.load(std::memory_order_acquire);
+        const bool working = mem.IsInitRunning();
+        const bool stopping = mem.IsDisconnectRequested();
+
+        if (menuLayout::BeginTwoColumns("##appColumns"))
         {
-            if (ImGui::BeginTabItem("App"))
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Connection"))
             {
-
-
-                ImGui::SeparatorText("Radar Control");
-                const bool dmaConnected = memoryGlobals::dmaConnected.load(
-                    std::memory_order_acquire
-                );
-
-                const bool processFound = memoryGlobals::processFound.load(
-                    std::memory_order_acquire
-                );
-
-                const bool working = mem.IsInitRunning();
-                const bool stopping = mem.IsDisconnectRequested();
-
                 if (working)
                 {
                     ImGui::BeginDisabled();
-
-                    ImGui::Button(
-                        stopping ? "Stopping..." : "Working...",
-                        ImVec2(140, 30)
-                    );
-
+                    ImGui::Button(stopping ? "Stopping..." : "Working...", ImVec2(130.0f, 28.0f));
                     ImGui::EndDisabled();
-
                     ImGui::SameLine();
-
-                    if (!stopping && ImGui::Button("Disconnect", ImVec2(140, 30)))
-                    {
+                    if (!stopping && ImGui::Button("Disconnect", ImVec2(130.0f, 28.0f)))
                         mem.doDMADisconnect();
-                    }
                 }
                 else if (!dmaConnected)
                 {
-                    if (ImGui::Button("Connect", ImVec2(140, 30)))
-                    {
+                    if (ImGui::Button("Connect", ImVec2(130.0f, 28.0f)))
                         mem.doDMAConnect();
-                    }
                 }
                 else
                 {
-                    if (ImGui::Button("Disconnect", ImVec2(140, 30)))
-                    {
+                    if (ImGui::Button("Disconnect", ImVec2(130.0f, 28.0f)))
                         mem.doDMADisconnect();
-                    }
-
                     ImGui::SameLine();
-
-                    if (processFound &&
-                        ImGui::Button("Soft Restart", ImVec2(140, 30)))
-                    {
+                    if (processFound && ImGui::Button("Soft restart", ImVec2(130.0f, 28.0f)))
                         players.softRestart();
-                    }
                 }
 
-
-                if (!memoryGlobals::dmaConnected)
+                if (!dmaConnected)
                 {
-                    if (ImGui::Checkbox(" Auto Connect", &memoryGlobals::dmaAutoConnect)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::Checkbox(" Close Connections", &memoryGlobals::dmaCloseAll);
-
+                    saveIfChanged(menuLayout::ToggleRow("Connect automatically", "autoConnect", &memoryGlobals::dmaAutoConnect));
+                    saveIfChanged(menuLayout::ToggleRow("Close connections", "closeConnections", &memoryGlobals::dmaCloseAll));
                 }
-                ImGui::Checkbox(" Show Stats", &memoryGlobals::dmaShowStats);
+                saveIfChanged(menuLayout::ToggleRow("Show connection stats", "showStats", &memoryGlobals::dmaShowStats));
+            }
 
-                ImGui::NewLine();
-
-                ImGui::SeparatorText("App Settings");
-                ImGui::PushItemWidth(150); if (ImGui::SliderFloat(" Window Alpha", &globals::appWindowAlpha, 0.f, 1.f, "%.1f")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                ImGui::PushItemWidth(150);
-                if (ImGui::SliderFloat(
-                    " Radar Max FPS",
-                    &globals::appRadarMaxFPS,
-                    15.0f,
-                    240.0f,
-                    "%.0f FPS",
-                    ImGuiSliderFlags_AlwaysClamp))
-                {
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Window & display"))
+            {
+                saveIfChanged(menuLayout::SliderFloatRow("Window opacity", "windowAlpha", &globals::appWindowAlpha, 0.25f, 1.0f, "%.2f"));
+                saveIfChanged(menuLayout::SliderFloatRow("Radar maximum FPS", "radarMaxFps", &globals::appRadarMaxFPS, 15.0f, 240.0f, "%.0f FPS"));
+                if (showResSelectionBox())
                     configManager.SaveConfig();
-                }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Caps the main radar render loop. VSync may impose a lower limit.");
-                ImGui::PopItemWidth();
-                ImGui::PushItemWidth(150); if (showResSelectionBox()) configManager.SaveConfig(); ImGui::PopItemWidth();
-
-                ImGui::NewLine();
-                ImGui::SeparatorText("Text Settings");
-                ImGui::PushItemWidth(150);
-                if (ImGui::SliderFloat(
-                    " Radar Text Size",
-                    &radarGlobals::textScale,
-                    0.75f,
-                    2.0f,
-                    "%.2fx",
-                    ImGuiSliderFlags_AlwaysClamp))
-                {
-                    radarGlobals::textScale =
-                        std::round(radarGlobals::textScale * 20.0f) / 20.0f;
-                    configManager.SaveConfig();
-                }
-                ImGui::PopItemWidth();
-                ImGui::TextDisabled("Scales player, loot and corpse marker labels.");
-
-                ImGui::NewLine();
-                //dogtag api connect details
-                {
-                    ImGui::SeparatorText("Dogtag Cloud API");
-
-                    static char apiKeyBuffer[256]{};
-                    static bool keyLoadedToBuffer = false;
-
-                    static bool keyStatusChecked = false;
-                    static bool keyIsValid = false;
-                    static std::string keyStatusText = "Not checked";
-                    static std::string lastError;
-
-                    if (!keyLoadedToBuffer)
-                    {
-                        strncpy_s(apiKeyBuffer, globals::dogTagAPIKey.c_str(), sizeof(apiKeyBuffer) - 1);
-
-                        keyLoadedToBuffer = true;
-                    }
-
-                    ImGui::TextWrapped(" Visit apicloud.meatyradar.co.uk/ for FREE\n Help build the database of players!\n");
-
-                    ImGui::InputText(" API Key", apiKeyBuffer, IM_ARRAYSIZE(apiKeyBuffer), ImGuiInputTextFlags_Password);
-
-                    if (ImGui::Button("Save Key", ImVec2(140, 30)))
-                    {
-                        std::string key = apiKeyBuffer;
-                        g_DogTagAPI.setApiKey(key);
-
-                        
-                        globals::dogTagAPIKey = key;
-                        configManager.SaveConfig();
-
-                        keyStatusChecked = false;
-                        keyIsValid = false;
-                        keyStatusText = "Saved. Not checked yet.";
-                        lastError.clear();
-                    }
-
-                    ImGui::SameLine();
-
-                    if (ImGui::Button("Check Status", ImVec2(140, 30)))
-                    {
-                        std::string key = apiKeyBuffer;
-                        g_DogTagAPI.setApiKey(key);
-
-                        keyStatusChecked = true;
-                        keyIsValid = false;
-                        keyStatusText = "Checking...";
-                        lastError.clear();
-
-                        auto status = g_DogTagAPI.getKeyStatus();
-
-                        if (status && status->valid)
-                        {
-                            keyIsValid = true;
-                            keyStatusText = "Active";
-                        }
-                        else
-                        {
-                            keyIsValid = false;
-                            keyStatusText = "Invalid / Disabled / Banned";
-
-                            if (status && !status->error.empty())
-                                lastError = status->error;
-                            else
-                                lastError = "Failed to check API key status.";
-                        }
-                    }
-
-                    if (globals::dogTagAPIKey != "")
-                    {
-                        ImGui::NewLine();
-
-                        if (ImGui::Button("Clear Key", ImVec2(140, 30)))
-                        {
-                            memset(apiKeyBuffer, 0, sizeof(apiKeyBuffer));
-                            g_DogTagAPI.clearApiKey();
-
-                            globals::dogTagAPIKey = "";
-                            configManager.SaveConfig();
-
-                            keyStatusChecked = false;
-                            keyIsValid = false;
-                            keyStatusText = "No key set";
-                            lastError.clear();
-                        }
-                    }
-
-                    ImGui::Spacing();
-                    ImGui::SeparatorText("Status");
-
-                    if (!keyStatusChecked)
-                    {
-                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "Status: %s", keyStatusText.c_str());
-                    }
-                    else if (keyIsValid)
-                    {
-                        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.35f, 1.0f), "Status: Active");
-                    }
-                    else
-                    {
-                        ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "Status: %s", keyStatusText.c_str());
-                    }
-
-                    if (!lastError.empty())
-                        ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "Error: %s", lastError.c_str());
-                }
-
-                ImGui::SeparatorText("App Timings");
-                auto DrawTaskTiming = [](const char* label, double& value, double minValue, double maxValue, double speed = 1.0)
-                    {
-                        const double oldValue = value;
-
-                        ImGui::SetNextItemWidth(200.0f);
-
-                        if (ImGui::DragScalar(
-                            label,
-                            ImGuiDataType_Double,
-                            &value,
-                            static_cast<float>(speed),
-                            &minValue,
-                            &maxValue,
-                            "%.0f ms",
-                            ImGuiSliderFlags_AlwaysClamp))
-                        {
-                            value = std::clamp(value, minValue, maxValue);
-                        }
-
-                        if (ImGui::IsItemHovered())
-                        {
-                            ImGui::SetTooltip("%s\nCurrent: %.2f ms\nApprox rate: %.1f Hz",
-                                label,
-                                value,
-                                value > 0.0 ? (1000.0 / value) : 0.0
-                            );
-                        }
-
-                        return oldValue != value;
-                    };
-
-                bool timingsChanged = false;
-
-                timingsChanged |= DrawTaskTiming(
-                    "Camera",
-                    globals::taskCamera,
-                    1.0,
-                    100.0,
-                    0.5
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Players",
-                    globals::taskPlayers,
-                    5.0,
-                    500.0,
-                    1.0
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Player Positions",
-                    globals::taskPlayerPositions,
-                    5.0,
-                    100.0,
-                    0.5
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Fireport",
-                    globals::taskFireport,
-                    5.0,
-                    100.0,
-                    1.0
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Player Bones",
-                    globals::taskPlayersBones,
-                    5.0,
-                    500.0,
-                    1.0
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Loot",
-                    globals::taskLoot,
-                    100.0,
-                    30000.0,
-                    100.0
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Player Equipment",
-                    globals::taskPlayersEquipment,
-                    100.0,
-                    30000.0,
-                    100.0
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Player Metadata",
-                    globals::taskPlayerMetadata,
-                    50.0,
-                    5000.0,
-                    25.0
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Grenades",
-                    globals::taskGrenades,
-                    10.0,
-                    5000.0,
-                    10.0
-                );
-
-                timingsChanged |= DrawTaskTiming(
-                    "Tripwires",
-                    globals::taskTripWire,
-                    10.0,
-                    5000.0,
-                    10.0
-                );
-
-                ImGui::EndTabItem();
+                saveIfChanged(menuLayout::SliderFloatRow("Radar text scale", "radarText", &radarGlobals::textScale, 0.75f, 2.0f, "%.2fx"));
             }
-            if (ImGui::BeginTabItem("Settings"))
-            {
-                ImGui::SeparatorText("Radar Settings");
-                if (ImGui::Checkbox(" Draw Players", &radarGlobals::drawPlayers)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Grenades", &radarGlobals::drawGrenades)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Tripwires", &radarGlobals::drawTripwires)) configManager.SaveConfig(); ImGui::SameLine(); if (ImGui::Checkbox("Show lines##radarTripwire", &radarGlobals::drawTripwireLine)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Exfils", &radarGlobals::drawExfils)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Loot", &radarGlobals::drawLoot)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Quest Helper", &radarGlobals::drawQuestHelper)) configManager.SaveConfig();
-
-                auto& aimviewConfig = g_AimViewWidget.GetConfig();
-                if (ImGui::Checkbox("Draw AimView", &aimviewConfig.enabled)) configManager.SaveConfig();
-
-                ImGui::Text("Local AimLine     "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##localAimLine", &radarGlobals::localAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                ImGui::Text("Friend AimLine    "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##friendAimLine", &radarGlobals::friendAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                ImGui::Text("Enemy AimLine   "); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("##enemyAimLine", &radarGlobals::enemyAimLine, 4, 500, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                ImGui::Text("Aim Target Line Angle"); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderFloat("##aimTargetAngle", &radarGlobals::aimLineTargetAngle, 1.0f, 20.0f, "%.1f deg")) configManager.SaveConfig(); ImGui::PopItemWidth();
-
-
-                ImGui::SeparatorText("Fuser/ESP Settings");
-
-                if (ImGui::Checkbox(" Draw Players        ", &espGlobals::drawPlayers)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##player", &espGlobals::drawPlayerDist, 10, 1000, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                if (ImGui::Checkbox(" Draw Grenades    ", &espGlobals::drawGrenades)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##grenade", &espGlobals::drawGrenadesDist, 10, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                if (ImGui::Checkbox(" Draw Tripwires  ", &espGlobals::drawTripwires)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##tripwire", &espGlobals::drawTripwiresDist, 10, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth(); ImGui::SameLine(); if (ImGui::Checkbox("Show lines##espTripwire", &espGlobals::drawTripwireLine)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Loot             ", &espGlobals::drawLoot)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##loot", &espGlobals::drawLootDist, 5, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                if (ImGui::Checkbox(" Draw Corpse          ", &espGlobals::drawCorpse)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##corpse", &espGlobals::drawCorpseDist, 5, 400, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-                if (ImGui::Checkbox(" Draw Box's", &espGlobals::drawBoxPlayers)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Quest Helper. ", &espGlobals::drawQuestHelper)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Skeleton", &espGlobals::drawSkeletons)) configManager.SaveConfig(); ImGui::SameLine(); if (ImGui::Checkbox(" Only closest", &espGlobals::skeletonsOnlyClosest)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Head Dot", &espGlobals::drawHeadDot)) configManager.SaveConfig();ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderFloat("##headdotSize", &espGlobals::headDotSize, 0.5, 10, "%.0f", ImGuiSliderFlags_AlwaysClamp)) espGlobals::headDotSize = std::round(espGlobals::headDotSize * 10.0f) / 10.0f; configManager.SaveConfig(); ImGui::PopItemWidth();
-                if (ImGui::Checkbox(" Draw Crosshair", &espGlobals::drawCrosshair)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Draw Exfils             ", &espGlobals::drawExfil)) configManager.SaveConfig(); ImGui::SameLine(); ImGui::PushItemWidth(150); if (ImGui::SliderInt("m##exfildist", &espGlobals::drawExfilDist, 5, 1000, "%d")) configManager.SaveConfig(); ImGui::PopItemWidth();
-
-
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Features"))
-            {
-                ImGui::SeparatorText("Safe Features");
-                if (ImGui::Checkbox(" Get Equipment Info", &radarGlobals::getPlayerEquip)) configManager.SaveConfig();
-                if (ImGui::Checkbox(" Get TarkovDev Info", &radarGlobals::getPlayerStats)) configManager.SaveConfig();
-
-
-                ImGui::SeparatorText("Risky Features");
-                
-
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Colours"))
-            {
-                ImGui::SeparatorText("Player Colours");
-                if (ImGui::ColorEdit4(" PMC Player", (float*)&coloursGlobals::playerPMC, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Player Scav", (float*)&coloursGlobals::playerScav, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" AI Player", (float*)&coloursGlobals::playerAI, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Local Player", (float*)&coloursGlobals::playerLocal, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Friendly Player", (float*)&coloursGlobals::playerFriendly, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" AI Boss", (float*)&coloursGlobals::playerBoss, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" BTR", (float*)&coloursGlobals::aiBTR, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Watched Player", (float*)&coloursGlobals::playerWatched, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-
-                ImGui::SeparatorText("Radar / ESP Colours");
-                if (ImGui::ColorEdit4(" Player GroupLine", (float*)&coloursGlobals::playerGroupLine, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Player Corpse", (float*)&coloursGlobals::playerCorpse, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Grenades", (float*)&coloursGlobals::grenades, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Tripwires", (float*)&coloursGlobals::tripwires, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Exfils", (float*)&coloursGlobals::exfils, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Crosshair", (float*)&coloursGlobals::crosshair, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" FOV Circle", (float*)&coloursGlobals::fovCircle, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Quest Markers", (float*)&coloursGlobals::questMarker, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-                if (ImGui::ColorEdit4(" Containers", (float*)&coloursGlobals::containerColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs)) configManager.SaveConfig();
-
-
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Misc"))
-            {
-                ImGui::SeparatorText("Keybind Settings");
-                if (ShowKeySelectionBox(keyGlobals::aimKey, " Aim Key")) configManager.SaveConfig();
-                if (ShowKeySelectionBox(keyGlobals::toggleFollow, " Toggle Follow")) configManager.SaveConfig();
-                if (ShowKeySelectionBox(keyGlobals::battleMode, " Battle Mode")) configManager.SaveConfig();
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
+            menuLayout::EndTwoColumns();
         }
 
+        if (menuLayout::Section("Dogtag Cloud API"))
+        {
+            if (!apiKeyLoaded)
+            {
+                strncpy_s(apiKeyBuffer, globals::dogTagAPIKey.c_str(), sizeof(apiKeyBuffer) - 1);
+                apiKeyLoaded = true;
+            }
 
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::InputText("API key", apiKeyBuffer, IM_ARRAYSIZE(apiKeyBuffer), ImGuiInputTextFlags_Password);
+            if (ImGui::Button("Save key", ImVec2(120.0f, 28.0f)))
+            {
+                globals::dogTagAPIKey = apiKeyBuffer;
+                g_DogTagAPI.setApiKey(globals::dogTagAPIKey);
+                configManager.SaveConfig();
+                apiKeyChecked = false;
+                apiKeyStatus = "Saved — not checked";
+                apiKeyError.clear();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Check status", ImVec2(120.0f, 28.0f)))
+            {
+                g_DogTagAPI.setApiKey(apiKeyBuffer);
+                apiKeyChecked = true;
+                apiKeyValid = false;
+                apiKeyStatus = "Checking...";
+                apiKeyError.clear();
+                const auto status = g_DogTagAPI.getKeyStatus();
+                if (status && status->valid)
+                {
+                    apiKeyValid = true;
+                    apiKeyStatus = "Active";
+                }
+                else
+                {
+                    apiKeyStatus = "Invalid, disabled or unavailable";
+                    apiKeyError = status && !status->error.empty()
+                        ? status->error
+                        : "Could not verify the API key.";
+                }
+            }
+            if (!globals::dogTagAPIKey.empty())
+            {
+                ImGui::SameLine();
+                if (ImGui::Button("Clear", ImVec2(80.0f, 28.0f)))
+                {
+                    memset(apiKeyBuffer, 0, sizeof(apiKeyBuffer));
+                    globals::dogTagAPIKey.clear();
+                    g_DogTagAPI.clearApiKey();
+                    configManager.SaveConfig();
+                    apiKeyChecked = false;
+                    apiKeyStatus = "No key set";
+                    apiKeyError.clear();
+                }
+            }
 
-
-
+            const ImVec4 statusColour = !apiKeyChecked
+                ? ImVec4(1.0f, 0.75f, 0.2f, 1.0f)
+                : apiKeyValid
+                    ? ImVec4(0.2f, 1.0f, 0.35f, 1.0f)
+                    : ImVec4(1.0f, 0.25f, 0.25f, 1.0f);
+            ImGui::TextColored(statusColour, "Status: %s", apiKeyStatus.c_str());
+            if (!apiKeyError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "%s", apiKeyError.c_str());
+        }
     }
+    else if (activePage == SettingsPage::Settings)
+    {
+        auto& aimviewConfig = g_AimViewWidget.GetConfig();
+        if (menuLayout::BeginTwoColumns("##featureColumns"))
+        {
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Radar"))
+            {
+                saveIfChanged(menuLayout::ToggleRow("Players", "radarPlayers", &radarGlobals::drawPlayers));
+                saveIfChanged(menuLayout::ToggleRow("Grenades", "radarGrenades", &radarGlobals::drawGrenades));
+                saveIfChanged(menuLayout::TogglePairRow(
+                    "Tripwires", "radarTripwires", &radarGlobals::drawTripwires,
+                    "Tripwire lines", "radarTripwireLines", &radarGlobals::drawTripwireLine));
+                saveIfChanged(menuLayout::ToggleRow("Loot", "radarLoot", &radarGlobals::drawLoot));
+                saveIfChanged(menuLayout::ToggleRow("Quest helper", "radarQuest", &radarGlobals::drawQuestHelper));
+                saveIfChanged(menuLayout::ToggleRow("Aim view", "aimView", &aimviewConfig.enabled));
+            }
+            if (menuLayout::Section("Radar aim lines"))
+            {
+                saveIfChanged(menuLayout::SliderIntRow("Local", "localAimLine", &radarGlobals::localAimLine, 4, 500, "%d px"));
+                saveIfChanged(menuLayout::SliderIntRow("Friends", "friendAimLine", &radarGlobals::friendAimLine, 4, 500, "%d px"));
+                saveIfChanged(menuLayout::SliderIntRow("Enemies", "enemyAimLine", &radarGlobals::enemyAimLine, 4, 500, "%d px"));
+                saveIfChanged(menuLayout::SliderFloatRow("Target angle", "aimTargetAngle", &radarGlobals::aimLineTargetAngle, 1.0f, 20.0f, "%.1f°"));
+            }
+
+            menuLayout::NextColumn();
+            if (menuLayout::Section("ESP"))
+            {
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Grenades", "espGrenades", &espGlobals::drawGrenades, "Range", &espGlobals::drawGrenadesDist, 10, 400, "%d m"));
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Tripwires", "espTripwires", &espGlobals::drawTripwires, "Range", &espGlobals::drawTripwiresDist, 10, 400, "%d m"));
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Loot", "espLoot", &espGlobals::drawLoot, "Range", &espGlobals::drawLootDist, 5, 400, "%d m"));
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Corpses", "espCorpses", &espGlobals::drawCorpse, "Range", &espGlobals::drawCorpseDist, 5, 400, "%d m"));
+                saveIfChanged(menuLayout::ToggleRow("Quest helper", "espQuest", &espGlobals::drawQuestHelper));
+
+                static const char* const aimOverlayAlertOptions[] =
+                {
+                    "Off",
+                    "All",
+                    "Players"
+                };
+
+                saveIfChanged(menuLayout::ComboRow(
+                    "Aim overlay alert",
+                    "espAimOverlayAlert",
+                    &espGlobals::aimOverlayAlert,
+                    aimOverlayAlertOptions,
+                    IM_ARRAYSIZE(aimOverlayAlertOptions)));
+            }
+            if (menuLayout::Section("ESP Players"))
+            {
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Players", "espPlayers", &espGlobals::drawPlayers, "Range", &espGlobals::drawPlayerDist, 10, 1000, "%d m"));
+                saveIfChanged(menuLayout::ToggleRow("Players Equip", "equipmentInfo", &radarGlobals::getPlayerEquip));
+                saveIfChanged(menuLayout::ToggleRow("Boxes", "espBoxes", &espGlobals::drawBoxPlayers));
+                saveIfChanged(menuLayout::ToggleRow("Skeleton", "espSkeleton", &espGlobals::drawSkeletons));
+                saveIfChanged(menuLayout::ToggleFloatSliderRow("Head dot", "espHeadDot", &espGlobals::drawHeadDot, "Size", &espGlobals::headDotSize, 0.5f, 10.0f, "%.1f"));
+            }
+            if (menuLayout::Section("ESP Local"))
+            {
+                static const char* const crosshairTypeOptions[] =
+                {
+                    "Circle",
+                    "Cross"
+                };
+
+                saveIfChanged(menuLayout::ToggleComboIntSliderRow(
+                    "Crosshair",
+                    "espCrosshair",
+                    &espGlobals::drawCrosshair,
+                    "Type",
+                    &espGlobals::crosshairType,
+                    crosshairTypeOptions,
+                    IM_ARRAYSIZE(crosshairTypeOptions),
+                    "Size",
+                    &espGlobals::crosshairSize,
+                    1,
+                    20));
+            }
+            menuLayout::EndTwoColumns();
+        }
+
+        if (menuLayout::BeginTwoColumns("##exfilAndDataColumns"))
+        {
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Radar Exfils"))
+            {
+                saveIfChanged(menuLayout::ToggleRow("Draw extracts", "radarExtracts", &radarGlobals::drawExfils));
+                bool radarExfilOptionsChanged = false;
+                if (!radarGlobals::drawExfils)
+                {
+                    radarExfilOptionsChanged |= radarGlobals::drawSecretExfils;
+                    radarExfilOptionsChanged |= radarGlobals::drawTransitExfils;
+                    radarGlobals::drawSecretExfils = false;
+                    radarGlobals::drawTransitExfils = false;
+                }
+                radarExfilOptionsChanged |= menuLayout::TogglePairRow(
+                    "Secret extracts", "radarSecretExtracts", &radarGlobals::drawSecretExfils,
+                    "Transits", "radarTransits", &radarGlobals::drawTransitExfils,
+                    radarGlobals::drawExfils);
+                saveIfChanged(radarExfilOptionsChanged);
+            }
+            menuLayout::NextColumn();
+            if (menuLayout::Section("ESP Exfils"))
+            {
+                saveIfChanged(menuLayout::ToggleRow("Draw extracts", "espExtracts", &espGlobals::drawExfil));
+                bool espExfilOptionsChanged = false;
+                if (!espGlobals::drawExfil)
+                {
+                    espExfilOptionsChanged |= espGlobals::drawSecretExfils;
+                    espExfilOptionsChanged |= espGlobals::drawTransitExfils;
+                    espGlobals::drawSecretExfils = false;
+                    espGlobals::drawTransitExfils = false;
+                }
+                espExfilOptionsChanged |= menuLayout::TogglePairRow(
+                    "Secret extracts", "espSecretExtracts", &espGlobals::drawSecretExfils,
+                    "Transits", "espTransits", &espGlobals::drawTransitExfils,
+                    espGlobals::drawExfil);
+                saveIfChanged(espExfilOptionsChanged);
+                saveIfChanged(menuLayout::SliderIntRow(
+                    "Extract range",
+                    "espExtractRange",
+                    &espGlobals::drawExfilDist,
+                    5,
+                    1000,
+                    "%d m",
+                    espGlobals::drawExfil));
+            }
+            menuLayout::EndTwoColumns();
+        }
+
+        if (menuLayout::Section("Player data"))
+        {
+            saveIfChanged(menuLayout::ToggleRow("Use Tarkov.dev player data", "tarkovDevInfo", &radarGlobals::getPlayerStats));
+        }
+    }
+    else if (activePage == SettingsPage::Appearance)
+    {
+        if (menuLayout::BeginTwoColumns("##appearanceColumns"))
+        {
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Players"))
+            {
+                saveIfChanged(menuLayout::ColourRow("PMC", "pmcColour", (float*)&coloursGlobals::playerPMC));
+                saveIfChanged(menuLayout::ColourRow("Player scav", "scavColour", (float*)&coloursGlobals::playerScav));
+                saveIfChanged(menuLayout::ColourRow("AI", "aiColour", (float*)&coloursGlobals::playerAI));
+                saveIfChanged(menuLayout::ColourRow("Boss", "bossColour", (float*)&coloursGlobals::playerBoss));
+                saveIfChanged(menuLayout::ColourRow("Black Division", "blackDivColour", (float*)&coloursGlobals::playerBlackDiv));
+                saveIfChanged(menuLayout::ColourRow("Local player", "localColour", (float*)&coloursGlobals::playerLocal));
+                saveIfChanged(menuLayout::ColourRow("Friendly", "friendlyColour", (float*)&coloursGlobals::playerFriendly));
+                saveIfChanged(menuLayout::ColourRow("Watched", "watchedColour", (float*)&coloursGlobals::playerWatched));
+            }
+            menuLayout::NextColumn();
+            if (menuLayout::Section("World"))
+            {
+                saveIfChanged(menuLayout::ColourRow("Grenades", "grenadesColour", (float*)&coloursGlobals::grenades));
+                saveIfChanged(menuLayout::ColourRow("Tripwires", "tripwiresColour", (float*)&coloursGlobals::tripwires));
+                saveIfChanged(menuLayout::ColourRow("Extracts", "extractsColour", (float*)&coloursGlobals::exfils));
+                saveIfChanged(menuLayout::ColourRow("Quest markers", "questColour", (float*)&coloursGlobals::questMarker));
+                saveIfChanged(menuLayout::ColourRow("Containers", "containersColour", (float*)&coloursGlobals::containerColour));
+                saveIfChanged(menuLayout::ColourRow("Player group lines", "groupLineColour", (float*)&coloursGlobals::playerGroupLine));
+                saveIfChanged(menuLayout::ColourRow("Player corpses", "corpseColour", (float*)&coloursGlobals::playerCorpse));
+                saveIfChanged(menuLayout::ColourRow("Crosshair", "crosshairColour", (float*)&coloursGlobals::crosshair));
+                saveIfChanged(menuLayout::ColourRow("FOV circle", "fovColour", (float*)&coloursGlobals::fovCircle));
+            }
+            menuLayout::EndTwoColumns();
+        }
+    }
+    else if (activePage == SettingsPage::Keybinds)
+    {
+        if (menuLayout::Section("Controls"))
+        {
+            ImGui::SetNextItemWidth(220.0f);
+            if (ShowKeySelectionBox(keyGlobals::aimKey, "Aim key"))
+                configManager.SaveConfig();
+            ImGui::SetNextItemWidth(220.0f);
+            if (ShowKeySelectionBox(keyGlobals::toggleFollow, "Toggle follow"))
+                configManager.SaveConfig();
+            ImGui::SetNextItemWidth(220.0f);
+            if (ShowKeySelectionBox(keyGlobals::battleMode, "Battle mode"))
+                configManager.SaveConfig();
+        }
+    }
+    else
+    {
+        if (menuLayout::Section("Task intervals"))
+        {
+            const auto timing = [](const char* label, double& value, double minValue, double maxValue, double speed)
+            {
+                const double before = value;
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::DragScalar(label, ImGuiDataType_Double, &value, static_cast<float>(speed), &minValue, &maxValue, "%.0f ms", ImGuiSliderFlags_AlwaysClamp);
+                return before != value;
+            };
+            bool changed = false;
+            changed |= timing("Camera", globals::taskCamera, 1.0, 100.0, 0.5);
+            changed |= timing("Players", globals::taskPlayers, 5.0, 500.0, 1.0);
+            changed |= timing("Player positions", globals::taskPlayerPositions, 5.0, 100.0, 0.5);
+            changed |= timing("Fireport", globals::taskFireport, 5.0, 100.0, 1.0);
+            changed |= timing("Player bones", globals::taskPlayersBones, 5.0, 500.0, 1.0);
+            changed |= timing("Loot", globals::taskLoot, 100.0, 30000.0, 100.0);
+            changed |= timing("Equipment", globals::taskPlayersEquipment, 100.0, 30000.0, 100.0);
+            changed |= timing("Player metadata", globals::taskPlayerMetadata, 50.0, 5000.0, 25.0);
+            changed |= timing("Grenades", globals::taskGrenades, 10.0, 5000.0, 10.0);
+            changed |= timing("Tripwires", globals::taskTripWire, 10.0, 5000.0, 10.0);
+            saveIfChanged(changed);
+        }
+    }
+
+    menuLayout::PopContentInset();
+    ImGui::EndChild();
     ImGui::End();
 }
 
@@ -3671,17 +3546,37 @@ static void DebugMatrixSummary(const char* label, const glm::highp_mat4& m)
 
 static void renderDebugWindow()
 {
+    enum class DebugPage : int { Console, Performance, Memory, Map };
+    static DebugPage activePage = DebugPage::Console;
     std::string windowNameMain = "Debug";
     static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse;
 
-    ImGui::SetNextWindowSize(ImVec2(900, 500), ImGuiCond_FirstUseEver);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 40.0f, viewport->Pos.y + 40.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(980.0f, 680.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(720.0f, 480.0f),
+        ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
+    );
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetDebug, flagss))
     {
-        if (ImGui::BeginTabBar("##Tabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+        ImGui::BeginChild("##debugNavigation", ImVec2(0.0f, 42.0f), false);
+        const auto nav = [&](const char* icon, const char* label, DebugPage page)
         {
-            if (ImGui::BeginTabItem("Console"))
-            {
+            if (menuLayout::TopTabButton(icon, label, activePage == page))
+                activePage = page;
+            ImGui::SameLine();
+        };
+        nav(ICON_FA_TERMINAL, "Console", DebugPage::Console);
+        nav(ICON_FA_GAUGE, "Performance", DebugPage::Performance);
+        nav(ICON_FA_DATABASE, "Memory", DebugPage::Memory);
+        nav(ICON_FA_MAP, "Map", DebugPage::Map);
+        ImGui::EndChild();
+        ImGui::BeginChild("##debugContent", ImVec2(0.0f, 0.0f), false);
+        menuLayout::PushContentInset();
+        if (activePage == DebugPage::Console)
+        {
                 static bool showInfo = true;
                 static bool showWarn = true;
                 static bool showError = true;
@@ -3814,10 +3709,9 @@ static void renderDebugWindow()
                     ImGui::EndTable();
                 }
 
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Performance"))
-            {
+        }
+        if (activePage == DebugPage::Performance)
+        {
                 static bool freezeRecent = false;
                 static bool newestFirst = true;
                 static std::vector<PerfSample> recentSamples;
@@ -4232,10 +4126,9 @@ static void renderDebugWindow()
                     }
                 }
 
-                ImGui::EndTabItem();
-            }
-           if (ImGui::BeginTabItem("Memory"))
-            {
+        }
+        if (activePage == DebugPage::Memory)
+        {
                 if (ImGui::BeginTabBar("##Tabsmemory", ImGuiTabBarFlags_FittingPolicyResizeDown))
                 {
                     if (ImGui::BeginTabItem("Overview"))
@@ -6697,10 +6590,9 @@ static void renderDebugWindow()
 
                     ImGui::EndTabBar();
                 }
-                ImGui::EndTabItem();
-            }
-           if (ImGui::BeginTabItem("Map Settings"))
-           {
+        }
+        if (activePage == DebugPage::Map)
+        {
                if (!mainGame.selectedLocation.empty())
                {
                    ImGui::TextUnformatted("The below information is for debug / map position corrections, they don't stick!");
@@ -6787,11 +6679,9 @@ static void renderDebugWindow()
                    ImGui::TextUnformatted("NOTE : Only visible when in raid");
                }
 
-               ImGui::EndTabItem();
-           }
-
-            ImGui::EndTabBar();
         }
+        menuLayout::PopContentInset();
+        ImGui::EndChild();
     }
     ImGui::End();
 
@@ -6843,11 +6733,27 @@ static void renderMenuIcons()
 
     // view port
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    constexpr float sidebarButtonSize = 42.0f;
+    constexpr float sidebarRightMargin = 10.0f;
+    constexpr float sidebarTop = 10.0f;
+    constexpr float sidebarStep = 48.0f;
+    const float sidebarX = viewport->Size.x - sidebarButtonSize - sidebarRightMargin;
+    const ImVec4 sidebarIconColour(0.94f, 0.22f, 0.25f, 1.0f);
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 10.f });
+    const auto sidebarButton = [&](const char* icon, float y)
+    {
+        ImGui::SetCursorPos(ImVec2(sidebarX, y));
+        ImGui::PushStyleColor(ImGuiCol_Text, sidebarIconColour);
+        const bool pressed = ImGui::ButtonMenu(
+            icon,
+            ImVec2(sidebarButtonSize, sidebarButtonSize),
+            ImVec2(0.0f, 0.0f));
+        ImGui::PopStyleColor();
+        return pressed;
+    };
 
     // Settings Icon
-    if (ImGui::ButtonMenu(settingIcon.c_str(), ImVec2(40, 40), ImVec2(-3.0f, 3.5f)))
+    if (sidebarButton(settingIcon.c_str(), sidebarTop))
     {
         appMenu::appSettings = !appMenu::appSettings;
         closeSettingWindows("settings");
@@ -6862,8 +6768,7 @@ static void renderMenuIcons()
         }
     }
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 55.f });
-    if (ImGui::ButtonMenu(fuserIcon.c_str(), ImVec2(40, 40), ImVec2(-1.5f, 2.5f))) {
+    if (sidebarButton(fuserIcon.c_str(), sidebarTop + sidebarStep)) {
         appMenu::appFuser = !appMenu::appFuser;
         closeSettingWindows("fuser");
     }
@@ -6878,8 +6783,7 @@ static void renderMenuIcons()
     }
 
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 100.f });
-    if (ImGui::ButtonMenu(makcuIcon.c_str(), ImVec2(40, 40), ImVec2(-1.5f, 3.5f))) {
+    if (sidebarButton(makcuIcon.c_str(), sidebarTop + (sidebarStep * 2.0f))) {
         appMenu::appMakcu = !appMenu::appMakcu;
         closeSettingWindows("makcu");
     }
@@ -6893,8 +6797,7 @@ static void renderMenuIcons()
         }
     }
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 145.f });
-    if (ImGui::ButtonMenu(filterIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.0f))) {
+    if (sidebarButton(filterIcon.c_str(), sidebarTop + (sidebarStep * 3.0f))) {
         appMenu::appLootFilters = !appMenu::appLootFilters;
         closeSettingWindows("lootfilters");
     }
@@ -6908,8 +6811,7 @@ static void renderMenuIcons()
         }
     }
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 190.f });
-    if (ImGui::ButtonMenu(questsIcon.c_str(), ImVec2(40, 40), ImVec2(0.5f, 3.5f))) {
+    if (sidebarButton(questsIcon.c_str(), sidebarTop + (sidebarStep * 4.0f))) {
         appMenu::appQuests = !appMenu::appQuests;
         closeSettingWindows("quests");
     }
@@ -6923,8 +6825,7 @@ static void renderMenuIcons()
         }
     }
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 235.f });
-    if (ImGui::ButtonMenu(watchlistIcon.c_str(), ImVec2(40, 40), ImVec2(0.5f, 3.0f))) {
+    if (sidebarButton(watchlistIcon.c_str(), sidebarTop + (sidebarStep * 5.0f))) {
         appMenu::appWatchList = !appMenu::appWatchList;
         closeSettingWindows("watchlist");
     }
@@ -6943,8 +6844,7 @@ static void renderMenuIcons()
     //widgets
 
 
-    ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 300.f });
-    if (ImGui::ButtonMenu(widgetDebugIcon.c_str(), ImVec2(40, 40), ImVec2(-2.5f, 3.0f))) { appMenu::widgetDebug = !appMenu::widgetDebug; }
+    if (sidebarButton(widgetDebugIcon.c_str(), sidebarTop + (sidebarStep * 6.0f) + 12.0f)) { appMenu::widgetDebug = !appMenu::widgetDebug; }
 
 
 
@@ -6952,14 +6852,11 @@ static void renderMenuIcons()
     if (mainGame.localPlayerPtr)
     {
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 350.f });
-        if (ImGui::ButtonMenu(widgetExitIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.5f))) { appMenu::widgetExfil = !appMenu::widgetExfil; }
+        if (sidebarButton(widgetExitIcon.c_str(), sidebarTop + (sidebarStep * 7.0f) + 12.0f)) { appMenu::widgetExfil = !appMenu::widgetExfil; }
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 400.f });
-        if (ImGui::ButtonMenu(widgetLootIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.5f))) { appMenu::widgetTopLoot = !appMenu::widgetTopLoot; }
+        if (sidebarButton(widgetLootIcon.c_str(), sidebarTop + (sidebarStep * 8.0f) + 12.0f)) { appMenu::widgetTopLoot = !appMenu::widgetTopLoot; }
 
-        ImGui::SetCursorPos(ImVec2{ (viewport->Size.x - 50.f), 450.f });
-        if (ImGui::ButtonMenu(widgetPlayersIcon.c_str(), ImVec2(40, 40), ImVec2(0.0f, 2.5f))) { appMenu::widgetPlayers = !appMenu::widgetPlayers; }
+        if (sidebarButton(widgetPlayersIcon.c_str(), sidebarTop + (sidebarStep * 9.0f) + 12.0f)) { appMenu::widgetPlayers = !appMenu::widgetPlayers; }
 
 
     }
@@ -7123,28 +7020,75 @@ static void renderMainScreen()
 static void load_styles()
 {
     ImVec4* colors = ImGui::GetStyle().Colors;
-    {
-        colors[ImGuiCol_WindowBg] = ImVec4(0.00f, 0.00f, 0.00f, 255.00f);
-
-        colors[ImGuiCol_FrameBg] = ImColor(11, 11, 11, 255);
-        colors[ImGuiCol_FrameBgHovered] = ImColor(11, 11, 11, 255);
-
-        colors[ImGuiCol_Button] = ImColor(0, 0, 255, 255);
-        colors[ImGuiCol_ButtonActive] = ImColor(0, 0, 255, 255);
-        colors[ImGuiCol_ButtonHovered] = ImColor(0, 0, 255, 100);
-
-        colors[ImGuiCol_TextDisabled] = ImVec4(0.37f, 0.37f, 0.37f, 1.00f);
-    }
+    // Compact charcoal theme: neutral input boxes, red accents, and no green.
+    colors[ImGuiCol_Text] = ImVec4(0.91f, 0.91f, 0.89f, 1.00f);
+    colors[ImGuiCol_TextDisabled] = ImVec4(0.48f, 0.48f, 0.46f, 1.00f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.045f, 0.050f, 0.055f, 1.00f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.065f, 0.070f, 0.075f, 0.96f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.090f, 0.095f, 0.100f, 1.00f);
+    colors[ImGuiCol_Border] = ImVec4(0.28f, 0.29f, 0.29f, 0.82f);
+    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.26f, 0.27f, 0.27f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.34f, 0.35f, 0.35f, 1.00f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.40f, 0.40f, 0.39f, 1.00f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.070f, 0.075f, 0.080f, 1.00f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.105f, 0.045f, 0.050f, 1.00f);
+    colors[ImGuiCol_MenuBarBg] = ImVec4(0.090f, 0.095f, 0.100f, 1.00f);
+    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.035f, 0.040f, 0.045f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.30f, 0.31f, 0.31f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.43f, 0.43f, 0.42f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.56f, 0.14f, 0.17f, 1.00f);
+    colors[ImGuiCol_CheckMark] = ImVec4(0.95f, 0.19f, 0.23f, 1.00f);
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.73f, 0.16f, 0.19f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(1.00f, 0.30f, 0.33f, 1.00f);
+    colors[ImGuiCol_Button] = ImVec4(0.16f, 0.17f, 0.18f, 1.00f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.43f, 0.10f, 0.13f, 1.00f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.72f, 0.13f, 0.16f, 1.00f);
+    colors[ImGuiCol_Header] = ImVec4(0.36f, 0.08f, 0.11f, 0.90f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.53f, 0.12f, 0.15f, 1.00f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.72f, 0.14f, 0.17f, 1.00f);
+    colors[ImGuiCol_Separator] = ImVec4(0.35f, 0.12f, 0.14f, 0.72f);
+    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.74f, 0.16f, 0.19f, 1.00f);
+    colors[ImGuiCol_SeparatorActive] = ImVec4(0.94f, 0.22f, 0.25f, 1.00f);
+    colors[ImGuiCol_ResizeGrip] = ImVec4(0.48f, 0.12f, 0.15f, 0.58f);
+    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.70f, 0.16f, 0.19f, 0.82f);
+    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.94f, 0.22f, 0.25f, 1.00f);
+    colors[ImGuiCol_Tab] = ImVec4(0.12f, 0.13f, 0.14f, 1.00f);
+    colors[ImGuiCol_TabHovered] = ImVec4(0.48f, 0.11f, 0.14f, 1.00f);
+    colors[ImGuiCol_TabActive] = ImVec4(0.62f, 0.13f, 0.16f, 1.00f);
+    colors[ImGuiCol_TabUnfocused] = ImVec4(0.10f, 0.11f, 0.12f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.38f, 0.09f, 0.12f, 1.00f);
+    colors[ImGuiCol_PlotLines] = ImVec4(0.88f, 0.20f, 0.23f, 1.00f);
+    colors[ImGuiCol_PlotHistogram] = ImVec4(0.88f, 0.20f, 0.23f, 1.00f);
+    colors[ImGuiCol_TextSelectedBg] = ImVec4(0.66f, 0.13f, 0.16f, 0.68f);
+    colors[ImGuiCol_NavHighlight] = ImVec4(0.94f, 0.22f, 0.25f, 1.00f);
+    colors[ImGuiCol_TableHeaderBg] = ImVec4(0.16f, 0.17f, 0.18f, 1.00f);
+    colors[ImGuiCol_TableBorderStrong] = ImVec4(0.30f, 0.31f, 0.31f, 0.82f);
+    colors[ImGuiCol_TableBorderLight] = ImVec4(0.20f, 0.21f, 0.22f, 0.82f);
+    colors[ImGuiCol_TableRowBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_TableRowBgAlt] = ImVec4(0.11f, 0.12f, 0.13f, 0.52f);
+    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.64f);
 
     ImGuiStyle* style = &ImGui::GetStyle();
     {
-        style->WindowPadding = ImVec2(6, 6);
+        style->WindowPadding = ImVec2(8, 8);
         style->WindowBorderSize = 1.f;
-        style->WindowRounding = 5.f;
+        style->WindowRounding = 2.f;
+        style->ChildRounding = 1.f;
+        style->ChildBorderSize = 1.f;
+        style->PopupRounding = 1.f;
 
-        style->FramePadding = ImVec2(8, 6);
-        style->FrameRounding = 3.f;
+        style->FramePadding = ImVec2(6, 3);
+        style->FrameRounding = 1.f;
         style->FrameBorderSize = 1.f;
+        style->ItemSpacing = ImVec2(8, 4);
+        style->ItemInnerSpacing = ImVec2(6, 4);
+        style->CellPadding = ImVec2(6, 4);
+        style->ScrollbarSize = 10.f;
+        style->ScrollbarRounding = 1.f;
+        style->GrabMinSize = 9.f;
+        style->GrabRounding = 1.f;
+        style->TabRounding = 1.f;
     }
 }
 
@@ -7231,11 +7175,11 @@ bool renderThread()
 
     // Other Fonts
     //io.Fonts->AddFontFromMemoryTTF((void*)Font, sizeof(Font), 16.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
-    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesCyrillic());
+    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f, NULL, io.Fonts->GetGlyphRangesCyrillic());
 
     // Font Awesome 7 Free (solid). Legacy ICON_FK_* names are mapped in
     // IconsFontAwesomeCompat.h so radar markers retain their established glyphs.
-    float iconFontSize = 24.f; //24
+    float iconFontSize = 17.f;
     static const ImWchar icons_ranges[] = {
         ICON_MIN_FA,
         ICON_MAX_16_FA,

@@ -112,10 +112,19 @@ namespace AimLineTargeting
         return foundTarget;
     }
 
-    inline bool IsLocalBeingLookedAt(const PlayerCacheCollection& players)
+    inline bool IsLocalBeingLookedAt(
+        const PlayerCacheCollection& players,
+        bool playerSourcesOnly)
     {
         for (const PlayerCache& player : players)
         {
+            if (playerSourcesOnly &&
+                (player.isAi ||
+                    !(player.isPlayer || player.isPlayerScav)))
+            {
+                continue;
+            }
+
             if (!player.isLocal &&
                 player.aimLineTargetConfirmed &&
                 player.aimLineTargetIsLocal)

@@ -1,6 +1,7 @@
 #include "headers/watchList.h"
 
 #include "headers/players.h"
+#include "../app/menuLayout.h"
 
 #include <nlohmann/json.hpp>
 
@@ -1146,7 +1147,9 @@ void WatchListManager::RenderWindow()
     if (!appMenu::appWatchList)
         return;
 
-    static constexpr ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    enum class WatchListPage : int { Watchlist, Friends, Raids };
+    static WatchListPage activePage = WatchListPage::Watchlist;
+    static constexpr ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse;
 
 
     static std::string editProfileId;
@@ -1203,17 +1206,13 @@ void WatchListManager::RenderWindow()
         ImGui::GetMainViewport();
 
     ImGui::SetNextWindowPos(
-        ImVec2(
-            (viewport->Pos.x + viewport->Size.x) - 810.0f,
-            viewport->Pos.y + 10.0f
-        )
+        ImVec2(viewport->Pos.x + 40.0f, viewport->Pos.y + 40.0f),
+        ImGuiCond_FirstUseEver
     );
-
-    ImGui::SetNextWindowSize(
-        ImVec2(
-            750.0f,
-            viewport->Size.y - 50.0f
-        )
+    ImGui::SetNextWindowSize(ImVec2(850.0f, 650.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(660.0f, 450.0f),
+        ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
     );
 
     if (ImGui::Begin(
@@ -1237,11 +1236,19 @@ void WatchListManager::RenderWindow()
             true
         ))
         {
-            if (ImGui::BeginTabBar(
-                "##WatchListManagerTabs",
-                ImGuiTabBarFlags_None
-            ))
+            ImGui::BeginChild("##watchListNavigation", ImVec2(0.0f, 42.0f), false);
+            const auto nav = [&](const char* icon, const char* label, WatchListPage page)
             {
+                if (menuLayout::TopTabButton(icon, label, activePage == page))
+                    activePage = page;
+                ImGui::SameLine();
+            };
+            nav(ICON_FA_LIST, "Watchlist", WatchListPage::Watchlist);
+            nav(ICON_FA_USERS, "Friends", WatchListPage::Friends);
+            nav(ICON_FA_CLOCK_ROTATE_LEFT, "Raid history", WatchListPage::Raids);
+            ImGui::EndChild();
+            ImGui::BeginChild("##watchListContent", ImVec2(0.0f, 0.0f), false);
+            menuLayout::PushContentInset();
                 // WATCHLIST TAB
 
                 const std::string watchListTabName =
@@ -1249,16 +1256,8 @@ void WatchListManager::RenderWindow()
                     std::to_string(watchListSnapshot.size()) +
                     ")";
 
-                if (ImGui::BeginTabItem(
-                    watchListTabName.c_str()
-                ))
+                if (activePage == WatchListPage::Watchlist)
                 {
-                    ImGui::TextDisabled(
-                        "Players stored in watchlist.json"
-                    );
-
-                    ImGui::Spacing();
-
                     if (watchListSnapshot.empty())
                     {
                         ImGui::TextDisabled(
@@ -1422,7 +1421,6 @@ void WatchListManager::RenderWindow()
                         }
                     }
 
-                    ImGui::EndTabItem();
                 }
 
                 // FRIENDS TAB
@@ -1432,14 +1430,8 @@ void WatchListManager::RenderWindow()
                     std::to_string(friendsSnapshot.size()) +
                     ")";
 
-                if (ImGui::BeginTabItem(friendsTabName.c_str()))
+                if (activePage == WatchListPage::Friends)
                 {
-                    ImGui::TextDisabled(
-                        "Friends are saved in watchlist.json and always shown as friendly."
-                    );
-
-                    ImGui::Spacing();
-
                     if (friendsSnapshot.empty())
                     {
                         ImGui::TextDisabled(
@@ -1523,7 +1515,6 @@ void WatchListManager::RenderWindow()
                         }
                     }
 
-                    ImGui::EndTabItem();
                 }
 
                 // RAID HISTORY TAB
@@ -1533,16 +1524,8 @@ void WatchListManager::RenderWindow()
                     std::to_string(raidHistorySnapshot.size()) +
                     ")";
 
-                if (ImGui::BeginTabItem(
-                    raidTabName.c_str()
-                ))
+                if (activePage == WatchListPage::Raids)
                 {
-                    ImGui::TextDisabled(
-                        "Raid history is held in memory and is cleared when the application closes."
-                    );
-
-                    ImGui::Spacing();
-
                     if (raidHistorySnapshot.empty())
                     {
                         ImGui::TextDisabled(
@@ -1922,11 +1905,9 @@ void WatchListManager::RenderWindow()
                         }
                     }
 
-                    ImGui::EndTabItem();
                 }
-
-                ImGui::EndTabBar();
-            }
+            menuLayout::PopContentInset();
+            ImGui::EndChild();
 
             ImGui::EndChild();
         }

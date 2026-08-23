@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <ostream>
@@ -85,6 +86,10 @@ struct gameCatList
     long id = 0;
     std::string categoryName;
 };
+
+// Incremented after the market catalogue is rebuilt so consumers can invalidate
+// indexes which hold copied price data.
+extern std::atomic<std::uint64_t> marketListRevision;
 
 class TarkovDevProfileClient
 {

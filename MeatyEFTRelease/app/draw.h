@@ -5,6 +5,10 @@
 #include "../game/headers/players.h"
 #include "../game/headers/explosives.h"
 
+#include <algorithm>
+#include <array>
+#include <vector>
+
 namespace MapNames
 {
     inline const std::unordered_map<std::string_view, std::string_view> idToNameId =
@@ -87,9 +91,107 @@ void DrawRadarSubText(int x, int y, ImVec4 color, const char* str)
 
 void drawPlayers()
 {
-
     const PlayerCacheSnapshot cacheSnapshot = players.getCacheSnapshot();
     const PlayerCacheCollection& cache = *cacheSnapshot;
+
+    constexpr float kBtrPassengerRadius = 4.0f;
+    constexpr float kBtrPassengerRadiusSquared =
+        kBtrPassengerRadius * kBtrPassengerRadius;
+    constexpr float kBtrPassengerStackOffsetX = 20.0f;
+    constexpr float kBtrPassengerStackSpacingY = 18.0f;
+    constexpr size_t kBtrPassengerCapacity = 4;
+
+    struct BtrPassengerStack
+    {
+        const PlayerCache* btr{};
+        std::array<const PlayerCache*, kBtrPassengerCapacity> passengers{};
+        size_t count{};
+    };
+
+    struct BtrPassengerMarker
+    {
+        const PlayerCache* passenger{};
+        const PlayerCache* btr{};
+        size_t slot{};
+        size_t passengerCount{};
+    };
+
+    std::vector<BtrPassengerStack> btrStacks;
+    btrStacks.reserve(1);
+
+    for (const PlayerCache& player : cache)
+    {
+        if (player.isBTR &&
+            !player.isDead &&
+            !player.hasExfiled &&
+            Utils::valid_pointer(player.instance))
+        {
+            btrStacks.push_back({ &player });
+        }
+    }
+
+    // Associate each confirmed passenger with its nearest BTR.  The BTR itself
+    // occupies the centre marker; up to four passenger dots form a stack left of it.
+    for (const PlayerCache& player : cache)
+    {
+        if (!player.isInBTR ||
+            player.isBTR ||
+            player.isDead ||
+            player.hasExfiled ||
+            !Utils::valid_pointer(player.instance))
+        {
+            continue;
+        }
+
+        BtrPassengerStack* nearestBtr = nullptr;
+        float nearestDistanceSquared = kBtrPassengerRadiusSquared;
+
+        for (BtrPassengerStack& stack : btrStacks)
+        {
+            const glm::vec3 delta = player.location - stack.btr->location;
+            const float distanceSquared =
+                (delta.x * delta.x) +
+                (delta.y * delta.y) +
+                (delta.z * delta.z);
+
+            if (distanceSquared <= nearestDistanceSquared)
+            {
+                nearestDistanceSquared = distanceSquared;
+                nearestBtr = &stack;
+            }
+        }
+
+        if (nearestBtr && nearestBtr->count < kBtrPassengerCapacity)
+            nearestBtr->passengers[nearestBtr->count++] = &player;
+    }
+
+    std::vector<BtrPassengerMarker> passengerMarkers;
+    passengerMarkers.reserve(kBtrPassengerCapacity);
+
+    for (BtrPassengerStack& stack : btrStacks)
+    {
+        // The cache order is not guaranteed to be persistent, so sort the four
+        // stack positions by instance address to prevent marker jitter.
+        std::sort(
+            stack.passengers.begin(),
+            stack.passengers.begin() + stack.count,
+            [](const PlayerCache* first, const PlayerCache* second)
+            {
+                return first->instance < second->instance;
+            }
+        );
+
+        for (size_t slot = 0; slot < stack.count; ++slot)
+        {
+            passengerMarkers.push_back({
+                stack.passengers[slot],
+                stack.btr,
+                slot,
+                stack.count
+            });
+        }
+    }
+
     for (const auto& player : cache)
     {
         if (!Utils::valid_pointer(player.instance))
@@ -107,39 +209,62 @@ void drawPlayers()
 
             glm::vec3 position = mapControl.getMapPosition(player.location, currentMap::configX, currentMap::configY, currentMap::configScale);
 
-            if (!player.isBTR)
+            if (player.isInBTR)
             {
-                if (!player.isInBTR)
+                const auto passengerMarker = std::find_if(
+                    passengerMarkers.begin(),
+                    passengerMarkers.end(),
+                    [&](const BtrPassengerMarker& marker)
+                    {
+                        return marker.passenger == &player;
+                    }
+                );
+
+                if (passengerMarker != passengerMarkers.end())
                 {
-                    int aimLineLen = 100;
-                    if (player.isFriend)
-                        aimLineLen = radarGlobals::friendAimLine;
-                    else if (player.groupId != mainGame.localGroupId)
-                        aimLineLen = radarGlobals::enemyAimLine;
-                    else
-                        aimLineLen = radarGlobals::friendAimLine;
+                    const glm::vec3 btrPosition = mapControl.getMapPosition(
+                        passengerMarker->btr->location,
+                        currentMap::configX,
+                        currentMap::configY,
+                        currentMap::configScale
+                    );
+                    const float centredSlot =
+                        static_cast<float>(passengerMarker->slot) -
+                        (static_cast<float>(passengerMarker->passengerCount) - 1.0f) * 0.5f;
 
-                    if (mainGame.localGroupId == "" && !player.isFriend)
-                        aimLineLen = radarGlobals::enemyAimLine;
+                    position.x = btrPosition.x - kBtrPassengerStackOffsetX;
+                    position.y = btrPosition.y +
+                        (centredSlot * kBtrPassengerStackSpacingY);
+                }
+            }
 
-                    if (player.aimLineTargetConfirmed)
-                    {
-                        const glm::vec3 targetPosition = mapControl.getMapPosition(player.aimLineTargetLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
+            if (!player.isBTR && !player.isInBTR)
+            {
+                int aimLineLen = 100;
+                if (player.isFriend)
+                    aimLineLen = radarGlobals::friendAimLine;
+                else if (player.groupId != mainGame.localGroupId)
+                    aimLineLen = radarGlobals::enemyAimLine;
+                else
+                    aimLineLen = radarGlobals::friendAimLine;
 
-                        DrawLine(position.x, position.y, targetPosition.x, targetPosition.y, player.colour, 3);
-                    }
-                    else
-                    {
-                        drawAimLine(glm::vec2(position.x, position.y), player.rotation, aimLineLen, player.colour);
-                    }
+                if (mainGame.localGroupId == "" && !player.isFriend)
+                    aimLineLen = radarGlobals::enemyAimLine;
+
+                if (player.aimLineTargetConfirmed)
+                {
+                    const glm::vec3 targetPosition = mapControl.getMapPosition(player.aimLineTargetLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
+
+                    DrawLine(position.x, position.y, targetPosition.x, targetPosition.y, player.colour, 3);
+                }
+                else
+                {
+                    drawAimLine(glm::vec2(position.x, position.y), player.rotation, aimLineLen, player.colour);
                 }
 
                 drawGroupLine(position, player);
-
-
             }
 
-            
             DrawRadarPlayerMarkers(position.x, position.y, mapControl.zoomLevel, player);
 
         }
@@ -738,6 +863,12 @@ void drawExfils() {
     {
         for (const auto& exfil : cache)
         {
+            if ((exfil.type == ExfilType::Secret && !radarGlobals::drawSecretExfils) ||
+                (exfil.type == ExfilType::Transit && !radarGlobals::drawTransitExfils))
+            {
+                continue;
+            }
+
             glm::vec3 location = mapControl.getMapPosition(exfil.locationWorld, currentMap::configX, currentMap::configY, currentMap::configScale);
 
             DrawExfil(location.x, location.y, mapControl.zoomLevel, exfil);
@@ -851,6 +982,11 @@ void drawWidgetExfils()
 
             for (const auto& cache : exfils)
             {
+                if ((cache.type == ExfilType::Secret && !radarGlobals::drawSecretExfils) ||
+                    (cache.type == ExfilType::Transit && !radarGlobals::drawTransitExfils))
+                {
+                    continue;
+                }
 
 
                 ImGui::TableNextRow();

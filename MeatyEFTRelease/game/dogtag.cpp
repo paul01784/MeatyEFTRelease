@@ -83,10 +83,16 @@ bool DogTagCache::AddEntryIfMissing(const Entry& entry)
     m_profileIndex[entry.profileId] = index;
     m_accountIndex[entry.accountId] = index;
 
-    //only send once per session
-    if (m_sentProfiles.insert(entry.profileId).second)
+    
+    if (entry.lvl > 0 &&
+        entry.lvl <= 100 &&
+        m_sentProfiles.insert(entry.profileId).second)
     {
-        if (!g_DogTagAPI.post(entry.profileId, entry.accountId, entry.nickname))
+        if (!g_DogTagAPI.post(
+            entry.profileId,
+            entry.accountId,
+            entry.nickname,
+            entry.lvl))
         {
             std::cout << "[DogTagCache] API POST failed\n";
         }
@@ -186,6 +192,7 @@ void DogTagCache::ReadFromCorpse(uint64_t corpseInteractiveClass)
             victim.profileId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::ProfileId, 256);
             victim.accountId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::AccountId, 256);
             victim.nickname = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::Nickname, 256);
+            victim.lvl = mem.Read<int>(dogtagComp + sdk::DogtagComponent::Level);
 
             Entry killer;
             killer.profileId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::KillerProfileId, 256);

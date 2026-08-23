@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.28.14";
+std::string globals::appVersion = "1.0.28.15";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -74,6 +74,8 @@ bool radarGlobals::drawGrenades = false;
 bool radarGlobals::drawTripwires = false;
 bool radarGlobals::drawTripwireLine = true;
 bool radarGlobals::drawExfils = false;
+bool radarGlobals::drawSecretExfils = true;
+bool radarGlobals::drawTransitExfils = true;
 int radarGlobals::localAimLine = 100;
 int radarGlobals::friendAimLine = 100;
 int radarGlobals::enemyAimLine = 100;
@@ -85,12 +87,12 @@ float radarGlobals::textScale = 1.0f;
 bool espGlobals::espEnabled = false;
 bool espGlobals::drawPlayers = false;
 int espGlobals::drawPlayerDist = 200;
+int espGlobals::aimOverlayAlert = 1;
 int espGlobals::drawCorpseDist = 100;
 bool espGlobals::drawGrenades = false;
 int espGlobals::drawGrenadesDist = 100;
 bool espGlobals::drawTripwires = false;
 int espGlobals::drawTripwiresDist = 100;
-bool espGlobals::drawTripwireLine = true;
 bool espGlobals::drawLoot = false;
 bool espGlobals::drawCorpse = false;
 int espGlobals::drawLootDist = 40;
@@ -101,13 +103,16 @@ bool espGlobals::drawHealthPlayers = false;
 glm::vec2 espGlobals::gameRes = glm::vec2(1920.f, 1080.f);
 int espGlobals::gameResInt = 0;
 bool espGlobals::drawSkeletons = false;
-bool espGlobals::skeletonsOnlyClosest = false;
 bool espGlobals::drawCrosshair = false;
+int espGlobals::crosshairType = 0;
+int espGlobals::crosshairSize = 2;
 bool espGlobals::drawHeadDot = false;
 float espGlobals::headDotSize = 1.5f;
 bool espGlobals::runEsp = false;
 int espGlobals::drawExfilDist = 1000;
 bool espGlobals::drawExfil = true;
+bool espGlobals::drawSecretExfils = true;
+bool espGlobals::drawTransitExfils = true;
 
 bool aimGlobals::aimEnabled = false;
 float aimGlobals::aimFOV = 50.f;
@@ -130,6 +135,7 @@ glm::vec4 coloursGlobals::playerPMC = { 1,1,1,1 };
 glm::vec4 coloursGlobals::playerScav = { 1,1,1,1 };
 glm::vec4 coloursGlobals::playerAI = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::playerBoss = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerBlackDiv = glm::vec4(0.75f, 0.10f, 0.95f, 1.0f);
 glm::vec4 coloursGlobals::aiBTR = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::playerWatched = glm::vec4(1, 1, 1, 1);
 glm::vec4 coloursGlobals::playerFriendly = glm::vec4(1, 1, 1, 1);

@@ -21,6 +21,7 @@ TarkovDev tarkovDev;
 std::vector<TarkovDevTasks> tarkovDevTasksData;
 std::vector<gameItemList> marketList;
 std::vector<gameCatList> catList;
+std::atomic<std::uint64_t> marketListRevision{ 0 };
 
 const std::vector<long long> LevelXpThresholds = {
     0, 1000, 4017, 8432, 14256, 21477, 30023, 39936, 51204, 63723,
@@ -1331,6 +1332,8 @@ void TarkovDev::buildItemList()
         {
             return lhs.name < rhs.name;
         });
+
+    marketListRevision.fetch_add(1, std::memory_order_release);
 
     if (!marketList.empty())
     {

@@ -19,6 +19,7 @@ public:
         std::string profileId;
         std::string accountId;
         std::string nickname;
+        int lvl = 0;
     };
 
     DogTagCache();

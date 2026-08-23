@@ -104,6 +104,7 @@ struct AIRole
 {
 	std::string Name;
 	PlayerType Type;
+	bool IsBlackDivision{ false };
 };
 
 enum class ETagStatus : uint32_t
@@ -200,6 +201,7 @@ struct PlayerCache {
 	bool isPlayer;
 	bool isPlayerScav;
 	bool isBoss;
+	bool isBlackDivision;
 	bool isWatched;
 	bool isFriend;
 	bool friendGroupOverride;
@@ -335,6 +337,7 @@ struct PlayerCache {
 		isPlayer(false),
 		isPlayerScav(false),
 		isBoss(false),
+		isBlackDivision(false),
 		isWatched(false),
 		isFriend(false),
 		friendGroupOverride(false),

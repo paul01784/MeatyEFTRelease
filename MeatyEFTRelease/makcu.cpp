@@ -1,4 +1,5 @@
 #include "app/makcu.h"
+#include "app/menuLayout.h"
 
 #include "external/imgui/imgui.h"
 
@@ -1239,13 +1240,13 @@ namespace
 
 void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<void()>& onConfigChanged)
 {
+    enum class MakcuPage : int { Connection, Aim, Diagnostics };
+    static MakcuPage activePage = MakcuPage::Connection;
+
     if (!pOpen || !*pOpen)
         return;
 
-    static constexpr ImGuiWindowFlags windowFlags =
-        ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_AlwaysAutoResize;
+    static constexpr ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse;
 
     static bool portsScanned = false;
     static std::vector<MakcuSerialPort> serialPorts;
@@ -1258,19 +1259,14 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    constexpr float windowWidth = 420.0f;
-    const float maxWindowHeight = viewport->Size.y - 20.0f;
-
     ImGui::SetNextWindowPos(
-        ImVec2(
-            (viewport->Pos.x + viewport->Size.x) - 479.0f,
-            viewport->Pos.y + 10.0f
-        )
+        ImVec2(viewport->Pos.x + 40.0f, viewport->Pos.y + 40.0f),
+        ImGuiCond_FirstUseEver
     );
-
+    ImGui::SetNextWindowSize(ImVec2(800.0f, 640.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(
-        ImVec2(windowWidth, 0.0f),
-        ImVec2(windowWidth, maxWindowHeight)
+        ImVec2(620.0f, 450.0f),
+        ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
     );
 
     ImGui::SetNextWindowBgAlpha(backgroundAlpha);
@@ -1281,13 +1277,22 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
         return;
     }
 
-    if (ImGui::BeginTabBar(
-        "##makcuTabs",
-        ImGuiTabBarFlags_FittingPolicyResizeDown
-    ))
+    ImGui::BeginChild("##makcuNavigation", ImVec2(0.0f, 42.0f), false);
+    const auto nav = [&](const char* icon, const char* label, MakcuPage page)
     {
+        if (menuLayout::TopTabButton(icon, label, activePage == page))
+            activePage = page;
+        ImGui::SameLine();
+    };
+    nav(ICON_FA_PLUG, "Connection", MakcuPage::Connection);
+    nav(ICON_FA_CROSSHAIRS, "Aim", MakcuPage::Aim);
+    nav(ICON_FA_BUG, "Diagnostics", MakcuPage::Diagnostics);
+    ImGui::EndChild();
+    ImGui::BeginChild("##makcuContent", ImVec2(0.0f, 0.0f), false);
+    menuLayout::PushContentInset();
+
         // Connection
-        if (ImGui::BeginTabItem("Connection"))
+        if (activePage == MakcuPage::Connection)
         {
             bool configChanged = false;
 
@@ -1460,11 +1465,10 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 );
             }
 
-            ImGui::EndTabItem();
         }
 
         // Settings
-        if (ImGui::BeginTabItem("Settings"))
+        if (activePage == MakcuPage::Aim)
         {
             bool configChanged = false;
 
@@ -1740,11 +1744,10 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             if (configChanged && onConfigChanged)
                 onConfigChanged();
 
-            ImGui::EndTabItem();
         }
 
         // Debug
-        if (ImGui::BeginTabItem("Debug"))
+        if (activePage == MakcuPage::Diagnostics)
         {
             const bool connected =
                 makcu.IsConnected();
@@ -1911,11 +1914,10 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 );
             }
 
-            ImGui::EndTabItem();
         }
 
-        ImGui::EndTabBar();
-    }
+    menuLayout::PopContentInset();
+    ImGui::EndChild();
 
     ImGui::End();
 }

@@ -624,14 +624,37 @@ namespace fuserRender
 
         const float screenW = ScreenWidth();
         const float screenH = ScreenHeight();
+        const float centerX = screenW * 0.5f;
+        const float centerY = screenH * 0.5f;
+        const float size = static_cast<float>(
+            std::clamp(espGlobals::crosshairSize, 1, 20));
 
-        g_DxWindow.DrawCircle(
-            screenW * 0.5f,
-            screenH * 0.5f,
-            2.0f,
-            coloursGlobals::crosshair,
-            1.0f
-        );
+        if (espGlobals::crosshairType == 1)
+        {
+            g_DxWindow.DrawLine(
+                centerX - size,
+                centerY,
+                centerX + size,
+                centerY,
+                coloursGlobals::crosshair,
+                1.0f);
+            g_DxWindow.DrawLine(
+                centerX,
+                centerY - size,
+                centerX,
+                centerY + size,
+                coloursGlobals::crosshair,
+                1.0f);
+        }
+        else
+        {
+            g_DxWindow.DrawCircle(
+                centerX,
+                centerY,
+                size,
+                coloursGlobals::crosshair,
+                1.0f);
+        }
     }
 
     static inline void RenderFireportVisual()
@@ -777,6 +800,12 @@ namespace fuserRender
 
         for (const exfilsMemory& currentExfil : exfilCache)
         {
+            if ((currentExfil.type == ExfilType::Secret && !espGlobals::drawSecretExfils) ||
+                (currentExfil.type == ExfilType::Transit && !espGlobals::drawTransitExfils))
+            {
+                continue;
+            }
+
             if (currentExfil.type != ExfilType::Transit &&
                 !Utils::valid_pointer(currentExfil.instance))
             {
@@ -973,20 +1002,17 @@ namespace fuserRender
             if (!ProjectWorldToScreen(tripwire.worldLocation, &toScreen))
                 continue;
 
-            if (espGlobals::drawTripwireLine)
-            {
-                glm::vec2 fromScreen{};
+            glm::vec2 fromScreen{};
 
-                if (ProjectWorldToScreen(tripwire.fromWorldLocation, &fromScreen))
-                {
-                    g_DxWindow.DrawLine(
-                        fromScreen.x,
-                        fromScreen.y,
-                        toScreen.x,
-                        toScreen.y,
-                        coloursGlobals::tripwires,
-                        2.0f);
-                }
+            if (ProjectWorldToScreen(tripwire.fromWorldLocation, &fromScreen))
+            {
+                g_DxWindow.DrawLine(
+                    fromScreen.x,
+                    fromScreen.y,
+                    toScreen.x,
+                    toScreen.y,
+                    coloursGlobals::tripwires,
+                    2.0f);
             }
 
             const std::string label = "TRIPWIRE " +
@@ -1394,9 +1420,16 @@ namespace fuserRender
 
     static inline void RenderLocalLookedAtAlert()
     {
+        const int alertMode = std::clamp(espGlobals::aimOverlayAlert, 0, 2);
+
+        if (alertMode == 0)
+            return;
+
         const PlayerCacheCollection& cache = *g_framePlayerSnapshot;
 
-        if (!AimLineTargeting::IsLocalBeingLookedAt(cache))
+        if (!AimLineTargeting::IsLocalBeingLookedAt(
+            cache,
+            alertMode == 2))
         {
             return;
         }

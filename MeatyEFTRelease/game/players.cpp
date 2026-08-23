@@ -2318,7 +2318,9 @@ AIRole GetAIRoleInfo(const std::string& voiceLine)
     if (containsIgnoreCase(voiceLine, "Boss_Kaban"))         return { "Kaban", PlayerType::AIBoss };
     if (containsIgnoreCase(voiceLine, "Boss_Kollontay"))     return { "Kollontay", PlayerType::AIBoss };
     if (containsIgnoreCase(voiceLine, "Boss_Sturman"))       return { "Shturman", PlayerType::AIBoss };
-    if (containsIgnoreCase(voiceLine, "black_division"))       return { "Black Division", PlayerType::AIRaider };
+    if (containsIgnoreCase(voiceLine, "blackdivision") ||
+        containsIgnoreCase(voiceLine, "black_division") ||
+        containsIgnoreCase(voiceLine, "black division"))      return { "BlackDiv", PlayerType::AIBoss, true };
     if (containsIgnoreCase(voiceLine, "vsrf"))       return { "VSRF", PlayerType::AIRaider };
     if (containsIgnoreCase(voiceLine, "civilian"))       return { "Civilian", PlayerType::AIScav };
 
@@ -2789,6 +2791,7 @@ std::optional<PlayerCache> Players::buildEntity(
 
             newEntity.isBoss =
                 role.Type == PlayerType::AIBoss;
+            newEntity.isBlackDivision = role.IsBlackDivision;
 
             newEntity.isPlayerScav = false;
             newEntity.isAi = true;
@@ -2972,6 +2975,7 @@ void Players::tryFindBTR()
         cachePlayer.isBTR = true;
         cachePlayer.isAi = true;
         cachePlayer.isBoss = false;
+        cachePlayer.isBlackDivision = false;
         cachePlayer.isPlayer = false;
         cachePlayer.isPlayerScav = false;
 
@@ -3210,6 +3214,9 @@ namespace
 
         if (player.isBoss)
             player.colour = coloursGlobals::playerBoss;
+
+        if (player.isBlackDivision)
+            player.colour = coloursGlobals::playerBlackDiv;
 
         if (player.isPlayer && !player.isPlayerScav && !player.isAi)
             player.colour = coloursGlobals::playerPMC;
@@ -3820,6 +3827,8 @@ void Players::playerMetadataTask()
             if (!player)
                 continue;
 
+            bool raidEntryNeedsRefresh = false;
+
             if (job.updateHands)
             {
                 if (job.handsSucceeded)
@@ -3864,6 +3873,7 @@ void Players::playerMetadataTask()
                 player->accountId = job.player.accountId;
                 player->foundDogTagCache =
                     job.player.foundDogTagCache;
+                raidEntryNeedsRefresh = player->foundDogTagCache;
             }
 
             if (job.lookupProfile && job.player.hasProfileData)
@@ -3874,9 +3884,14 @@ void Players::playerMetadataTask()
                 player->kd = job.player.kd;
                 player->pkd = job.player.pkd;
                 player->hours = job.player.hours;
+                raidEntryNeedsRefresh = true;
             }
 
             ApplyPlayerColour(*player);
+
+            
+            if (raidEntryNeedsRefresh)
+                watchListManager.logAddPlayer(*player);
         }
     }
 
@@ -4206,6 +4221,7 @@ void Players::playerEquipment()
         std::string profileId;
         std::string accountId;
         std::string nickname;
+        int lvl = 0;
     };
 
     auto findPlayerByInstance = [](
@@ -4909,6 +4925,11 @@ void Players::playerEquipment()
                                             result.nickname =
                                                 apiResult->nickname;
                                         }
+
+                                        if (apiResult->lvl > 0)
+                                        {
+                                            result.lvl = apiResult->lvl;
+                                        }
                                     }
                                 }
                             }
@@ -4991,7 +5012,7 @@ void Players::playerEquipment()
 
             if (!slot.wanted &&
                 lootGlobals::enableValueLoot &&
-                slot.price > lootGlobals::valueLootFromEquip)
+                slot.price >= lootGlobals::valueLootFromEquip)
             {
                 slot.wanted = true;
             }
@@ -5074,6 +5095,11 @@ void Players::playerEquipment()
                     {
                         player->name =
                             result.nickname;
+                    }
+
+                    if (result.lvl > 0)
+                    {
+                        player->DT_lvl = result.lvl;
                     }
 
                     //update watchlist raid list pid

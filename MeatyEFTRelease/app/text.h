@@ -374,6 +374,9 @@ void DrawRadarPlayerMarkers(float x, float y, float zoomLevel, const PlayerCache
 		// main marker
 		DrawCircleFilled(x, y, markerRadius, ImColor(color.x, color.y, color.z, color.w));
 
+		if (player.isInBTR)
+			return;
+
 		if (!player.isBTR)
 			DrawRadarHealthDot(x, y, player.healthETAG);
 

@@ -134,7 +134,8 @@
             "y": 1080.0
         },
         "gameResInt": 0,
-        "skeletonsOnlyClosest": false
+        "drawSecretExfils": true,
+        "drawTransitExfils": true
     },
     "keyGlobals": {
         "aimKey": 162,
@@ -181,6 +182,8 @@
     },
     "radarGlobals": {
         "drawExfils": false,
+        "drawSecretExfils": true,
+        "drawTransitExfils": true,
         "drawGrenades": false,
         "drawTripwires": false,
         "drawTripwireLine": true,

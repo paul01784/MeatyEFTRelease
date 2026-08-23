@@ -87,6 +87,8 @@ struct radarGlobals {
     static bool drawTripwires;
     static bool drawTripwireLine;
     static bool drawExfils;
+    static bool drawSecretExfils;
+    static bool drawTransitExfils;
     static int localAimLine;
     static int friendAimLine;
     static int enemyAimLine;
@@ -101,12 +103,13 @@ struct espGlobals {
     static bool espEnabled;
     static bool drawPlayers;
     static int drawPlayerDist;
+    // 0 = off, 1 = all valid sources, 2 = PMCs and player scavs only.
+    static int aimOverlayAlert;
     static int drawCorpseDist;
     static bool drawGrenades;
     static int drawGrenadesDist;
     static bool drawTripwires;
     static int drawTripwiresDist;
-    static bool drawTripwireLine;
     static bool drawLoot;
     static bool drawCorpse;
     static bool drawQuestHelper;
@@ -116,13 +119,17 @@ struct espGlobals {
     static glm::vec2 gameRes;
     static int gameResInt;
     static bool drawSkeletons;
-    static bool skeletonsOnlyClosest;
     static bool drawCrosshair;
+    // 0 = dot/circle, 1 = cross.
+    static int crosshairType;
+    static int crosshairSize;
     static bool drawHeadDot;
     static float headDotSize;
     static bool runEsp;
     static int drawExfilDist;
     static bool drawExfil;
+    static bool drawSecretExfils;
+    static bool drawTransitExfils;
 };
 
 struct aimGlobals {
@@ -148,6 +155,7 @@ struct coloursGlobals {
     static glm::vec4 playerScav;
     static glm::vec4 playerAI;
     static glm::vec4 playerBoss;
+    static glm::vec4 playerBlackDiv;
     static glm::vec4 aiBTR;
     static glm::vec4 playerWatched;
     static glm::vec4 playerFriendly;
