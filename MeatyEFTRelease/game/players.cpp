@@ -3655,10 +3655,12 @@ void Players::playerMetadataTask()
     {
         uint64_t instance = 0;
         PlayerCache player;
+        int profileMode = 0;
         bool updateHands = false;
         bool updateWatchStatus = false;
         bool lookupDogTag = false;
         bool lookupProfile = false;
+        bool profileLookupSucceeded = false;
         bool handsSucceeded = false;
     };
 
@@ -3708,16 +3710,18 @@ void Players::playerMetadataTask()
             if (job.lookupDogTag)
                 player.lastDogTagLookup = now;
 
-            job.lookupProfile =
-                player.isPlayer &&
-                !player.profileId.empty() &&
-                !player.hasProfileData &&
+            const int profileMode = std::clamp(radarGlobals::tarkovDevDataMode, 0,  1);
+            const unsigned int profileModeBit = 1u << static_cast<unsigned int>(profileMode);
+            job.lookupProfile = player.isPlayer && !player.profileId.empty() &&
                 !player.accountId.empty() &&
                 radarGlobals::getPlayerStats == TRUE &&
-                !player.triedprofileonce;
+                player.profileDataMode != profileMode && (player.attemptedProfileDataModes & profileModeBit) == 0;
 
             if (job.lookupProfile)
-                player.triedprofileonce = true;
+            {
+                job.profileMode = profileMode;
+                player.attemptedProfileDataModes |= profileModeBit;
+            }
 
             if (!job.updateHands &&
                 !job.updateWatchStatus &&
@@ -3790,22 +3794,18 @@ void Players::playerMetadataTask()
             try
             {
                 const auto profile =
-                    TarkovDevProfileClient::GetProfileForAccountId(
-                        job.player.accountId);
+                    TarkovDevProfileClient::GetProfileForAccountId(job.player.accountId, job.profileMode);
 
                 if (profile)
                 {
                     job.player.profileStats = *profile;
                     job.player.hasProfileData = true;
-                    job.player.DT_lvl =
-                        ConvertXpToLevel(profile->experience);
-                    job.player.kd =
-                        CalculateKD(profile->Kills, profile->deathsPMC);
-                    job.player.pkd =
-                        CalculatePKD(
-                            profile->killedPMC,
-                            profile->deathsPMC);
+                    job.player.profileDataMode = job.profileMode;
+                    job.player.DT_lvl = ConvertXpToLevel(profile->experience);
+                    job.player.kd = CalculateKD(profile->Kills, profile->deathsPMC);
+                    job.player.pkd = CalculatePKD(profile->killedPMC, profile->deathsPMC);
                     job.player.hours = profile->hoursPlayed;
+                    job.profileLookupSucceeded = true;
                 }
             }
             catch (...)
@@ -3876,10 +3876,11 @@ void Players::playerMetadataTask()
                 raidEntryNeedsRefresh = player->foundDogTagCache;
             }
 
-            if (job.lookupProfile && job.player.hasProfileData)
+            if (job.lookupProfile && job.profileLookupSucceeded)
             {
                 player->profileStats = job.player.profileStats;
                 player->hasProfileData = true;
+                player->profileDataMode = job.player.profileDataMode;
                 player->DT_lvl = job.player.DT_lvl;
                 player->kd = job.player.kd;
                 player->pkd = job.player.pkd;

@@ -177,7 +177,8 @@ struct PlayerCache {
 
 	PlayerProfileStats profileStats;
 	bool hasProfileData;
-	bool triedprofileonce;
+	int profileDataMode;
+	unsigned int attemptedProfileDataModes;
 	std::string DT_profileId;
 	std::string DT_accountId;
 	std::string DT_nickname;
@@ -317,7 +318,8 @@ struct PlayerCache {
 		side(""),
 		voice(""),
 		hasProfileData(0),
-		triedprofileonce(0),
+		profileDataMode(-1),
+		attemptedProfileDataModes(0),
 		profileStats(0),
 		DT_profileId(""),
 		DT_accountId(""),

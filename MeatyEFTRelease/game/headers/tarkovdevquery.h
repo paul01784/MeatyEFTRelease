@@ -94,8 +94,8 @@ extern std::atomic<std::uint64_t> marketListRevision;
 class TarkovDevProfileClient
 {
 public:
-    static std::optional<PlayerProfileStats> FetchProfile(long long accountId);
-    static std::optional<PlayerProfileStats> GetProfileForAccountId(const std::string& accountId);
+    static std::optional<PlayerProfileStats> FetchProfile(long long accountId, int profileMode);
+    static std::optional<PlayerProfileStats> GetProfileForAccountId(const std::string& accountId, int profileMode);
 
 private:
     static std::string HttpGet(const std::string& url, long& httpCode);

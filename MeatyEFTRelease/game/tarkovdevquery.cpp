@@ -774,7 +774,9 @@ std::string TarkovDevProfileClient::HttpGet(const std::string& url, long& httpCo
     return response;
 }
 
-std::optional<PlayerProfileStats> TarkovDevProfileClient::GetProfileForAccountId(const std::string& accountId)
+std::optional<PlayerProfileStats> TarkovDevProfileClient::GetProfileForAccountId(
+    const std::string& accountId,
+    int profileMode)
 {
     if (accountId.empty())
         return std::nullopt;
@@ -791,15 +793,18 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::GetProfileForAccountId
         return std::nullopt;
     }
 
-    return FetchProfile(aid);
+    return FetchProfile(aid, profileMode);
 }
 
-std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long accountId)
+std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long accountId, int profileMode)
 {
     if (accountId <= 0)
         return std::nullopt;
 
-    const std::string url = "https://players.tarkov.dev/profile/" + std::to_string(accountId) + ".json";
+    const char* const profilePath = profileMode == 0
+        ? "profile"
+        : "pvp-season";
+    const std::string url = "https://players.tarkov.dev/" + std::string(profilePath) + "/" + std::to_string(accountId) + ".json";
 
     long httpCode = 0;
     const std::string body = HttpGet(url, httpCode);

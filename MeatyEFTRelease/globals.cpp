@@ -82,6 +82,7 @@ int radarGlobals::enemyAimLine = 100;
 float radarGlobals::aimLineTargetAngle = 7.5f;
 bool radarGlobals::getPlayerEquip = false;
 bool radarGlobals::getPlayerStats = false;
+int radarGlobals::tarkovDevDataMode = 1;
 float radarGlobals::textScale = 1.0f;
 int radarGlobals::fontIndex = 0;
 bool radarGlobals::fontBold = true;

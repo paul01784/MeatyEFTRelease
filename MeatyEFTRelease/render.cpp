@@ -3347,7 +3347,24 @@ static void renderMenuSettings()
 
         if (menuLayout::Section("Player data"))
         {
-            saveIfChanged(menuLayout::ToggleRow("Use Tarkov.dev player data", "tarkovDevInfo", &radarGlobals::getPlayerStats));
+            static const char* const tarkovDevDataModes[] =
+            {
+                "PVP",
+                "PVP-SEASONAL"
+            };
+
+            bool changed = menuLayout::InlineToggle(
+                "Use Tarkov.dev Data",
+                "tarkovDevInfo",
+                &radarGlobals::getPlayerStats);
+            ImGui::SameLine(0.0f, 12.0f);
+            ImGui::SetNextItemWidth(145.0f);
+            changed |= ImGui::Combo(
+                "##tarkovDevDataMode",
+                &radarGlobals::tarkovDevDataMode,
+                tarkovDevDataModes,
+                IM_ARRAYSIZE(tarkovDevDataModes));
+            saveIfChanged(changed);
         }
     }
     else if (activePage == SettingsPage::Appearance)
