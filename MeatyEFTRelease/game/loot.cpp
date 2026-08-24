@@ -18,6 +18,7 @@
 #include "headers/players.h"
 
 #include <iomanip>
+#include <limits>
 #include <sstream>
 
 loot::loot()
@@ -388,51 +389,12 @@ void loot::markFailed(
     item.wanted = false;
 }
 
-void loot::markLootWanted(
-    const std::vector<uint64_t>& instances,
-    const glm::vec4& colour)
-{
-    if (instances.empty())
-        return;
-
-    std::unordered_set<uint64_t> instanceSet;
-    instanceSet.reserve(instances.size());
-
-    for (const uint64_t instance : instances)
-    {
-        if (instance != 0)
-            instanceSet.insert(instance);
-    }
-
-    if (instanceSet.empty())
-        return;
-
-    std::unique_lock<std::shared_mutex> lock(lootMutex);
-
-    for (LootList& loot : lootList)
-    {
-        if (loot.instance == 0)
-            continue;
-
-        if (instanceSet.find(loot.instance) == instanceSet.end())
-            continue;
-
-        loot.wanted = true;
-        loot.forceWanted = true;
-        loot.color = colour;
-    }
-
-    publishCacheSnapshotLocked();
-}
-
 void loot::setLootWanted(const uint64_t instance, const bool wanted, const glm::vec4& colour)
 {
     if (instance == 0)
         return;
 
-    const WantedLookup lookup = wanted
-        ? WantedLookup{}
-        : buildWantedLookup();
+    const WantedLookup lookup = buildWantedLookup();
 
     std::unique_lock<std::shared_mutex> lock(lootMutex);
 
@@ -448,32 +410,88 @@ void loot::setLootWanted(const uint64_t instance, const bool wanted, const glm::
     if (it == lootList.end())
         return;
 
+    
+    applyWantedState(*it, lookup);
+
+    if (wanted && it->filterWanted)
+    {
+        publishCacheSnapshotLocked();
+        return;
+    }
+
     it->forceWanted = wanted;
 
     if (wanted)
     {
-        it->wanted = true;
-        it->color = colour;
-        publishCacheSnapshotLocked();
-        return;
+        it->forceColor = colour;
     }
 
-    if (it->pendingResolve || it->failed)
-    {
-        it->wanted = false;
-        publishCacheSnapshotLocked();
-        return;
-    }
-
-    if (it->isItem || it->isQuestItem)
-    {
-        applyWantedState(*it, lookup);
-        publishCacheSnapshotLocked();
-        return;
-    }
-
-    it->wanted = false;
+    applyWantedState(*it, lookup);
     publishCacheSnapshotLocked();
+}
+
+std::optional<glm::vec3> loot::focusClosestLootItem(const uint64_t instance, const std::string& bsgId, const glm::vec4& colour)
+{
+    if (instance == 0 && bsgId.empty())
+        return std::nullopt;
+
+    const WantedLookup lookup = buildWantedLookup();
+    std::unique_lock<std::shared_mutex> lock(lootMutex);
+
+    const auto isMatch = [instance, &bsgId](const LootList& item)
+    {
+        return !bsgId.empty()
+            ? item.bsgId == bsgId
+            : item.instance == instance;
+    };
+
+    LootList* closest = nullptr;
+    float closestDistanceSquared = std::numeric_limits<float>::max();
+
+    for (LootList& item : lootList)
+    {
+        if (!isMatch(item))
+            continue;
+
+        applyWantedState(item, lookup);
+
+        if (item.forceWanted)
+        {
+            item.forceWanted = false;
+            applyWantedState(item, lookup);
+        }
+
+        if (item.pendingResolve || item.failed || !item.hasValidPosition)
+            continue;
+
+        const glm::vec3 difference = item.worldLocation - mainGame.localLocation;
+        const float distanceSquared =
+            difference.x * difference.x +
+            difference.y * difference.y +
+            difference.z * difference.z;
+
+        if (distanceSquared < closestDistanceSquared)
+        {
+            closestDistanceSquared = distanceSquared;
+            closest = &item;
+        }
+    }
+
+    if (!closest)
+    {
+        publishCacheSnapshotLocked();
+        return std::nullopt;
+    }
+
+    if (!closest->filterWanted)
+    {
+        closest->forceWanted = true;
+        closest->forceColor = colour;
+        applyWantedState(*closest, lookup);
+    }
+
+    publishCacheSnapshotLocked();
+    return closest->worldLocation;
 }
 
 bool loot::tryUpdateLootPosition(LootList& item, bool markAsFailedOnError)
@@ -1578,56 +1596,52 @@ loot::WantedLookup loot::buildWantedLookup() const
 
 void loot::applyWantedState(LootList& lootItem, const WantedLookup& lookup) const
 {
-    if (!lootItem.isItem && !lootItem.isQuestItem)
-        return;
+    lootItem.filterWanted = false;
+    lootItem.wanted = false;
+
+    glm::vec4 filterColour{};
+
+    if ((lootItem.isItem || lootItem.isQuestItem) && !lootItem.bsgId.empty())
+    {
+        if (lookup.questIds.contains(lootItem.bsgId))
+        {
+            lootItem.filterWanted = true;
+            filterColour = coloursGlobals::questColour;
+        }
+        else if (lookup.wishlistIds.contains(lootItem.bsgId))
+        {
+            lootItem.filterWanted = true;
+            filterColour = coloursGlobals::wishListColour;
+        }
+        else if (const auto filterIt = lookup.activeFilterItems.find(lootItem.bsgId);
+            filterIt != lookup.activeFilterItems.end())
+        {
+            lootItem.filterWanted = true;
+            filterColour = filterIt->second;
+        }
+        else if (lookup.categoryLootIds.contains(lootItem.bsgId))
+        {
+            lootItem.filterWanted = true;
+            filterColour = lootGlobals::categoryLootColour;
+        }
+        else if (lootGlobals::enableValueLoot &&
+            GetLootValueFilterPrice(lootItem) >= lootGlobals::valueLootFrom)
+        {
+            lootItem.filterWanted = true;
+            filterColour = coloursGlobals::valueLootColour;
+        }
+    }
+
+    lootItem.wanted = lootItem.forceWanted || lootItem.filterWanted;
 
     if (lootItem.forceWanted)
     {
-        lootItem.wanted = true;
+        lootItem.color = lootItem.forceColor;
         return;
     }
 
-    lootItem.wanted = false;
-
-    if (lootItem.bsgId.empty())
-        return;
-
-    if (lookup.questIds.contains(lootItem.bsgId))
-    {
-        lootItem.wanted = true;
-        lootItem.color = coloursGlobals::questColour;
-        return;
-    }
-
-    if (lookup.wishlistIds.contains(lootItem.bsgId))
-    {
-        lootItem.wanted = true;
-        lootItem.color = coloursGlobals::wishListColour;
-        return;
-    }
-
-    const auto filterIt = lookup.activeFilterItems.find(lootItem.bsgId);
-
-    if (filterIt != lookup.activeFilterItems.end())
-    {
-        lootItem.wanted = true;
-        lootItem.color = filterIt->second;
-        return;
-    }
-
-    if (lookup.categoryLootIds.contains(lootItem.bsgId))
-    {
-        lootItem.wanted = true;
-        lootItem.color = lootGlobals::categoryLootColour;
-        return;
-    }
-
-    if (lootGlobals::enableValueLoot &&
-        GetLootValueFilterPrice(lootItem) >= lootGlobals::valueLootFrom)
-    {
-        lootItem.wanted = true;
-        lootItem.color = coloursGlobals::valueLootColour;
-    }
+    if (lootItem.filterWanted)
+        lootItem.color = filterColour;
 }
 
 bool loot::isContainerEnabled(const std::string& name) const
@@ -2322,15 +2336,12 @@ void loot::lootTask()
 
                 const LootList& current = *currentIt->second;
 
-                if (current.forceWanted)
+                if (current.forceWanted != item.forceWanted)
                 {
-                    item.forceWanted = true;
-                    item.wanted = true;
-                    item.color = current.color;
-                }
-                else if (item.forceWanted)
-                {
-                    item.forceWanted = false;
+                    
+                    item.forceWanted = current.forceWanted;
+                    item.forceColor = current.forceColor;
+                    item.filterWanted = current.filterWanted;
                     item.wanted = current.wanted;
                     item.color = current.color;
                 }

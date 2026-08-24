@@ -474,16 +474,10 @@ void drawWidgetTopLoot()
                     LootList* bestLoot = nullptr;
                     float bestDistSq = FLT_MAX;
 
-                    std::vector<uint64_t> matchingInstances;
-                    matchingInstances.reserve(loot.items.size());
-
                     for (LootList* item : loot.items)
                     {
                         if (!item)
                             continue;
-
-                        if (item->instance != 0)
-                            matchingInstances.push_back(item->instance);
 
                         const glm::vec3 difference =
                             item->worldLocation - mainGame.localLocation;
@@ -502,21 +496,25 @@ void drawWidgetTopLoot()
 
                     if (bestLoot)
                     {
-                        const glm::vec3 focusLocation = bestLoot->worldLocation;
-
-                        mapGlobals::followLocal = false;
-                        mapGlobals::focusPoint = focusLocation;
-
-                        Loot.markLootWanted(
-                            matchingInstances,
+                        const auto focusLocation = Loot.focusClosestLootItem(
+                            bestLoot->instance,
+                            bestLoot->bsgId,
                             coloursGlobals::valueLootColour
                         );
+
+                        if (focusLocation)
+                        {
+                            mapGlobals::followLocal = false;
+                            mapGlobals::focusPoint = *focusLocation;
+                        }
                     }
                 }
 
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("Focus nearest and mark wanted: %s", loot.shortName.c_str());
+                    ImGui::SetTooltip(
+                        "Focus the closest instance and force it only when needed: %s",
+                        loot.shortName.c_str());
                 }
 
                 ImGui::PopID();

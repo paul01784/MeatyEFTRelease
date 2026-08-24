@@ -27,6 +27,7 @@
 
 #include <cctype>
 #include <chrono>
+#include <limits>
 
 ConfigManager configManager("config.json", "lootFilters.json");
 
@@ -825,6 +826,7 @@ static void DrawLootListInfoTooltip(const LootList& loot)
     ImGui::Text("isQuestItem: %s", loot.isQuestItem ? "true" : "false");
     ImGui::Text("isCorpse: %s", loot.isCorpse ? "true" : "false");
     ImGui::Text("wanted: %s", loot.wanted ? "true" : "false");
+    ImGui::Text("filterWanted: %s", loot.filterWanted ? "true" : "false");
     ImGui::Text("forceWanted: %s", loot.forceWanted ? "true" : "false");
 
     ImGui::Text("color: %.2f, %.2f, %.2f, %.2f",
@@ -877,7 +879,7 @@ static void BuildLootListDebugRows(
 
 static void DrawLootListDebugTable(std::vector<LootList*>& rows, const char* tableId)
 {
-    if (!ImGui::BeginTable(tableId, 4,
+    if (!ImGui::BeginTable(tableId, 5,
         ImGuiTableFlags_RowBg |
         ImGuiTableFlags_Borders |
         ImGuiTableFlags_ScrollY |
@@ -886,7 +888,8 @@ static void DrawLootListDebugTable(std::vector<LootList*>& rows, const char* tab
         return;
     }
 
-    ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+    ImGui::TableSetupColumn("Force", ImGuiTableColumnFlags_WidthFixed, 46.0f);
     ImGui::TableSetupColumn("Short Name", ImGuiTableColumnFlags_WidthStretch, 220.0f);
     ImGui::TableSetupColumn("BSG ID", ImGuiTableColumnFlags_WidthStretch, 260.0f);
     ImGui::TableSetupColumn("Info", ImGuiTableColumnFlags_WidthFixed, 30.0f);
@@ -901,23 +904,47 @@ static void DrawLootListDebugTable(std::vector<LootList*>& rows, const char* tab
         ImGui::TableNextRow();
         ImGui::PushID(loot);
 
-        // Wanted toggle
+        // Wanted is the final display state. It is intentionally read-only:
+        // rule-owned entries cannot be manually changed.
         ImGui::TableSetColumnIndex(0);
-        bool wantedTick = (loot->wanted || loot->forceWanted);
-        if (ImGui::Checkbox("##wanted", &wantedTick))
+        bool wantedTick = loot->wanted;
+        ImGui::BeginDisabled();
+        ImGui::Checkbox("##wanted", &wantedTick);
+        ImGui::EndDisabled();
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         {
-            Loot.setLootWanted(loot->instance, wantedTick, loot->color);
-            loot->wanted = wantedTick;
-            loot->forceWanted = wantedTick;
+            ImGui::SetTooltip(
+                loot->filterWanted
+                    ? "Wanted by an active loot rule"
+                    : "Currently shown on the radar");
         }
 
-        if (ImGui::IsItemHovered())
+        // Only items not selected by an active rule can be forced manually.
+        ImGui::TableSetColumnIndex(1);
+        bool forceWanted = loot->forceWanted;
+        const bool forceLocked =
+            loot->filterWanted || loot->pendingResolve || loot->failed;
+        ImGui::BeginDisabled(forceLocked);
+        if (ImGui::Checkbox("##forceWanted", &forceWanted))
         {
-            ImGui::SetTooltip("Toggle wanted and forceWanted");
+            Loot.setLootWanted(
+                loot->instance,
+                forceWanted,
+                coloursGlobals::valueLootColour);
+            loot->forceWanted = forceWanted;
+            loot->wanted = forceWanted;
         }
+        ImGui::EndDisabled();
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(
+                forceLocked
+                    ? "Items selected by active rules cannot be force-changed"
+                    : "Force this individual item to display");
 
         // Short Name
-        ImGui::TableSetColumnIndex(1);
+        ImGui::TableSetColumnIndex(2);
         const std::string shortName = TrimEFT(loot->shortName);
         const std::string longName = TrimEFT(loot->longName);
 
@@ -929,17 +956,334 @@ static void DrawLootListDebugTable(std::vector<LootList*>& rows, const char* tab
         }
 
         // BSG ID
-        ImGui::TableSetColumnIndex(2);
+        ImGui::TableSetColumnIndex(3);
         const std::string bsgId = TrimEFT(loot->bsgId);
         ImGui::TextUnformatted(bsgId.c_str());
 
         // Info
-        ImGui::TableSetColumnIndex(3);
+        ImGui::TableSetColumnIndex(4);
         ImGui::TextUnformatted("(i)");
         if (ImGui::IsItemHovered())
         {
             DrawLootListInfoTooltip(*loot);
         }
+
+        ImGui::PopID();
+    }
+
+    ImGui::EndTable();
+}
+
+static void DrawRaidLootWindow(std::vector<LootList>& lootCache)
+{
+    static char searchBuffer[128]{};
+    static std::string selectedCategory;
+    static std::unordered_map<std::string, std::vector<std::string>>
+        categoriesByItemId;
+    static std::uint64_t indexedMarketRevision =
+        std::numeric_limits<std::uint64_t>::max();
+
+    const std::uint64_t currentMarketRevision =
+        marketListRevision.load(std::memory_order_acquire);
+
+    if (indexedMarketRevision != currentMarketRevision)
+    {
+        categoriesByItemId.clear();
+        categoriesByItemId.reserve(marketList.size());
+
+        for (const gameItemList& item : marketList)
+        {
+            if (!item.bsgid.empty())
+                categoriesByItemId.emplace(item.bsgid, item.bsgCategory);
+        }
+
+        indexedMarketRevision = currentMarketRevision;
+    }
+
+    std::vector<std::string> categoryOptions;
+
+    for (const LootList& loot : lootCache)
+    {
+        if (!loot.isItem || loot.isQuestItem || loot.isContainer || loot.isCorpse)
+            continue;
+
+        const auto categoriesIt = categoriesByItemId.find(loot.bsgId);
+        if (categoriesIt == categoriesByItemId.end())
+            continue;
+
+        for (const std::string& category : categoriesIt->second)
+        {
+            if (!category.empty())
+                categoryOptions.push_back(category);
+        }
+    }
+
+    std::sort(categoryOptions.begin(), categoryOptions.end());
+    categoryOptions.erase(
+        std::unique(categoryOptions.begin(), categoryOptions.end()),
+        categoryOptions.end());
+
+    if (!selectedCategory.empty() &&
+        !std::binary_search(
+            categoryOptions.begin(),
+            categoryOptions.end(),
+            selectedCategory))
+    {
+        selectedCategory.clear();
+    }
+
+    ImGui::SetNextItemWidth(330.0f);
+    ImGui::InputTextWithHint(
+        "##raidLootSearch",
+        "Search name or BSG ID...",
+        searchBuffer,
+        IM_ARRAYSIZE(searchBuffer));
+
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Category");
+    ImGui::SameLine();
+
+    ImGui::SetNextItemWidth(210.0f);
+    const char* categoryPreview = selectedCategory.empty()
+        ? "All categories"
+        : selectedCategory.c_str();
+
+    if (ImGui::BeginCombo("##raidLootCategory", categoryPreview))
+    {
+        if (ImGui::Selectable("All categories", selectedCategory.empty()))
+            selectedCategory.clear();
+
+        for (const std::string& category : categoryOptions)
+        {
+            const bool selected = selectedCategory == category;
+            if (ImGui::Selectable(category.c_str(), selected))
+                selectedCategory = category;
+        }
+
+        ImGui::EndCombo();
+    }
+
+    const std::string lowerSearch = ToLower(TrimEFT(searchBuffer));
+
+    struct LootGroup
+    {
+        std::string bsgId;
+        std::string shortName;
+        std::string longName;
+        std::vector<LootList*> items;
+        LootList* representative = nullptr;
+        uint64_t forcedInstance = 0;
+        bool wanted = false;
+        bool filterWanted = false;
+        bool forceWanted = false;
+        bool canFocus = false;
+    };
+
+    std::vector<LootGroup> groups;
+    groups.reserve(lootCache.size());
+    std::unordered_map<std::string, size_t> groupIndexByKey;
+    groupIndexByKey.reserve(lootCache.size());
+
+    for (LootList& loot : lootCache)
+    {
+        if (!loot.isItem || loot.isQuestItem || loot.isContainer || loot.isCorpse)
+            continue;
+
+        const std::string shortName = TrimEFT(loot.shortName);
+        const std::string longName = TrimEFT(loot.longName);
+        const std::string bsgId = TrimEFT(loot.bsgId);
+        const auto categoriesIt = categoriesByItemId.find(bsgId);
+        const std::vector<std::string>* categories =
+            categoriesIt == categoriesByItemId.end()
+            ? nullptr
+            : &categoriesIt->second;
+
+        if (!lowerSearch.empty() &&
+            ToLower(shortName).find(lowerSearch) == std::string::npos &&
+            ToLower(longName).find(lowerSearch) == std::string::npos &&
+            ToLower(bsgId).find(lowerSearch) == std::string::npos)
+        {
+            continue;
+        }
+
+        if (!selectedCategory.empty() &&
+            (!categories ||
+                std::find(
+                    categories->begin(),
+                    categories->end(),
+                    selectedCategory) == categories->end()))
+        {
+            continue;
+        }
+
+        const std::string groupKey = bsgId.empty()
+            ? "instance:" + std::to_string(loot.instance)
+            : bsgId;
+
+        size_t groupIndex = 0;
+        const auto existingGroup = groupIndexByKey.find(groupKey);
+
+        if (existingGroup == groupIndexByKey.end())
+        {
+            groupIndex = groups.size();
+            groupIndexByKey.emplace(groupKey, groupIndex);
+            groups.push_back(LootGroup{
+                bsgId,
+                shortName,
+                longName,
+                {},
+                &loot
+            });
+        }
+        else
+        {
+            groupIndex = existingGroup->second;
+        }
+
+        LootGroup& group = groups[groupIndex];
+        group.items.push_back(&loot);
+        group.wanted = group.wanted || loot.wanted;
+        group.filterWanted = group.filterWanted || loot.filterWanted;
+        group.canFocus = group.canFocus ||
+            (!loot.pendingResolve && !loot.failed && loot.hasValidPosition);
+
+        if (loot.forceWanted)
+        {
+            group.forceWanted = true;
+            group.forcedInstance = loot.instance;
+        }
+    }
+
+    std::sort(
+        groups.begin(),
+        groups.end(),
+        [](const LootGroup& left, const LootGroup& right)
+        {
+            const std::string& leftName = left.longName.empty()
+                ? left.shortName
+                : left.longName;
+            const std::string& rightName = right.longName.empty()
+                ? right.shortName
+                : right.longName;
+            return ToLower(leftName) < ToLower(rightName);
+        });
+
+    if (!ImGui::BeginTable(
+        "##raidLootTable",
+        6,
+        ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_Borders |
+        ImGuiTableFlags_ScrollY |
+        ImGuiTableFlags_Resizable,
+        ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing() - 8.0f)))
+    {
+        return;
+    }
+
+    ImGui::TableSetupColumn("Wanted", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+    ImGui::TableSetupColumn("Force", ImGuiTableColumnFlags_WidthFixed, 46.0f);
+    ImGui::TableSetupColumn("Focus", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+    ImGui::TableSetupColumn("Qty", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Info", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+    ImGui::TableHeadersRow();
+
+    for (size_t index = 0; index < groups.size(); ++index)
+    {
+        LootGroup& group = groups[index];
+
+        ImGui::TableNextRow();
+        ImGui::PushID(static_cast<int>(index));
+
+        ImGui::TableSetColumnIndex(0);
+        bool wantedTick = group.wanted;
+        ImGui::BeginDisabled();
+        ImGui::Checkbox("##wanted", &wantedTick);
+        ImGui::EndDisabled();
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip(
+                group.filterWanted
+                    ? "Wanted by an active loot rule"
+                    : "Currently shown on the radar");
+        }
+
+        ImGui::TableSetColumnIndex(1);
+        bool forceWanted = group.forceWanted;
+        const bool canToggleForce = group.forceWanted
+            ? !group.filterWanted && group.forcedInstance != 0
+            : !group.wanted && !group.filterWanted && group.canFocus;
+        ImGui::BeginDisabled(!canToggleForce);
+        if (ImGui::Checkbox("##forceWanted", &forceWanted))
+        {
+            if (forceWanted)
+            {
+                Loot.focusClosestLootItem(
+                    group.representative->instance,
+                    group.bsgId,
+                    coloursGlobals::valueLootColour);
+            }
+            else
+            {
+                Loot.setLootWanted(
+                    group.forcedInstance,
+                    false,
+                    coloursGlobals::valueLootColour);
+            }
+        }
+        ImGui::EndDisabled();
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip(
+                group.filterWanted
+                    ? "Items selected by active rules cannot be force-changed"
+                    : group.wanted
+                        ? "This group is already wanted"
+                        : "Force the closest instance in this group to display");
+        }
+
+        ImGui::TableSetColumnIndex(2);
+        ImGui::BeginDisabled(!group.canFocus);
+        if (ImGui::SmallButton(ICON_FK_SEARCH))
+        {
+            const auto focusLocation = Loot.focusClosestLootItem(
+                group.representative->instance,
+                group.bsgId,
+                coloursGlobals::valueLootColour);
+
+            if (focusLocation)
+            {
+                mapGlobals::followLocal = false;
+                mapGlobals::focusPoint = *focusLocation;
+            }
+        }
+        ImGui::EndDisabled();
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip(
+                group.canFocus
+                    ? "Focus the closest matching item and force only that instance if needed"
+                    : "This item does not have a valid raid position yet");
+        }
+
+        ImGui::TableSetColumnIndex(3);
+        ImGui::Text("%zu", group.items.size());
+
+        ImGui::TableSetColumnIndex(4);
+        const std::string displayName = group.longName.empty()
+            ? group.shortName
+            : group.shortName.empty() || group.shortName == group.longName
+                ? group.longName
+                : group.longName + " (" + group.shortName + ")";
+        ImGui::TextUnformatted(displayName.c_str());
+
+        ImGui::TableSetColumnIndex(5);
+        ImGui::TextUnformatted("(i)");
+        if (ImGui::IsItemHovered() && group.representative)
+            DrawLootListInfoTooltip(*group.representative);
 
         ImGui::PopID();
     }
@@ -996,6 +1340,8 @@ static void renderLootFiltersMenu()
         constexpr float leftColourX = 226.0f;
         constexpr float leftValueX = 116.0f;
         constexpr float leftActionY = 235.0f;
+        const float leftBottomActionY =
+            topPanelY + topPanelHeight - 30.0f;
         constexpr float leftButtonWidth = 105.0f;
         constexpr float leftButtonGap = 8.0f;
         const float leftSecondButtonX = leftContentX + leftButtonWidth + leftButtonGap;
@@ -1614,20 +1960,24 @@ static void renderLootFiltersMenu()
                                     ImGui::TableNextRow();
 
                                     ImGui::TableSetColumnIndex(0);
-                                    bool wanted = loot.wanted;
-                                    if (ImGui::Checkbox("##wanted", &wanted))
+                                    bool forceWanted = loot.forceWanted;
+                                    const bool forceLocked = loot.filterWanted || loot.pendingResolve || loot.failed;
+                                    ImGui::BeginDisabled(forceLocked);
+                                    if (ImGui::Checkbox("##wanted", &forceWanted))
                                     {
-                                        Loot.setLootWanted(
-                                            loot.instance,
-                                            wanted,
-                                            coloursGlobals::questColour
-                                        );
+                                        Loot.setLootWanted(loot.instance, forceWanted, coloursGlobals::questColour);
 
-                                        loot.wanted = wanted;
-                                        loot.forceWanted = wanted;
+                                        loot.forceWanted = forceWanted;
+                                        loot.wanted = forceWanted;
+                                    }
+                                    ImGui::EndDisabled();
 
-                                        if (loot.wanted)
-                                            loot.color = coloursGlobals::questColour;
+                                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                    {
+                                        ImGui::SetTooltip(
+                                            forceLocked
+                                                ? "Items selected by active rules cannot be force-changed"
+                                                : "Force this individual item to display");
                                     }
 
                                     ImGui::TableSetColumnIndex(1);
@@ -1732,17 +2082,44 @@ static void renderLootFiltersMenu()
                 ImGui::EndPopup();
             }
             ImGui::SetCursorPos(ImVec2(leftContentX, leftActionY + 58.0f));
-            //fullLootListPopupOpen items
-            static bool fullLootListPopupOpen = false;
-            if (ImGui::Button("Debug Loot", ImVec2(leftButtonWidth, 0)))
+            static bool lootListPopupOpen = false;
+            if (ImGui::Button("Loot", ImVec2(leftButtonWidth, 0)))
             {
-                fullLootListPopupOpen = true;
-                ImGui::OpenPopup("lootList");
+                lootListPopupOpen = true;
+                ImGui::OpenPopup("Loot");
             }
 
             std::vector<LootList> lootCache = Loot.getCacheLoot();
 
-            if (ImGui::BeginPopupModal("lootList", &fullLootListPopupOpen, ImGuiWindowFlags_NoResize))
+            if (ImGui::BeginPopupModal("Loot", &lootListPopupOpen, ImGuiWindowFlags_NoResize))
+            {
+                ImGui::SetWindowSize(ImVec2(950, 500), ImGuiCond_Always);
+
+                ImGui::Separator();
+                DrawRaidLootWindow(lootCache);
+
+                ImGui::Spacing();
+                ImGui::Separator();
+
+                if (ImGui::Button("Close", ImVec2(120, 0)))
+                {
+                    lootListPopupOpen = false;
+                    ImGui::CloseCurrentPopup();
+                }
+
+                ImGui::EndPopup();
+            }
+
+           
+            ImGui::SetCursorPos(ImVec2(leftContentX, leftBottomActionY));
+            static bool fullLootListPopupOpen = false;
+            if (ImGui::Button("Debug Loot", ImVec2(leftButtonWidth, 0)))
+            {
+                fullLootListPopupOpen = true;
+                ImGui::OpenPopup("Debug Loot");
+            }
+
+            if (ImGui::BeginPopupModal("Debug Loot", &fullLootListPopupOpen, ImGuiWindowFlags_NoResize))
             {
                 ImGui::SetWindowSize(ImVec2(950, 500), ImGuiCond_Always);
 
@@ -1752,26 +2129,19 @@ static void renderLootFiltersMenu()
 
                 BuildLootListDebugRows(lootCache, normalLootRows, questLootRows, wantedRows);
 
-                if (ImGui::BeginTabBar("##lootListTabs"))
+                if (ImGui::BeginTabBar("##debugLootTabs"))
                 {
-                    if (ImGui::BeginTabItem("Loot"))
-                    {
-                        ImGui::Separator();
-                        DrawLootListDebugTable(normalLootRows, "##lootListNormalTable");
-                        ImGui::EndTabItem();
-                    }
-
                     if (ImGui::BeginTabItem("Quest Items"))
                     {
                         ImGui::Separator();
-                        DrawLootListDebugTable(questLootRows, "##lootListQuestTable");
+                        DrawLootListDebugTable(questLootRows, "##debugLootQuestTable");
                         ImGui::EndTabItem();
                     }
 
                     if (ImGui::BeginTabItem("Wanted"))
                     {
                         ImGui::Separator();
-                        DrawLootListDebugTable(wantedRows, "##lootListWantedTable");
+                        DrawLootListDebugTable(wantedRows, "##debugLootWantedTable");
                         ImGui::EndTabItem();
                     }
 

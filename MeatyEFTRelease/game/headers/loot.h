@@ -2,6 +2,7 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <glm/glm.hpp>
@@ -75,7 +76,9 @@ struct LootList
 
     bool wanted = false;
     bool forceWanted = false;
+    bool filterWanted = false;
     glm::vec4 color{};
+    glm::vec4 forceColor{};
 
     // Resolution state.
     bool failed = false;
@@ -103,8 +106,11 @@ public:
     void lootTask();
     void clearCache();
 
-    void markLootWanted(const std::vector<uint64_t>& instances, const glm::vec4& colour);
     void setLootWanted(uint64_t instance, bool wanted, const glm::vec4& colour);
+    [[nodiscard]] std::optional<glm::vec3> focusClosestLootItem(
+        uint64_t instance,
+        const std::string& bsgId,
+        const glm::vec4& colour);
 
     [[nodiscard]] std::vector<LootList> getCacheLoot() const;
     [[nodiscard]] LootCacheSnapshot getCacheSnapshot() const noexcept;
