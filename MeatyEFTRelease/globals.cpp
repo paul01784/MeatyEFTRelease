@@ -83,6 +83,8 @@ float radarGlobals::aimLineTargetAngle = 7.5f;
 bool radarGlobals::getPlayerEquip = false;
 bool radarGlobals::getPlayerStats = false;
 float radarGlobals::textScale = 1.0f;
+int radarGlobals::fontIndex = 0;
+bool radarGlobals::fontBold = true;
 
 bool espGlobals::espEnabled = false;
 bool espGlobals::drawPlayers = false;

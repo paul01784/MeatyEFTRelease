@@ -96,6 +96,8 @@ struct radarGlobals {
     static bool getPlayerEquip;
     static bool getPlayerStats;
     static float textScale;
+    static int fontIndex;
+    static bool fontBold;
 
 };
 

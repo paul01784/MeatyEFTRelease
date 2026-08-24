@@ -30,6 +30,29 @@
 
 ConfigManager configManager("config.json", "lootFilters.json");
 
+namespace
+{
+    constexpr int RadarFontFamilyCount = 3;
+    constexpr int RadarFontWeightCount = 2;
+    constexpr float RadarFontSize = 18.0f;
+
+    const char* const RadarFontNames[RadarFontFamilyCount] =
+    {
+        "Segoe UI",
+        "Arial",
+        "Tahoma"
+    };
+
+    ImFont* radarFonts[RadarFontFamilyCount][RadarFontWeightCount] = {};
+
+    ImFont* GetSelectedRadarFont()
+    {
+        const int fontIndex = std::clamp(radarGlobals::fontIndex, 0, RadarFontFamilyCount - 1);
+        const int weightIndex = radarGlobals::fontBold ? 1 : 0;
+        return radarFonts[fontIndex][weightIndex];
+    }
+}
+
 // select what window to not close on run
 // settings,lootfilters,players,fuser
 void closeSettingWindows(std::string dontClose)
@@ -3121,6 +3144,8 @@ static void renderMenuSettings()
                 if (showResSelectionBox())
                     configManager.SaveConfig();
                 saveIfChanged(menuLayout::SliderFloatRow("Radar text scale", "radarText", &radarGlobals::textScale, 0.75f, 2.0f, "%.2fx"));
+                saveIfChanged(menuLayout::ComboRow("Radar font", "radarFont", &radarGlobals::fontIndex, RadarFontNames, IM_ARRAYSIZE(RadarFontNames)));
+                saveIfChanged(menuLayout::ToggleRow("Bold", "radarFontBold", &radarGlobals::fontBold));
             }
             menuLayout::EndTwoColumns();
         }
@@ -6954,6 +6979,10 @@ static void renderMainScreen()
         {
             ImVec2 centerScreen = viewport->GetWorkCenter();
 
+            ImFont* radarFont = GetSelectedRadarFont();
+            if (radarFont != nullptr)
+                ImGui::PushFont(radarFont);
+
             DrawRadarMainText(centerScreen.x, centerScreen.y, { 1,0,0,1 }, Text);
 
             const bool showDmaConnectionHint =
@@ -6979,7 +7008,9 @@ static void renderMainScreen()
 
             setCurrentMapSpecs = false;
 
-            //g_AimViewWidget.Render((ImVec2&)espGlobals::gameRes);
+            if (radarFont != nullptr)
+                ImGui::PopFont();
+
 
         }
         else
@@ -6987,6 +7018,10 @@ static void renderMainScreen()
             // consider in raid? render what we only have access to in raid!
             EnsureSelectedMapLoaded();
             renderMapDetails();
+
+            ImFont* radarFont = GetSelectedRadarFont();
+            if (radarFont != nullptr)
+                ImGui::PushFont(radarFont);
 
             //render what we want on map as runRadar is true
             drawLocalPlayer();
@@ -7002,6 +7037,8 @@ static void renderMainScreen()
             drawWidgetExfils();
             drawWidgetTopLoot();
 
+            if (radarFont != nullptr)
+                ImGui::PopFont();
 
             renderLeftIcons();
 
@@ -7197,6 +7234,46 @@ bool renderThread()
         LOGS.logError(
             "Unable to load Font Awesome 7 from "
             FONT_ICON_FILE_NAME_FAS);
+    }
+
+    const char* const radarFontPaths[RadarFontFamilyCount][RadarFontWeightCount] =
+    {
+        { "C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\segoeuib.ttf" },
+        { "C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\arialbd.ttf" },
+        { "C:\\Windows\\Fonts\\tahoma.ttf", "C:\\Windows\\Fonts\\tahomabd.ttf" }
+    };
+
+    for (int familyIndex = 0; familyIndex < RadarFontFamilyCount; ++familyIndex)
+    {
+        for (int weightIndex = 0; weightIndex < RadarFontWeightCount; ++weightIndex)
+        {
+            ImFont* const radarFont = io.Fonts->AddFontFromFileTTF(
+                radarFontPaths[familyIndex][weightIndex],
+                RadarFontSize,
+                NULL,
+                io.Fonts->GetGlyphRangesCyrillic()
+            );
+            radarFonts[familyIndex][weightIndex] = radarFont;
+
+            if (radarFont == nullptr)
+            {
+                LOGS.logError("Unable to load radar font from " + std::string(radarFontPaths[familyIndex][weightIndex]));
+                continue;
+            }
+
+            ImFontConfig radarIconsConfig;
+            radarIconsConfig.MergeMode = true;
+            radarIconsConfig.PixelSnapH = true;
+            radarIconsConfig.DstFont = radarFont;
+            if (!io.Fonts->AddFontFromFileTTF(
+                FONT_ICON_FILE_NAME_FAS,
+                RadarFontSize,
+                &radarIconsConfig,
+                icons_ranges))
+            {
+                LOGS.logError("Unable to merge Font Awesome 7 into radar font " + std::string(RadarFontNames[familyIndex]));
+            }
+        }
     }
 
 
