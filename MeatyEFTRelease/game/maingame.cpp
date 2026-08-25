@@ -238,7 +238,7 @@ bool MainGame::checkIfRaidStarted()
 void MainGame::updateLocalPlayerPtr()
 {
     const uint64_t ptr = mem.Read<uint64_t>(
-        mainGame.localGameWorld + sdk::ClientLocalGameWorld::MainPlayer
+        mainGame.localGameWorld + sdk::ClientLocalGameWorld::MainPlayer, DmaCacheMode::Uncached
     );
 
     if (Utils::valid_pointer(ptr))
@@ -277,7 +277,7 @@ bool MainGame::updatePlayerList()
 
             try
             {
-                return mem.Read(address, &out, sizeof(T));
+                return mem.Read(address, &out, sizeof(T), DmaCacheMode::Uncached);
             }
             catch (...)
             {
@@ -295,7 +295,7 @@ bool MainGame::updatePlayerList()
 
             try
             {
-                return mem.Read(address, out, size);
+                return mem.Read(address, out, size, DmaCacheMode::Uncached);
             }
             catch (...)
             {
@@ -328,7 +328,7 @@ bool MainGame::updatePlayerList()
     if (!mem.ReadScatter(
         rootRequests,
         std::size(rootRequests),
-        false,
+        DmaCacheMode::Uncached,
         "Player roster roots"))
     {
         return false;
@@ -354,7 +354,7 @@ bool MainGame::updatePlayerList()
         }
     };
 
-    if (!mem.ReadScatter(headerRequests, std::size(headerRequests), false, "Player roster header"))
+    if (!mem.ReadScatter(headerRequests, std::size(headerRequests), DmaCacheMode::Uncached, "Player roster header"))
     {
         return false;
     }
@@ -418,7 +418,7 @@ bool MainGame::updatePlayerList()
         }
     };
 
-    if (!mem.ReadScatter(verificationRequests, std::size(verificationRequests), false, "Player roster verify"))
+    if (!mem.ReadScatter(verificationRequests, std::size(verificationRequests), DmaCacheMode::Uncached, "Player roster verify"))
     {
         return false;
     }
@@ -1080,7 +1080,7 @@ void MainGame::raidMonitorTask()
 
                 try
                 {
-                    return mem.Read(address, &out, sizeof(T));
+                    return mem.Read(address, &out, sizeof(T), DmaCacheMode::Uncached);
                 }
                 catch (...)
                 {

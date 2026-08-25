@@ -425,6 +425,7 @@ private:
 	std::atomic<std::int64_t> publishedSnapshotTicks{ 0 };
 	std::atomic<std::int64_t> publishedMotionTicks{ 0 };
 	std::atomic<double> averageMotionIntervalMs{ 0.0 };
+	std::size_t boneResolveCursor{ 0 };
 
 	void publishCacheSnapshotLocked(bool motionUpdated = false);
 

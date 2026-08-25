@@ -56,7 +56,11 @@ struct MongoID
         if (_stringId == 0)
             return {};
 
-        int charCount = memory.Read<int>(_stringId + 0x10, useCache);
+        const DmaCacheMode cacheMode = useCache
+            ? DmaCacheMode::Cached
+            : DmaCacheMode::Uncached;
+
+        int charCount = memory.Read<int>(_stringId + 0x10, cacheMode);
         if (charCount <= 0)
             return {};
 
@@ -66,7 +70,7 @@ struct MongoID
         return memory.readUnicodeString(
             _stringId + 0x14,
             charCount,
-            useCache
+            cacheMode
         );
     }
 };
@@ -238,7 +242,7 @@ struct UnityArray
             baseAddr + CountOffset,
             &count,
             sizeof(count),
-            false,
+            DmaCacheMode::Cached,
             telemetryLabel);
 
         // Your original guard
@@ -253,7 +257,7 @@ struct UnityArray
             baseAddr + ArrBaseOffset,
             elements,
             static_cast<std::size_t>(count) * sizeof(T),
-            false,
+            DmaCacheMode::Cached,
             telemetryLabel);
     }
 
@@ -355,8 +359,12 @@ static std::string ReadName(uint64_t objectClass, int length = 128, bool useCach
 {
     try
     {
-        uint64_t namePtr = mem.ReadChain(objectClass, { 0x0, 0x10 }, useCache);
-        return mem.readUTF8String(namePtr, length, useCache);
+        const DmaCacheMode cacheMode = useCache
+            ? DmaCacheMode::Cached
+            : DmaCacheMode::Uncached;
+
+        uint64_t namePtr = mem.ReadChain(objectClass, { 0x0, 0x10 }, cacheMode);
+        return mem.readUTF8String(namePtr, length, cacheMode);
     }
     catch (const std::exception& ex) {
         LOGS.logError("Exception caught in ReadName Unity Struct: " + std::string(ex.what()) + ".");
@@ -494,14 +502,16 @@ public:
         *this = Create(addr);
     }
 
-    static UnityList<T> Create(uint64_t addr)
+    static UnityList<T> Create(
+        uint64_t addr,
+        DmaCacheMode cacheMode = DmaCacheMode::Cached)
     {
         UnityList<T> list;
 
         if (!addr)
             return list;
 
-        int count = mem.Read<int>(addr + CountOffset);
+        int count = mem.Read<int>(addr + CountOffset, cacheMode);
 
         if (count < 0 || count > MaxCount)
             return list;
@@ -511,7 +521,7 @@ public:
 
         list.resize(count);
 
-        const uint64_t arrPtr = mem.Read<uint64_t>(addr + ArrOffset);
+        const uint64_t arrPtr = mem.Read<uint64_t>(addr + ArrOffset, cacheMode);
         if (!arrPtr)
         {
             list.clear();
@@ -521,7 +531,7 @@ public:
         const uint64_t base = arrPtr + ArrStartOffset;
 
         // Bulk read entire backing array
-        mem.Read(base, list.m_data.data(), sizeof(T) * count);
+        mem.Read(base, list.m_data.data(), sizeof(T) * count, cacheMode);
 
         return list;
     }

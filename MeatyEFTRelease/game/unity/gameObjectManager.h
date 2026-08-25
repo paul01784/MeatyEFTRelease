@@ -4,6 +4,7 @@
 #include <cstring>
 #include <algorithm>
 #include "../../memory/Memory.h"
+#include "../../memory/ScatterReadBatch.h"
 #include "../headers/unitysdk.h"
 #include "../headers/sdk.h"
 
@@ -282,24 +283,30 @@ struct GameObjectManager
         {
             const size_t batch = std::min(kGomScatterBatch, count - offset);
 
-            auto h = mem.CreateScatterHandle();
-            if (!h)
+            ScatterReadBatch scatter(
+                mem,
+                DmaCacheMode::Cached,
+                "Game object nodes");
+
+            if (!scatter.Valid())
             {
-                dbg("Failed CreateScatterHandle() for nodes");
+                dbg("DMA unavailable for node scatter");
                 return 0;
             }
 
             for (size_t i = 0; i < batch; ++i)
             {
-                mem.AddScatterReadRequest(
-                    h,
+                scatter.AddBytes(
                     nodeAddrs[offset + i],
                     &nodes[offset + i],
                     sizeof(LinkedListObject));
             }
 
-            mem.ExecuteReadScatter(h);
-            mem.CloseScatterHandle(h);
+            if (!scatter.Execute())
+            {
+                dbg("Failed scatter read for nodes");
+                return 0;
+            }
         }
 
         dbg("Scatter read LinkedListObjects complete");
@@ -318,10 +325,14 @@ struct GameObjectManager
         {
             const size_t batch = std::min(kGomScatterBatch, count - offset);
 
-            auto h = mem.CreateScatterHandle();
-            if (!h)
+            ScatterReadBatch scatter(
+                mem,
+                DmaCacheMode::Cached,
+                "Game object names");
+
+            if (!scatter.Valid())
             {
-                dbg("Failed CreateScatterHandle() for namePtrs");
+                dbg("DMA unavailable for name pointer scatter");
                 return 0;
             }
 
@@ -333,8 +344,7 @@ struct GameObjectManager
                     continue;
 
                 any = true;
-                mem.AddScatterReadRequest(
-                    h,
+                scatter.AddBytes(
                     nodes[idx].ThisObject + UnityOffsets::GameObject_NameOffset,
                     &namePtrs[idx],
                     sizeof(uint64_t));
@@ -342,10 +352,12 @@ struct GameObjectManager
 
             if (any)
             {
-                mem.ExecuteReadScatter(h);
+                if (!scatter.Execute())
+                {
+                    dbg("Failed scatter read for name pointers");
+                    return 0;
+                }
             }
-
-            mem.CloseScatterHandle(h);
         }
 
         dbg("Scatter read namePtrs complete");

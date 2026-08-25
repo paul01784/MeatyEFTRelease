@@ -94,6 +94,7 @@ namespace
     constexpr int MAX_LOOT_BUFFER_ITEMS = MAX_LOOT_COUNT;
     constexpr size_t MAX_LOOT_RESOLVE_PER_TICK = 8;
     constexpr size_t MAX_CORPSE_UPDATES_PER_TICK = 1;
+    constexpr size_t MAX_CONTAINER_STATE_UPDATES_PER_TICK = 32;
     constexpr bool ENABLE_LOOT_TRANSFORM_DIAGNOSTICS = false;
     constexpr size_t MAX_OBJECT_NAME_LENGTH = 64;
     constexpr size_t MAX_CLASS_NAME_LENGTH = 64;
@@ -376,6 +377,7 @@ void loot::clearCache()
     publishCacheSnapshotLocked();
     corpseRefreshCursor = 0;
     dogTagRefreshCursor = 0;
+    containerRefreshCursor = 0;
 }
 
 void loot::markFailed(
@@ -857,7 +859,7 @@ bool loot::buildPointers()
             mainGame.localGameWorld +
                 sdk::ClientLocalGameWorld::LootList,
             nextLootList,
-            false) ||
+            DmaCacheMode::Uncached) ||
             !Utils::valid_pointer(nextLootList))
         {
             if (attempt < 2)
@@ -880,7 +882,7 @@ bool loot::refreshLootListHeader()
     uint64_t nextLootListPtr = 0;
     int nextLootCount = 0;
 
-    ScatterReadBatch batch(mem, false, "Loot");
+    ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
     if (!batch.Add(lootListP + 0x10, nextLootListPtr) ||
         !batch.Add(lootListP + 0x18, nextLootCount) ||
@@ -921,7 +923,7 @@ bool loot::buildLootBuffer()
 
     const size_t bytes = sizeof(uint64_t) * static_cast<size_t>(itemsToRead);
 
-    if (!mem.Read(lootListPtr + 0x20, loot_buffer.data(), bytes))
+    if (!mem.Read(lootListPtr + 0x20, loot_buffer.data(), bytes, DmaCacheMode::Uncached, "Loot pointer buffer"))
         return false;
 
     return true;
@@ -961,7 +963,7 @@ bool loot::buildNewLootItemsScatter(
 
     // MonoBehaviour.
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& shell : shellReads)
             batch.Add(shell.instance + 0x10, shell.monoBehaviour);
@@ -978,7 +980,7 @@ bool loot::buildNewLootItemsScatter(
 
     // interactive class and GameObject.
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& shell : shellReads)
         {
@@ -1008,7 +1010,7 @@ bool loot::buildNewLootItemsScatter(
 
     // name pointer and components.
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& shell : shellReads)
         {
@@ -1038,7 +1040,7 @@ bool loot::buildNewLootItemsScatter(
 
     //transform.
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& shell : shellReads)
         {
@@ -1100,7 +1102,7 @@ bool loot::buildNewLootItemsScatter(
             item.gameObjectName = mem.readString(
                 item.m_pGameObjectName,
                 MAX_OBJECT_NAME_LENGTH,
-                true
+                DmaCacheMode::Cached
             );
         }
         catch (const std::exception& e)
@@ -1194,7 +1196,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
         return;
 
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1216,7 +1218,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1239,7 +1241,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1368,7 +1370,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
         return;
 
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1390,7 +1392,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1413,7 +1415,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1436,7 +1438,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootList>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, true, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1673,11 +1675,21 @@ bool loot::isContainerEnabled(const std::string& name) const
 
 void loot::updateLootableContainerStates(std::vector<LootList>& workingCache)
 {
-    std::vector<ContainerOpenedRead> reads;
-    reads.reserve(workingCache.size());
-
-    for (size_t i = 0; i < workingCache.size(); ++i)
+    if (workingCache.empty())
     {
+        containerRefreshCursor = 0;
+        return;
+    }
+
+    std::vector<ContainerOpenedRead> reads;
+    reads.reserve((std::min)(workingCache.size(), MAX_CONTAINER_STATE_UPDATES_PER_TICK));
+
+    for (size_t checked = 0;
+        checked < workingCache.size() &&
+        reads.size() < MAX_CONTAINER_STATE_UPDATES_PER_TICK;
+        ++checked)
+    {
+        const size_t i = containerRefreshCursor++ % workingCache.size();
         LootList& item = workingCache[i];
 
         if (item.failed || !item.isContainer || item.isAirdrop)
@@ -1697,7 +1709,7 @@ void loot::updateLootableContainerStates(std::vector<LootList>& workingCache)
     if (reads.empty())
         return;
 
-    ScatterReadBatch batch(mem, true, "Loot");
+    ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot container state");
 
     for (auto& read : reads)
     {
@@ -1950,7 +1962,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
         uint64_t slotsPtr = 0;
 
         {
-            ScatterReadBatch batch(mem, true, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
             batch.Add(interactive + sdk::InteractiveLootItem::Item, itemBase);
 
             if (!batch.Execute())
@@ -1961,7 +1973,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
             return;
 
         {
-            ScatterReadBatch batch(mem, true, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
             batch.Add(itemBase + sdk::LootItemMod::Slots, slotsPtr);
 
             if (!batch.Execute())
@@ -1994,7 +2006,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
         // slot
         {
-            ScatterReadBatch batch(mem, false, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
             for (auto& read : slotReads)
             {
@@ -2008,7 +2020,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
         // name template.
         {
-            ScatterReadBatch batch(mem, true, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
             for (auto& read : slotReads)
             {
@@ -2025,7 +2037,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
 
         // mongo id.
         {
-            ScatterReadBatch batch(mem, true, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
 
             for (auto& read : slotReads)
             {
@@ -2060,7 +2072,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
                 mem.readUnicodeString(
                     read.namePtr + 0x14,
                     read.nameLen,
-                    true
+                    DmaCacheMode::Cached
                 )
             );
 

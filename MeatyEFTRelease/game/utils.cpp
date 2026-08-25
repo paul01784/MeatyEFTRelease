@@ -169,7 +169,7 @@ glm::vec3 get_transform_position1(ULONG64 pMatrix, ULONG64 index)
 
 	ScatterReadBatch metadataBatch(
 		mem,
-		false,
+		DmaCacheMode::Uncached,
 		"Transform metadata"
 	);
 
@@ -214,7 +214,7 @@ glm::vec3 get_transform_position1(ULONG64 pMatrix, ULONG64 index)
 
 			ScatterReadBatch matrixBatch(
 				mem,
-				false,
+				DmaCacheMode::Uncached,
 				"Transform matrix"
 			);
 

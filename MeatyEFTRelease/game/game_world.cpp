@@ -362,7 +362,7 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     {
         ScatterReadBatch scatter(
             mem,
-            false,
+            DmaCacheMode::Uncached,
             "Game World objects"
         );
 
@@ -409,7 +409,7 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
 
             ScatterReadBatch scatter(
                 mem,
-                false,
+                DmaCacheMode::Uncached,
                 "Game World names"
             );
 

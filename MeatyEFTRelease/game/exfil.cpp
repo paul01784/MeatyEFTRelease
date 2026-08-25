@@ -259,7 +259,7 @@ void Exfil::updateStatus()
 	{
 		ScatterReadBatch batch(
 			mem,
-			true,
+			DmaCacheMode::Cached,
 			"Exfil update"
 		);
 

@@ -187,6 +187,7 @@ private:
 
     size_t corpseRefreshCursor = 0;
     size_t dogTagRefreshCursor = 0;
+    size_t containerRefreshCursor = 0;
 
     void publishCacheSnapshotLocked();
 };

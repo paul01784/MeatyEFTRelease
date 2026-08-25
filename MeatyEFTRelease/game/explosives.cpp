@@ -222,7 +222,9 @@ bool ExplosiveManager::readGrenadeAddressesUnlocked(
     {
         
         auto allGrenades =
-            UnityList<std::uint64_t>::Create(m_grenadesListPointer);
+            UnityList<std::uint64_t>::Create(
+                m_grenadesListPointer,
+                DmaCacheMode::Uncached);
 
         std::unordered_set<std::uint64_t> uniqueAddresses;
         uniqueAddresses.reserve(allGrenades.count());
@@ -288,22 +290,48 @@ bool ExplosiveManager::readTripwireAddressesUnlocked(std::vector<std::uint64_t>&
         m_synchronizableObjectLogicProcessor = logicProcessor;
         m_synchronizableObjectsListPointer = synchronizableObjects;
 
-        const auto synchronizableObjectList = UnityList<std::uint64_t>::Create(synchronizableObjects);
+        const auto synchronizableObjectList = UnityList<std::uint64_t>::Create(
+            synchronizableObjects,
+            DmaCacheMode::Uncached);
+
+        std::vector<std::uint64_t> candidates;
+        candidates.reserve(synchronizableObjectList.count());
+
+        for (const std::uint64_t objectAddress : synchronizableObjectList)
+        {
+            if (Utils::valid_pointer(objectAddress))
+                candidates.emplace_back(objectAddress);
+        }
+
+        std::vector<std::int32_t> objectTypes(candidates.size(), -1);
+
+        if (!candidates.empty())
+        {
+            ScatterReadBatch typeReads(
+                mem,
+                DmaCacheMode::Cached,
+                "Tripwire object types");
+
+            for (size_t i = 0; i < candidates.size(); ++i)
+            {
+                typeReads.Add(
+                    candidates[i] + sdk::SynchronizableObject::Type,
+                    objectTypes[i]);
+            }
+
+            if (!typeReads.Execute())
+                return false;
+        }
 
         std::unordered_set<std::uint64_t> uniqueAddresses;
         uniqueAddresses.reserve(synchronizableObjectList.count());
 
-        for (const std::uint64_t objectAddress : synchronizableObjectList)
+        for (size_t i = 0; i < candidates.size(); ++i)
         {
-            if (!Utils::valid_pointer(objectAddress))
+            if (objectTypes[i] != 2)
                 continue;
 
-            if (mem.Read<std::int32_t>(objectAddress + sdk::SynchronizableObject::Type) != 2)
-            {
-                continue;
-            }
-
-            uniqueAddresses.insert(objectAddress);
+            uniqueAddresses.insert(candidates[i]);
 
             if (uniqueAddresses.size() > MaxReasonableTripwires)
                 return false;
@@ -372,7 +400,8 @@ void ExplosiveManager::refreshGrenadesUnlocked()
         const bool isDestroyed =
             mem.Read<std::uint8_t>(
                 grenadeAddress +
-                sdk::Throwable::_isDestroyed) != 0;
+                sdk::Throwable::_isDestroyed,
+                DmaCacheMode::Uncached) != 0;
 
         if (isDestroyed)
             continue;
@@ -408,7 +437,7 @@ void ExplosiveManager::refreshGrenadesUnlocked()
     {
         ScatterReadBatch scatter(
             mem,
-            false,
+            DmaCacheMode::Uncached,
             "Grenade destroyed state"
         );
 
@@ -455,7 +484,8 @@ void ExplosiveManager::refreshGrenadesUnlocked()
             grenade.isDestroyed =
                 mem.Read<std::uint8_t>(
                     grenade.instance +
-                    sdk::Throwable::_isDestroyed) != 0;
+                    sdk::Throwable::_isDestroyed,
+                    DmaCacheMode::Uncached) != 0;
         }
 
         if (grenade.isDestroyed)
@@ -551,38 +581,101 @@ void ExplosiveManager::refreshTripwiresUnlocked()
         workingExplosives.emplace_back(std::move(tripwire));
     }
 
-    for (GrenadeList& tripwire : workingExplosives)
+    struct TripwireLiveRead
     {
-        if (tripwire.type != ExplosiveType::Tripwire)
+        size_t explosiveIndex{};
+        std::int32_t state{};
+        glm::vec3 toPosition{};
+        glm::vec3 fromPosition{};
+    };
+
+    std::vector<TripwireLiveRead> reads;
+    reads.reserve(workingExplosives.size());
+
+    for (size_t i = 0; i < workingExplosives.size(); ++i)
+    {
+        if (workingExplosives[i].type != ExplosiveType::Tripwire)
             continue;
 
-        const std::int32_t state = mem.Read<std::int32_t>(tripwire.instance + sdk::TripwireSynchronizableObject::_tripwireState);
+        TripwireLiveRead read{};
+        read.explosiveIndex = i;
+        reads.emplace_back(read);
+    }
 
-        tripwire.isActive = isTripwireActive(state);
+    if (!reads.empty())
+    {
+        ScatterReadBatch stateReads(
+            mem,
+            DmaCacheMode::Uncached,
+            "Tripwire states");
+
+        for (TripwireLiveRead& read : reads)
+        {
+            const GrenadeList& tripwire = workingExplosives[read.explosiveIndex];
+            stateReads.Add(
+                tripwire.instance + sdk::TripwireSynchronizableObject::_tripwireState,
+                read.state);
+        }
+
+        if (!stateReads.Execute())
+            return;
+    }
+
+    bool hasActiveTripwire = false;
+
+    for (TripwireLiveRead& read : reads)
+    {
+        GrenadeList& tripwire = workingExplosives[read.explosiveIndex];
+        tripwire.isActive = isTripwireActive(read.state);
+        hasActiveTripwire = hasActiveTripwire || tripwire.isActive;
+    }
+
+    if (hasActiveTripwire)
+    {
+        ScatterReadBatch positionReads(
+            mem,
+            DmaCacheMode::Uncached,
+            "Tripwire positions");
+
+        for (TripwireLiveRead& read : reads)
+        {
+            const GrenadeList& tripwire = workingExplosives[read.explosiveIndex];
+
+            if (!tripwire.isActive)
+                continue;
+
+            positionReads.Add(
+                tripwire.instance + sdk::TripwireSynchronizableObject::ToPosition,
+                read.toPosition);
+            positionReads.Add(
+                tripwire.instance + sdk::TripwireSynchronizableObject::FromPosition,
+                read.fromPosition);
+        }
+
+        if (!positionReads.Execute())
+            return;
+    }
+
+    for (TripwireLiveRead& read : reads)
+    {
+        GrenadeList& tripwire = workingExplosives[read.explosiveIndex];
 
         if (!tripwire.isActive)
             continue;
 
-        glm::vec3 toPosition = mem.Read<glm::vec3>(
-            tripwire.instance +
-            sdk::TripwireSynchronizableObject::ToPosition);
-        glm::vec3 fromPosition = mem.Read<glm::vec3>(
-            tripwire.instance +
-            sdk::TripwireSynchronizableObject::FromPosition);
-
         // The game stores both anchor points slightly below the visible wire.
-        toPosition.y += 0.175f;
-        fromPosition.y += 0.175f;
+        read.toPosition.y += 0.175f;
+        read.fromPosition.y += 0.175f;
 
-        if (!positionLooksValid(toPosition) ||
-            !positionLooksValid(fromPosition))
+        if (!positionLooksValid(read.toPosition) ||
+            !positionLooksValid(read.fromPosition))
         {
             tripwire.isActive = false;
             continue;
         }
 
-        tripwire.worldLocation = toPosition;
-        tripwire.fromWorldLocation = fromPosition;
+        tripwire.worldLocation = read.toPosition;
+        tripwire.fromWorldLocation = read.fromPosition;
     }
 
     workingExplosives.erase(

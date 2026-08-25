@@ -850,7 +850,7 @@ void c_keys::UpdateKeys()
 		state_bitmap,
 		sizeof(state_bitmap),
 		keyboardPid,
-		false,
+		DmaCacheMode::Uncached,
 		"Keyboard"
 	);
 

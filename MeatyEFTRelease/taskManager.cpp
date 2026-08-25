@@ -13,6 +13,7 @@ namespace
 {
     constexpr auto kMaximumIdleSleep = std::chrono::milliseconds(5);
     constexpr auto kDeferredDmaRetry = std::chrono::milliseconds(5);
+    constexpr auto kNonCriticalWorkBudget = std::chrono::milliseconds(4);
 
     [[nodiscard]] int PriorityRank(TaskPriority priority) noexcept
     {
@@ -163,6 +164,8 @@ void TaskManager::run(std::stop_token stopToken)
             });
 
         bool backgroundTaskRan = false;
+        bool nonCriticalTaskRan = false;
+        Clock::time_point nonCriticalWorkStarted{};
 
         for (TimedTask* task : dueTasks)
         {
@@ -173,6 +176,22 @@ void TaskManager::run(std::stop_token stopToken)
             }
 
             now = Clock::now();
+
+            if (task->options.priority != TaskPriority::Critical)
+            {
+                if (nonCriticalTaskRan &&
+                    now - nonCriticalWorkStarted >= kNonCriticalWorkBudget)
+                {
+                    
+                    break;
+                }
+
+                if (!nonCriticalTaskRan)
+                {
+                    nonCriticalTaskRan = true;
+                    nonCriticalWorkStarted = now;
+                }
+            }
 
             if (task->options.priority == TaskPriority::Background)
             {

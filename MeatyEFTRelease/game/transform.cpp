@@ -15,6 +15,11 @@ namespace {
 constexpr int kMaxParentDepth = 512;
 constexpr int kMaxTransformIndex = 1'000'000;
 
+DmaCacheMode ToCacheMode(bool useCache)
+{
+    return useCache ? DmaCacheMode::Cached : DmaCacheMode::Uncached;
+}
+
 bool ValidateIndices(const std::vector<int>& indices, int count)
 {
     if (count <= 0)
@@ -74,12 +79,12 @@ bool UnityTransform::TryResolveNative(
 
         const uint64_t hierarchy = mem.Read<uint64_t>(
             candidate + UnityOffsets::TransformAccess_HierarchyOffset,
-            useCache
+            ToCacheMode(useCache)
         );
 
         const int index = mem.Read<int>(
             candidate + UnityOffsets::TransformAccess_IndexOffset,
-            useCache
+            ToCacheMode(useCache)
         );
 
         return Memory::IsValidPointer(hierarchy) &&
@@ -90,7 +95,7 @@ bool UnityTransform::TryResolveNative(
     constexpr uint64_t kManagedNativePointerOffset = 0x10;
     const uint64_t candidate = mem.Read<uint64_t>(
         transformObject + kManagedNativePointerOffset,
-        useCache
+        ToCacheMode(useCache)
     );
 
     if (isNativeTransform(candidate))
@@ -122,7 +127,7 @@ UnityTransform::UnityTransform(
     const int index = mem.Read<int>(
         TransformInternal +
         UnityOffsets::TransformAccess_IndexOffset,
-        _useCache
+        ToCacheMode(_useCache)
     );
 
     if (index < 0 || index >= kMaxTransformIndex)
@@ -133,7 +138,7 @@ UnityTransform::UnityTransform(
     const uint64_t hierarchy = mem.Read<uint64_t>(
         TransformInternal +
         UnityOffsets::TransformAccess_HierarchyOffset,
-        _useCache
+        ToCacheMode(_useCache)
     );
 
     if (!Utils::valid_pointer(hierarchy))
@@ -144,13 +149,13 @@ UnityTransform::UnityTransform(
     const uint64_t vertices = mem.Read<uint64_t>(
         _hierarchyAddr +
         UnityOffsets::Hierarchy_VerticesOffset,
-        _useCache
+        ToCacheMode(_useCache)
     );
 
     const uint64_t indices = mem.Read<uint64_t>(
         _hierarchyAddr +
         UnityOffsets::Hierarchy_IndicesOffset,
-        _useCache
+        ToCacheMode(_useCache)
     );
 
     if (!Utils::valid_pointer(vertices) ||
@@ -217,7 +222,7 @@ bool UnityTransform::BuildParentChain()
             parentAddress,
             &parentIndex,
             sizeof(parentIndex),
-            _useCache))
+            ToCacheMode(_useCache)))
         {
             _parentChain.clear();
             return false;
@@ -264,7 +269,7 @@ bool UnityTransform::ReadTransformAt(
         address,
         &out,
         sizeof(TrsX),
-        _useCache
+        ToCacheMode(_useCache)
     );
 }
 
@@ -433,7 +438,7 @@ bool UnityTransform::UpdateWorldPose(
     if (!mem.ReadScatter(
         requests.data(),
         requests.size(),
-        _useCache,
+        ToCacheMode(_useCache),
         "Transform pose"))
     {
         return false;

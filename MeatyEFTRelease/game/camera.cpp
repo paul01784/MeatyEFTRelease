@@ -618,7 +618,7 @@ Camera::FrameReadStatus Camera::readFrameData(FrameData& out, bool readLens)
     const Memory::TryScatterReadResult readResult = mem.TryReadScatter(
         requests,
         requestCount,
-        false,
+        DmaCacheMode::Uncached,
         "Camera Update"
     );
 

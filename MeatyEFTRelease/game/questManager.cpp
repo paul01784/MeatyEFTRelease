@@ -649,7 +649,7 @@ void QuestManager::updateAndPruneActiveQuests()
         std::vector<std::string> newMasterItems;
         std::vector<QuestLocation> newMasterLocations;
 
-        ScatterReadBatch scatter(mem, false, "Quests");
+        ScatterReadBatch scatter(mem, DmaCacheMode::Cached, "Quests");
 
         if (!scatter.Valid())
             return;
