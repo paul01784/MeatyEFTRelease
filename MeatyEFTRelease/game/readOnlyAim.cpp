@@ -43,7 +43,8 @@ AimReferencePoint ReadOnlyAim::resolveAimReference() const
 }
 
 std::optional<TargetResult> ReadOnlyAim::BuildTargetResult(const PlayerCache& entity, float maxDistance,
-                                                             float fovRadiusPx, const glm::vec2& aimRef) const
+                                                             float fovRadiusPx, const glm::vec2& aimRef,
+                                                             const AimPredictionContext& prediction) const
 {
     if (entity.isDead || entity.hasExfiled)
         return std::nullopt;
@@ -64,6 +65,25 @@ std::optional<TargetResult> ReadOnlyAim::BuildTargetResult(const PlayerCache& en
     glm::vec3 selectedBoneWorldPos{};
     if (!GetSelectedBonePosition(entity, selectedBone, selectedBoneWorldPos))
         return std::nullopt;
+
+    if (prediction.enabled)
+    {
+        const BallisticSimulationResult simulation = BallisticsCalculator::Simulate(prediction.sourcePosition, selectedBoneWorldPos, prediction.ballistics);
+
+        if (simulation.valid)
+        {
+            const bool freshVelocity = entity.velocityValid && entity.lastVelocityUpdate !=
+                    std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() -
+                    entity.lastVelocityUpdate <= std::chrono::milliseconds(250);
+
+            if (freshVelocity)
+            {
+                selectedBoneWorldPos += entity.velocity * simulation.travelTime;
+            }
+
+            selectedBoneWorldPos.y += simulation.dropCompensation;
+        }
+    }
 
     glm::vec2 selectedBoneScreenPos{};
     if (!Utils::Camera::world_to_screen(selectedBoneWorldPos, &selectedBoneScreenPos))
@@ -112,12 +132,18 @@ bool ReadOnlyAim::GetSelectedBonePosition(const PlayerCache& entity, boneListInd
 
 std::optional<TargetResult> ReadOnlyAim::FindBestTarget(const std::vector<PlayerCache>& snapshot, TargetMode mode,
                                                         float maxDistance, float fovRadiusPx,
-                                                        const glm::vec2& aimRef) const
+                                                        const glm::vec2& aimRef,
+                                                        const AimPredictionContext& prediction) const
 {
     std::optional<TargetResult> bestTarget;
 
     for (const PlayerCache& entity : snapshot) {
-        const auto candidate = BuildTargetResult(entity, maxDistance, fovRadiusPx, aimRef);
+        const auto candidate = BuildTargetResult(
+            entity,
+            maxDistance,
+            fovRadiusPx,
+            aimRef,
+            prediction);
         if (!candidate.has_value())
             continue;
 
@@ -152,7 +178,8 @@ std::optional<TargetResult> ReadOnlyAim::FindBestTarget(const std::vector<Player
 
 std::optional<TargetResult> ReadOnlyAim::RefreshTargetByInstance(const std::vector<PlayerCache>& snapshot,
                                                                  uint64_t instance, float maxDistance,
-                                                                 float fovRadiusPx, const glm::vec2& aimRef) const
+                                                                 float fovRadiusPx, const glm::vec2& aimRef,
+                                                                 const AimPredictionContext& prediction) const
 {
     if (!instance)
         return std::nullopt;
@@ -160,7 +187,12 @@ std::optional<TargetResult> ReadOnlyAim::RefreshTargetByInstance(const std::vect
     for (const PlayerCache& entity : snapshot) {
         if (entity.instance != instance)
             continue;
-        return BuildTargetResult(entity, maxDistance, fovRadiusPx, aimRef);
+        return BuildTargetResult(
+            entity,
+            maxDistance,
+            fovRadiusPx,
+            aimRef,
+            prediction);
     }
 
     return std::nullopt;
@@ -214,8 +246,40 @@ void ReadOnlyAim::aimTask()
     const float fovRadius = aimGlobals::aimFOV;
     const bool targetLockEnabled = aimGlobals::targetLock;
 
-    const auto liveTarget =
-        fireportReady ? FindBestTarget(snapshot, aimGlobals::targetMode, maxDistance, fovRadius, aimRef) : std::nullopt;
+    AimPredictionContext prediction{};
+
+    if (aimGlobals::predictionEnabled)
+    {
+        const auto localPlayer = std::find_if(
+            snapshot.begin(),
+            snapshot.end(),
+            [](const PlayerCache& player)
+            {
+                return player.isLocal;
+            });
+
+        if (localPlayer != snapshot.end() &&
+            localPlayer->observedHandsInfo.ballistics.IsValid())
+        {
+            const FireportPose fireport = g_fireport.snapshot();
+
+            prediction.enabled = true;
+            prediction.sourcePosition = fireport.valid
+                ? fireport.worldOrigin
+                : mainGame.localLocation;
+            prediction.ballistics = localPlayer->observedHandsInfo.ballistics;
+        }
+    }
+
+    const auto liveTarget = fireportReady
+        ? FindBestTarget(
+            snapshot,
+            aimGlobals::targetMode,
+            maxDistance,
+            fovRadius,
+            aimRef,
+            prediction)
+        : std::nullopt;
 
     std::optional<TargetResult> previousActiveTarget;
     bool wasKeyHeld = false;
@@ -237,7 +301,13 @@ void ReadOnlyAim::aimTask()
             newActiveTarget = liveTarget;
         else
             newActiveTarget =
-                RefreshTargetByInstance(snapshot, previousActiveTarget->player.instance, maxDistance, fovRadius, aimRef);
+                RefreshTargetByInstance(
+                    snapshot,
+                    previousActiveTarget->player.instance,
+                    maxDistance,
+                    fovRadius,
+                    aimRef,
+                    prediction);
     }
 
     std::optional<TargetResult> targetToMove;

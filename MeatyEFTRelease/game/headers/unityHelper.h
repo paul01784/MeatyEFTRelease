@@ -5,6 +5,7 @@
 
 
 #include <cstdint>
+#include <algorithm>
 #include <vector>
 #include <type_traits>
 #include <span>
@@ -123,12 +124,18 @@ public:
 
     UnityDictionary() = default;
 
-    explicit UnityDictionary(std::uintptr_t dictAddr)
+    explicit UnityDictionary(
+        std::uintptr_t dictAddr,
+        int maxAllowedCount = 16384,
+        std::string_view telemetryLabel = "UnityDictionary")
     {
-        init(dictAddr);
+        init(dictAddr, maxAllowedCount, telemetryLabel);
     }
 
-    void init(std::uintptr_t dictAddr)
+    void init(
+        std::uintptr_t dictAddr,
+        int maxAllowedCount = 16384,
+        std::string_view telemetryLabel = "UnityDictionary")
     {
         baseAddr = dictAddr;
         delete[] entries;
@@ -140,7 +147,9 @@ public:
 
         // Read count exactly as C# does
         const int c = mem.Read<int>(baseAddr + CountOffset);
-        if (c < 0 || c > 16384)
+        const int allowedCount = (std::min)(16384, (std::max)(0, maxAllowedCount));
+
+        if (c < 0 || c > allowedCount)
             throw std::out_of_range("UnityDictionary count out of range.");
 
         count = c;
@@ -160,7 +169,12 @@ public:
 
         // Allocate and single bulk read, exactly like ReadSpan()
         entries = new MemDictEntry[count];
-        mem.Read(dictBase, entries, static_cast<std::size_t>(count) * sizeof(MemDictEntry));
+        mem.Read(
+            dictBase,
+            entries,
+            static_cast<std::size_t>(count) * sizeof(MemDictEntry),
+            DmaCacheMode::Cached,
+            telemetryLabel);
     }
 
     ~UnityDictionary()
@@ -231,7 +245,8 @@ struct UnityArray
     // Construct from a Unity/Mono array object: read count + element buffer
     explicit UnityArray(
         std::uintptr_t addr,
-        std::string_view telemetryLabel = "UnityArray")
+        std::string_view telemetryLabel = "UnityArray",
+        int maxAllowedCount = 4096)
         : baseAddr(addr)
     {
         if (!baseAddr)
@@ -245,8 +260,10 @@ struct UnityArray
             DmaCacheMode::Cached,
             telemetryLabel);
 
-        // Your original guard
-        if (count < 0 || count > 4096)
+        const int allowedCount =
+            (std::min)(4096, (std::max)(0, maxAllowedCount));
+
+        if (count < 0 || count > allowedCount)
             throw std::out_of_range("UnityArray count out of allowed range.");
 
         if (count == 0)
@@ -262,7 +279,10 @@ struct UnityArray
     }
 
     // Construct from a raw contiguous buffer (addr points directly to elements)
-    UnityArray(std::uintptr_t addr, int elementCount)
+    UnityArray(
+        std::uintptr_t addr,
+        int elementCount,
+        int maxAllowedCount = 4096)
         : baseAddr(addr), count(elementCount)
     {
         if (!baseAddr || count <= 0)
@@ -271,7 +291,10 @@ struct UnityArray
             return;
         }
 
-        if (count > 4096)
+        const int allowedCount =
+            (std::min)(4096, (std::max)(0, maxAllowedCount));
+
+        if (count > allowedCount)
             throw std::out_of_range("UnityArray count out of allowed range.");
 
         elements = new T[count]{};
@@ -404,14 +427,21 @@ struct UnityHashSet
     std::int32_t size() const noexcept { return count; }
 
     template <typename MemoryT>
-    static UnityHashSet Create(std::uint64_t addr, MemoryT& mem)
+    static UnityHashSet Create(
+        std::uint64_t addr,
+        MemoryT& mem,
+        std::int32_t maxAllowedCount = 16384)
     {
         const std::int32_t c = mem.template Read<std::int32_t>(addr + CountOffset);
 
+        const std::int32_t allowedCount =
+            (std::min)(std::int32_t{ 16384 },
+                (std::max)(std::int32_t{ 0 }, maxAllowedCount));
+
         if (c < 0)
             throw std::out_of_range("UnityHashSet count < 0");
-        if (c > 16384)
-            throw std::out_of_range("UnityHashSet count > 16384");
+        if (c > allowedCount)
+            throw std::out_of_range("UnityHashSet count out of range");
 
         UnityHashSet hs(c);
         if (c == 0)
@@ -447,14 +477,18 @@ struct MonoList
 
     MonoList() = default;
 
-    explicit MonoList(std::uint64_t addr)
+    explicit MonoList(
+        std::uint64_t addr,
+        int maxAllowedCount = 16384)
         : baseAddr(addr)
     {
         if (!baseAddr)
             return;
 
         count = mem.Read<int>(baseAddr + CountOffset);
-        if (count < 0 || count > 16384)
+        const int allowedCount = (std::min)(16384, (std::max)(0, maxAllowedCount));
+
+        if (count < 0 || count > allowedCount)
             throw std::out_of_range("MonoList count out of range");
 
         if (count == 0)
@@ -504,7 +538,8 @@ public:
 
     static UnityList<T> Create(
         uint64_t addr,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached)
+        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        int maxAllowedCount = MaxCount)
     {
         UnityList<T> list;
 
@@ -513,7 +548,9 @@ public:
 
         int count = mem.Read<int>(addr + CountOffset, cacheMode);
 
-        if (count < 0 || count > MaxCount)
+        const int allowedCount = (std::min)(MaxCount, (std::max)(0, maxAllowedCount));
+
+        if (count < 0 || count > allowedCount)
             return list;
 
         if (count == 0)

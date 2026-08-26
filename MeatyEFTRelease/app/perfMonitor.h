@@ -35,9 +35,9 @@ struct PerfMetricSnapshot
 class PerfMonitor
 {
 public:
-    static constexpr double kSlowTaskMs = 25.0;
-    static constexpr double kSlowDmaLockWaitMs = 25.0;
-    static constexpr double kSlowScatterMs = 35.0;
+    static constexpr double kSlowTaskMs = 50.0;
+    static constexpr double kSlowDmaLockWaitMs = 50.0;
+    static constexpr double kSlowScatterMs = 75.0;
 
     static PerfMonitor& Instance()
     {
@@ -80,18 +80,31 @@ public:
             return;
 
         static std::mutex logMutex;
-        static std::chrono::steady_clock::time_point lastLog{};
+        static std::unordered_map<
+            std::string,
+            std::chrono::steady_clock::time_point> lastLogByMetric;
+        static std::chrono::steady_clock::time_point lastGlobalLog{};
         const auto now = std::chrono::steady_clock::now();
+        constexpr auto kMetricLogCooldown = std::chrono::seconds(30);
+        constexpr auto kGlobalLogCooldown = std::chrono::seconds(5);
 
         {
             std::lock_guard<std::mutex> lock(logMutex);
-            if (lastLog != std::chrono::steady_clock::time_point{} &&
-                (now - lastLog) < std::chrono::milliseconds(750))
+            if (lastGlobalLog != std::chrono::steady_clock::time_point{} &&
+                (now - lastGlobalLog) < kGlobalLogCooldown)
             {
                 return;
             }
 
-            lastLog = now;
+            const auto metricLog = lastLogByMetric.find(name);
+            if (metricLog != lastLogByMetric.end() &&
+                (now - metricLog->second) < kMetricLogCooldown)
+            {
+                return;
+            }
+
+            lastGlobalLog = now;
+            lastLogByMetric[name] = now;
         }
 
         std::string message = "[PERF] " + name + " took " + std::to_string(static_cast<int>(durationMs)) + "ms";

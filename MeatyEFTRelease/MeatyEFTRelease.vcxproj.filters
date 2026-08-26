@@ -418,6 +418,7 @@
     <ClInclude Include="app\DxRenderWindow.h" />
     <ClInclude Include="app\fuserRender.h" />
     <ClInclude Include="fuser\colour.h" />
+    <ClInclude Include="game\headers\ballistics.h" />
     <ClInclude Include="game\modules\HandsManager.h" />
     <ClInclude Include="app\makcu.h" />
     <ClInclude Include="app\menuLayout.h" />

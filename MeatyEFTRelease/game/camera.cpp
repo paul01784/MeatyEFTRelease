@@ -779,7 +779,7 @@ void Camera::cameraTask()
     static auto lastMatrixFailureLog = std::chrono::steady_clock::time_point{};
     static bool wasScoped = false;
 
-    constexpr auto kCameraReadInterval = std::chrono::milliseconds(8);
+    constexpr auto kCameraReadInterval = std::chrono::milliseconds(3);
     constexpr auto kLensReadInterval = std::chrono::milliseconds(100);
     constexpr auto kCameraPointerRetryInterval = std::chrono::milliseconds(250);
     constexpr auto kScopedOpticProbeInterval = std::chrono::milliseconds(250);
@@ -799,8 +799,6 @@ void Camera::cameraTask()
         {
             return;
         }
-
-        lastCameraRead = now;
 
         const bool scoped = mainGame.localIsScoped;
         const bool scopeJustStarted = scoped && !wasScoped;
@@ -930,6 +928,8 @@ void Camera::cameraTask()
             m_busyReadSkips.fetch_add(1, std::memory_order_relaxed);
             return;
         }
+
+        lastCameraRead = now;
 
         if (lensReadDue)
             lastLensReadAttempt = std::chrono::steady_clock::now();

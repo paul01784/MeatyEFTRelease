@@ -186,6 +186,9 @@ void Players::clearCache()
     this->playerCache.clear();
     this->playerGroups.clear();
     boneResolveCursor = 0;
+    nextFullBoneUpdate = {};
+    lastBoneRefreshLog = {};
+    boneRefreshesSinceLastLog = 0;
     players.groupIDSet = false;
     publishCacheSnapshotLocked();
 
@@ -201,6 +204,9 @@ void Players::softRestart()
     this->playerCache.clear();
     this->playerGroups.clear();
     boneResolveCursor = 0;
+    nextFullBoneUpdate = {};
+    lastBoneRefreshLog = {};
+    boneRefreshesSinceLastLog = 0;
     publishCacheSnapshotLocked();
 }
 
@@ -568,7 +574,8 @@ namespace
     using Milliseconds = std::chrono::milliseconds;
 
     constexpr int kMaxTransformChain = 512;
-    constexpr size_t kMaxCombinedMatrixElements = 2048;
+    constexpr size_t kMaxBoneScatterBytes = 64 * 1024;
+    constexpr size_t kMaxBoneHierarchiesPerScatter = 2;
     constexpr size_t kMaxBonePointerResolvesPerPass = 1;
 
     constexpr int kMinimalBoneSlots[] =
@@ -730,7 +737,8 @@ namespace
         };
 
         return distanceSquared(base, leftFoot) <= kMaxFootDistanceSq &&
-            distanceSquared(base, rightFoot) <= kMaxFootDistanceSq;
+            distanceSquared(base, rightFoot) <= kMaxFootDistanceSq &&
+            distanceSquared(leftFoot, rightFoot) <= kMaxFootDistanceSq;
     }
 
     static void EnsureTransformCacheShape(
@@ -1187,8 +1195,7 @@ namespace
                     );
 
             if (matrixCount == 0 ||
-                matrixCount > kMaxTransformChain ||
-                matrixCount > kMaxCombinedMatrixElements)
+                matrixCount > kMaxTransformChain)
             {
                 read.cache.valid = false;
                 continue;
@@ -1230,18 +1237,23 @@ namespace
         {
             size_t end = start;
             size_t totalMatrixElements = 0;
+            size_t totalBytes = 0;
 
             while (end < hierarchyReads.size())
             {
                 const size_t matrixCount = hierarchyReads[end].count;
+                const size_t hierarchyBytes = matrixCount *
+                    (sizeof(Matrix34) + sizeof(int32_t));
 
-                if (totalMatrixElements + matrixCount >
-                    kMaxCombinedMatrixElements)
+                if (hierarchyBytes > kMaxBoneScatterBytes ||
+                    end - start >= kMaxBoneHierarchiesPerScatter ||
+                    totalBytes + hierarchyBytes > kMaxBoneScatterBytes)
                 {
                     break;
                 }
 
                 totalMatrixElements += matrixCount;
+                totalBytes += hierarchyBytes;
                 ++end;
             }
 
@@ -1380,9 +1392,15 @@ namespace
         struct AppliedPlayerState
         {
             uint64_t instance = 0;
-            bool hadMinimalBoneRead = false;
-            bool gotMinimalBonePosition = false;
+            uint8_t minimalBonesQueued = 0;
+            uint8_t minimalBonesRead = 0;
         };
+
+        constexpr uint8_t kBaseBoneBit = 1u << 0;
+        constexpr uint8_t kLeftFootBoneBit = 1u << 1;
+        constexpr uint8_t kRightFootBoneBit = 1u << 2;
+        constexpr uint8_t kCompleteMinimalBoneMask =
+            kBaseBoneBit | kLeftFootBoneBit | kRightFootBoneBit;
 
         std::vector<AppliedPlayerState> states;
         states.reserve(reads.size());
@@ -1460,10 +1478,18 @@ namespace
 
             if (IsMinimalBoneSlot(read.boneSlot))
             {
-                state.hadMinimalBoneRead = true;
+                uint8_t boneBit = 0;
 
+                if (read.boneSlot == static_cast<int>(boneListIndexes::Base))
+                    boneBit = kBaseBoneBit;
+                else if (read.boneSlot == static_cast<int>(boneListIndexes::LFoot))
+                    boneBit = kLeftFootBoneBit;
+                else if (read.boneSlot == static_cast<int>(boneListIndexes::RFoot))
+                    boneBit = kRightFootBoneBit;
+
+                state.minimalBonesQueued |= boneBit;
                 if (read.hasPosition)
-                    state.gotMinimalBonePosition = true;
+                    state.minimalBonesRead |= boneBit;
             }
 
             if (read.hasPosition)
@@ -1487,11 +1513,17 @@ namespace
             const bool minimalPointersValid =
                 HasMinimalBonePointers(*player);
 
+            const bool queuedCompleteMinimalPose =
+                state.minimalBonesQueued == kCompleteMinimalBoneMask;
+
+            const bool readCompleteMinimalPose =
+                state.minimalBonesRead == kCompleteMinimalBoneMask;
+
             // re-resolve bone pointers
-            // pointers disappeared or all read positions were invalid
+            // pointers disappeared or any required position read failed
             if (!minimalPointersValid ||
-                (state.hadMinimalBoneRead &&
-                    !state.gotMinimalBonePosition))
+                !queuedCompleteMinimalPose ||
+                !readCompleteMinimalPose)
             {
                 player->bonePointersNeedResolve = true;
                 continue;
@@ -1513,9 +1545,6 @@ namespace
                 player->boneTransformCache.clear();
                 continue;
             }
-
-            if (!state.gotMinimalBonePosition)
-                continue;
 
             player->bonePointersNeedResolve = false;
             player->invalidBones = false;
@@ -1683,86 +1712,6 @@ namespace
 }
 
 
-void Players::positionTask()
-{
-    try
-    {
-        if (!mem.IsDmaOperational() ||
-            !Utils::valid_pointer(mainGame.localPlayerPtr))
-        {
-            return;
-        }
-
-        std::vector<BonePlayerSnapshot> pendingScans;
-
-        {
-            std::lock_guard<std::mutex> lock(playerMutex);
-            pendingScans.reserve(playerCache.size());
-
-            for (PlayerCache& player : playerCache)
-            {
-                if (!Utils::valid_pointer(player.instance) ||
-                    player.isBTR ||
-                    player.isDead ||
-                    player.hasExfiled ||
-                    player.bonePointersNeedResolve ||
-                    !HasMinimalBonePointers(player))
-                {
-                    continue;
-                }
-
-                EnsureTransformCacheShape(player);
-
-                BonePlayerSnapshot pending{};
-                pending.instance = player.instance;
-                pending.distance = player.distance;
-                pending.isLocal = player.isLocal;
-                pending.bonePtrs = player.bonePtrs;
-                pending.transformCache = player.boneTransformCache;
-                pendingScans.emplace_back(std::move(pending));
-            }
-        }
-
-        if (pendingScans.empty())
-            return;
-
-        std::vector<LiveBoneRead> reads;
-        reads.reserve(pendingScans.size() * 3);
-
-        for (const BonePlayerSnapshot& pending : pendingScans)
-            AppendFastPlayerBoneReads(pending, reads);
-
-        if (reads.empty())
-            return;
-
-        BatchReadBoneWorldPositions(mem, reads);
-
-        const bool hasFreshPosition = std::any_of(
-            reads.begin(),
-            reads.end(),
-            [](const LiveBoneRead& read)
-            {
-                return read.hasPosition && IsMinimalBoneSlot(read.boneSlot);
-            });
-
-        ApplyBoneResults(reads);
-
-        if (hasFreshPosition)
-            publishCacheSnapshot(true);
-    }
-    catch (const std::exception& e)
-    {
-        LOGS.logError(
-            "[PLAYERS][POSITION] Exception: " +
-            std::string(e.what()));
-    }
-    catch (...)
-    {
-        LOGS.logError("[PLAYERS][POSITION] Unknown exception");
-    }
-}
-
-
 void Players::boneTask()
 {
     bool motionUpdated = false;
@@ -1774,6 +1723,19 @@ void Players::boneTask()
 
         if (!Utils::valid_pointer(mainGame.localPlayerPtr))
             return;
+
+        const auto now = Clock::now();
+        const auto fullBoneInterval =
+            std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double, std::milli>(
+                    (std::max)(1.0, globals::taskPlayersBones)));
+
+        const bool runFullBonePass =
+            nextFullBoneUpdate == Clock::time_point{} ||
+            now >= nextFullBoneUpdate;
+
+        if (runFullBonePass)
+            nextFullBoneUpdate = now + fullBoneInterval;
 
         constexpr float kNearOriginLimit = 2.0f;
         constexpr float kMaxFootDistanceFromBase = 5.0f;
@@ -1852,6 +1814,7 @@ void Players::boneTask()
         std::vector<PendingBoneResolve> pendingResolves;
 
         
+        if (runFullBonePass)
         {
             std::lock_guard<std::mutex> lock(playerMutex);
             std::vector<PlayerCache>& cache = players.getCache();
@@ -1970,6 +1933,7 @@ void Players::boneTask()
                 // Every player gets Base/LFoot/RFoot. Expand to the full
                 // skeleton only while it can actually be rendered on screen.
                 pending.readFullBoneList =
+                    runFullBonePass &&
                     espGlobals::drawSkeletons &&
                     !player.isLocal &&
                     player.distance > 0.0f &&
@@ -1995,12 +1959,20 @@ void Players::boneTask()
         {
             const size_t readsBefore = reads.size();
 
-            AppendPlayerBoneReads(
-                pending.snapshot,
-                BoneReadKind::Normal,
-                pending.readFullBoneList,
-                reads
-            );
+            if (pending.readFullBoneList)
+            {
+                AppendPlayerBoneReads(
+                    pending.snapshot,
+                    BoneReadKind::Normal,
+                    true,
+                    reads);
+            }
+            else
+            {
+                AppendFastPlayerBoneReads(
+                    pending.snapshot,
+                    reads);
+            }
 
             // Only validate players for which this task actually submitted reads.
             if (reads.size() == readsBefore)
@@ -2038,6 +2010,8 @@ void Players::boneTask()
             });
 
         ApplyBoneResults(reads);
+
+        std::string boneRefreshWarning;
 
         // Validate the newly applied skeleton data
         {
@@ -2104,6 +2078,12 @@ void Players::boneTask()
                     {
                         needsPointerRefresh = true;
                         invalidReason = "RFoot too far from Base";
+                    }
+                    else if (DistanceSquared(leftFoot, rightFoot) >
+                        kMaxFootDistanceSq)
+                    {
+                        needsPointerRefresh = true;
+                        invalidReason = "LFoot too far from RFoot";
                     }
 
                     const bool receivedFullBoneScan =
@@ -2198,12 +2178,28 @@ void Players::boneTask()
 
                 if (!player.bonePointersNeedResolve)
                 {
-                    LOGS.logError(
-                        "[PLAYERS][BONES] Invalid skeleton for player 0x" +
-                        std::to_string(player.instance) +
-                        " - " + invalidReason +
-                        ". Scheduling bone pointer refresh."
-                    );
+                    ++boneRefreshesSinceLastLog;
+
+                    constexpr auto kBoneRefreshLogCooldown =
+                        std::chrono::minutes(5);
+
+                    if (lastBoneRefreshLog == Clock::time_point{} ||
+                        (now - lastBoneRefreshLog) >= kBoneRefreshLogCooldown)
+                    {
+                        std::ostringstream warning;
+
+                        warning
+                            << "[PLAYERS][BONES] Invalid skeleton; refreshing "
+                            << "bone pointers | refreshes="
+                            << boneRefreshesSinceLastLog
+                            << " | lastReason=" << invalidReason
+                            << " | lastPlayer=0x"
+                            << std::hex << player.instance;
+
+                        boneRefreshWarning = warning.str();
+                        boneRefreshesSinceLastLog = 0;
+                        lastBoneRefreshLog = now;
+                    }
                 }
 
                 // Do not keep reading known-bad transforms
@@ -2224,6 +2220,9 @@ void Players::boneTask()
                 player.boneTransformCache.clear();
             }
         }
+
+        if (!boneRefreshWarning.empty())
+            LOGS.logWarn(boneRefreshWarning);
     }
     catch (const std::exception& e)
     {
@@ -2406,15 +2405,6 @@ void Players::playersTask()
                 {
                     continue;
                 }
-
-                std::ostringstream ss;
-
-                ss << "[PLAYERS][INIT] Adding player : 0x"
-                    << std::hex << entity.instance
-                    << " className : " << entity.className
-                    << " name : " << entity.name;
-
-                LOGS.logInfo(ss.str());
 
                 addedPlayerInstances.emplace_back(entity.instance);
                 playerCache.emplace_back(std::move(entity));
@@ -2756,6 +2746,16 @@ std::optional<PlayerCache> Players::buildEntity(
             newEntity.P_RotationAddress = newEntity.P_MovementContext + sdk::MovementContext::_rotation;
         }
 
+        uint64_t characterController = 0;
+        if (TryReadPtr(
+            instance + sdk::Player::CharacterController,
+            characterController))
+        {
+            newEntity.P_VelocityAddress =
+                characterController +
+                sdk::SimpleCharacterController::Velocity;
+        }
+
         ValidateAddr(
             failed,
             newEntity.P_CorpseAddr,
@@ -2854,16 +2854,31 @@ std::optional<PlayerCache> Players::buildEntity(
 
         newEntity.P_HandsControllerAddr =  newEntity.P_ObservedPlayerController +  sdk::ObservedPlayerController::HandsController;
 
-        if (!TryReadChain(
-            newEntity.P_ObservedPlayerController,
-            {
+        uint64_t observedMovementController = 0;
+
+        if (!TryReadPtr(
+            newEntity.P_ObservedPlayerController +
                 sdk::ObservedPlayerController::MovementController,
-                sdk::ObservedMovementController::
-                ObservedPlayerStateContext
-            },
-            newEntity.P_MovementContext))
+            observedMovementController))
         {
             AddFailure(failed, "MovementContext");
+        }
+        else
+        {
+            if (!TryReadPtr(
+                observedMovementController +
+                    sdk::ObservedMovementController::
+                    ObservedPlayerStateContext,
+                newEntity.P_MovementContext))
+            {
+                AddFailure(failed, "MovementContext");
+            }
+            else
+            {
+                newEntity.P_VelocityAddress =
+                    newEntity.P_MovementContext +
+                    sdk::ObservedPlayerStateContext::Velocity;
+            }
         }
     }
 
@@ -3480,6 +3495,7 @@ void Players::updateEntity()
     {
         uint64_t instance = 0;
         bool isBtr = false;
+        bool isLocal = false;
         bool isOfflinePlayer = false;
 
         uint64_t btrView = 0;
@@ -3488,9 +3504,11 @@ void Players::updateEntity()
         uint64_t handsControllerAddress = 0;
         uint64_t proceduralWeaponAnimation = 0;
         uint64_t healthController = 0;
+        uint64_t velocityAddress = 0;
 
         glm::vec3 location{};
         glm::vec3 rotationRaw{};
+        glm::vec3 velocity{};
         uint64_t corpseClass = 0;
         uint64_t handsController = 0;
         int healthTag = 0;
@@ -3506,6 +3524,7 @@ void Players::updateEntity()
         bool healthQueued = false;
         bool handsQueued = false;
         bool aimingQueued = false;
+        bool velocityQueued = false;
     };
 
     std::vector<EntityRead> reads;
@@ -3522,8 +3541,10 @@ void Players::updateEntity()
             EntityRead read{};
             read.instance = player.instance;
             read.isBtr = player.isBTR;
+            read.isLocal = player.isLocal;
             read.location = player.location;
             read.rotationRaw = player.rotationRAW;
+            read.velocity = player.velocity;
             read.corpseClass = player.P_CorpseClass;
             read.handsController = player.P_HandsController;
             read.healthTag = player.healthETAG;
@@ -3548,6 +3569,7 @@ void Players::updateEntity()
             read.handsControllerAddress = player.P_HandsControllerAddr;
             read.proceduralWeaponAnimation = player.P_PWA;
             read.healthController = player.P_ObservedHealthController;
+            read.velocityAddress = player.P_VelocityAddress;
 
             read.corpseDue =
                 player.nextCorpseRead == Clock::time_point{} ||
@@ -3602,6 +3624,16 @@ void Players::updateEntity()
                 &read.rotationRaw,
                 sizeof(glm::vec2));
             queuedAnything = queuedAnything || read.rotationQueued;
+
+            if (aimGlobals::predictionEnabled &&
+                !read.isLocal &&
+                Utils::valid_pointer(read.velocityAddress))
+            {
+                read.velocityQueued = updateBatch.Add(
+                    read.velocityAddress,
+                    read.velocity);
+                queuedAnything = queuedAnything || read.velocityQueued;
+            }
 
             if (read.corpseDue)
             {
@@ -3660,6 +3692,23 @@ void Players::updateEntity()
 
                 if (read.rotationQueued)
                     player->rotationRAW = read.rotationRaw;
+
+                if (read.velocityQueued)
+                {
+                    const float speed = glm::length(read.velocity);
+                    const bool velocityValid =
+                        std::isfinite(read.velocity.x) &&
+                        std::isfinite(read.velocity.y) &&
+                        std::isfinite(read.velocity.z) &&
+                        std::isfinite(speed) &&
+                        speed >= 0.1f && speed <= 15.0f;
+
+                    player->velocity = velocityValid
+                        ? read.velocity
+                        : glm::vec3{};
+                    player->velocityValid = velocityValid;
+                    player->lastVelocityUpdate = now;
+                }
 
                 if (read.corpseQueued)
                     player->P_CorpseClass = read.corpseClass;
@@ -3827,6 +3876,7 @@ void Players::playerMetadataTask()
     using Milliseconds = std::chrono::milliseconds;
 
     static constexpr Milliseconds kHeldItemRefreshInterval{ 3000 };
+    static constexpr Milliseconds kPredictionHeldItemRefreshInterval{ 250 };
     static constexpr Milliseconds kFailedReadRetryInterval{ 2500 };
 
     struct MetadataJob
@@ -3870,8 +3920,14 @@ void Players::playerMetadataTask()
 
                 if (job.updateHands)
                 {
+                    const Milliseconds refreshInterval =
+                        player.isLocal &&
+                        aimGlobals::predictionEnabled
+                        ? kPredictionHeldItemRefreshInterval
+                        : kHeldItemRefreshInterval;
+
                     player.nextHeldItemRefresh =
-                        now + kHeldItemRefreshInterval;
+                        now + refreshInterval;
                 }
             }
 
@@ -4691,7 +4747,8 @@ void Players::playerEquipment()
                 {
                     UnityArray<uint64_t> slotsArray(
                         job.slotsPtr,
-                        "Player equipment slots");
+                        "Player equipment slots",
+                        128);
 
                     const int slotCount =
                         static_cast<int>(slotsArray.count);
@@ -5065,11 +5122,6 @@ void Players::playerEquipment()
                                 result.hasProfileUpdate = true;
                                 result.profileId = readString;
 
-                                LOGS.logInfo(
-                                    "[PLAYER] Set PID to Player : ",
-                                    result.profileId
-                                );
-
                                 if (g_DogTagAPI.hasApiKey())
                                 {
                                     const auto apiResult =
@@ -5394,7 +5446,10 @@ static inline bool CountLoadedChamberArray(
     if (!Utils::valid_pointer(chambersPtr))
         return false;
 
-    UnityArray<Chamber> chambers(chambersPtr, "Weapon chambers");
+    UnityArray<Chamber> chambers(
+        chambersPtr,
+        "Weapon chambers",
+        64);
 
     if (chambers.count <= 0)
         return false;
@@ -5495,7 +5550,8 @@ static inline bool TryGetAmmoTemplateFromWeapon(
     {
         UnityArray<Chamber> magChambers(
             magChambersPtr,
-            "Magazine chambers");
+            "Magazine chambers",
+            64);
 
         if (magChambers.count > 0)
         {
@@ -5541,7 +5597,11 @@ static inline bool TryGetAmmoTemplateFromWeapon(
 
     maxAmmoCount += magMaxCount;
 
-    UnityList<uint64_t> magStack(magStackPtr);
+    UnityList<uint64_t> magStack =
+        UnityList<uint64_t>::Create(
+            magStackPtr,
+            DmaCacheMode::Cached,
+            512);
 
     if (magStack.count() > 0)
     {
@@ -5570,6 +5630,192 @@ static inline bool TryGetAmmoTemplateFromWeapon(
     magazineCount = maxAmmoCount;
 
     return TryReadAmmoTemplateFromRound(firstRound, ammoTemplate);
+}
+
+static void AccumulateWeaponVelocityModifiers(
+    uint64_t itemBase,
+    float& velocityModifier,
+    std::unordered_set<uint64_t>& visitedItems,
+    size_t depth,
+    size_t& itemCount)
+{
+    constexpr size_t kMaximumAttachmentDepth = 8;
+    constexpr size_t kMaximumAttachmentItems = 64;
+
+    if (!Utils::valid_pointer(itemBase) ||
+        depth >= kMaximumAttachmentDepth ||
+        itemCount >= kMaximumAttachmentItems ||
+        !visitedItems.insert(itemBase).second)
+    {
+        return;
+    }
+
+    ++itemCount;
+
+    uint64_t slotsPointer = 0;
+    if (!mem.TryRead<uint64_t>(
+        itemBase + sdk::LootItemMod::Slots,
+        slotsPointer) ||
+        !Utils::valid_pointer(slotsPointer))
+    {
+        return;
+    }
+
+    try
+    {
+        UnityArray<uint64_t> slots(
+            slotsPointer,
+            "Weapon velocity modifier slots",
+            100);
+
+        for (const uint64_t slot : slots)
+        {
+            if (!Utils::valid_pointer(slot) ||
+                itemCount >= kMaximumAttachmentItems)
+            {
+                continue;
+            }
+
+            uint64_t containedItem = 0;
+            uint64_t itemTemplate = 0;
+            float attachmentModifier = 0.0f;
+
+            if (!mem.TryRead<uint64_t>(
+                slot + sdk::Slot::ContainedItem,
+                containedItem) ||
+                !Utils::valid_pointer(containedItem) ||
+                !mem.TryRead<uint64_t>(
+                    containedItem + sdk::LootItem::Template,
+                    itemTemplate) ||
+                !Utils::valid_pointer(itemTemplate))
+            {
+                continue;
+            }
+
+            if (mem.TryRead<float>(
+                itemTemplate + sdk::ModTemplate::Velocity,
+                attachmentModifier) &&
+                std::isfinite(attachmentModifier) &&
+                std::fabs(attachmentModifier) <= 100.0f)
+            {
+                velocityModifier += attachmentModifier;
+            }
+
+            AccumulateWeaponVelocityModifiers(
+                containedItem,
+                velocityModifier,
+                visitedItems,
+                depth + 1,
+                itemCount);
+        }
+    }
+    catch (...)
+    {
+        // A malformed attachment branch should not invalidate the ammo data.
+    }
+}
+
+static bool TryReadWeaponVelocityModifier(
+    uint64_t weaponItem,
+    uint64_t weaponTemplate,
+    float& output)
+{
+    output = 0.0f;
+
+    if (!Utils::valid_pointer(weaponItem) ||
+        !Utils::valid_pointer(weaponTemplate) ||
+        !mem.TryRead<float>(
+            weaponTemplate + sdk::WeaponTemplate::Velocity,
+            output) ||
+        !std::isfinite(output) ||
+        std::fabs(output) > 100.0f)
+    {
+        return false;
+    }
+
+    std::unordered_set<uint64_t> visitedItems;
+    visitedItems.reserve(32);
+    size_t attachmentItemCount = 0;
+
+    AccumulateWeaponVelocityModifiers(
+        weaponItem,
+        output,
+        visitedItems,
+        0,
+        attachmentItemCount);
+
+    const float velocityFactor = 1.0f + output / 100.0f;
+    return
+        std::isfinite(velocityFactor) &&
+        velocityFactor > 0.0f &&
+        velocityFactor < 2.0f;
+}
+
+static bool TryReadWeaponBallistics(
+    uint64_t ammoTemplate,
+    float velocityModifier,
+    BallisticsInfo& output)
+{
+    output = {};
+
+    if (!Utils::valid_pointer(ammoTemplate) ||
+        !std::isfinite(velocityModifier))
+    {
+        return false;
+    }
+
+    float initialSpeed = 0.0f;
+    float ballisticCoefficient = 0.0f;
+    float bulletMass = 0.0f;
+    float bulletDiameter = 0.0f;
+
+    const Memory::ScatterReadRequest requests[] =
+    {
+        {
+            ammoTemplate + sdk::AmmoTemplate::InitialSpeed,
+            &initialSpeed,
+            sizeof(initialSpeed)
+        },
+        {
+            ammoTemplate + sdk::AmmoTemplate::BallisticCoefficient,
+            &ballisticCoefficient,
+            sizeof(ballisticCoefficient)
+        },
+        {
+            ammoTemplate + sdk::AmmoTemplate::BulletMassGrams,
+            &bulletMass,
+            sizeof(bulletMass)
+        },
+        {
+            ammoTemplate + sdk::AmmoTemplate::BulletDiameterMillimeters,
+            &bulletDiameter,
+            sizeof(bulletDiameter)
+        }
+    };
+
+    if (!mem.ReadScatter(
+        requests,
+        std::size(requests),
+        DmaCacheMode::Cached,
+        "Weapon ballistics"))
+    {
+        return false;
+    }
+
+    const float velocityFactor = 1.0f + velocityModifier / 100.0f;
+    if (!std::isfinite(velocityFactor) ||
+        velocityFactor <= 0.0f ||
+        velocityFactor >= 2.0f)
+    {
+        return false;
+    }
+
+    output.bulletSpeed = initialSpeed * velocityFactor;
+    output.bulletMassGrams = bulletMass;
+    output.bulletDiameterMillimeters = bulletDiameter;
+    output.ballisticCoefficient = ballisticCoefficient;
+
+    return output.IsValid();
 }
 
 inline bool HandsInfo::update(const PlayerCache& playerCache)
@@ -5629,6 +5875,14 @@ inline bool HandsInfo::update(const PlayerCache& playerCache)
         magazineCount = 0;
 
         cachedIsWeapon = false;
+        cachedItemTemplate = 0;
+        loadedAmmoTemplate = 0;
+        weaponVersion = -1;
+        ballistics = {};
+        nextBallisticsRefresh = {};
+        weaponVelocityModifier = 0.0f;
+        weaponVelocityModifierValid = false;
+        nextVelocityModifierRefresh = {};
         isWeapon = false;
 
         uint64_t itemTemp = 0;
@@ -5640,6 +5894,8 @@ inline bool HandsInfo::update(const PlayerCache& playerCache)
             cachedItem = itemBase;
             return true;
         }
+
+        cachedItemTemplate = itemTemp;
 
         MongoID mongoId{};
 
@@ -5723,7 +5979,35 @@ inline bool HandsInfo::update(const PlayerCache& playerCache)
     // Use cached weapon state after item identity refresh
     isWeapon = cachedIsWeapon;
 
-    if (isWeapon && (playerCache.isLocal || itemChanged))
+    int currentWeaponVersion = weaponVersion;
+    const bool versionRead = isWeapon &&
+        mem.TryRead<int>(
+            itemBase + sdk::LootItem::Version,
+            currentWeaponVersion);
+    const bool weaponVersionChanged =
+        itemChanged ||
+        (versionRead && currentWeaponVersion != weaponVersion);
+    const auto ballisticsNow = std::chrono::steady_clock::now();
+    const bool ballisticsRequested =
+        playerCache.isLocal && aimGlobals::predictionEnabled;
+    const bool ballisticsRetryDue =
+        ballisticsRequested &&
+        !ballistics.IsValid() &&
+        (nextBallisticsRefresh ==
+            std::chrono::steady_clock::time_point{} ||
+            ballisticsNow >= nextBallisticsRefresh);
+    const bool velocityModifierRefreshDue =
+        ballisticsRequested &&
+        (nextVelocityModifierRefresh ==
+            std::chrono::steady_clock::time_point{} ||
+            ballisticsNow >= nextVelocityModifierRefresh);
+
+    if (isWeapon &&
+        (itemChanged ||
+            (playerCache.isLocal &&
+                (weaponVersionChanged ||
+                    ballisticsRetryDue ||
+                    velocityModifierRefreshDue))))
     {
         uint64_t ammoTemplate = 0;
 
@@ -5738,10 +6022,69 @@ inline bool HandsInfo::update(const PlayerCache& playerCache)
         );
 
         
-        if (newMagazineCount > 0 || newChamberCount > 0)
+        chamberCount = newChamberCount;
+        magazineCount = newMagazineCount;
+        ammoName.clear();
+
+        if (versionRead)
+            weaponVersion = currentWeaponVersion;
+
+        if (ballisticsRequested)
         {
-            chamberCount = newChamberCount;
-            magazineCount = newMagazineCount;
+            nextBallisticsRefresh =
+                ballisticsNow + std::chrono::seconds(3);
+            const bool ammoChanged =
+                ammoTemplate != loadedAmmoTemplate;
+            bool velocityModifierRefreshed = false;
+
+            if (velocityModifierRefreshDue)
+            {
+                float refreshedModifier = 0.0f;
+
+                if (TryReadWeaponVelocityModifier(
+                    itemBase,
+                    cachedItemTemplate,
+                    refreshedModifier))
+                {
+                    weaponVelocityModifier = refreshedModifier;
+                    weaponVelocityModifierValid = true;
+                    velocityModifierRefreshed = true;
+                    nextVelocityModifierRefresh =
+                        ballisticsNow + std::chrono::seconds(10);
+                }
+                else
+                {
+                    nextVelocityModifierRefresh =
+                        ballisticsNow + std::chrono::seconds(3);
+                }
+            }
+
+            if (!Utils::valid_pointer(ammoTemplate) ||
+                !weaponVelocityModifierValid)
+            {
+                loadedAmmoTemplate = 0;
+                ballistics = {};
+            }
+            else if (ammoChanged ||
+                velocityModifierRefreshed ||
+                !ballistics.IsValid())
+            {
+                BallisticsInfo refreshedBallistics{};
+
+                if (TryReadWeaponBallistics(
+                    ammoTemplate,
+                    weaponVelocityModifier,
+                    refreshedBallistics))
+                {
+                    ballistics = refreshedBallistics;
+                    loadedAmmoTemplate = ammoTemplate;
+                }
+                else
+                {
+                    loadedAmmoTemplate = 0;
+                    ballistics = {};
+                }
+            }
         }
 
         
@@ -5775,6 +6118,13 @@ inline bool HandsInfo::update(const PlayerCache& playerCache)
         chamberCount = 0;
         magazineCount = 0;
         ammoName = "";
+        loadedAmmoTemplate = 0;
+        weaponVersion = -1;
+        ballistics = {};
+        nextBallisticsRefresh = {};
+        weaponVelocityModifier = 0.0f;
+        weaponVelocityModifierValid = false;
+        nextVelocityModifierRefresh = {};
     }
 
     return true;
@@ -5822,6 +6172,13 @@ void Players::checkExfil()
         return;
     }
 
+    const bool localPlayerNoLongerRegistered =
+        Utils::valid_pointer(mainGame.localPlayerPtr) &&
+        alivePlayers.find(mainGame.localPlayerPtr) == alivePlayers.end();
+    const bool protectLocalGroup =
+        localPlayerNoLongerRegistered &&
+        !mainGame.localGroupId.empty();
+
     for (auto& cachedPlayer : cache)
     {
         if (cachedPlayer.isBTR)
@@ -5849,6 +6206,21 @@ void Players::checkExfil()
             continue;
         }
 
+        // Once local leaves the registered-player list it is no longer a
+        // reliable source for deciding whether local teammates have left the
+        // raid. Keep those teammates active unless the authoritative corpse
+        // path marks them dead.
+        const bool isLocalPlayer =
+            cachedPlayer.isLocal ||
+            cachedPlayer.instance == mainGame.localPlayerPtr;
+
+        if (protectLocalGroup &&
+            !isLocalPlayer &&
+            cachedPlayer.groupId == mainGame.localGroupId)
+        {
+            continue;
+        }
+
         if (cachedPlayer.hasExfiled)
             continue;
 
@@ -5857,16 +6229,6 @@ void Players::checkExfil()
         if (cachedPlayer.isLocal)
         {
             LOGS.logInfo("[PLAYERS][EXFIL] Local player no longer registered");
-        }
-        else
-        {
-            std::ostringstream ss;
-            ss << "[PLAYERS][EXFIL] Player removed from roster: "
-                << cachedPlayer.name
-                << " instance: 0x"
-                << std::hex << cachedPlayer.instance;
-
-            LOGS.logInfo(ss.str());
         }
     }
 }

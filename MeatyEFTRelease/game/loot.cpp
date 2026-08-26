@@ -95,6 +95,7 @@ namespace
     constexpr size_t MAX_LOOT_RESOLVE_PER_TICK = 8;
     constexpr size_t MAX_CORPSE_UPDATES_PER_TICK = 1;
     constexpr size_t MAX_CONTAINER_STATE_UPDATES_PER_TICK = 32;
+    constexpr int MAX_CORPSE_SLOTS = 128;
     constexpr bool ENABLE_LOOT_TRANSFORM_DIAGNOSTICS = false;
     constexpr size_t MAX_OBJECT_NAME_LENGTH = 64;
     constexpr size_t MAX_CLASS_NAME_LENGTH = 64;
@@ -1983,7 +1984,10 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootList& lootItem, bool up
         if (!Utils::valid_pointer(slotsPtr))
             return;
 
-        UnityArray<uint64_t> slotsRead(slotsPtr, "Loot corpse slots");
+        UnityArray<uint64_t> slotsRead(
+            slotsPtr,
+            "Loot corpse slots",
+            MAX_CORPSE_SLOTS);
 
         if (slotsRead.count <= 0)
             return;

@@ -137,6 +137,39 @@ namespace
     private:
         bool m_active = false;
     };
+
+    class ScopedPerMonitorDpiAwareness
+    {
+    public:
+        ScopedPerMonitorDpiAwareness()
+        {
+            const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+            if (!user32)
+                return;
+
+            m_setContext = reinterpret_cast<SetContextFn>(
+                GetProcAddress(user32, "SetThreadDpiAwarenessContext"));
+
+            if (m_setContext)
+            {
+                m_previousContext = m_setContext(
+                    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            }
+        }
+
+        ~ScopedPerMonitorDpiAwareness()
+        {
+            if (m_setContext && m_previousContext)
+                m_setContext(m_previousContext);
+        }
+
+    private:
+        using SetContextFn = DPI_AWARENESS_CONTEXT(WINAPI*)(
+            DPI_AWARENESS_CONTEXT);
+
+        SetContextFn m_setContext = nullptr;
+        DPI_AWARENESS_CONTEXT m_previousContext = nullptr;
+    };
 }
 
 bool DxRenderWindow::IsDrawCommandSafe(const DxRenderWindow::DrawCommand& cmd) noexcept
@@ -871,7 +904,11 @@ bool DxRenderWindow::CreateRenderTargets()
         return false;
 
     const DxWindowConfig cfg = GetConfigSnapshot();
-    const float dpi = 96.0f * std::max(0.05f, m_dpiScale.load(std::memory_order_acquire));
+
+    // Every fuser draw command is expressed in physical client pixels. Keeping
+    // the Direct2D target at 96 DPI makes one D2D unit equal one back-buffer
+    // pixel; monitor DPI is applied separately to optional size scaling only.
+    constexpr float pixelDpi = 96.0f;
 
     const D2D1_ALPHA_MODE alphaMode = cfg.transparentBackground
         ? D2D1_ALPHA_MODE_PREMULTIPLIED
@@ -880,8 +917,8 @@ bool DxRenderWindow::CreateRenderTargets()
     const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
         D2D1_RENDER_TARGET_TYPE_DEFAULT,
         D2D1::PixelFormat(DXGI_FORMAT_UNKNOWN, alphaMode),
-        dpi,
-        dpi
+        pixelDpi,
+        pixelDpi
     );
 
     hr = m_d2dFactory->CreateDxgiSurfaceRenderTarget(dxgiSurface.Get(), &props, m_d2dRenderTarget.GetAddressOf());
@@ -965,6 +1002,9 @@ void DxRenderWindow::RenderLoop()
     m_frameLimiterPrimed = false;
     m_lastFrameLimitFPS = 0;
 
+    // Monitor rectangles, client sizes and the Direct2D back buffer must all
+    // use the same physical-pixel coordinate space.
+    ScopedPerMonitorDpiAwareness dpiAwareness;
     ScopedTimerResolution timerResolution;
     _se_translator_function previousTranslator = _set_se_translator(FuserSehTranslator);
 
@@ -1600,6 +1640,23 @@ float DxRenderWindow::GetDpiScaleForWindow(HWND hwnd) const
     if (!hwnd)
         return 1.0f;
 
+    using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+    static const GetDpiForWindowFn getDpiForWindow = []()
+        {
+            const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+            return user32
+                ? reinterpret_cast<GetDpiForWindowFn>(
+                    GetProcAddress(user32, "GetDpiForWindow"))
+                : nullptr;
+        }();
+
+    if (getDpiForWindow)
+    {
+        const UINT windowDpi = getDpiForWindow(hwnd);
+        if (windowDpi > 0)
+            return static_cast<float>(windowDpi) / 96.0f;
+    }
+
     HDC hdc = GetDC(hwnd);
     if (!hdc)
         return 1.0f;
@@ -1734,8 +1791,28 @@ LRESULT CALLBACK DxRenderWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             return 0;
 
         case WM_DPICHANGED:
-            self->m_dpiScale.store(self->GetDpiScaleForWindow(hwnd), std::memory_order_release);
+        {
+            const UINT dpiX = LOWORD(wParam);
+            const float dpiScale = dpiX > 0
+                ? static_cast<float>(dpiX) / 96.0f
+                : self->GetDpiScaleForWindow(hwnd);
+
+            self->m_dpiScale.store(dpiScale, std::memory_order_release);
+
+            const RECT* suggestedRect = reinterpret_cast<const RECT*>(lParam);
+            if (suggestedRect)
+            {
+                SetWindowPos(
+                    hwnd,
+                    nullptr,
+                    suggestedRect->left,
+                    suggestedRect->top,
+                    suggestedRect->right - suggestedRect->left,
+                    suggestedRect->bottom - suggestedRect->top,
+                    SWP_NOACTIVATE | SWP_NOZORDER);
+            }
             return 0;
+        }
 
         case WM_CLOSE:
             self->m_stopRequested.store(true, std::memory_order_release);

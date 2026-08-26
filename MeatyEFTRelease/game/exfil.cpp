@@ -12,6 +12,12 @@
 
 #include <algorithm>
 
+namespace
+{
+	constexpr int kMaxExfilPoints = 256;
+	constexpr int kMaxExfilRequirements = 64;
+}
+
 
 Exfil::Exfil()
 	: publishedExfilCache(
@@ -197,7 +203,10 @@ void Exfil::tryLoadMemoryExfils()
 
 		if (Utils::valid_pointer(exfilArrayAddr))
 		{
-			UnityArray<uint64_t> exfilArray(exfilArrayAddr, "Exfil points");
+			UnityArray<uint64_t> exfilArray(
+				exfilArrayAddr,
+				"Exfil points",
+				kMaxExfilPoints);
 
 			for (const uint64_t exfilPointAddr : exfilArray)
 				addExfil(exfilPointAddr, ExfilType::Regular);
@@ -209,7 +218,8 @@ void Exfil::tryLoadMemoryExfils()
 		{
 			UnityArray<uint64_t> secretArray(
 				secretArrayAddr,
-				"Secret exfil points");
+				"Secret exfil points",
+				kMaxExfilPoints);
 
 			for (const uint64_t exfilPointAddr : secretArray)
 				addExfil(exfilPointAddr, ExfilType::Secret);
@@ -312,7 +322,10 @@ void Exfil::LoadEligibleEntryPoints(uint64_t exfilPointAddr)
 		if (!Utils::valid_pointer(arrPtr))
 			return;
 
-		auto arr = UnityArray<uint64_t>(arrPtr, "Exfil requirements");
+		auto arr = UnityArray<uint64_t>(
+			arrPtr,
+			"Exfil requirements",
+			kMaxExfilRequirements);
 		for (auto& strPtr : arr)
 		{
 

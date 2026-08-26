@@ -224,7 +224,8 @@ bool ExplosiveManager::readGrenadeAddressesUnlocked(
         auto allGrenades =
             UnityList<std::uint64_t>::Create(
                 m_grenadesListPointer,
-                DmaCacheMode::Uncached);
+                DmaCacheMode::Uncached,
+                static_cast<int>(MaxReasonableGrenades));
 
         std::unordered_set<std::uint64_t> uniqueAddresses;
         uniqueAddresses.reserve(allGrenades.count());
@@ -292,7 +293,8 @@ bool ExplosiveManager::readTripwireAddressesUnlocked(std::vector<std::uint64_t>&
 
         const auto synchronizableObjectList = UnityList<std::uint64_t>::Create(
             synchronizableObjects,
-            DmaCacheMode::Uncached);
+            DmaCacheMode::Uncached,
+            static_cast<int>(MaxReasonableTripwires));
 
         std::vector<std::uint64_t> candidates;
         candidates.reserve(synchronizableObjectList.count());

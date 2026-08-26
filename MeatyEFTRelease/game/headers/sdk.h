@@ -73,6 +73,7 @@ namespace sdk
 
 	namespace Player
 	{
+		constexpr uint64_t CharacterController = 0x40;
 		constexpr uint64_t MovementContext = 0x60; // EFT.MovementContext
 		constexpr uint64_t _playerBody = 0x1A0; // EFT.PlayerBody
 		constexpr uint64_t Physical = 0x9D8; // -.\uE399 <Physical> Physical
@@ -84,6 +85,11 @@ namespace sdk
 		constexpr uint64_t _handsController = 0xA40; // EFT.PlayerHands update
 		constexpr uint64_t _playerLookRaycastTransform = 0xAD8; // UnityEngine.Transform
 		constexpr uint64_t PlayerBones = 0xB40; // EFT.PlayerBones
+	}
+
+	namespace SimpleCharacterController
+	{
+		constexpr uint64_t Velocity = 0xF0;
 	}
 
 	namespace FirearmController
@@ -137,7 +143,7 @@ namespace sdk
 	{
 		constexpr uint64_t ObservedPlayerStateContext = 0xB0;
 		constexpr uint64_t Rotation = 0x1c; // UnityEngine.Vector2 <HeadRotation> HeadRotation
-		constexpr uint64_t Velocity = 0x30; // UnityEngine.Vector3 <Velocity> Velocity
+		constexpr uint64_t Velocity = 0x30; // UnityEngine.Vector3 ObservedPlayerMovementModel::Velocity (requires Model pointer)
 	}
 
 	namespace ItemHandsController
@@ -206,6 +212,7 @@ namespace sdk
 	namespace ObservedPlayerStateContext
 	{
 		constexpr uint64_t Rotation = 0x28; // UnityEngine.Vector2
+		constexpr uint64_t Velocity = 0xF8; // UnityEngine.Vector3 _velocity
 	}
 
 	namespace ObservedMovementState
@@ -328,6 +335,24 @@ namespace sdk
 		constexpr uint64_t ShortName = 0x18; // String
 		constexpr uint64_t _id = 0xE0; // EFT.MongoID
 		constexpr uint64_t QuestItem = 0x34; // Boolean
+	}
+
+	namespace ModTemplate
+	{
+		constexpr uint64_t Velocity = 0x188;
+	}
+
+	namespace AmmoTemplate
+	{
+		constexpr uint64_t InitialSpeed = 0x1A4; 
+		constexpr uint64_t BallisticCoefficient = 0x1B8; 
+		constexpr uint64_t BulletMassGrams = 0x25C; 
+		constexpr uint64_t BulletDiameterMillimeters = 0x260;
+	}
+
+	namespace WeaponTemplate
+	{
+		constexpr uint64_t Velocity = 0x25C;
 	}
 
 	namespace Throwable

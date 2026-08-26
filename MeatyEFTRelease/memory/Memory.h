@@ -7,6 +7,7 @@
 #include "DmaScheduler.h"
 
 #include <atomic>
+#include <chrono>
 #include <optional>
 #include <type_traits>
 #include <limits>
@@ -241,11 +242,19 @@ private:
     mutable std::mutex handleMutex;
     mutable PriorityDmaMutex dmaOpsMutex;
 
+    std::chrono::steady_clock::time_point lastMemoryCacheRefresh{};
+    std::chrono::steady_clock::time_point lastTlbCacheRefresh{};
+
 private:
     [[nodiscard]] static DWORD BuildReadFlags(DmaCacheMode cacheMode);
     [[nodiscard]] static DWORD BuildScatterFlags(DmaCacheMode cacheMode);
 
 public:
+    // Keep a single DMA operation short enough that a waiting high-priority
+    // task can take the bus between chunks.
+    static constexpr size_t MaxDmaTransferBytes = 64 * 1024;
+    static constexpr size_t MaxDmaScatterRequests = 256;
+
     struct ScatterReadRequest
     {
         uint64_t address = 0;
@@ -321,7 +330,7 @@ public:
     );
 
     bool RefreshProcessInformationNow();
-    void ConfigureRefreshTimings();
+    void RunCacheMaintenance();
 
 
     bool WriteBufferEnsure(

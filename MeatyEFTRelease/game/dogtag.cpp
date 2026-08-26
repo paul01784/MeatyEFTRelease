@@ -160,7 +160,11 @@ void DogTagCache::ReadFromCorpse(uint64_t corpseInteractiveClass)
         if (!Utils::valid_pointer(slotsPtr))
             return;
 
-        auto slotsRead = UnityArray<uint64_t>(slotsPtr, "Dogtag slots");
+        constexpr int kMaxDogtagSlots = 128;
+        auto slotsRead = UnityArray<uint64_t>(
+            slotsPtr,
+            "Dogtag slots",
+            kMaxDogtagSlots);
         if (slotsRead.count == 0)
             return;
 

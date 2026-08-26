@@ -30,17 +30,14 @@ void WishListManager::createWishList()
 			return;
 		}
 
-		auto items = UnityDictionary<MongoID, int>(itemPtr);
+		constexpr int kMaxWishlistItems = 512;
+		auto items = UnityDictionary<MongoID, int>(
+			itemPtr,
+			kMaxWishlistItems,
+			"Wishlist items");
 
 		if (items.GetCount() == 0)
 		{
-			auto& e0 = *items.begin();
-			//std::cout << std::hex
-			//	<< "MongoID ts=0x" << e0.Key._timeStamp
-			//	<< " counter=0x" << e0.Key._counter
-			//	<< " strId=0x" << e0.Key._stringId
-			//	<< std::dec << "\n";
-
 			std::cout << "[WishList] : Item list count 0, exiting...\n";
 			return;
 		}

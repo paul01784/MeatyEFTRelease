@@ -1482,6 +1482,66 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             ImGui::BeginDisabled(!aimGlobals::aimEnabled);
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
 
+            configChanged |= ImGui::Checkbox(
+                "Prediction",
+                &aimGlobals::predictionEnabled
+            );
+            ShowSettingsTooltip(
+                "Lead moving targets and compensate for bullet drop using the chambered round, weapon/attachment velocity modifiers, and the target's live velocity."
+            );
+
+            if (aimGlobals::predictionEnabled)
+            {
+                const PlayerCacheSnapshot predictionSnapshot =
+                    players.getCacheSnapshot();
+                const auto localPlayer = std::find_if(
+                    predictionSnapshot->begin(),
+                    predictionSnapshot->end(),
+                    [](const PlayerCache& player)
+                    {
+                        return player.isLocal;
+                    });
+
+                if (localPlayer != predictionSnapshot->end() &&
+                    localPlayer->observedHandsInfo.ballistics.IsValid())
+                {
+                    const BallisticsInfo& ballistics =
+                        localPlayer->observedHandsInfo.ballistics;
+
+                    ImGui::TextDisabled(
+                        "Ballistics: %.0f m/s | %.2f g | BC %.3f | %.2f mm",
+                        ballistics.bulletSpeed,
+                        ballistics.bulletMassGrams,
+                        ballistics.ballisticCoefficient,
+                        ballistics.bulletDiameterMillimeters
+                    );
+                }
+                else
+                {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.55f, 0.31f, 1.0f),
+                        "Prediction waiting for valid local weapon/ammo data"
+                    );
+                }
+
+                const std::optional<TargetResult> activeTarget =
+                    readOnlyAim.GetActiveTarget();
+
+                if (activeTarget.has_value() &&
+                    activeTarget->player.velocityValid &&
+                    activeTarget->player.lastVelocityUpdate !=
+                        std::chrono::steady_clock::time_point{} &&
+                    std::chrono::steady_clock::now() -
+                        activeTarget->player.lastVelocityUpdate <=
+                        std::chrono::milliseconds(250))
+                {
+                    ImGui::TextDisabled(
+                        "Target velocity: %.2f m/s",
+                        glm::length(activeTarget->player.velocity)
+                    );
+                }
+            }
+
             configChanged |= ImGui::DragFloat(
                 "Aim FOV",
                 &aimGlobals::aimFOV,

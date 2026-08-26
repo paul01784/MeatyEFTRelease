@@ -2,8 +2,10 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <string>
 #include "../headers/sdk.h"
+#include "../headers/ballistics.h"
 #include "../headers/utils.h"
 #include "../../memory/Memory.h"
 
@@ -13,7 +15,15 @@ struct PlayerCache;
 struct HandsInfo
 {
     uint64_t cachedItem = 0;
+    uint64_t cachedItemTemplate = 0;
+    uint64_t loadedAmmoTemplate = 0;
     bool cachedIsWeapon = false;
+    int weaponVersion = -1;
+    BallisticsInfo ballistics{};
+    std::chrono::steady_clock::time_point nextBallisticsRefresh{};
+    float weaponVelocityModifier = 0.0f;
+    bool weaponVelocityModifierValid = false;
+    std::chrono::steady_clock::time_point nextVelocityModifierRefresh{};
 
     // Item in hand info
     uint64_t itemPtr = 0;
@@ -27,7 +37,15 @@ struct HandsInfo
     {
         itemPtr = 0;
         cachedItem = 0;
+        cachedItemTemplate = 0;
+        loadedAmmoTemplate = 0;
         cachedIsWeapon = false;
+        weaponVersion = -1;
+        ballistics = {};
+        nextBallisticsRefresh = {};
+        weaponVelocityModifier = 0.0f;
+        weaponVelocityModifierValid = false;
+        nextVelocityModifierRefresh = {};
 
         itemName.clear();
         ammoName.clear();

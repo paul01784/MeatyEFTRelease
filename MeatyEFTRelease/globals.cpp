@@ -3,7 +3,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.28.16";
+std::string globals::appVersion = "1.0.28.17";
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
@@ -21,11 +21,15 @@ double globals::taskExfil = 5000;
 double globals::taskLoot = 250;
 double globals::taskQuest = 7000;
 double globals::taskWishManager = 1000;
-double globals::taskTripWire = 20;
+double globals::taskTripWire = 100;
 double globals::taskKeyManager = 25;
-double globals::taskCamera = 8;
+// Poll frequently so a busy DMA gate can be retried on the next scheduler tick.
+// Camera::cameraTask limits successful matrix reads to its own target interval.
+double globals::taskCamera = 1;
 double globals::taskFireport = 16;
-double globals::taskMemoryManager = 1000;
+// Lightweight scheduler tick; RunCacheMaintenance enforces the actual
+// 300 ms memory and 2 second TLB partial-refresh intervals.
+double globals::taskMemoryManager = 100;
 double globals::taskRaidMonitor = 800;
 double globals::taskAim = 1;
 
@@ -118,6 +122,7 @@ bool espGlobals::drawSecretExfils = true;
 bool espGlobals::drawTransitExfils = true;
 
 bool aimGlobals::aimEnabled = false;
+bool aimGlobals::predictionEnabled = false;
 float aimGlobals::aimFOV = 50.f;
 int aimGlobals::aimDistance = 100;
 boneListIndexes aimGlobals::aiBone = boneListIndexes::Head;

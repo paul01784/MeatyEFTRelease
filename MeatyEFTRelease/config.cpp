@@ -502,6 +502,7 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
 void to_json(nlohmann::json& j, const aimGlobals& a) {
     j = nlohmann::json{
         {"aimEnabled", a.aimEnabled},
+        {"predictionEnabled", a.predictionEnabled},
         {"aimFOV", a.aimFOV},
         {"aimDistance", a.aimDistance},
         {"aiBone", a.aiBone},
@@ -521,6 +522,7 @@ void to_json(nlohmann::json& j, const aimGlobals& a) {
 
 void from_json(const nlohmann::json& j, aimGlobals& a) {
     a.aimEnabled = j.value("aimEnabled", a.aimEnabled);
+    a.predictionEnabled = j.value("predictionEnabled", a.predictionEnabled);
     a.aimFOV = j.value("aimFOV", a.aimFOV);
     a.aimDistance = j.value("aimDistance", a.aimDistance);
     a.aiBone = j.value("aiBone", a.aiBone);

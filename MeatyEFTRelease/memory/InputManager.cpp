@@ -7,38 +7,63 @@
 
 namespace
 {
-	std::string Hex64(uint64_t value)
-	{
-		std::ostringstream oss;
-		oss << "0x" << std::hex << std::uppercase << value;
-		return oss.str();
-	}
-
 	void MemoryLogError(const std::string& message)
 	{
 		LOGS.logError("[Memory] " + message);
-	}
-
-	void MemoryLogInfo(const char* message)
-	{
-		LOGS.logInfo(
-			std::string("[Memory] ") +
-			(message ? message : "")
-		);
 	}
 
 	void MemoryLogInfo(const std::string& message)
 	{
 		LOGS.logInfo("[Memory] " + message);
 	}
+
+    class KeyboardInitOutcome
+    {
+    public:
+        ~KeyboardInitOutcome()
+        {
+            if (succeeded_)
+            {
+                MemoryLogInfo(
+                    "[KEYS] Keyboard initialised successfully via " +
+                    successPath_);
+                return;
+            }
+
+            MemoryLogError(
+                "[KEYS] Keyboard initialisation failed: " +
+                lastFailure_ +
+                " | Hotkeys disabled");
+        }
+
+        void SetFailure(std::string reason)
+        {
+            lastFailure_ = std::move(reason);
+        }
+
+        void MarkSuccess(std::string path)
+        {
+            succeeded_ = true;
+            successPath_ = std::move(path);
+        }
+
+    private:
+        bool succeeded_ = false;
+        std::string successPath_;
+        std::string lastFailure_ = "initialisation did not complete";
+    };
 }
 
 bool c_keys::InitKeyboard()
 {
     constexpr uintptr_t kKernelAddressThreshold = 0x7FFFFFFFFFFFULL;
+    KeyboardInitOutcome outcome;
 
-    auto Log = [](bool isError, const char* format, ...)
+    auto Log = [&outcome](bool isError, const char* format, ...)
         {
+            if (!isError)
+                return;
+
             char buffer[1024]{};
 
             va_list args;
@@ -46,40 +71,12 @@ bool c_keys::InitKeyboard()
             _vsnprintf_s(buffer, sizeof(buffer), _TRUNCATE, format, args);
             va_end(args);
 
-            if (isError)
-                MemoryLogError(buffer);
-            else
-                MemoryLogInfo(buffer);
+            outcome.SetFailure(buffer);
         };
 
     auto IsKernelPointer = [](uintptr_t address) -> bool
         {
             return address > kKernelAddressThreshold;
-        };
-
-    auto LogBytes = [&](const char* label, uintptr_t address, const uint8_t* bytes, size_t count)
-        {
-            char line[512]{};
-
-            int written = snprintf(
-                line,
-                sizeof(line),
-                "[KEYS][BYTES] %s | 0x%llX :",
-                label,
-                static_cast<unsigned long long>(address)
-            );
-
-            for (size_t i = 0; i < count && written > 0 && written < static_cast<int>(sizeof(line) - 4); ++i)
-            {
-                written += snprintf(
-                    line + written,
-                    sizeof(line) - written,
-                    " %02X",
-                    static_cast<unsigned int>(bytes[i])
-                );
-            }
-
-            MemoryLogInfo(line);
         };
 
     try
@@ -183,23 +180,41 @@ bool c_keys::InitKeyboard()
         {
             Log(false, "[KEYS][WIN11] Windows build > 22000. Using CSRSS session-state path.");
 
-            const auto pids = mem.GetPidListFromName("csrss.exe");
-
-            Log(false, "[KEYS][WIN11] csrss.exe PID count: %zu", pids.size());
-
-            if (pids.empty())
+            static constexpr uint8_t kWin32ksgdSessionSignature[] =
             {
-                Log(true, "[KEYS][WIN11] No csrss.exe processes found");
-                return false;
-            }
-
-            for (size_t index = 0; index < pids.size(); ++index)
+                0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00,
+                0x48, 0x8B, 0x04, 0xC8
+            };
+            static constexpr uint8_t kWin32kSessionSignature[] =
             {
-                const auto pid = pids[index];
+                0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00,
+                0xFF, 0xC9
+            };
+            static constexpr uint8_t kGafAsyncKeyStateSignature[] =
+            {
+                0x48, 0x8D, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0xE8, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x57, 0xC0
+            };
 
-                const DWORD kernelPid =
-                    static_cast<DWORD>(pid) |
-                    VMMDLL_PID_PROCESS_WITH_KERNELMEMORY;
+            auto TryResolveWindows11Keyboard = [&]() -> bool
+            {
+                const auto pids = mem.GetPidListFromName("csrss.exe");
+
+                Log(false, "[KEYS][WIN11] csrss.exe PID count: %zu", pids.size());
+
+                if (pids.empty())
+                {
+                    Log(true, "[KEYS][WIN11] No csrss.exe processes found");
+                    return false;
+                }
+
+                for (size_t index = 0; index < pids.size(); ++index)
+                {
+                    const auto pid = pids[index];
+
+                    const DWORD kernelPid =
+                        static_cast<DWORD>(pid) |
+                        VMMDLL_PID_PROCESS_WITH_KERNELMEMORY;
 
                 auto ReadKernelExact = [&](uintptr_t address, void* outBuffer, DWORD size, const char* label) -> bool
                     {
@@ -239,6 +254,98 @@ bool c_keys::InitKeyboard()
                         );
 
                         return ok && bytesRead == size;
+                    };
+
+                auto FindKernelSignatureExact = [&] (
+                    uintptr_t rangeStart,
+                    uintptr_t rangeEnd,
+                    const uint8_t* pattern,
+                    const char* mask,
+                    size_t patternSize,
+                    const char* label) -> uintptr_t
+                    {
+                        if (!rangeStart ||
+                            rangeStart >= rangeEnd ||
+                            !pattern ||
+                            !mask ||
+                            patternSize == 0 ||
+                            std::strlen(mask) != patternSize)
+                        {
+                            return 0;
+                        }
+
+                        // Scan one page at a time so a single unavailable
+                        // kernel page cannot discard a much larger module
+                        // region. The overlap catches cross-page signatures.
+                        constexpr size_t kChunkSize = 4 * 1024;
+                        std::vector<uint8_t> buffer(
+                            kChunkSize + patternSize - 1);
+
+                        for (uintptr_t address = rangeStart;
+                            address < rangeEnd;
+                            address += kChunkSize)
+                        {
+                            const size_t remaining = static_cast<size_t>(
+                                rangeEnd - address);
+                            const size_t bytesToRead = (std::min)(
+                                kChunkSize + patternSize - 1,
+                                remaining);
+
+                            if (bytesToRead < patternSize)
+                                break;
+
+                            size_t readableBytes = bytesToRead;
+
+                            if (!ReadKernelExact(
+                                address,
+                                buffer.data(),
+                                static_cast<DWORD>(bytesToRead),
+                                label))
+                            {
+                                // The overlap enters the following page. If
+                                // only that page is unavailable, retain the
+                                // current page instead of dropping both.
+                                if (bytesToRead <= kChunkSize ||
+                                    !ReadKernelExact(
+                                        address,
+                                        buffer.data(),
+                                        static_cast<DWORD>(kChunkSize),
+                                        label))
+                                {
+                                    continue;
+                                }
+
+                                readableBytes = kChunkSize;
+                            }
+
+                            const size_t lastStart =
+                                readableBytes - patternSize;
+
+                            for (size_t offset = 0;
+                                offset <= lastStart;
+                                ++offset)
+                            {
+                                bool matches = true;
+
+                                for (size_t byteIndex = 0;
+                                    byteIndex < patternSize;
+                                    ++byteIndex)
+                                {
+                                    if (mask[byteIndex] != '?' &&
+                                        buffer[offset + byteIndex] !=
+                                        pattern[byteIndex])
+                                    {
+                                        matches = false;
+                                        break;
+                                    }
+                                }
+
+                                if (matches)
+                                    return address + offset;
+                            }
+                        }
+
+                        return 0;
                     };
 
                 Log(false, "[KEYS][WIN11] ----------------------------------------");
@@ -293,6 +400,9 @@ bool c_keys::InitKeyboard()
                 const uintptr_t win32k_base = win32k_module_info->vaBase;
                 const size_t win32k_size = win32k_module_info->cbImageSize;
 
+                VMMDLL_MemFree(win32k_module_info);
+                win32k_module_info = nullptr;
+
                 Log(
                     false,
                     "[KEYS][WIN11] win32k module=%s base=0x%llX size=0x%llX (%zu bytes)",
@@ -315,22 +425,26 @@ bool c_keys::InitKeyboard()
                 {
                     Log(false, "[KEYS][WIN11] Searching win32ksgd signature");
 
-                    g_session_ptr = mem.FindSignature(
-                        "48 8B 05 ? ? ? ? 48 8B 04 C8",
+                    g_session_ptr = FindKernelSignatureExact(
                         win32k_base,
                         win32k_base + win32k_size,
-                        kernelPid
+                        kWin32ksgdSessionSignature,
+                        "xxx????xxxx",
+                        std::size(kWin32ksgdSessionSignature),
+                        "win32ksgd signature scan"
                     );
                 }
                 else
                 {
                     Log(false, "[KEYS][WIN11] Searching win32k signature");
 
-                    g_session_ptr = mem.FindSignature(
-                        "48 8B 05 ? ? ? ? FF C9",
+                    g_session_ptr = FindKernelSignatureExact(
                         win32k_base,
                         win32k_base + win32k_size,
-                        kernelPid
+                        kWin32kSessionSignature,
+                        "xxx????xx",
+                        std::size(kWin32kSessionSignature),
+                        "win32k signature scan"
                     );
                 }
 
@@ -357,13 +471,6 @@ bool c_keys::InitKeyboard()
                     Log(true, "[KEYS][WIN11] Could not read g_session instruction bytes");
                     continue;
                 }
-
-                LogBytes(
-                    "g_session signature bytes",
-                    g_session_ptr,
-                    gSessionBytes,
-                    sizeof(gSessionBytes)
-                );
 
                 int32_t relative = 0;
 
@@ -529,6 +636,9 @@ bool c_keys::InitKeyboard()
                 const uintptr_t win32kbase_base = win32kbase_module_info->vaBase;
                 const size_t win32kbase_size = win32kbase_module_info->cbImageSize;
 
+                VMMDLL_MemFree(win32kbase_module_info);
+                win32kbase_module_info = nullptr;
+
                 Log(
                     false,
                     "[KEYS][WIN11] win32kbase base=0x%llX size=0x%llX (%zu bytes)",
@@ -546,11 +656,13 @@ bool c_keys::InitKeyboard()
                 // Resolve gafAsyncKeyState offset from user_session_state
                 Log(false, "[KEYS][WIN11] Searching gafAsyncKeyStateExport signature");
 
-                const uintptr_t ptr = mem.FindSignature(
-                    "48 8D 90 ? ? ? ? E8 ? ? ? ? 0F 57 C0",
+                const uintptr_t ptr = FindKernelSignatureExact(
                     win32kbase_base,
                     win32kbase_base + win32kbase_size,
-                    kernelPid
+                    kGafAsyncKeyStateSignature,
+                    "xxx????x????xxx",
+                    std::size(kGafAsyncKeyStateSignature),
+                    "gafAsyncKeyState signature scan"
                 );
 
                 Log(
@@ -576,13 +688,6 @@ bool c_keys::InitKeyboard()
                     Log(true, "[KEYS][WIN11] Could not read gafAsyncKeyState instruction bytes");
                     continue;
                 }
-
-                LogBytes(
-                    "gafAsyncKeyState signature bytes",
-                    ptr,
-                    gafBytes,
-                    sizeof(gafBytes)
-                );
 
                 int32_t session_offset = 0;
 
@@ -616,14 +721,40 @@ bool c_keys::InitKeyboard()
 
                 if (IsKernelPointer(gafAsyncKeyStateExport))
                 {
-                    Log(false, "[KEYS][WIN11] ===== InitKeyboard succeeded =====");
+                    outcome.MarkSuccess("Windows 11 session-state lookup");
                     return true;
                 }
 
                 Log(true, "[KEYS][WIN11] Candidate gafAsyncKeyStateExport was not kernel-space");
+                }
+
+                return false;
+            };
+
+            constexpr int kMaximumResolveAttempts = 3;
+
+            for (int attempt = 1;
+                attempt <= kMaximumResolveAttempts;
+                ++attempt)
+            {
+                if (TryResolveWindows11Keyboard())
+                    return true;
+
+                if (attempt == kMaximumResolveAttempts)
+                    break;
+
+                // Automatic VMM refresh is disabled. Rebuild process/module
+                // and virtual-translation state before retrying the CSRSS
+                // session mappings.
+                if (!mem.RefreshProcessInformationNow())
+                {
+                    Log(true, "[KEYS][WIN11] VMM refresh before retry failed");
+                }
+
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(200));
             }
 
-            Log(true, "[KEYS][WIN11] ===== InitKeyboard failed: no valid gafAsyncKeyStateExport =====");
             return false;
         }
 
@@ -723,7 +854,7 @@ bool c_keys::InitKeyboard()
 
         if (IsKernelPointer(gafAsyncKeyStateExport))
         {
-            Log(false, "[KEYS][LEGACY] ===== InitKeyboard succeeded through EAT =====");
+            outcome.MarkSuccess("legacy EAT lookup");
             return true;
         }
 
@@ -811,7 +942,7 @@ bool c_keys::InitKeyboard()
 
         if (IsKernelPointer(gafAsyncKeyStateExport))
         {
-            Log(false, "[KEYS][LEGACY] ===== InitKeyboard succeeded through PDB =====");
+            outcome.MarkSuccess("legacy PDB lookup");
             return true;
         }
 

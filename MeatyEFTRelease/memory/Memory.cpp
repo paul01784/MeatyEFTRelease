@@ -1024,56 +1024,68 @@ bool Memory::RefreshProcessInformationNow()
 	return ok;
 }
 
-void Memory::ConfigureRefreshTimings()
+void Memory::RunCacheMaintenance()
 {
-	std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
+	using Clock = std::chrono::steady_clock;
 
-	if (!vHandle)
+	constexpr auto kMemoryRefreshInterval = std::chrono::milliseconds(300);
+	constexpr auto kTlbRefreshInterval = std::chrono::seconds(2);
+
+	const auto now = Clock::now();
+
+	// Cache maintenance must never queue behind live camera/player reads. The
+	// background task will try again on its next short scheduler tick.
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::try_to_lock);
+
+	if (!lock.owns_lock() || !vHandle)
 		return;
 
-	// All other values below are multiples of this 100 ms tick
-	const bool tickOk = VMMDLL_ConfigSet(
-		vHandle,
-		VMMDLL_OPT_CONFIG_TICK_PERIOD,
-		100
-	);
+	const bool memoryRefreshDue =
+		lastMemoryCacheRefresh.time_since_epoch().count() == 0 ||
+		(now - lastMemoryCacheRefresh) >= kMemoryRefreshInterval;
+	const bool tlbRefreshDue =
+		lastTlbCacheRefresh.time_since_epoch().count() == 0 ||
+		(now - lastTlbCacheRefresh) >= kTlbRefreshInterval;
 
-	// 3 ticks = 300 ms
-	const bool readCacheOk = VMMDLL_ConfigSet(
-		vHandle,
-		VMMDLL_OPT_CONFIG_READCACHE_TICKS,
-		3
-	);
+	if (!memoryRefreshDue && !tlbRefreshDue)
+		return;
 
-	// 20 ticks = 2 seconds
-	const bool tlbCacheOk = VMMDLL_ConfigSet(
-		vHandle,
-		VMMDLL_OPT_CONFIG_TLBCACHE_TICKS,
-		20
-	);
+	bool ok = true;
 
-	// 600 ticks = 60 seconds
-	const bool processPartialOk = VMMDLL_ConfigSet(
-		vHandle,
-		VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_PARTIAL,
-		600
-	);
-
-	// 6000 ticks = 10 minutes
-	const bool processTotalOk = VMMDLL_ConfigSet(
-		vHandle,
-		VMMDLL_OPT_CONFIG_PROCCACHE_TICKS_TOTAL,
-		6000
-	);
-
-	if (!tickOk ||
-		!readCacheOk ||
-		!tlbCacheOk ||
-		!processPartialOk ||
-		!processTotalOk)
+	if (memoryRefreshDue)
 	{
-		MemoryLogError("Failed to configure VMM refresh timings");
+		const bool refreshed = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_MEM_PARTIAL,
+			1
+		);
+
+		if (refreshed)
+			lastMemoryCacheRefresh = now;
+
+		ok = refreshed && ok;
 	}
+
+	if (tlbRefreshDue)
+	{
+		const bool refreshed = VMMDLL_ConfigSet(
+			vHandle,
+			VMMDLL_OPT_REFRESH_FREQ_TLB_PARTIAL,
+			1
+		);
+
+		if (refreshed)
+			lastTlbCacheRefresh = now;
+
+		ok = refreshed && ok;
+	}
+
+	if (!ok)
+		MemoryLogErrorThrottled(
+			"partial-cache-maintenance",
+			"Partial DMA cache maintenance failed",
+			std::chrono::seconds(30)
+		);
 }
 
 // ------------------------------------------------------------
@@ -1270,6 +1282,7 @@ bool Memory::Init(bool memMap, bool debug)
 		args.reserve(12);
 
 		args.push_back("");
+		args.push_back("-norefresh");
 		args.push_back("-device");
 		args.push_back("fpga://algo=0");
 		args.push_back("-waitinitialize");
@@ -1394,6 +1407,8 @@ bool Memory::Init(bool memMap, bool debug)
 			{
 				vHandle = newHandle;
 				newHandle = nullptr;
+				lastMemoryCacheRefresh = {};
+				lastTlbCacheRefresh = {};
 
 				ULONG64 FPGA_ID = 0;
 				ULONG64 DEVICE_ID = 0;
@@ -1431,9 +1446,6 @@ bool Memory::Init(bool memMap, bool debug)
 		}
 
 		memoryGlobals::dmaConnected.store(true, std::memory_order_release);
-
-
-		ConfigureRefreshTimings();
 
 		MemoryLogInfo("DMA connected successfully");
 	}
@@ -1586,13 +1598,7 @@ bool Memory::Init(bool memMap, bool debug)
 
 				MemoryLogInfo("Target process initialised successfully");
 
-				if (!mem.GetKeyboard()->InitKeyboard())
-				{
-					MemoryLogError("[KeyManager] Failed - Hotkeys will not work");
-				}
-				else {
-					MemoryLogInfo("[KeyManager] Setup / Connected");
-				}
+				mem.GetKeyboard()->InitKeyboard();
 
 				return true;
 			}
@@ -2329,6 +2335,33 @@ bool Memory::Read(
 	if (size == 0)
 		return false;
 
+	if (size > MaxDmaTransferBytes)
+	{
+		auto* output = static_cast<std::byte*>(buffer);
+		size_t offset = 0;
+
+		while (offset < size)
+		{
+			const size_t chunkSize =
+				(std::min)(MaxDmaTransferBytes, size - offset);
+
+			if (!Read(
+				address + offset,
+				output + offset,
+				chunkSize,
+				cacheMode,
+				callingFunc,
+				caller))
+			{
+				return false;
+			}
+
+			offset += chunkSize;
+		}
+
+		return true;
+	}
+
 	DWORD readSize = 0;
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
@@ -2420,6 +2453,34 @@ bool Memory::Read(
 
 	if (size == 0)
 		return false;
+
+	if (size > MaxDmaTransferBytes)
+	{
+		auto* output = static_cast<std::byte*>(buffer);
+		size_t offset = 0;
+
+		while (offset < size)
+		{
+			const size_t chunkSize =
+				(std::min)(MaxDmaTransferBytes, size - offset);
+
+			if (!Read(
+				address + offset,
+				output + offset,
+				chunkSize,
+				pid,
+				cacheMode,
+				callingFunc,
+				caller))
+			{
+				return false;
+			}
+
+			offset += chunkSize;
+		}
+
+		return true;
+	}
 
 	DWORD readSize = 0;
 
@@ -2847,6 +2908,9 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 	if (!requests || requestCount == 0)
 		return false;
 
+	bool requiresChunking = requestCount > MaxDmaScatterRequests;
+	size_t totalBytes = 0;
+
 	for (size_t index = 0; index < requestCount; ++index)
 	{
 		if (!requests[index].address ||
@@ -2855,6 +2919,76 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 		{
 			return false;
 		}
+
+		const size_t boundedRequestSize =
+			(std::min)(requests[index].size, MaxDmaTransferBytes);
+
+		if (requests[index].size > MaxDmaTransferBytes ||
+			totalBytes > MaxDmaTransferBytes - boundedRequestSize)
+		{
+			requiresChunking = true;
+			totalBytes = MaxDmaTransferBytes + 1;
+		}
+		else
+		{
+			totalBytes += requests[index].size;
+		}
+	}
+
+	if (totalBytes > MaxDmaTransferBytes)
+		requiresChunking = true;
+
+	if (requiresChunking)
+	{
+		std::vector<ScatterReadRequest> chunk;
+		chunk.reserve(MaxDmaScatterRequests);
+
+		size_t requestIndex = 0;
+		size_t requestOffset = 0;
+
+		while (requestIndex < requestCount)
+		{
+			chunk.clear();
+			size_t chunkBytes = 0;
+
+			while (requestIndex < requestCount &&
+				chunk.size() < MaxDmaScatterRequests &&
+				chunkBytes < MaxDmaTransferBytes)
+			{
+				const ScatterReadRequest& request = requests[requestIndex];
+				const size_t remainingBytes = request.size - requestOffset;
+				const size_t availableBytes = MaxDmaTransferBytes - chunkBytes;
+				const size_t bytesToQueue =
+					(std::min)(remainingBytes, availableBytes);
+
+				chunk.push_back({
+					request.address + requestOffset,
+					static_cast<std::byte*>(request.buffer) + requestOffset,
+					bytesToQueue
+					});
+
+				chunkBytes += bytesToQueue;
+				requestOffset += bytesToQueue;
+
+				if (requestOffset == request.size)
+				{
+					++requestIndex;
+					requestOffset = 0;
+				}
+			}
+
+			if (chunk.empty() ||
+				!ReadScatter(
+					chunk.data(),
+					chunk.size(),
+					cacheMode,
+					callingFunc))
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
@@ -2951,10 +3085,23 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 	if (!requests || requestCount == 0)
 		return TryScatterReadResult::Failed;
 
+	if (requestCount > MaxDmaScatterRequests)
+		return TryScatterReadResult::Failed;
+
+	size_t totalBytes = 0;
+
 	for (size_t i = 0; i < requestCount; ++i)
 	{
 		if (!requests[i].address || !requests[i].buffer || requests[i].size == 0)
 			return TryScatterReadResult::Failed;
+
+		if (requests[i].size > MaxDmaTransferBytes ||
+			totalBytes > MaxDmaTransferBytes - requests[i].size)
+		{
+			return TryScatterReadResult::Failed;
+		}
+
+		totalBytes += requests[i].size;
 	}
 
 	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::try_to_lock);

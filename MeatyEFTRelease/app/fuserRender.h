@@ -238,7 +238,7 @@ namespace fuserRender
         return glm::vec4(colour.r, colour.g, colour.b, alpha);
     }
 
-    static inline void RenderMovingBox(float time, float screenW, float screenH)
+    static inline void RenderMovingBox(float time, float screenW, float screenH, float renderScale)
     {
         const glm::vec4 outlineColour = glm::vec4(0.15f, 0.65f, 1.0f, 1.0f);
         const glm::vec4 fillColour = glm::vec4(0.15f, 0.65f, 1.0f, 0.18f);
@@ -246,8 +246,10 @@ namespace fuserRender
 
         const float boxW = 180.0f;
         const float boxH = 70.0f;
+        const float drawnBoxW = boxW * renderScale;
+        const float drawnBoxH = boxH * renderScale;
 
-        const float rangeX = std::max(1.0f, screenW - boxW - 80.0f);
+        const float rangeX = std::max(1.0f, screenW - drawnBoxW - 80.0f);
 
         const float x = 40.0f + (Wave01(time * 1.2f) * rangeX);
         const float y = 70.0f;
@@ -265,8 +267,8 @@ namespace fuserRender
 
         g_DxWindow.DrawString(
             "Moving Box",
-            x + (boxW * 0.5f),
-            y + boxH + 8.0f,
+            x + (drawnBoxW * 0.5f),
+            y + drawnBoxH + (8.0f * renderScale),
             15.0f,
             textColour,
             true,
@@ -405,16 +407,24 @@ namespace fuserRender
         );
     }
 
-    static inline void RenderCornerBoxes(float screenW, float screenH)
+    static inline void RenderCornerBoxes(float screenW, float screenH, float renderScale)
     {
         const glm::vec4 colour = glm::vec4(0.8f, 0.2f, 1.0f, 1.0f);
         const glm::vec4 fill = glm::vec4(0.8f, 0.2f, 1.0f, 0.10f);
+        constexpr float margin = 20.0f;
+        constexpr float boxW = 120.0f;
+        constexpr float boxH = 45.0f;
+
+        const float drawnBoxW = boxW * renderScale;
+        const float drawnBoxH = boxH * renderScale;
+        const float rightX = std::max(margin, screenW - margin - drawnBoxW);
+        const float bottomY = std::max(margin, screenH - margin - drawnBoxH);
 
         g_DxWindow.DrawBox(
-            20.0f,
-            20.0f,
-            120.0f,
-            45.0f,
+            margin,
+            margin,
+            boxW,
+            boxH,
             colour,
             1.0f,
             fill,
@@ -422,10 +432,10 @@ namespace fuserRender
         );
 
         g_DxWindow.DrawBox(
-            screenW - 140.0f,
-            20.0f,
-            120.0f,
-            45.0f,
+            rightX,
+            margin,
+            boxW,
+            boxH,
             colour,
             1.0f,
             fill,
@@ -433,10 +443,10 @@ namespace fuserRender
         );
 
         g_DxWindow.DrawBox(
-            20.0f,
-            screenH - 65.0f,
-            120.0f,
-            45.0f,
+            margin,
+            bottomY,
+            boxW,
+            boxH,
             colour,
             1.0f,
             fill,
@@ -444,10 +454,10 @@ namespace fuserRender
         );
 
         g_DxWindow.DrawBox(
-            screenW - 140.0f,
-            screenH - 65.0f,
-            120.0f,
-            45.0f,
+            rightX,
+            bottomY,
+            boxW,
+            boxH,
             colour,
             1.0f,
             fill,
@@ -520,9 +530,11 @@ namespace fuserRender
         if (screenH <= 0.0f)
             screenH = 720.0f;
 
+        const float renderScale = std::max(0.05f, g_DxWindow.GetFinalRenderScale());
+
         RenderHeaderText(time, fps);
-        RenderCornerBoxes(screenW, screenH);
-        RenderMovingBox(time, screenW, screenH);
+        RenderCornerBoxes(screenW, screenH, renderScale);
+        RenderMovingBox(time, screenW, screenH, renderScale);
         RenderRotatingLine(time, screenW, screenH);
         RenderOrbitCircle(time, screenW, screenH);
         RenderMarkers(time, screenW, screenH);

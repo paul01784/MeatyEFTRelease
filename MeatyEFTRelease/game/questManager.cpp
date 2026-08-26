@@ -248,6 +248,7 @@ namespace
 {
     constexpr std::int32_t kMaxCompletedConditionEntries = 2048;
     constexpr int kMaxConditionIdChars = 128;
+    constexpr int kMaxActiveQuestEntries = 512;
 
     using CompletedConditionEntry = UnityHashSet<MongoID>::MemHashEntry;
 
@@ -496,7 +497,9 @@ void QuestManager::initQuestManager()
         if (!Utils::valid_pointer(questData))
             return;
 
-        MonoList<uint64_t> questDataList(questData);
+        MonoList<uint64_t> questDataList(
+            questData,
+            kMaxActiveQuestEntries);
 
         if (questDataList.count < 1 || questDataList.count > 512)
             return;
@@ -554,7 +557,10 @@ void QuestManager::initQuestManager()
 
             if (Utils::valid_pointer(completedPtr))
             {
-                auto completedHS = UnityHashSet<MongoID>::Create(completedPtr, mem);
+                auto completedHS = UnityHashSet<MongoID>::Create(
+                    completedPtr,
+                    mem,
+                    kMaxCompletedConditionEntries);
 
                 const size_t reserveCount = std::min<size_t>(
                     static_cast<size_t>(completedHS.size()),
@@ -766,7 +772,9 @@ uint64_t QuestManager::findLiveQuestPtrById(const std::string& wantedQuestId)
     if (!Utils::valid_pointer(questData))
         return 0;
 
-    MonoList<uint64_t> questDataList(questData);
+    MonoList<uint64_t> questDataList(
+        questData,
+        kMaxActiveQuestEntries);
     if (questDataList.count < 1)
         return 0;
 

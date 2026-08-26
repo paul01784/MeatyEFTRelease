@@ -34,6 +34,7 @@
 
 #include <condition_variable>
 #include <mutex>
+#include <thread>
 #include <unordered_set>
 
 namespace
@@ -531,15 +532,15 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
 {
     LOGS.logInfo("[GameWorld] Waiting for raid start");
 
-    globals::radarSubText = "Trying to resolve game world details";
+    globals::radarSubText = "Looking for a raid...";
 
     int waitAttempts = 0;
     int pendingAttempts = 0;
+    bool refreshFailureLogged = false;
 
     std::uint64_t pending_local_gw = 0;
     std::uint64_t pending_gw_object = 0;
 
-    constexpr int kLogEveryAttempts = 4;
     constexpr int kMaxPendingPromoteAttempts = 6;
     constexpr int kRefreshEveryAttempts = 2;
     constexpr DWORD kRetryDelayMs = 2500;
@@ -558,10 +559,20 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
 
                 if (!mem.RefreshProcessInformationNow())
                 {
-                    LOGS.logWarn(
-                        "[GameWorld] DMA process/TLB refresh failed; "
-                        "continuing with uncached lookup"
-                    );
+                    if (!refreshFailureLogged)
+                    {
+                        LOGS.logWarn(
+                            "[GameWorld] DMA process/TLB refresh failed; "
+                            "continuing with uncached lookup"
+                        );
+                        refreshFailureLogged = true;
+                    }
+                }
+                else if (refreshFailureLogged)
+                {
+                    LOGS.logInfo(
+                        "[GameWorld] DMA process/TLB refresh recovered");
+                    refreshFailureLogged = false;
                 }
             }
 
@@ -579,12 +590,6 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
 
                     if (pendingAttempts >= kMaxPendingPromoteAttempts)
                     {
-                        LOGS.logInfo(
-                            "[GameWorld] Pending object did not become ready; "
-                            "rescanning the active object list | Last state: ",
-                            probe.empty() ? "raid data unavailable" : probe
-                        );
-
                         pending_local_gw = 0;
                         pending_gw_object = 0;
                         pendingAttempts = 0;
@@ -604,11 +609,6 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
                     pending_local_gw = pending.local_game_world;
                     pending_gw_object = pending.game_world_object;
                     pendingAttempts = 0;
-
-                    LOGS.logInfo(
-                        "[GameWorld] Object found; waiting for raid data | ",
-                        probe.empty() ? "raid data unavailable" : probe
-                    );
                 }
             }
 
@@ -619,17 +619,14 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
                 this->gameWorld = raid.game_world_object;
                 this->localGameWorld = raid.local_game_world;
 
-                LOGS.logInfo("[GameWorld] ", probe);
+                LOGS.logInfo("[GameWorld] Raid ready | ", probe);
                 return true;
             }
 
-            if ((waitAttempts % kLogEveryAttempts) == 0)
-            {
-                LOGS.logInfo(
-                    "[GameWorld] Still waiting | ",
-                    probe.empty() ? "raid not ready" : probe
-                );
-            }
+            globals::radarSubText =
+                Utils::valid_pointer(pending_local_gw)
+                ? "Raid found. Waiting to start..."
+                : "Looking for a raid...";
         }
         catch (const std::exception& e)
         {
@@ -700,10 +697,6 @@ void MainGame::mainThread(std::stop_token stopToken)
 
             if (!Utils::valid_pointer(gomSig))
             {
-                LOGS.logInfo(
-                    "[GOM] Signature scan did not find the "
-                    "GameObjectManager; retrying"
-                );
                 if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))
                     break;
                 continue;
@@ -719,9 +712,6 @@ void MainGame::mainThread(std::stop_token stopToken)
 
             if (this->gameObjectManager == NULL)
             {
-                LOGS.logInfo(
-                    "[GOM] GameObjectManager pointer is unavailable; retrying"
-                );
                 if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))
                     break;
                 continue;
@@ -748,32 +738,33 @@ void MainGame::mainThread(std::stop_token stopToken)
         LOGS.logInfo("[MAIN][THREADS] Starting radar");
         appGlobals::runThreads.store(true, std::memory_order_release);
 
-        TaskManager manager;
+        TaskManager fastWorker;
+        TaskManager liveWorker;
+        TaskManager backgroundWorker;
 
-        // One scheduler
-        manager.addTask(
+        // Fast worker: latency-sensitive camera, aim, input and raid liveness.
+        fastWorker.addTask(
             "cameraTask",
             std::bind(&Camera::cameraTask, &camera),
             &globals::taskCamera,
             { TaskPriority::Critical, DmaPriority::Critical, false, 0.0 });
 
-        manager.addTask(
-            "playerPositionTask",
-            std::bind(&Players::positionTask, &players),
-            &globals::taskPlayerPositions,
-            { TaskPriority::Critical, DmaPriority::High, false, 0.0 });
-
-        manager.addTask(
+        fastWorker.addTask(
             "readOnlyAim",
             std::bind(&ReadOnlyAim::aimTask, &readOnlyAim),
             &globals::taskAim,
             { TaskPriority::Critical, DmaPriority::Critical, false, 0.0 });
 
-        manager.addTask(
+        fastWorker.addTask(
             "fireportTask",
             []()
             {
-                const bool fireportNeeded = makcu.IsConnected() && aimGlobals::aimEnabled && (aimGlobals::drawFireportLine || aimGlobals::aimReference == AimReference::Fireport);
+                const bool fireportNeeded =
+                    makcu.IsConnected() &&
+                    aimGlobals::aimEnabled &&
+                    (aimGlobals::drawFireportLine ||
+                        aimGlobals::predictionEnabled ||
+                        aimGlobals::aimReference == AimReference::Fireport);
 
                 if (fireportNeeded)
                     g_fireport.update(mainGame.localPlayerPtr);
@@ -783,92 +774,134 @@ void MainGame::mainThread(std::stop_token stopToken)
             &globals::taskFireport,
             { TaskPriority::High, DmaPriority::High, false, 4.0 });
 
-        manager.addTask(
-            "playersTask",
-            std::bind(&Players::playersTask, &players),
-            &globals::taskPlayers,
-            { TaskPriority::High, DmaPriority::Normal, false, 0.0 });
-
-        manager.addTask(
-            "playersBoneTask",
-            std::bind(&Players::boneTask, &players),
-            &globals::taskPlayersBones,
-            { TaskPriority::High, DmaPriority::Normal, false, 10.0 });
-
-        manager.addTask(
-            "ExplosiveManagerTask",
-            std::bind(&ExplosiveManager::initManager, &explosiveManager),
-            &globals::taskGrenades,
-            { TaskPriority::High, DmaPriority::High, false, 100.0 });
-
-        manager.addTask(
-            "TripwireManagerTask",
-            std::bind(&ExplosiveManager::refreshTripwires, &explosiveManager),
-            &globals::taskTripWire,
-            { TaskPriority::High, DmaPriority::High, false, 20.0 });
-
-        manager.addTask(
-            "raidMonitor",
-            std::bind(&MainGame::raidMonitorTask, &mainGame),
-            &globals::taskRaidMonitor,
-            { TaskPriority::Normal, DmaPriority::Normal, false, 40.0 });
-
-        manager.addTask(
+        fastWorker.addTask(
             "keyManager",
             std::bind(&MainGame::keyManagerTask, &mainGame),
             &globals::taskKeyManager,
             { TaskPriority::Normal, DmaPriority::Normal, false, 0.0 });
 
-        manager.addTask(
+        fastWorker.addTask(
+            "raidMonitor",
+            std::bind(&MainGame::raidMonitorTask, &mainGame),
+            &globals::taskRaidMonitor,
+            { TaskPriority::Normal, DmaPriority::Normal, false, 40.0 });
+
+        // Live worker: player roster plus the unified position/bone pipeline.
+        liveWorker.addTask(
+            "playersTask",
+            std::bind(&Players::playersTask, &players),
+            &globals::taskPlayers,
+            { TaskPriority::High, DmaPriority::Normal, false, 0.0 });
+
+        liveWorker.addTask(
+            "playerBoneTask",
+            std::bind(&Players::boneTask, &players),
+            &globals::taskPlayerPositions,
+            { TaskPriority::Critical, DmaPriority::High, false, 0.0 });
+
+        // Background worker: bounded work that may defer to live DMA.
+        backgroundWorker.addTask(
+            "MemoryManagerTask",
+            std::bind(&Memory::RunCacheMaintenance, &mem),
+            &globals::taskMemoryManager,
+            { TaskPriority::Background, DmaPriority::Background, true, 75.0 });
+
+        backgroundWorker.addTask(
+            "ExplosiveManagerTask",
+            std::bind(&ExplosiveManager::initManager, &explosiveManager),
+            &globals::taskGrenades,
+            { TaskPriority::Background, DmaPriority::Background, true, 100.0 });
+
+        backgroundWorker.addTask(
+            "TripwireManagerTask",
+            std::bind(&ExplosiveManager::refreshTripwires, &explosiveManager),
+            &globals::taskTripWire,
+            { TaskPriority::Background, DmaPriority::Background, true, 20.0 });
+
+        backgroundWorker.addTask(
             "exfilTask",
             std::bind(&Exfil::exfilTask, &exfil),
             &globals::taskExfil,
-            { TaskPriority::Normal, DmaPriority::Normal, false, 250.0 });
+            { TaskPriority::Background, DmaPriority::Background, true, 250.0 });
 
-        manager.addTask(
+        backgroundWorker.addTask(
             "lootTask",
             std::bind(&loot::lootTask, &Loot),
             &globals::taskLoot,
             { TaskPriority::Background, DmaPriority::Background, true, 50.0 });
 
-        manager.addTask(
+        backgroundWorker.addTask(
             "PlayerEquipmentTask",
             std::bind(&Players::playerEquipment, &players),
             &globals::taskPlayersEquipment,
             { TaskPriority::Background, DmaPriority::Background, true, 150.0 });
 
-        manager.addTask(
+        backgroundWorker.addTask(
             "PlayerMetadataTask",
             std::bind(&Players::playerMetadataTask, &players),
             &globals::taskPlayerMetadata,
             { TaskPriority::Background, DmaPriority::Background, true, 225.0 });
 
-        manager.addTask(
+        backgroundWorker.addTask(
             "questTask",
             std::bind(&QuestManager::updateAndPruneActiveQuests, &questManager),
             &globals::taskQuest,
             { TaskPriority::Background, DmaPriority::Background, true, 350.0 });
 
-        manager.addTask(
+        backgroundWorker.addTask(
             "wishManagerTask",
             std::bind(&WishListManager::createWishList, &wishListManager),
             &globals::taskWishManager,
             { TaskPriority::Background, DmaPriority::Background, false, 450.0 });
 
-        LOGS.logInfo("[MAIN][MANAGER] Starting Manager");
+        LOGS.logInfo("[MAIN][MANAGER] Starting Fast, Live and Background workers");
         LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log Start");
         watchListManager.logRaidStart(this->selectedLocation.c_str());
 
-        manager.run(stopToken);
+        std::jthread fastWorkerThread(
+            [&](std::stop_token workerStop)
+            {
+                SetThreadPriority(
+                    GetCurrentThread(),
+                    THREAD_PRIORITY_ABOVE_NORMAL);
+                fastWorker.run(workerStop);
+            });
+
+        std::jthread liveWorkerThread(
+            [&](std::stop_token workerStop)
+            {
+                liveWorker.run(workerStop);
+            });
+
+        std::jthread backgroundWorkerThread(
+            [&](std::stop_token workerStop)
+            {
+                backgroundWorker.run(workerStop);
+            });
+
+        while (!stopToken.stop_requested() &&
+            appGlobals::runThreads.load(std::memory_order_acquire))
+        {
+            if (!WaitForStop(stopToken, std::chrono::milliseconds(10)))
+                break;
+        }
 
         appGlobals::runThreads.store(false, std::memory_order_release);
+
+        fastWorkerThread.request_stop();
+        liveWorkerThread.request_stop();
+        backgroundWorkerThread.request_stop();
+
+        fastWorkerThread.join();
+        liveWorkerThread.join();
+        backgroundWorkerThread.join();
 
         exfil.clearCache();
         Loot.clearCache();
         wishListData.clear();
         explosiveManager.reset();
 
-        LOGS.logInfo("[MAIN][MANAGER] Stopping Manager");
+        LOGS.logInfo("[MAIN][MANAGER] Fast, Live and Background workers stopped");
         watchListManager.logRaidEnd();
         LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log End");
 

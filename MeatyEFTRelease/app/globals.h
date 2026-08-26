@@ -138,6 +138,7 @@ struct espGlobals {
 
 struct aimGlobals {
     static bool aimEnabled;
+    static bool predictionEnabled;
     static float aimFOV;
     static int aimDistance;
     static boneListIndexes aiBone;

@@ -3798,9 +3798,9 @@ static void renderMenuSettings()
             bool changed = false;
             changed |= timing("Camera", globals::taskCamera, 1.0, 100.0, 0.5);
             changed |= timing("Players", globals::taskPlayers, 5.0, 500.0, 1.0);
-            changed |= timing("Player positions", globals::taskPlayerPositions, 5.0, 100.0, 0.5);
+            changed |= timing("Player bone update", globals::taskPlayerPositions, 5.0, 100.0, 0.5);
             changed |= timing("Fireport", globals::taskFireport, 5.0, 100.0, 1.0);
-            changed |= timing("Player bones", globals::taskPlayersBones, 5.0, 500.0, 1.0);
+            changed |= timing("Full skeleton", globals::taskPlayersBones, 5.0, 500.0, 1.0);
             changed |= timing("Loot", globals::taskLoot, 100.0, 30000.0, 100.0);
             changed |= timing("Equipment", globals::taskPlayersEquipment, 100.0, 30000.0, 100.0);
             changed |= timing("Player metadata", globals::taskPlayerMetadata, 50.0, 5000.0, 25.0);
@@ -4243,14 +4243,14 @@ static void renderDebugWindow()
                             return globals::taskKeyManager;
                         if (name == "task.playersTask")
                             return globals::taskPlayers;
-                        if (name == "task.playerPositionTask")
+                        if (name == "task.playerBoneTask")
                             return globals::taskPlayerPositions;
-                        if (name == "task.playersBoneTask")
-                            return globals::taskPlayersBones;
                         if (name == "task.raidMonitor")
                             return globals::taskRaidMonitor;
                         if (name == "task.ExplosiveManagerTask")
                             return globals::taskGrenades;
+                        if (name == "task.TripwireManagerTask")
+                            return globals::taskTripWire;
                         if (name == "task.exfilTask")
                             return globals::taskExfil;
                         if (name == "task.lootTask")
@@ -7390,7 +7390,7 @@ static void renderMainScreen()
             DrawRadarSubText(
                 centerScreen.x,
                 statusTextY,
-                { 1,0,0,1 },
+                { 1,1,1,1 },
                 globals::radarSubText.c_str());
 
             setCurrentMapSpecs = false;

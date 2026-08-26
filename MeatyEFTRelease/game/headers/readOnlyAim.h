@@ -7,6 +7,7 @@
 #include <optional>
 #include <chrono>
 #include <glm/glm.hpp>
+#include "ballistics.h"
 #include "players.h"
 #include "../../app/render.h"
 
@@ -31,6 +32,13 @@ struct AimReferencePoint
     bool fallbackToCrosshair = false;
 };
 
+struct AimPredictionContext
+{
+    bool enabled = false;
+    glm::vec3 sourcePosition{};
+    BallisticsInfo ballistics{};
+};
+
 class ReadOnlyAim
 {
 public:
@@ -45,16 +53,19 @@ public:
 
 private:
     std::optional<TargetResult> BuildTargetResult(const PlayerCache& entity, float maxDistance, float fovRadiusPx,
-                                                  const glm::vec2& aimRef) const;
+                                                  const glm::vec2& aimRef,
+                                                  const AimPredictionContext& prediction) const;
 
     bool GetSelectedBonePosition(const PlayerCache& entity, boneListIndexes selectedBone, glm::vec3& outPosition) const;
 
     std::optional<TargetResult> FindBestTarget(const std::vector<PlayerCache>& snapshot, TargetMode mode,
-                                               float maxDistance, float fovRadiusPx, const glm::vec2& aimRef) const;
+                                               float maxDistance, float fovRadiusPx, const glm::vec2& aimRef,
+                                               const AimPredictionContext& prediction) const;
 
     std::optional<TargetResult> RefreshTargetByInstance(const std::vector<PlayerCache>& snapshot, uint64_t instance,
                                                         float maxDistance, float fovRadiusPx,
-                                                        const glm::vec2& aimRef) const;
+                                                        const glm::vec2& aimRef,
+                                                        const AimPredictionContext& prediction) const;
 
     void ClearTargetState(bool keyIsHeld);
 
