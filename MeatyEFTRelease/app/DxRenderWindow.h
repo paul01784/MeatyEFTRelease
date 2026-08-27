@@ -69,6 +69,9 @@ struct DxWindowConfig
     bool useDpiScale = true;
     float renderScale = 1.0f;
 
+    float renderOffsetX = 0.0f;
+    float renderOffsetY = 0.0f;
+
     // Text / fonts
     DxFontSettings defaultFont;
 };

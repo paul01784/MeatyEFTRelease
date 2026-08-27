@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -155,7 +156,7 @@ private:
     void cleanupMissingLoot(
         std::vector<LootList>& workingCache,
         const std::unordered_set<uint64_t>& livePointers
-    ) const;
+    );
 
     void markFailed(
         LootList& item,
@@ -181,6 +182,11 @@ private:
     std::atomic<LootCacheSnapshot> publishedLootCache;
     std::vector<uint64_t> loot_buffer;
     std::unordered_set<uint64_t> liveLootPointers;
+    std::unordered_set<uint64_t> stagedLootPointers;
+    std::unordered_map<uint64_t, std::uint8_t> missingLootDiscoveryCounts;
+
+    size_t lootBufferScanCursor = 0;
+    uint64_t lootBufferScanListPtr = 0;
 
     std::chrono::steady_clock::time_point nextLootDiscovery{};
     std::chrono::steady_clock::time_point lastDogTagUpdate{};

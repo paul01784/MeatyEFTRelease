@@ -91,10 +91,14 @@ constexpr std::chrono::milliseconds LOOT_RESOLVE_RETRY_DELAY{
 namespace
 {
     constexpr int MAX_LOOT_COUNT = 12000;
-    constexpr int MAX_LOOT_BUFFER_ITEMS = MAX_LOOT_COUNT;
+    constexpr size_t MAX_LOOT_BUFFER_BYTES = 64 * 1024;
+    constexpr size_t MAX_LOOT_BUFFER_ITEMS =
+        MAX_LOOT_BUFFER_BYTES / sizeof(uint64_t);
     constexpr size_t MAX_LOOT_RESOLVE_PER_TICK = 8;
     constexpr size_t MAX_CORPSE_UPDATES_PER_TICK = 1;
     constexpr size_t MAX_CONTAINER_STATE_UPDATES_PER_TICK = 32;
+    constexpr std::uint8_t MISSING_LOOT_SCANS_BEFORE_PRUNE = 2;
+    constexpr size_t MIN_CACHE_SIZE_FOR_CATASTROPHIC_DROP_GUARD = 32;
     constexpr int MAX_CORPSE_SLOTS = 128;
     constexpr bool ENABLE_LOOT_TRANSFORM_DIAGNOSTICS = false;
     constexpr size_t MAX_OBJECT_NAME_LENGTH = 64;
@@ -368,10 +372,14 @@ void loot::clearCache()
     lootList.clear();
     loot_buffer.clear();
     liveLootPointers.clear();
+    stagedLootPointers.clear();
+    missingLootDiscoveryCounts.clear();
 
     lootListP = 0;
     lootListPtr = 0;
     lootCount = 0;
+    lootBufferScanCursor = 0;
+    lootBufferScanListPtr = 0;
 
     nextLootDiscovery = {};
     lastDogTagUpdate = {};
@@ -902,30 +910,53 @@ bool loot::refreshLootListHeader()
     lootListPtr = nextLootListPtr;
     lootCount = nextLootCount;
 
+    if (lootBufferScanListPtr != nextLootListPtr ||
+        static_cast<size_t>(nextLootCount) < lootBufferScanCursor)
+    {
+        lootBufferScanCursor = 0;
+        stagedLootPointers.clear();
+    }
+
+    lootBufferScanListPtr = nextLootListPtr;
+
     return true;
 }
 
 bool loot::buildLootBuffer()
 {
     if (lootCount <= 0 || lootCount > MAX_LOOT_COUNT)
-    {
-        clearCache();
         return false;
-    }
 
     if (!Utils::valid_pointer(lootListPtr))
-    {
-        clearCache();
         return false;
+
+    const size_t itemCount = static_cast<size_t>(lootCount);
+
+    if (lootBufferScanCursor >= itemCount)
+    {
+        lootBufferScanCursor = 0;
+        stagedLootPointers.clear();
     }
 
-    const int itemsToRead = (lootCount < MAX_LOOT_BUFFER_ITEMS) ? lootCount : MAX_LOOT_BUFFER_ITEMS;
-    loot_buffer.assign(static_cast<size_t>(itemsToRead), 0);
+    const size_t itemsToRead = std::min(MAX_LOOT_BUFFER_ITEMS, itemCount - lootBufferScanCursor);
 
-    const size_t bytes = sizeof(uint64_t) * static_cast<size_t>(itemsToRead);
-
-    if (!mem.Read(lootListPtr + 0x20, loot_buffer.data(), bytes, DmaCacheMode::Uncached, "Loot pointer buffer"))
+    if (itemsToRead == 0)
         return false;
+
+    loot_buffer.assign(itemsToRead, 0);
+
+    const size_t bytes = sizeof(uint64_t) * itemsToRead;
+    const uint64_t bufferAddress = lootListPtr + 0x20 + (sizeof(uint64_t) * lootBufferScanCursor);
+
+    if (!mem.Read(
+            bufferAddress,
+            loot_buffer.data(),
+            bytes,
+            DmaCacheMode::Uncached,
+            "Loot pointer buffer"))
+        return false;
+
+    lootBufferScanCursor += itemsToRead;
 
     return true;
 }
@@ -1903,15 +1934,39 @@ void loot::updateCorpseRequirements(std::vector<LootList>& workingCache)
     }
 }
 
-void loot::cleanupMissingLoot(std::vector<LootList>& workingCache, const std::unordered_set<uint64_t>& livePointers) const
+void loot::cleanupMissingLoot(std::vector<LootList>& workingCache, const std::unordered_set<uint64_t>& livePointers)
 {
+    
+    if (workingCache.size() >= MIN_CACHE_SIZE_FOR_CATASTROPHIC_DROP_GUARD &&
+        livePointers.size() * 2 < workingCache.size())
+    {
+        missingLootDiscoveryCounts.clear();
+        return;
+    }
+
     workingCache.erase(
         std::remove_if(
             workingCache.begin(),
             workingCache.end(),
-            [&livePointers](const LootList& item)
+            [this, &livePointers](const LootList& item)
             {
-                return !livePointers.contains(item.instance);
+                if (livePointers.contains(item.instance))
+                {
+                    missingLootDiscoveryCounts.erase(item.instance);
+                    return false;
+                }
+
+                std::uint8_t& missingCount = missingLootDiscoveryCounts[item.instance];
+
+                missingCount = std::min<std::uint8_t>(
+                    MISSING_LOOT_SCANS_BEFORE_PRUNE,
+                    static_cast<std::uint8_t>(missingCount + 1));
+
+                if (missingCount < MISSING_LOOT_SCANS_BEFORE_PRUNE)
+                    return false;
+
+                missingLootDiscoveryCounts.erase(item.instance);
+                return true;
             }
         ),
         workingCache.end()
@@ -2137,6 +2192,7 @@ void loot::lootTask()
     static int lootFailStreak = 0;
     static int lootCountFailStreak = 0;
     static int lootBufferFailStreak = 0;
+    static int unexpectedFailureStreak = 0;
     static std::chrono::steady_clock::time_point lootBackoffUntil{};
 
     try
@@ -2154,6 +2210,7 @@ void loot::lootTask()
         if (now < lootBackoffUntil)
             return;
 
+        bool completedLootDiscovery = false;
         const bool discoveryDue = nextLootDiscovery == std::chrono::steady_clock::time_point{} || now >= nextLootDiscovery;
 
         if (discoveryDue)
@@ -2219,18 +2276,31 @@ void loot::lootTask()
 
             lootBufferFailStreak = 0;
 
-            std::unordered_set<uint64_t> discoveredPointers;
-            discoveredPointers.reserve(loot_buffer.size());
+            stagedLootPointers.reserve(stagedLootPointers.size() + loot_buffer.size());
 
             for (const uint64_t pointer : loot_buffer)
             {
                 if (Utils::valid_pointer(pointer))
-                    discoveredPointers.insert(pointer);
+                    stagedLootPointers.insert(pointer);
             }
 
-            liveLootPointers = std::move(discoveredPointers);
+            if (lootBufferScanCursor >= static_cast<size_t>(lootCount))
+            {
+                
+                if (!stagedLootPointers.empty())
+                {
+                    liveLootPointers = std::move(stagedLootPointers);
+                    stagedLootPointers.clear();
+                    completedLootDiscovery = true;
+                }
+
+                lootBufferScanCursor = 0;
+            }
+
             nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
         }
+
+        unexpectedFailureStreak = 0;
 
         const auto& livePointers = liveLootPointers;
 
@@ -2329,7 +2399,8 @@ void loot::lootTask()
         updateLootableContainerStates(workingCache);
         updateCorpseRequirements(workingCache);
         updateExistingLootItems(workingCache);
-        cleanupMissingLoot(workingCache, livePointers);
+        if (completedLootDiscovery)
+            cleanupMissingLoot(workingCache, livePointers);
 
         {
             std::unique_lock lock(lootMutex);
@@ -2366,24 +2437,28 @@ void loot::lootTask()
             lootList = std::move(workingCache);
             publishCacheSnapshotLocked();
         }
+
     }
     catch (const std::exception& e)
     {
-        LOGS.logError(
-            "Exception caught in lootThread: " +
-            std::string(e.what()) +
-            ". Clearing cache..."
-        );
+        ++unexpectedFailureStreak;
 
-        clearCache();
+        if (unexpectedFailureStreak == 1 || unexpectedFailureStreak % 10 == 0)
+        {
+            LOGS.logError(
+                "[LOOT] Exception while updating; retaining the current cache: " +
+                std::string(e.what()));
+        }
     }
     catch (...)
     {
-        LOGS.logError(
-            "Unknown exception caught in lootThread. Clearing cache..."
-        );
+        ++unexpectedFailureStreak;
 
-        clearCache();
+        if (unexpectedFailureStreak == 1 || unexpectedFailureStreak % 10 == 0)
+        {
+            LOGS.logError(
+                "[LOOT] Unknown exception while updating; retaining the current cache");
+        }
     }
 }
 

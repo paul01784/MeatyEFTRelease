@@ -191,6 +191,16 @@ extern float labyrinth_configX;
 extern float labyrinth_configY;
 extern float labyrinth_configScale;
 
+// Terminal
+
+extern PDIRECT3DTEXTURE9 terminal_texture;
+extern int terminal_orgW;
+extern int terminal_orgH;
+
+extern float terminal_configX;
+extern float terminal_configY;
+extern float terminal_configScale;
+
 // Icebreaker
 
 extern PDIRECT3DTEXTURE9 ib_texture1;

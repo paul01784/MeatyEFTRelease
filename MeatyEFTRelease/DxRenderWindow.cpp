@@ -1418,6 +1418,18 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
     if (!IsSafeScale(scale))
         scale = 1.0f;
 
+    const float renderOffsetX = std::clamp(
+        std::isfinite(cfg.renderOffsetX) ? cfg.renderOffsetX : 0.0f,
+        -500.0f,
+        500.0f);
+    const float renderOffsetY = std::clamp(
+        std::isfinite(cfg.renderOffsetY) ? cfg.renderOffsetY : 0.0f,
+        -500.0f,
+        500.0f);
+
+    m_d2dRenderTarget->SetTransform(
+        D2D1::Matrix3x2F::Translation(renderOffsetX, renderOffsetY));
+
     for (const DrawCommand& cmd : commands)
     {
         if (!IsDrawCommandSafe(cmd))
@@ -1499,6 +1511,8 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
             break;
         }
     }
+
+    m_d2dRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
 }
 
 void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale)

@@ -317,6 +317,8 @@ void to_json(nlohmann::json& j, const DxWindowConfig& f)
 
         { "useDpiScale", f.useDpiScale },
         { "renderScale", f.renderScale },
+        { "renderOffsetX", f.renderOffsetX },
+        { "renderOffsetY", f.renderOffsetY },
 
         { "defaultFont", f.defaultFont }
     };
@@ -351,6 +353,8 @@ void from_json(const nlohmann::json& j, DxWindowConfig& f)
 
     f.useDpiScale = j.value("useDpiScale", f.useDpiScale);
     f.renderScale = j.value("renderScale", f.renderScale);
+    f.renderOffsetX = j.value("renderOffsetX", f.renderOffsetX);
+    f.renderOffsetY = j.value("renderOffsetY", f.renderOffsetY);
 
     if (j.contains("defaultFont"))
         f.defaultFont = j.at("defaultFont").get<DxFontSettings>();
@@ -362,6 +366,8 @@ void from_json(const nlohmann::json& j, DxWindowConfig& f)
 
     f.maxFPS = std::clamp(f.maxFPS, 30, 1000);
     f.renderScale = std::clamp(f.renderScale, 0.05f, 5.0f);
+    f.renderOffsetX = std::clamp(f.renderOffsetX, -500.0f, 500.0f);
+    f.renderOffsetY = std::clamp(f.renderOffsetY, -500.0f, 500.0f);
 
     if (f.fullscreen)
     {

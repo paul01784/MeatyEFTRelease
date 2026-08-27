@@ -16,6 +16,7 @@ namespace
 {
 	constexpr int kMaxExfilPoints = 256;
 	constexpr int kMaxExfilRequirements = 64;
+	constexpr auto kExfilStatusUpdateInterval = std::chrono::seconds(1);
 }
 
 
@@ -52,7 +53,7 @@ void Exfil::exfilTask()
 			publishCacheSnapshot();
 		}
 
-		if (now - this->lastExfilStatusUpdate < std::chrono::seconds(4))
+		if (now - this->lastExfilStatusUpdate < kExfilStatusUpdateInterval)
 			return;
 		this->lastExfilStatusUpdate = now;
 
@@ -269,7 +270,7 @@ void Exfil::updateStatus()
 	{
 		ScatterReadBatch batch(
 			mem,
-			DmaCacheMode::Cached,
+			DmaCacheMode::Uncached,
 			"Exfil update"
 		);
 
@@ -298,7 +299,11 @@ void Exfil::updateStatus()
 			}
 			else
 			{
-				exfilCache.status = getExfilStatusText(exfilCache.statusRaw);
+				const std::string statusText =
+					getExfilStatusText(exfilCache.statusRaw);
+
+				if (statusText != "Unknown" || exfilCache.status.empty())
+					exfilCache.status = statusText;
 			}
 
 			exfilCache.distance = getDistance(mainGame.localLocation, exfilCache.locationWorld);

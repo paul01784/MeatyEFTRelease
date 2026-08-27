@@ -488,6 +488,20 @@ static void renderMapDetails()
         map_orgH = labyrinth_orgH;
         texture = labyrinth_texture;
     }
+    else if (mainGame.selectedLocation == "Terminal")
+    {
+        if (!setCurrentMapSpecs)
+        {
+            currentMap::configX = terminal_configX;
+            currentMap::configY = terminal_configY;
+            currentMap::configScale = terminal_configScale;
+            setCurrentMapSpecs = true;
+        }
+
+        map_orgW = terminal_orgW;
+        map_orgH = terminal_orgH;
+        texture = terminal_texture;
+    }
     else if (mainGame.selectedLocation == "Icebreaker")
     {
         if (!setCurrentMapSpecs)
@@ -3307,6 +3321,33 @@ static void renderFuserWindow()
                 if (!editorConfig.transparentBackground)
                     changed |= menuLayout::ColourRow("Colour", "fuserBackground", (float*)&editorConfig.backgroundColour);
             }
+            if (menuLayout::Section("Overlay alignment"))
+            {
+                changed |= menuLayout::SliderFloatRow(
+                    "Horizontal (right +)",
+                    "fuserRenderOffsetX",
+                    &editorConfig.renderOffsetX,
+                    -100.0f,
+                    100.0f,
+                    "%.1f px");
+                changed |= menuLayout::SliderFloatRow(
+                    "Vertical (down +)",
+                    "fuserRenderOffsetY",
+                    &editorConfig.renderOffsetY,
+                    -100.0f,
+                    100.0f,
+                    "%.1f px");
+
+                if (ImGui::Button("Reset alignment", ImVec2(150.0f, 26.0f)))
+                {
+                    editorConfig.renderOffsetX = 0.0f;
+                    editorConfig.renderOffsetY = 0.0f;
+                    changed = true;
+                }
+
+                ImGui::TextDisabled(
+                    "Moves every Fuser draw in physical pixels. Aim is unchanged.");
+            }
             menuLayout::EndTwoColumns();
         }
         if (changed)
@@ -3395,6 +3436,10 @@ static void renderFuserWindow()
             ImGui::Text("Window ready: %s", g_DxWindow.IsWindowReady() ? "Yes" : "No");
             ImGui::Text("Window size: %d x %d", g_DxWindow.GetWindowWidth(), g_DxWindow.GetWindowHeight());
             ImGui::Text("Final scale: %.2f", g_DxWindow.GetFinalRenderScale());
+            ImGui::Text(
+                "Overlay offset: X %.1f px | Y %.1f px",
+                editorConfig.renderOffsetX,
+                editorConfig.renderOffsetY);
             ImGui::Text("Window handle: %s", g_DxWindow.GetHWND() ? "Valid" : "None");
         }
     }

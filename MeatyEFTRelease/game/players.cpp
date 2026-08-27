@@ -804,8 +804,51 @@ namespace
             : &(*it);
     }
 
-    static bool HasUsableTransformMetadata(
-        const LiveBoneRead& read)
+    static bool IsLocalGroupRosterProtectionActive()
+    {
+        constexpr int kMaxRegisteredPlayersSafe = 512;
+
+        if (!Utils::valid_pointer(mainGame.localPlayerPtr) ||
+            mainGame.localGroupId.empty())
+        {
+            return false;
+        }
+
+        const int registeredCount = mainGame.registeredPlayersCount;
+
+        if (registeredCount <= 0 ||
+            registeredCount > kMaxRegisteredPlayersSafe)
+        {
+            return false;
+        }
+
+        bool hasValidRegisteredPlayer = false;
+
+        for (int i = 0; i < registeredCount; ++i)
+        {
+            const uint64_t playerInstance = mainGame.player_buffer[i];
+
+            if (!Utils::valid_pointer(playerInstance))
+                continue;
+
+            hasValidRegisteredPlayer = true;
+
+            if (playerInstance == mainGame.localPlayerPtr)
+                return false;
+        }
+
+        return hasValidRegisteredPlayer;
+    }
+
+    static bool IsProtectedLocalGroupMember(const PlayerCache& player, const bool localGroupRosterProtectionActive)
+    {
+        return localGroupRosterProtectionActive &&
+            !player.isLocal &&
+            player.instance != mainGame.localPlayerPtr &&
+            player.groupId == mainGame.localGroupId;
+    }
+
+    static bool HasUsableTransformMetadata(const LiveBoneRead& read)
     {
         return
             read.cache.valid &&
@@ -3756,6 +3799,8 @@ void Players::updateEntity()
         return;
     }
 
+    const bool localGroupRosterProtectionActive = IsLocalGroupRosterProtectionActive();
+
     {
         std::lock_guard<std::mutex> lock(playerMutex);
 
@@ -3768,6 +3813,15 @@ void Players::updateEntity()
                     player.location,
                     mainGame.localLocation);
                 continue;
+            }
+
+            if (IsProtectedLocalGroupMember(
+                    player,
+                    localGroupRosterProtectionActive))
+            {
+                player.isDead = false;
+                player.hasExfiled = false;
+                player.P_CorpseClass = 0;
             }
 
             if (player.isDead || player.hasExfiled)
@@ -6172,17 +6226,21 @@ void Players::checkExfil()
         return;
     }
 
-    const bool localPlayerNoLongerRegistered =
-        Utils::valid_pointer(mainGame.localPlayerPtr) &&
-        alivePlayers.find(mainGame.localPlayerPtr) == alivePlayers.end();
-    const bool protectLocalGroup =
-        localPlayerNoLongerRegistered &&
-        !mainGame.localGroupId.empty();
+    const bool localGroupRosterProtectionActive = IsLocalGroupRosterProtectionActive();
 
     for (auto& cachedPlayer : cache)
     {
         if (cachedPlayer.isBTR)
             continue;
+
+        if (IsProtectedLocalGroupMember(
+                cachedPlayer,
+                localGroupRosterProtectionActive))
+        {
+            cachedPlayer.isDead = false;
+            cachedPlayer.hasExfiled = false;
+            cachedPlayer.P_CorpseClass = 0;
+        }
 
         if (cachedPlayer.isDead)
             continue;
@@ -6206,17 +6264,7 @@ void Players::checkExfil()
             continue;
         }
 
-        // Once local leaves the registered-player list it is no longer a
-        // reliable source for deciding whether local teammates have left the
-        // raid. Keep those teammates active unless the authoritative corpse
-        // path marks them dead.
-        const bool isLocalPlayer =
-            cachedPlayer.isLocal ||
-            cachedPlayer.instance == mainGame.localPlayerPtr;
-
-        if (protectLocalGroup &&
-            !isLocalPlayer &&
-            cachedPlayer.groupId == mainGame.localGroupId)
+        if (IsProtectedLocalGroupMember(cachedPlayer, localGroupRosterProtectionActive))
         {
             continue;
         }

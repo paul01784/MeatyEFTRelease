@@ -163,6 +163,17 @@ float labyrinth_configX = 256.f;
 float labyrinth_configY = 374.f;
 float labyrinth_configScale = 5.f;
 
+// Terminal
+
+PDIRECT3DTEXTURE9 terminal_texture = NULL;
+
+int terminal_orgW = 1516;
+int terminal_orgH = 1908;
+
+float terminal_configX = 2886.f;
+float terminal_configY = 2654.f;
+float terminal_configScale = 2.f;
+
 // Icebreaker
 
 PDIRECT3DTEXTURE9 ib_texture1 = NULL;
@@ -391,6 +402,20 @@ bool loadMaps(std::string mapToLoad)
             &currentMap::mapSizeY
         );
         IM_ASSERT(labyrinth_loaded);
+    }
+
+    if (mapToLoad == "Terminal")
+    {
+        std::filesystem::path file_path_terminal = cwd / "Maps" / "Terminal.png";
+        std::string terminal_file_path = file_path_terminal.string();
+
+        bool terminal_loaded = LoadTextureFromFile(
+            terminal_file_path.c_str(),
+            &terminal_texture,
+            &currentMap::mapSizeX,
+            &currentMap::mapSizeY
+        );
+        IM_ASSERT(terminal_loaded);
     }
 
     if (mapToLoad == "Icebreaker")
