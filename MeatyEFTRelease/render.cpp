@@ -7522,7 +7522,7 @@ static void renderVersionMismatchNotice()
         );
         ImGui::Spacing();
         ImGui::Text("Installed version: %s", globals::appVersion.c_str());
-        ImGui::Text("Latest version:  %s", globals::manifestVersion.c_str());
+        ImGui::Text("Latest version:  %s", globals::latestAppVersion.c_str());
         ImGui::Spacing();
         ImGui::TextWrapped(
             "You can continue using this version. Updating is recommended."
