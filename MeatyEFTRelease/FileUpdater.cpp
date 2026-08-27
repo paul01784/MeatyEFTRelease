@@ -663,11 +663,28 @@ UpdateResult FileUpdater::Synchronise(const fs::path& applicationDirectory, cons
             throw std::runtime_error(std::string("Failed to parse manifest.json: ") + exception.what());
         }
 
-        const int manifestVersion = manifest.value("manifestVersion", 0);
+        const auto manifestVersionIt = manifest.find("manifestVersion");
 
-        if (manifestVersion != 1)
+        if (manifestVersionIt == manifest.end())
         {
-            throw std::runtime_error("Unsupported manifest version: " + std::to_string(manifestVersion));
+            result.warnings.emplace_back(
+                "manifestVersion is missing; version notice disabled"
+            );
+        }
+        else if (manifestVersionIt->is_string())
+        {
+            result.manifestVersion = manifestVersionIt->get<std::string>();
+        }
+        else if (manifestVersionIt->is_number_integer() ||
+            manifestVersionIt->is_number_unsigned())
+        {
+            result.manifestVersion = manifestVersionIt->dump();
+        }
+        else
+        {
+            result.warnings.emplace_back(
+                "manifestVersion must be a string; version notice disabled"
+            );
         }
 
         if (!manifest.contains("files") || !manifest["files"].is_array())

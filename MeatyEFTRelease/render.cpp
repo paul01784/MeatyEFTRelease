@@ -7487,6 +7487,54 @@ static void renderMainScreen()
 
 }
 
+static void renderVersionMismatchNotice()
+{
+    if (!globals::showVersionMismatchWarning)
+        return;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetNextWindowPos(
+        viewport->GetCenter(),
+        ImGuiCond_Appearing,
+        ImVec2(0.5f, 0.5f)
+    );
+    ImGui::SetNextWindowSize(
+        ImVec2(460.0f, 0.0f),
+        ImGuiCond_Appearing
+    );
+
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoSavedSettings;
+
+    if (ImGui::Begin("Version notice###VersionMismatchNotice", &globals::showVersionMismatchWarning, flags))
+    {
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetWindowFocus();
+
+        ImGui::TextWrapped(
+            "Application version outdated"
+        );
+        ImGui::Spacing();
+        ImGui::Text("Installed version: %s", globals::appVersion.c_str());
+        ImGui::Text("Latest version:  %s", globals::manifestVersion.c_str());
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "You can continue using this version. Updating is recommended."
+        );
+        ImGui::Spacing();
+
+        if (ImGui::Button("Continue", ImVec2(120.0f, 0.0f)))
+            globals::showVersionMismatchWarning = false;
+    }
+    ImGui::End();
+}
+
 static void load_styles()
 {
     ImVec4* colors = ImGui::GetStyle().Colors;
@@ -7773,6 +7821,7 @@ bool renderThread()
 
         // Our app function for rendering whats on screen
         renderMainScreen();
+        renderVersionMismatchNotice();
 
         // Rendering
         ImGui::EndFrame();

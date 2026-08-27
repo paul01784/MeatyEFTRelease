@@ -7,6 +7,8 @@
 
 struct globals {
     static std::string appVersion;
+    static std::string manifestVersion;
+    static bool showVersionMismatchWarning;
     static float appTextScale;
     static float appWindowAlpha;
     static float appRadarMaxFPS;

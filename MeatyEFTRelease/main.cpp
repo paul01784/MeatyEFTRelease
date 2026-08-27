@@ -121,6 +121,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                         throw std::runtime_error("File update check failed: " + updateResult.error);
                     }
 
+                    globals::manifestVersion = updateResult.manifestVersion;
+                    globals::showVersionMismatchWarning = !globals::manifestVersion.empty() && globals::manifestVersion != globals::appVersion;
+
+                    if (!globals::manifestVersion.empty())
+                    {
+                        LOGS.logInfo(
+                            "[MAIN][VERSION] Installed: " +
+                            globals::appVersion +
+                            ", manifest: " +
+                            globals::manifestVersion
+                        );
+
+                        if (globals::showVersionMismatchWarning)
+                            LOGS.logWarn("[MAIN][VERSION] Application version mismatch");
+                    }
+
                     LOGS.logInfo(
                         "[MAIN][UPDATER] Checked: " +
                         std::to_string(
