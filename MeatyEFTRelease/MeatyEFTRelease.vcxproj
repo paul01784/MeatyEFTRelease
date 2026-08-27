@@ -771,6 +771,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ResourceCompile Include="MeatyEFTRelease.rc" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="app\resources\MeatyEFT.ico" />
     <Image Include="app\resources\MeatyEFT.png" />
     <Image Include="bitmap1.bmp" />
     <Image Include="resources\MeatyEFT.png" />

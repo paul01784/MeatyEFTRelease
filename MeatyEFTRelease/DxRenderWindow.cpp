@@ -1,6 +1,7 @@
 #include "app/debug.h"
 #include "app/DxRenderWindow.h"
 #include "app/fuserRender.h"
+#include "resource.h"
 
 #include <algorithm>
 #include <array>
@@ -724,6 +725,8 @@ bool DxRenderWindow::CreateAppWindow()
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = DxRenderWindow::WndProc;
     wc.hInstance = hInstance;
+    wc.hIcon = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR | LR_SHARED));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR | LR_SHARED));
     wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
     wc.hbrBackground = nullptr;
     wc.lpszClassName = DX_RENDER_WINDOW_CLASS_NAME;

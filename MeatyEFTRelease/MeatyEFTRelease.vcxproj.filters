@@ -635,6 +635,7 @@
     <ResourceCompile Include="MeatyEFTRelease.rc" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="app\resources\MeatyEFT.ico" />
     <Image Include="bitmap1.bmp" />
     <Image Include="resources\MeatyEFT.png" />
     <Image Include="app\resources\MeatyEFT.png" />
