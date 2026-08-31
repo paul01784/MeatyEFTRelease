@@ -10613,7 +10613,7 @@ static void ImGui::ErrorCheckNewFrameSanityChecks()
     if (true) IM_ASSERT(1); else IM_ASSERT(0);
 
     // Emscripten backends are often imprecise in their submission of DeltaTime. (#6114, #3644)
-    // Ideally the Emscripten app/backend should aim to fix or smooth this value and avoid feeding zero, but we tolerate it.
+    // Ideally the Emscripten UI/backend should aim to fix or smooth this value and avoid feeding zero, but we tolerate it.
 #ifdef __EMSCRIPTEN__
     if (g.IO.DeltaTime <= 0.0f && g.FrameCount > 0)
         g.IO.DeltaTime = 0.00001f;

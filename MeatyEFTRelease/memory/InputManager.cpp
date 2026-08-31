@@ -3,7 +3,7 @@
 #include "Registry.h"
 #include "Memory.h"
 #include <iostream>
-#include "../app/debug.h"
+#include "../UI/debug.h"
 
 namespace
 {

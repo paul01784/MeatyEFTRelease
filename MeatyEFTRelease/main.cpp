@@ -1,14 +1,13 @@
-#include "app/includes.h"
-#include "app/globals.h"
-#include "app/render.h"
-#include "app/config.h"
-#include "game/headers/tarkovdevquery.h"
-#include "game/headers/maingame.h"
-#include "game/headers/tarkovdevquery.h"
-#include "app/DogTagAPI.h"
+#include "UI/includes.h"
+#include "UI/globals.h"
+#include "UI/render.h"
+#include "UI/config.h"
+#include "Web/TarkovDev/TarkovDevClient.h"
+#include "Tarkov/GameWorld/MainGame.h"
+#include "UI/DogTagAPI.h"
 
-#include "app/SplashWindow.h"
-#include "app/resource.h"
+#include "UI/SplashWindow.h"
+#include "UI/resource.h"
 
 #include <atomic>
 #include <exception>
@@ -17,7 +16,7 @@
 #include <string>
 #include <thread>
 
-#include "app/FileUpdater.h"
+#include "UI/FileUpdater.h"
 
 // This shouldnt be changed unless your using your own manifest 
 static constexpr const char* kManifestUrl = 

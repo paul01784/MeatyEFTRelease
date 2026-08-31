@@ -1,25 +1,73 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="app">
+    <Filter Include="UI">
       <UniqueIdentifier>{9a737f2b-6050-479a-a9dc-416aa35858e8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI\Widgets">
+      <UniqueIdentifier>{9BFF65C7-FE92-4566-B9B1-FC2C54C2EE87}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov">
+      <UniqueIdentifier>{7A9AA9E1-EBED-4C76-BFAA-E2A9A0EC1378}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\GameWorld">
+      <UniqueIdentifier>{E98AA57A-1969-420A-80F4-8E3A24F346DB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\GameWorld\Player">
+      <UniqueIdentifier>{FBEAB4A5-1655-4EA1-A32C-0935B566A637}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\GameWorld\Loot">
+      <UniqueIdentifier>{C7A89E57-1EF3-4225-9FCA-9B5455282E57}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\GameWorld\Exits">
+      <UniqueIdentifier>{2E124A3D-29C3-47E8-99A4-EB79D80E4325}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\GameWorld\Explosives">
+      <UniqueIdentifier>{64EF88A9-7AC6-4DCF-8126-A2465980736B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\Unity">
+      <UniqueIdentifier>{ACA2CD69-8C70-4BEE-8B74-0FAEAC8E9A1C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\Features">
+      <UniqueIdentifier>{6B5E4A4E-0BB2-4FEB-A7AA-2077E18A90A9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\Features\Aim">
+      <UniqueIdentifier>{6BBBE47E-45F4-4301-8C8F-B6E55F9B7141}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\Features\Visibility">
+      <UniqueIdentifier>{0426BE76-25E0-40FB-A23A-BD4F7489E9E5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\QuestPlanner">
+      <UniqueIdentifier>{25BAE156-ED4F-4A8C-A74C-B7935E1E2539}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web">
+      <UniqueIdentifier>{4CDF50D4-1E47-4B65-B514-6D29940E46D0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\TarkovDev">
+      <UniqueIdentifier>{0214F3B2-9AE7-4B1E-9378-53B2B652C6F9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core">
+      <UniqueIdentifier>{71E60CFA-17A5-4DDD-BBB9-A1B80E2F1AF7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tarkov\SDK">
+      <UniqueIdentifier>{CE30CBB0-156E-4A3C-9042-DC53679A0C12}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="app\render.h">
-      <Filter>app</Filter>
+    <ClInclude Include="UI\render.h">
+      <Filter>UI</Filter>
     </ClInclude>
-    <ClInclude Include="app\debug.h">
-      <Filter>app</Filter>
+    <ClInclude Include="UI\debug.h">
+      <Filter>UI</Filter>
     </ClInclude>
-    <ClInclude Include="app\includes.h">
-      <Filter>app</Filter>
+    <ClInclude Include="UI\includes.h">
+      <Filter>UI</Filter>
     </ClInclude>
-    <ClInclude Include="app\IconsFontAwesome7.h">
-      <Filter>app</Filter>
+    <ClInclude Include="UI\IconsFontAwesome7.h">
+      <Filter>UI</Filter>
     </ClInclude>
-    <ClInclude Include="app\IconsFontAwesomeCompat.h">
-      <Filter>app</Filter>
+    <ClInclude Include="UI\IconsFontAwesomeCompat.h">
+      <Filter>UI</Filter>
     </ClInclude>
     <ClInclude Include="external\imgui\backends\imgui_impl_dx9.h" />
     <ClInclude Include="external\imgui\backends\imgui_impl_win32.h" />
@@ -76,7 +124,7 @@
     <ClInclude Include="external\nlohmann\json.hpp" />
     <ClInclude Include="external\nlohmann\json_fwd.hpp" />
     <ClInclude Include="external\nlohmann\ordered_map.hpp" />
-    <ClInclude Include="app\maps.h" />
+    <ClInclude Include="UI\maps.h" />
     <ClInclude Include="external\glm\detail\_features.hpp" />
     <ClInclude Include="external\glm\detail\_fixes.hpp" />
     <ClInclude Include="external\glm\detail\_noise.hpp" />
@@ -367,9 +415,13 @@
     <ClInclude Include="external\glm\vec3.hpp" />
     <ClInclude Include="external\glm\vec4.hpp" />
     <ClInclude Include="external\glm\vector_relational.hpp" />
-    <ClInclude Include="game\headers\maingame.h" />
-    <ClInclude Include="game\headers\utils.h" />
-    <ClInclude Include="app\taskManager.h" />
+    <ClInclude Include="Tarkov\GameWorld\MainGame.h">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Utilities.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\taskManager.h" />
     <ClInclude Include="memory\framework.h" />
     <ClInclude Include="memory\DmaScheduler.h" />
     <ClInclude Include="memory\InputManager.h" />
@@ -391,53 +443,184 @@
     <ClInclude Include="external\curl\typecheck-gcc.h" />
     <ClInclude Include="external\curl\urlapi.h" />
     <ClInclude Include="external\curl\websockets.h" />
-    <ClInclude Include="app\config.h" />
-    <ClInclude Include="app\draw.h" />
-    <ClInclude Include="app\text.h" />
+    <ClInclude Include="UI\config.h" />
+    <ClInclude Include="UI\draw.h" />
+    <ClInclude Include="UI\text.h" />
     <ClInclude Include="libs\leechcore.h" />
     <ClInclude Include="libs\skStr.h" />
     <ClInclude Include="libs\vmmdll.h" />
-    <ClInclude Include="game\headers\unitysdk.h" />
-    <ClInclude Include="game\headers\sdk.h" />
-    <ClInclude Include="game\unity\gameObjectManager.h" />
-    <ClInclude Include="game\headers\players.h" />
-    <ClInclude Include="game\headers\unityHelper.h" />
-    <ClInclude Include="game\headers\camera.h" />
-    <ClInclude Include="game\headers\tarkovdevquery.h" />
-    <ClInclude Include="game\headers\taskZonePatch.h" />
-    <ClInclude Include="game\headers\loot.h" />
-    <ClInclude Include="game\headers\transform.h" />
-    <ClInclude Include="game\headers\questManager.h" />
-    <ClInclude Include="game\headers\wishlist.h" />
-    <ClInclude Include="game\headers\explosives.h" />
-    <ClInclude Include="game\headers\dogtag.h" />
-    <ClInclude Include="game\headers\exfil.h" />
-    <ClInclude Include="game\headers\transitLocations.h" />
-    <ClInclude Include="app\DogTagAPI.h" />
+    <ClInclude Include="Tarkov\Unity\UnityOffsets.h">
+      <Filter>Tarkov\Unity</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\SDK\EftOffsets.h">
+      <Filter>Tarkov\SDK</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\Unity\GameObjectManager.h">
+      <Filter>Tarkov\Unity</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\RegisteredPlayers.h">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\Player.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\PlayerRuntimeModel.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\PlayerMemoryAccess.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\PlayerClassifier.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\PlayerLookup.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\PlayerPosition.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\PlayerAppearance.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\ClientPlayer.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\ObservedPlayer.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\LocalPlayer.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\BtrOperator.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\Unity\UnityContainers.h">
+      <Filter>Tarkov\Unity</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\Unity\Camera.h">
+      <Filter>Tarkov\Unity</Filter>
+    </ClInclude>
+    <ClInclude Include="Web\TarkovDev\TarkovDevClient.h">
+      <Filter>Web\TarkovDev</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\QuestPlanner\TaskZonePatches.h">
+      <Filter>Tarkov\QuestPlanner</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\Loot.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\LootEntity.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\LootEntityModel.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\LootClassifier.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\ItemLoot.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\QuestLoot.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\ContainerLoot.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\CorpseLoot.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\AirdropLoot.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\Unity\Transform.h">
+      <Filter>Tarkov\Unity</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\QuestManager.h">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Loot\WishList.h">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Explosives\ExplosiveManager.h">
+      <Filter>Tarkov\GameWorld\Explosives</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\DogTagCache.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Exits\Exfil.h">
+      <Filter>Tarkov\GameWorld\Exits</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Exits\TransitLocations.h">
+      <Filter>Tarkov\GameWorld\Exits</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\DogTagAPI.h" />
     <ClInclude Include="resource.h" />
-    <ClInclude Include="app\DxRenderWindow.h" />
-    <ClInclude Include="app\fuserRender.h" />
+    <ClInclude Include="UI\DxRenderWindow.h" />
+    <ClInclude Include="UI\fuserRender.h" />
     <ClInclude Include="fuser\colour.h" />
-    <ClInclude Include="game\headers\ballistics.h" />
-    <ClInclude Include="game\modules\HandsManager.h" />
-    <ClInclude Include="app\makcu.h" />
-    <ClInclude Include="app\menuLayout.h" />
-    <ClInclude Include="app\globals.h" />
-    <ClInclude Include="game\headers\readOnlyAim.h" />
-    <ClInclude Include="app\perfMonitor.h" />
-    <ClInclude Include="game\headers\fireport.h" />
-    <ClInclude Include="game\headers\game_world.h" />
-    <ClInclude Include="game\headers\watchList.h" />
-    <ClInclude Include="app\resource.h" />
-    <ClInclude Include="app\SplashWindow.h" />
-    <ClInclude Include="app\FileUpdater.h" />
-    <ClInclude Include="app\aimview.h" />
+    <ClInclude Include="Tarkov\Features\Aim\Ballistics.h">
+      <Filter>Tarkov\Features\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\HandsManager.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\makcu.h" />
+    <ClInclude Include="UI\menuLayout.h" />
+    <ClInclude Include="UI\globals.h" />
+    <ClInclude Include="Tarkov\Features\Aim\ReadOnlyAim.h">
+      <Filter>Tarkov\Features\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\perfMonitor.h" />
+    <ClInclude Include="Tarkov\Features\Aim\FireportTracker.h">
+      <Filter>Tarkov\Features\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\GameWorld.h">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\WatchList.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\resource.h" />
+    <ClInclude Include="UI\SplashWindow.h" />
+    <ClInclude Include="UI\FileUpdater.h" />
+    <ClInclude Include="UI\aimview.h" />
+    <ClInclude Include="UI\Widgets\LootWidget.h">
+      <Filter>UI\Widgets</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\Widgets\MapWidget.h">
+      <Filter>UI\Widgets</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\Widgets\QuestWidget.h">
+      <Filter>UI\Widgets</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\Widgets\FuserWidget.h">
+      <Filter>UI\Widgets</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="debug.cpp" />
+    <ClCompile Include="UI\debug.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="render.cpp" />
-    <ClCompile Include="globals.cpp" />
+    <ClCompile Include="UI\render.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\Widgets\LootWidget.cpp">
+      <Filter>UI\Widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\Widgets\MapWidget.cpp">
+      <Filter>UI\Widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\Widgets\QuestWidget.cpp">
+      <Filter>UI\Widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\Widgets\FuserWidget.cpp">
+      <Filter>UI\Widgets</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\globals.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
     <ClCompile Include="external\imgui\backends\imgui_impl_dx9.cpp" />
     <ClCompile Include="external\imgui\backends\imgui_impl_win32.cpp" />
     <ClCompile Include="external\imgui\misc\cpp\imgui_stdlib.cpp" />
@@ -446,43 +629,157 @@
     <ClCompile Include="external\imgui\imgui_draw.cpp" />
     <ClCompile Include="external\imgui\imgui_tables.cpp" />
     <ClCompile Include="external\imgui\imgui_widgets.cpp" />
-    <ClCompile Include="maps.cpp" />
+    <ClCompile Include="UI\maps.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
     <ClCompile Include="external\glm\detail\glm.cpp" />
     <ClCompile Include="external\glm\glm.cppm" />
-    <ClCompile Include="game\maingame.cpp" />
-    <ClCompile Include="taskManager.cpp" />
+    <ClCompile Include="Tarkov\GameWorld\MainGame.cpp">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\taskManager.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
     <ClCompile Include="memory\InputManager.cpp" />
     <ClCompile Include="memory\Memory.cpp" />
     <ClCompile Include="memory\Registry.cpp" />
     <ClCompile Include="memory\Shellcode.cpp" />
-    <ClCompile Include="config.cpp" />
-    <ClCompile Include="game\utils.cpp" />
-    <ClCompile Include="game\players.cpp" />
-    <ClCompile Include="game\camera.cpp" />
-    <ClCompile Include="game\tarkovdevquery.cpp" />
-    <ClCompile Include="game\loot.cpp" />
-    <ClCompile Include="game\transform.cpp" />
-    <ClCompile Include="game\questManager.cpp" />
-    <ClCompile Include="game\wishlist.cpp" />
-    <ClCompile Include="game\explosives.cpp" />
-    <ClCompile Include="game\dogtag.cpp" />
-    <ClCompile Include="game\exfil.cpp" />
-    <ClCompile Include="DogTagAPI.cpp" />
-    <ClCompile Include="DxRenderWindow.cpp" />
-    <ClCompile Include="makcu.cpp" />
-    <ClCompile Include="game\readOnlyAim.cpp" />
-    <ClCompile Include="game\fireport.cpp" />
-    <ClCompile Include="game\game_world.cpp" />
-    <ClCompile Include="game\watchlist.cpp" />
-    <ClCompile Include="FileUpdater.cpp" />
-    <ClCompile Include="aimview.cpp" />
+    <ClCompile Include="UI\config.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\Utilities.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\RegisteredPlayers.cpp">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\BtrOperator.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\ClientPlayer.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\LocalPlayer.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\ObservedPlayer.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\PlayerClassifier.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\PlayerHands.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\PlayerRegistration.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\PlayerUpdates.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\PlayerAppearance.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\PlayerMetadata.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\PlayerEquipment.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\PlayerBones.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\BtrTracking.cpp">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\PlayerGrouping.cpp">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\PlayerExfil.cpp">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\Unity\Camera.cpp">
+      <Filter>Tarkov\Unity</Filter>
+    </ClCompile>
+    <ClCompile Include="Web\TarkovDev\TarkovDevClient.cpp">
+      <Filter>Web\TarkovDev</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\Loot.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\LootEntityModel.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\LootClassifier.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\ItemLoot.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\QuestLoot.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\ContainerLoot.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\CorpseLoot.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\AirdropLoot.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\Unity\Transform.cpp">
+      <Filter>Tarkov\Unity</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\QuestManager.cpp">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Loot\WishList.cpp">
+      <Filter>Tarkov\GameWorld\Loot</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Explosives\ExplosiveManager.cpp">
+      <Filter>Tarkov\GameWorld\Explosives</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\DogTagCache.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Exits\Exfil.cpp">
+      <Filter>Tarkov\GameWorld\Exits</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\DogTagAPI.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\DxRenderWindow.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\makcu.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\Features\Aim\ReadOnlyAim.cpp">
+      <Filter>Tarkov\Features\Aim</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\Features\Aim\FireportTracker.cpp">
+      <Filter>Tarkov\Features\Aim</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\GameWorld.cpp">
+      <Filter>Tarkov\GameWorld</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\GameWorld\Player\WatchList.cpp">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\FileUpdater.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\aimview.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <Font Include="app\fonts\fa-solid-900.otf" />
-    <Font Include="app\fonts\forkawesome-webfont.ttf" />
+    <Font Include="UI\fonts\fa-solid-900.otf" />
+    <Font Include="UI\fonts\forkawesome-webfont.ttf" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="app\fonts\FONT-AWESOME-LICENSE.txt" />
+    <None Include="UI\fonts\FONT-AWESOME-LICENSE.txt" />
     <None Include="external\glm\detail\func_common.inl" />
     <None Include="external\glm\detail\func_common_simd.inl" />
     <None Include="external\glm\detail\func_exponential.inl" />
@@ -635,9 +932,19 @@
     <ResourceCompile Include="MeatyEFTRelease.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="app\resources\MeatyEFT.ico" />
+    <Image Include="UI\resources\MeatyEFT.ico" />
     <Image Include="bitmap1.bmp" />
     <Image Include="resources\MeatyEFT.png" />
-    <Image Include="app\resources\MeatyEFT.png" />
+    <Image Include="UI\resources\MeatyEFT.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Tarkov\Features\Visibility\AtlasVisibility.h">
+      <Filter>Tarkov\Features\Visibility</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Tarkov\Features\Visibility\AtlasVisibility.cpp">
+      <Filter>Tarkov\Features\Visibility</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

@@ -1,8 +1,8 @@
 #include "pch.h"
 #include "Memory.h"
-#include "../app/globals.h"
-#include "../app/debug.h"
-#include "../app/perfMonitor.h"
+#include "../UI/globals.h"
+#include "../UI/debug.h"
+#include "../UI/perfMonitor.h"
 
 #include <thread>
 #include <iostream>

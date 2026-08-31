@@ -1,0 +1,214 @@
+#include "includes.h"
+#include "globals.h"
+
+
+//define globals
+std::string globals::appVersion = "1.0.28.19";
+std::string globals::latestAppVersion = "";
+bool globals::showVersionMismatchWarning = false;
+float globals::appTextScale = 1.f;
+float globals::appWindowAlpha = 0.7f;
+float globals::appRadarMaxFPS = 60.f;
+std::string globals::dogTagAPIKey = "";
+
+std::string globals::radarSubText = "";
+
+double globals::taskPlayers = 20;
+double globals::taskPlayerPositions = 10;
+double globals::taskPlayersBones = 33;
+double globals::taskStaticVisibility = 250;
+double globals::taskGrenades = 100;
+double globals::taskPlayersEquipment = 2000;
+double globals::taskPlayerMetadata = 250;
+double globals::taskExfil = 5000;
+double globals::taskLoot = 250;
+double globals::taskQuest = 7000;
+double globals::taskWishManager = 1000;
+double globals::taskTripWire = 100;
+double globals::taskKeyManager = 25;
+// Poll frequently so a busy DMA gate can be retried on the next scheduler tick.
+// Camera::cameraTask limits successful matrix reads to its own target interval.
+double globals::taskCamera = 1;
+double globals::taskFireport = 16;
+// Lightweight scheduler tick; RunCacheMaintenance enforces the actual
+// 300 ms memory and 2 second TLB partial-refresh intervals.
+double globals::taskMemoryManager = 100;
+double globals::taskRaidMonitor = 800;
+double globals::taskAim = 1;
+
+// App menu settings/status
+bool appMenu::appSettings = false;
+bool appMenu::appLootFilters = false;
+bool appMenu::appFuser = false;
+bool appMenu::appMakcu = false;
+bool appMenu::appQuests = false;
+bool appMenu::appWatchList = false;
+
+bool appMenu::widgetPlayers = true;
+bool appMenu::widgetTopLoot = false;
+bool appMenu::widgetExfil = false;
+bool appMenu::widgetExfil_Scav = false;
+bool appMenu::widgetLoot = false;
+bool appMenu::widgetDebug = false;
+
+// mapGlobals struct defaults/current values
+bool mapGlobals::followLocal = true; 
+glm::vec3 mapGlobals::focusPoint = glm::vec3(0, 0, 0);
+glm::vec3 mapGlobals::lootFocusRippleLocation = glm::vec3(0, 0, 0);
+std::chrono::steady_clock::time_point mapGlobals::lootFocusRippleUntil{};
+
+void mapGlobals::startLootFocusRipple(const glm::vec3& location)
+{
+    lootFocusRippleLocation = location;
+    lootFocusRippleUntil = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+}
+
+// gameGlobals struct
+bool gameGlobals::gameRunning = false;
+bool gameGlobals::inHideout = false;
+
+
+// appGlobals struct
+std::atomic_bool appGlobals::runRadar = false;
+std::atomic_bool appGlobals::runThreads = false;
+
+// memoryGlobals struct
+std::atomic_bool memoryGlobals::dmaConnected{ false };
+std::atomic_bool memoryGlobals::processFound{ false };
+bool memoryGlobals::dmaAutoConnect = false;
+bool memoryGlobals::dmaCloseAll = true;
+bool memoryGlobals::dmaShowStats = true;
+
+
+bool radarGlobals::minimalView = false;
+bool radarGlobals::drawPlayers = false;
+bool radarGlobals::drawLoot = false;
+bool radarGlobals::drawQuestHelper = false;
+bool radarGlobals::drawGrenades = false;
+bool radarGlobals::drawTripwires = false;
+bool radarGlobals::drawTripwireLine = true;
+bool radarGlobals::drawExfils = false;
+bool radarGlobals::drawSecretExfils = true;
+bool radarGlobals::drawTransitExfils = true;
+int radarGlobals::localAimLine = 100;
+int radarGlobals::friendAimLine = 100;
+int radarGlobals::enemyAimLine = 100;
+bool radarGlobals::drawAimLineTargets = true;
+float radarGlobals::aimLineTargetAngle = 7.5f;
+int radarGlobals::aimLineTargetMaxDistance = 1000;
+bool radarGlobals::getPlayerEquip = false;
+bool radarGlobals::getPlayerStats = false;
+int radarGlobals::tarkovDevDataMode = 1;
+float radarGlobals::textScale = 1.0f;
+int radarGlobals::fontIndex = 0;
+bool radarGlobals::fontBold = true;
+
+bool espGlobals::espEnabled = false;
+bool espGlobals::drawPlayers = false;
+int espGlobals::drawPlayerDist = 200;
+int espGlobals::aimOverlayAlert = 1;
+int espGlobals::drawCorpseDist = 100;
+bool espGlobals::drawGrenades = false;
+int espGlobals::drawGrenadesDist = 100;
+bool espGlobals::drawTripwires = false;
+int espGlobals::drawTripwiresDist = 100;
+bool espGlobals::drawLoot = false;
+bool espGlobals::drawCorpse = false;
+int espGlobals::drawLootDist = 40;
+bool espGlobals::drawQuestHelper = false;
+bool espGlobals::drawBoxPlayers = false;
+bool espGlobals::drawHealthPlayers = false;
+
+glm::vec2 espGlobals::gameRes = glm::vec2(1920.f, 1080.f);
+int espGlobals::gameResInt = 0;
+bool espGlobals::drawSkeletons = false;
+bool espGlobals::drawCrosshair = false;
+int espGlobals::crosshairType = 0;
+int espGlobals::crosshairSize = 2;
+bool espGlobals::drawHeadDot = false;
+float espGlobals::headDotSize = 1.5f;
+bool espGlobals::runEsp = false;
+int espGlobals::drawExfilDist = 1000;
+bool espGlobals::drawExfil = true;
+bool espGlobals::drawSecretExfils = true;
+bool espGlobals::drawTransitExfils = true;
+
+bool aimGlobals::aimEnabled = false;
+bool aimGlobals::predictionEnabled = false;
+float aimGlobals::aimFOV = 50.f;
+int aimGlobals::aimDistance = 100;
+boneListIndexes aimGlobals::aiBone = boneListIndexes::Head;
+boneListIndexes aimGlobals::pmcBone = boneListIndexes::Head;
+TargetMode aimGlobals::targetMode = TargetMode::FOV;
+bool aimGlobals::targetLock = false;
+float aimGlobals::aimSmooth = 4.f;
+float aimGlobals::aimSpeedPixelsPerSecond = 1200.f;
+float aimGlobals::aimDeadzonePixels = 2.5f;
+float aimGlobals::aimOffsetX = 0.f;
+float aimGlobals::aimOffsetY = 0.f;
+AimReference aimGlobals::aimReference = AimReference::Crosshair;
+bool aimGlobals::aimClosestBoneToFireport = false;
+bool aimGlobals::showAimFovRing = true;
+bool aimGlobals::drawFireportLine = true;
+
+
+glm::vec4 coloursGlobals::playerPMC = { 1,1,1,1 };
+glm::vec4 coloursGlobals::playerScav = { 1,1,1,1 };
+glm::vec4 coloursGlobals::playerAI = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerBoss = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerBlackDiv = glm::vec4(0.75f, 0.10f, 0.95f, 1.0f);
+glm::vec4 coloursGlobals::aiBTR = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerWatched = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerFriendly = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerLocal = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerSkeleton = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerCorpse = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::playerGroupLine = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::grenades = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::tripwires = glm::vec4(1, 0.3f, 0, 1);
+glm::vec4 coloursGlobals::exfils = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::questMarker = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::crosshair = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::fovCircle = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::questColour = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::wishListColour = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::valueLootColour = glm::vec4(1, 1, 1, 1);
+glm::vec4 coloursGlobals::containerColour = glm::vec4(1, 1, 1, 1);
+
+WindowsKey keyGlobals::aimKey = WindowsKey::LeftControl;
+WindowsKey keyGlobals::toggleFollow = WindowsKey::Enter;
+WindowsKey keyGlobals::battleMode = WindowsKey::F12;
+WindowsKey keyGlobals::toggleRadarMinView = WindowsKey::F11;
+
+bool lootGlobals::enableQuestLoot = false;
+bool lootGlobals::enableWishListLoot = false;
+bool lootGlobals::enableValueLoot = false;
+bool lootGlobals::showLootValue = false;
+int lootGlobals::lootValuePriceSource = 0;
+std::vector<std::string> lootGlobals::selectedLootCategories;
+glm::vec4 lootGlobals::categoryLootColour = glm::vec4(1, 1, 1, 1);
+bool lootGlobals::hideSearched = false;
+int lootGlobals::containerDistance = 250;
+int lootGlobals::valueLootFrom = 500000;
+int lootGlobals::valueLootFromEquip = 500000;
+bool lootGlobals::drawDrawer = false;
+bool lootGlobals::drawDuffle = false;
+bool lootGlobals::drawSafe = false;
+bool lootGlobals::drawWeaponBox = false;
+bool lootGlobals::drawTechCrate = false;
+bool lootGlobals::drawRationCrate = false;
+bool lootGlobals::drawMedicalCrate = false;
+bool lootGlobals::drawJacket = false;
+bool lootGlobals::drawMedPackage = false;
+bool lootGlobals::drawMedBox = false;
+bool lootGlobals::drawToolbox = false;
+bool lootGlobals::drawGrenadeBox = false;
+bool lootGlobals::drawBuriedStash = false;
+bool lootGlobals::drawGroundCache = false;
+bool lootGlobals::drawWoodenCrate = false;
+bool lootGlobals::drawSuitcase = false;
+bool lootGlobals::drawAmmoBox = false;
+bool lootGlobals::drawDeadBody = false;
+bool lootGlobals::drawPCBlock = false;
+bool lootGlobals::drawRegister = false;
+bool lootGlobals::drawAirDrops = false;
