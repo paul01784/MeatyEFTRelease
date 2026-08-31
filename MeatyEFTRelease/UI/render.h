@@ -52,20 +52,6 @@ enum boneListIndexes
     Base         // 12
 };
 
-enum class WindowsKey {
-    Mouse0 = VK_LBUTTON,
-    Mouse1 = VK_RBUTTON,
-    Mouse2 = VK_MBUTTON,
-    Mouse3 = VK_XBUTTON1,
-    Mouse4 = VK_XBUTTON2,
-    LeftControl = VK_LCONTROL,
-    LeftAlt = VK_LMENU,
-    LeftShift = VK_LSHIFT,
-    Enter = VK_RETURN,
-    F11 = VK_F11,
-    F12 = VK_F12,
-};
-
 enum class BoneList
 {
     head = 133,
@@ -90,8 +76,5 @@ enum class AimReference : int
     Crosshair = 0,
     Fireport = 1,
 };
-
-const char* WindowsKeyToString(WindowsKey key);
-
 
 static bool setCurrentMapSpecs = false;

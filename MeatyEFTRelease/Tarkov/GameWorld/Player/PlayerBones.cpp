@@ -4,7 +4,7 @@
 #include "PlayerClassifier.h"
 #include "PlayerPosition.h"
 
-#include "../../../UI/DogTagAPI.h"
+#include "../../../Web/MeatyAPI/DogTagAPI.h"
 #include "../../../UI/debug.h"
 #include "../../../UI/globals.h"
 #include "../../Features/Visibility/AtlasVisibility.h"
@@ -1393,7 +1393,7 @@ void RegisteredPlayers::boneTask()
 
         constexpr float kFullBoneUpdateDistanceMargin = 1.0f;
 
-        const float drawPlayerDistance = static_cast<float>(espGlobals::drawPlayerDist);
+        const float drawPlayerDistance = static_cast<float>(espGlobals::getMaximumPlayerDrawDistance());
         const bool closestFireportBoneEnabled =
             aimGlobals::aimEnabled &&
             aimGlobals::aimReference == AimReference::Fireport &&

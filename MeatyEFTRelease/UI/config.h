@@ -8,6 +8,7 @@
 #include "../Core/Utilities.h"
 #include "../Tarkov/GameWorld/Loot/Loot.h"
 #include "DxRenderWindow.h"
+#include "aimview.h"
 #include "makcu.h"
 #include "../Tarkov/Features/Visibility/AtlasVisibility.h"
 
@@ -23,6 +24,9 @@ void from_json(const nlohmann::json& j, radarGlobals& r);
 
 void to_json(nlohmann::json& j, const espGlobals& e);
 void from_json(const nlohmann::json& j, espGlobals& e);
+
+void to_json(nlohmann::json& j, const AimViewConfig& a);
+void from_json(const nlohmann::json& j, AimViewConfig& a);
 
 void to_json(nlohmann::json& j, const atlasVisibilityGlobals& v);
 void from_json(const nlohmann::json& j, atlasVisibilityGlobals& v);
@@ -61,6 +65,7 @@ private:
     std::string filename_lootFilter;
     globals app_;
     DxWindowConfig fuser_;
+    AimViewConfig aimView_;
     radarGlobals radar_;
     espGlobals esp_;
     atlasVisibilityGlobals atlasVisibility_;

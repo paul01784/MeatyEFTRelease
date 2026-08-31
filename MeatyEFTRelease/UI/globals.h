@@ -3,8 +3,11 @@
 #include <vector>
 
 #include "render.h"
+#include "../Core/KeyManager/KeyManager.h"
 #include "../external/glm/glm.hpp"
 
+class Player;
+struct LootEntity;
 
 struct globals {
     static std::string appVersion;
@@ -87,7 +90,6 @@ struct memoryGlobals {
 
 struct radarGlobals {
     static bool minimalView;
-    static bool drawPlayers;
     static bool drawLoot;
     static bool drawQuestHelper;
     static bool drawGrenades;
@@ -103,6 +105,8 @@ struct radarGlobals {
     static float aimLineTargetAngle;
     static int aimLineTargetMaxDistance;
     static bool getPlayerEquip;
+    static bool drawPlayerEquip;
+    static bool drawHandItem;
     static bool getPlayerStats;
     // 0 = persistent PvP, 1 = PvP Seasonal.
     static int tarkovDevDataMode;
@@ -114,8 +118,13 @@ struct radarGlobals {
 
 struct espGlobals {
     static bool espEnabled;
-    static bool drawPlayers;
-    static int drawPlayerDist;
+    static int drawPmcDist;
+    static int drawPScavDist;
+    static int drawScavDist;
+    static int drawBossDist;
+    static int drawUsecDist;
+    static bool drawPlayerEquip;
+    static bool drawHandItem;
     // 0 = off, 1 = all valid sources, 2 = PMCs and player scavs only.
     static int aimOverlayAlert;
     static int drawCorpseDist;
@@ -127,6 +136,10 @@ struct espGlobals {
     static bool drawCorpse;
     static bool drawQuestHelper;
     static int drawLootDist;
+    static int drawContainerDist;
+    static int drawQuestLootDist;
+    static int drawWishlistLootDist;
+    static int drawValueLootDist;
     static bool drawBoxPlayers;
     static bool drawHealthPlayers;
     static glm::vec2 gameRes;
@@ -143,6 +156,10 @@ struct espGlobals {
     static bool drawExfil;
     static bool drawSecretExfils;
     static bool drawTransitExfils;
+
+    [[nodiscard]] static int getPlayerDrawDistance(const Player& player);
+    [[nodiscard]] static int getMaximumPlayerDrawDistance();
+    [[nodiscard]] static int getLootDrawDistance(const LootEntity& loot);
 };
 
 struct aimGlobals {

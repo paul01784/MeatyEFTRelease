@@ -18,7 +18,7 @@
 #include "../Tarkov/GameWorld/Exits/Exfil.h"
 #include "../Tarkov/GameWorld/QuestManager.h"
 #include "../Tarkov/GameWorld/Loot/WishList.h"
-#include "DogTagAPI.h"
+#include "../Web/MeatyAPI/DogTagAPI.h"
 #include "makcu.h"
 #include "menuLayout.h"
 #include "../Tarkov/GameWorld/Player/WatchList.h"
@@ -28,6 +28,7 @@
 #include "Widgets/QuestWidget.h"
 #include "Widgets/FuserWidget.h"
 #include "../Tarkov/Features/Visibility/AtlasVisibility.h"
+#include "../Core/KeyManager/KeyManager.h"
 #include "../resource.h"
 
 #include <cctype>
@@ -201,76 +202,6 @@ void closeSettingWindows(std::string dontClose)
         appMenu::appWatchList = false;
 }
 
-// Function to convert enum to string for display purposes
-const char* WindowsKeyToString(WindowsKey key) {
-    switch (key) {
-    case WindowsKey::LeftControl: return "Left Control";
-    case WindowsKey::LeftAlt: return "Left Alt";
-    case WindowsKey::LeftShift: return "Left Shift";
-    case WindowsKey::Mouse0: return "Mouse 0";
-    case WindowsKey::Mouse1: return "Mouse 1";
-    case WindowsKey::Mouse2: return "Mouse 2";
-    case WindowsKey::Mouse3: return "Mouse 3";
-    case WindowsKey::Mouse4: return "Mouse 4";
-    case WindowsKey::Enter: return "Enter";
-    case WindowsKey::F11: return "F11";
-    case WindowsKey::F12: return "F12";
-    default: return "Unknown";
-    }
-}
-
-
-
-int WindowsKeyToIndex(WindowsKey key) {
-    switch (key) {
-    case WindowsKey::Mouse0: return 0;
-    case WindowsKey::Mouse1: return 1;
-    case WindowsKey::Mouse2: return 2;
-    case WindowsKey::Mouse3: return 3;
-    case WindowsKey::Mouse4: return 4;
-    case WindowsKey::LeftControl: return 5;
-    case WindowsKey::LeftAlt: return 6;
-    case WindowsKey::LeftShift: return 7;
-    case WindowsKey::Enter: return 8;
-    case WindowsKey::F11: return 9;
-    case WindowsKey::F12: return 10;
-    default: return -1;
-    }
-}
-
-WindowsKey IndexToWindowsKey(int index) {
-    switch (index) {
-    case 0: return WindowsKey::Mouse0;
-    case 1: return WindowsKey::Mouse1;
-    case 2: return WindowsKey::Mouse2;
-    case 3: return WindowsKey::Mouse3;
-    case 4: return WindowsKey::Mouse4;
-    case 5: return WindowsKey::LeftControl;
-    case 6: return WindowsKey::LeftAlt;
-    case 7: return WindowsKey::LeftShift;
-    case 8: return WindowsKey::Enter;
-    case 9: return WindowsKey::F11;
-    case 10: return WindowsKey::F12;
-    default: return WindowsKey::LeftControl;
-    }
-}
-
-std::vector<WindowsKey> GetAllWindowsKeys() {
-    return {
-        WindowsKey::Mouse0,
-        WindowsKey::Mouse1,
-        WindowsKey::Mouse2,
-        WindowsKey::Mouse3,
-        WindowsKey::Mouse4,
-        WindowsKey::LeftControl,
-        WindowsKey::LeftAlt,
-        WindowsKey::LeftShift,
-        WindowsKey::Enter,
-        WindowsKey::F11,
-        WindowsKey::F12,
-    };
-}
-
 boneListIndexes IndexToBoneList(int index) {
     switch (index) {
     case 0: return boneListIndexes::Pelvis;
@@ -345,38 +276,6 @@ bool showResSelectionBox()
         return true;
     }
     return false;
-}
-
-bool ShowKeySelectionBox(WindowsKey& aimKey, std::string selection_name) {
-    static std::vector<WindowsKey> keys = GetAllWindowsKeys();
-    static std::vector<const char*> items;
-
-    if (items.empty()) {
-        for (const auto& key : keys) {
-            items.push_back(WindowsKeyToString(key));
-        }
-    }
-
-    int currentItem = std::distance(keys.begin(), std::find(keys.begin(), keys.end(), aimKey));
-
-
-    bool changed = false;
-
-    if (ImGui::BeginCombo(selection_name.c_str(), items[currentItem])) {
-        for (int i = 0; i < items.size(); i++) {
-            bool isSelected = (currentItem == i);
-            if (ImGui::Selectable(items[i], isSelected)) {
-                currentItem = i;
-                aimKey = IndexToWindowsKey(i); // Map selection to enum
-                changed = true;
-            }
-            if (isSelected) {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    return changed;
 }
 
 bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, int* out_width, int* out_height)
@@ -586,27 +485,40 @@ static void renderMenuSettings()
         if (menuLayout::BeginTwoColumns("##featureColumns"))
         {
             menuLayout::NextColumn();
-            if (menuLayout::Section("Radar"))
+            if (menuLayout::Section("Radar Draw"))
             {
-                saveIfChanged(menuLayout::ToggleRow("Players", "radarPlayers", &radarGlobals::drawPlayers));
                 saveIfChanged(menuLayout::ToggleRow("Grenades", "radarGrenades", &radarGlobals::drawGrenades));
-                saveIfChanged(menuLayout::TogglePairRow(
+                saveIfChanged(menuLayout::AlignedTogglePairRow(
                     "Tripwires", "radarTripwires", &radarGlobals::drawTripwires,
-                    "Tripwire lines", "radarTripwireLines", &radarGlobals::drawTripwireLine));
+                    "Tripwire lines", "radarTripwireLines", &radarGlobals::drawTripwireLine,
+                    true,
+                    radarGlobals::drawTripwires));
                 saveIfChanged(menuLayout::ToggleRow("Loot", "radarLoot", &radarGlobals::drawLoot));
                 saveIfChanged(menuLayout::ToggleRow("Quest helper", "radarQuest", &radarGlobals::drawQuestHelper));
+                saveIfChanged(menuLayout::AlignedTogglePairRow(
+                    "Player Equip", "radarPlayerEquip", &radarGlobals::drawPlayerEquip,
+                    "Hand Item", "radarHandItem", &radarGlobals::drawHandItem,
+                    radarGlobals::getPlayerEquip));
                 saveIfChanged(menuLayout::ToggleRow("Aim view", "aimView", &aimviewConfig.enabled));
                 saveIfChanged(menuLayout::ToggleRow("Radar min view", "radarMinView", &radarGlobals::minimalView));
             }
-            if (menuLayout::Section("Radar aim lines"))
+            if (menuLayout::Section("Radar AimLines"))
             {
-                saveIfChanged(menuLayout::SliderIntRow("Local", "localAimLine", &radarGlobals::localAimLine, 4, 500, "%d px"));
-                saveIfChanged(menuLayout::SliderIntRow("Friends", "friendAimLine", &radarGlobals::friendAimLine, 4, 500, "%d px"));
-                saveIfChanged(menuLayout::SliderIntRow("Enemies", "enemyAimLine", &radarGlobals::enemyAimLine, 4, 500, "%d px"));
-                saveIfChanged(menuLayout::ToggleRow("Extend aimlines", "aimLineTargets", &radarGlobals::drawAimLineTargets));
+                saveIfChanged(menuLayout::SliderIntRow("Local length", "localAimLine", &radarGlobals::localAimLine, 4, 500, "%d px"));
+                saveIfChanged(menuLayout::SliderIntRow("Friends length", "friendAimLine", &radarGlobals::friendAimLine, 4, 500, "%d px"));
+                saveIfChanged(menuLayout::SliderIntRow("Enemies length", "enemyAimLine", &radarGlobals::enemyAimLine, 4, 500, "%d px"));
+                saveIfChanged(menuLayout::ToggleFloatSliderRow(
+                    "Extend aimlines",
+                    "aimLineTargets",
+                    &radarGlobals::drawAimLineTargets,
+                    "Target angle",
+                    &radarGlobals::aimLineTargetAngle,
+                    1.0f,
+                    20.0f,
+                    "%.1f°",
+                    true));
 
                 ImGui::BeginDisabled(!radarGlobals::drawAimLineTargets);
-                saveIfChanged(menuLayout::SliderFloatRow("Target angle", "aimTargetAngle", &radarGlobals::aimLineTargetAngle, 1.0f, 20.0f, "%.1f°"));
                 saveIfChanged(menuLayout::SliderIntRow("Looking at you range", "aimTargetRange", &radarGlobals::aimLineTargetMaxDistance, 10, 2000, "%d m"));
 
                 static const char* const aimOverlayAlertOptions[] =
@@ -617,7 +529,7 @@ static void renderMenuSettings()
                 };
 
                 saveIfChanged(menuLayout::ComboRow(
-                    "Aim overlay alert",
+                    "Fuser edge alert",
                     "aimOverlayAlert",
                     &espGlobals::aimOverlayAlert,
                     aimOverlayAlertOptions,
@@ -625,22 +537,83 @@ static void renderMenuSettings()
                 ImGui::EndDisabled();
             }
 
-            menuLayout::NextColumn();
-            if (menuLayout::Section("ESP"))
+            if (menuLayout::Section("Radar Exfils"))
             {
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Grenades", "espGrenades", &espGlobals::drawGrenades, "Range", &espGlobals::drawGrenadesDist, 10, 400, "%d m"));
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Tripwires", "espTripwires", &espGlobals::drawTripwires, "Range", &espGlobals::drawTripwiresDist, 10, 400, "%d m"));
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Loot", "espLoot", &espGlobals::drawLoot, "Range", &espGlobals::drawLootDist, 5, 400, "%d m"));
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Corpses", "espCorpses", &espGlobals::drawCorpse, "Range", &espGlobals::drawCorpseDist, 5, 400, "%d m"));
+                saveIfChanged(menuLayout::ToggleRow("Draw extracts", "radarExtracts", &radarGlobals::drawExfils));
+                bool radarExfilOptionsChanged = false;
+                if (!radarGlobals::drawExfils)
+                {
+                    radarExfilOptionsChanged |= radarGlobals::drawSecretExfils;
+                    radarExfilOptionsChanged |= radarGlobals::drawTransitExfils;
+                    radarGlobals::drawSecretExfils = false;
+                    radarGlobals::drawTransitExfils = false;
+                }
+                radarExfilOptionsChanged |= menuLayout::AlignedTogglePairRow(
+                    "Secret extracts", "radarSecretExtracts", &radarGlobals::drawSecretExfils,
+                    "Transits", "radarTransits", &radarGlobals::drawTransitExfils,
+                    radarGlobals::drawExfils,
+                    radarGlobals::drawExfils);
+                saveIfChanged(radarExfilOptionsChanged);
+            }
+
+            if (menuLayout::Section("Player data"))
+            {
+                static const char* const tarkovDevDataModes[] =
+                {
+                    "PVP",
+                    "PVP-SEASONAL"
+                };
+
+                bool changed = menuLayout::ToggleRow(
+                    "Read Player Equipment",
+                    "readPlayerEquipment",
+                    &radarGlobals::getPlayerEquip);
+                changed |= menuLayout::InlineToggle(
+                    "Use Tarkov.dev Data",
+                    "tarkovDevInfo",
+                    &radarGlobals::getPlayerStats);
+                ImGui::BeginDisabled(!radarGlobals::getPlayerStats);
+                ImGui::SameLine(0.0f, 12.0f);
+                ImGui::SetNextItemWidth(145.0f);
+                changed |= ImGui::Combo(
+                    "##tarkovDevDataMode",
+                    &radarGlobals::tarkovDevDataMode,
+                    tarkovDevDataModes,
+                    IM_ARRAYSIZE(tarkovDevDataModes));
+                ImGui::EndDisabled();
+                saveIfChanged(changed);
+            }
+
+            menuLayout::NextColumn();
+            if (menuLayout::Section("ESP Draw & Distances"))
+            {
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Grenades", "espGrenades", &espGlobals::drawGrenades, "Range", &espGlobals::drawGrenadesDist, 10, 400, "%d m", true));
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Tripwires", "espTripwires", &espGlobals::drawTripwires, "Range", &espGlobals::drawTripwiresDist, 10, 400, "%d m", true));
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Loot", "espLoot", &espGlobals::drawLoot, "Loose", &espGlobals::drawLootDist, 5, 400, "%d m", true));
+                ImGui::BeginDisabled(!espGlobals::drawLoot);
+                saveIfChanged(menuLayout::RightIntSliderRow("Containers", "espContainersDist", &espGlobals::drawContainerDist, 5, 1000, "%d m"));
+                saveIfChanged(menuLayout::RightIntSliderRow("Quest", "espQuestLootDist", &espGlobals::drawQuestLootDist, 5, 1000, "%d m"));
+                saveIfChanged(menuLayout::RightIntSliderRow("Wishlist", "espWishlistLootDist", &espGlobals::drawWishlistLootDist, 5, 1000, "%d m"));
+                saveIfChanged(menuLayout::RightIntSliderRow("Value", "espValueLootDist", &espGlobals::drawValueLootDist, 5, 1000, "%d m"));
+                ImGui::EndDisabled();
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Corpses", "espCorpses", &espGlobals::drawCorpse, "Range", &espGlobals::drawCorpseDist, 5, 400, "%d m", true));
                 saveIfChanged(menuLayout::ToggleRow("Quest helper", "espQuest", &espGlobals::drawQuestHelper));
             }
-            if (menuLayout::Section("ESP Players"))
+            if (menuLayout::Section("ESP Players Draw & Distances"))
             {
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Players", "espPlayers", &espGlobals::drawPlayers, "Range", &espGlobals::drawPlayerDist, 10, 1000, "%d m"));
-                saveIfChanged(menuLayout::ToggleRow("Players Equip", "equipmentInfo", &radarGlobals::getPlayerEquip));
-                saveIfChanged(menuLayout::ToggleRow("Boxes", "espBoxes", &espGlobals::drawBoxPlayers));
-                saveIfChanged(menuLayout::ToggleRow("Skeleton", "espSkeleton", &espGlobals::drawSkeletons));
-                saveIfChanged(menuLayout::ToggleFloatSliderRow("Head dot", "espHeadDot", &espGlobals::drawHeadDot, "Size", &espGlobals::headDotSize, 0.5f, 10.0f, "%.1f"));
+                saveIfChanged(menuLayout::AlignedTogglePairRow(
+                    "Player Equip", "espPlayerEquip", &espGlobals::drawPlayerEquip,
+                    "Hand Item", "espHandItem", &espGlobals::drawHandItem,
+                    radarGlobals::getPlayerEquip));
+                saveIfChanged(menuLayout::AlignedTogglePairRow(
+                    "Boxes", "espBoxes", &espGlobals::drawBoxPlayers,
+                    "Skeleton", "espSkeleton", &espGlobals::drawSkeletons));
+                saveIfChanged(menuLayout::ToggleFloatSliderRow("Head dot", "espHeadDot", &espGlobals::drawHeadDot, "Size", &espGlobals::headDotSize, 0.5f, 10.0f, "%.1f", true, true));
+                saveIfChanged(menuLayout::LeftLabelRightIntSliderRow("Players Distances", "PMC", "espPmcDist", &espGlobals::drawPmcDist, 10, 1000, "%d m"));
+                saveIfChanged(menuLayout::RightIntSliderRow("PScav", "espPScavDist", &espGlobals::drawPScavDist, 10, 1000, "%d m", true));
+                saveIfChanged(menuLayout::RightIntSliderRow("Scav", "espScavDist", &espGlobals::drawScavDist, 10, 1000, "%d m", true));
+                saveIfChanged(menuLayout::RightIntSliderRow("Boss", "espBossDist", &espGlobals::drawBossDist, 10, 1000, "%d m", true));
+                saveIfChanged(menuLayout::RightIntSliderRow("Usec", "espUsecDist", &espGlobals::drawUsecDist, 10, 1000, "%d m", true));
             }
             if (menuLayout::Section("ESP Local"))
             {
@@ -661,32 +634,11 @@ static void renderMenuSettings()
                     "Size",
                     &espGlobals::crosshairSize,
                     1,
-                    20));
+                    20,
+                    "%d",
+                    true));
             }
-            menuLayout::EndTwoColumns();
-        }
 
-        if (menuLayout::BeginTwoColumns("##exfilAndDataColumns"))
-        {
-            menuLayout::NextColumn();
-            if (menuLayout::Section("Radar Exfils"))
-            {
-                saveIfChanged(menuLayout::ToggleRow("Draw extracts", "radarExtracts", &radarGlobals::drawExfils));
-                bool radarExfilOptionsChanged = false;
-                if (!radarGlobals::drawExfils)
-                {
-                    radarExfilOptionsChanged |= radarGlobals::drawSecretExfils;
-                    radarExfilOptionsChanged |= radarGlobals::drawTransitExfils;
-                    radarGlobals::drawSecretExfils = false;
-                    radarGlobals::drawTransitExfils = false;
-                }
-                radarExfilOptionsChanged |= menuLayout::TogglePairRow(
-                    "Secret extracts", "radarSecretExtracts", &radarGlobals::drawSecretExfils,
-                    "Transits", "radarTransits", &radarGlobals::drawTransitExfils,
-                    radarGlobals::drawExfils);
-                saveIfChanged(radarExfilOptionsChanged);
-            }
-            menuLayout::NextColumn();
             if (menuLayout::Section("ESP Exfils"))
             {
                 saveIfChanged(menuLayout::ToggleRow("Draw extracts", "espExtracts", &espGlobals::drawExfil));
@@ -698,9 +650,10 @@ static void renderMenuSettings()
                     espGlobals::drawSecretExfils = false;
                     espGlobals::drawTransitExfils = false;
                 }
-                espExfilOptionsChanged |= menuLayout::TogglePairRow(
+                espExfilOptionsChanged |= menuLayout::AlignedTogglePairRow(
                     "Secret extracts", "espSecretExtracts", &espGlobals::drawSecretExfils,
                     "Transits", "espTransits", &espGlobals::drawTransitExfils,
+                    espGlobals::drawExfil,
                     espGlobals::drawExfil);
                 saveIfChanged(espExfilOptionsChanged);
                 saveIfChanged(menuLayout::SliderIntRow(
@@ -713,28 +666,6 @@ static void renderMenuSettings()
                     espGlobals::drawExfil));
             }
             menuLayout::EndTwoColumns();
-        }
-
-        if (menuLayout::Section("Player data"))
-        {
-            static const char* const tarkovDevDataModes[] =
-            {
-                "PVP",
-                "PVP-SEASONAL"
-            };
-
-            bool changed = menuLayout::InlineToggle(
-                "Use Tarkov.dev Data",
-                "tarkovDevInfo",
-                &radarGlobals::getPlayerStats);
-            ImGui::SameLine(0.0f, 12.0f);
-            ImGui::SetNextItemWidth(145.0f);
-            changed |= ImGui::Combo(
-                "##tarkovDevDataMode",
-                &radarGlobals::tarkovDevDataMode,
-                tarkovDevDataModes,
-                IM_ARRAYSIZE(tarkovDevDataModes));
-            saveIfChanged(changed);
         }
     }
     else if (activePage == SettingsPage::Appearance)
@@ -773,17 +704,13 @@ static void renderMenuSettings()
     {
         if (menuLayout::Section("Controls"))
         {
-            ImGui::SetNextItemWidth(220.0f);
-            if (ShowKeySelectionBox(keyGlobals::aimKey, "Aim key"))
+            if (keyManager::DrawKeyBindingRow(keyGlobals::aimKey, "Aim key"))
                 configManager.SaveConfig();
-            ImGui::SetNextItemWidth(220.0f);
-            if (ShowKeySelectionBox(keyGlobals::toggleFollow, "Toggle follow"))
+            if (keyManager::DrawKeyBindingRow(keyGlobals::toggleFollow, "Toggle follow"))
                 configManager.SaveConfig();
-            ImGui::SetNextItemWidth(220.0f);
-            if (ShowKeySelectionBox(keyGlobals::battleMode, "Battle mode"))
+            if (keyManager::DrawKeyBindingRow(keyGlobals::battleMode, "Battle mode"))
                 configManager.SaveConfig();
-            ImGui::SetNextItemWidth(220.0f);
-            if (ShowKeySelectionBox(keyGlobals::toggleRadarMinView, "Toggle radar min view"))
+            if (keyManager::DrawKeyBindingRow(keyGlobals::toggleRadarMinView, "Toggle radar min view"))
                 configManager.SaveConfig();
         }
     }
@@ -3377,7 +3304,7 @@ static void renderDebugWindow()
                         {
                             ImGui::Text(
                                 "Radar: players %s | loot %s | grenades %s | quests %s | exfils %s",
-                                radarGlobals::drawPlayers ? "ON" : "OFF",
+                                "ON",
                                 radarGlobals::drawLoot ? "ON" : "OFF",
                                 radarGlobals::drawGrenades ? "ON" : "OFF",
                                 radarGlobals::drawQuestHelper ? "ON" : "OFF",
@@ -3385,7 +3312,7 @@ static void renderDebugWindow()
                             ImGui::Text(
                                 "ESP: %s | players %s | loot %s | grenades %s | quests %s | exfils %s",
                                 espGlobals::espEnabled ? "ON" : "OFF",
-                                espGlobals::drawPlayers ? "ON" : "OFF",
+                                "ON",
                                 espGlobals::drawLoot ? "ON" : "OFF",
                                 espGlobals::drawGrenades ? "ON" : "OFF",
                                 espGlobals::drawQuestHelper ? "ON" : "OFF",

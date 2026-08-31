@@ -188,6 +188,119 @@ namespace menuLayout
         return firstChanged || secondChanged;
     }
 
+    inline bool AlignedTogglePairRow(
+        const char* firstLabel,
+        const char* firstId,
+        bool* firstValue,
+        const char* secondLabel,
+        const char* secondId,
+        bool* secondValue,
+        bool firstEnabled = true,
+        bool secondEnabled = true)
+    {
+        const float rowStartX = ImGui::GetCursorPosX();
+        const float rowWidth = ImGui::GetContentRegionAvail().x;
+        const float firstControlX = ControlColumnX(rowStartX, rowWidth);
+        const float rowEndX = ControlRightX(rowStartX, rowWidth);
+        const float secondLabelX = firstControlX + ImGui::GetFrameHeight() + 12.0f;
+        const float secondControlX = rowEndX - ImGui::GetFrameHeight();
+
+        ImGui::PushID(firstId);
+        ImGui::BeginDisabled(!firstEnabled);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(firstLabel);
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), firstControlX));
+        bool changed = ImGui::Checkbox("##toggle", firstValue);
+        ImGui::EndDisabled();
+        ImGui::PopID();
+
+        ImGui::SameLine(0.0f, 12.0f);
+        ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), secondLabelX));
+        ImGui::PushID(secondId);
+        ImGui::BeginDisabled(!secondEnabled);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(secondLabel);
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), secondControlX));
+        changed |= ImGui::Checkbox("##toggle", secondValue);
+        ImGui::EndDisabled();
+        ImGui::PopID();
+
+        return changed;
+    }
+
+    inline bool RightIntSliderRow(
+        const char* label,
+        const char* id,
+        int* value,
+        int minValue,
+        int maxValue,
+        const char* format = "%d",
+        bool leftAlignLabel = false)
+    {
+        ImGui::PushID(id);
+        const float rowStartX = ImGui::GetCursorPosX();
+        const float rowWidth = ImGui::GetContentRegionAvail().x;
+        const float controlX = ControlColumnX(rowStartX, rowWidth);
+        const float rowEndX = ControlRightX(rowStartX, rowWidth);
+        const float inlineLabelX = controlX + ImGui::GetFrameHeight() + 12.0f;
+        const float sliderX = inlineLabelX + ImGui::CalcTextSize("Range").x + 6.0f;
+        const float labelWidth = ImGui::CalcTextSize(label).x;
+
+        ImGui::AlignTextToFramePadding();
+        const float labelX = leftAlignLabel
+            ? inlineLabelX
+            : sliderX - labelWidth - 6.0f;
+        ImGui::SetCursorPosX((std::max)(rowStartX, labelX));
+        ImGui::TextDisabled("%s", label);
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::SetCursorPosX(sliderX);
+        ImGui::SetNextItemWidth((std::max)(1.0f, rowEndX - sliderX));
+        const bool changed = ImGui::SliderInt(
+            "##range",
+            value,
+            minValue,
+            maxValue,
+            format);
+        ImGui::PopID();
+        return changed;
+    }
+
+    inline bool LeftLabelRightIntSliderRow(
+        const char* leftLabel,
+        const char* inlineLabel,
+        const char* id,
+        int* value,
+        int minValue,
+        int maxValue,
+        const char* format = "%d")
+    {
+        ImGui::PushID(id);
+        const float rowStartX = ImGui::GetCursorPosX();
+        const float rowWidth = ImGui::GetContentRegionAvail().x;
+        const float controlX = ControlColumnX(rowStartX, rowWidth);
+        const float rowEndX = ControlRightX(rowStartX, rowWidth);
+        const float inlineLabelX = controlX + ImGui::GetFrameHeight() + 12.0f;
+        const float sliderX = inlineLabelX + ImGui::CalcTextSize("Range").x + 6.0f;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(leftLabel);
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(), inlineLabelX));
+        ImGui::TextDisabled("%s", inlineLabel);
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::SetCursorPosX(sliderX);
+        ImGui::SetNextItemWidth((std::max)(1.0f, rowEndX - sliderX));
+        const bool changed = ImGui::SliderInt(
+            "##range",
+            value,
+            minValue,
+            maxValue,
+            format);
+        ImGui::PopID();
+        return changed;
+    }
+
     inline bool ToggleIntSliderRow(
         const char* label,
         const char* id,
@@ -196,7 +309,8 @@ namespace menuLayout
         int* sliderValue,
         int minValue,
         int maxValue,
-        const char* format = "%d"
+        const char* format = "%d",
+        bool disableSliderWhenOff = false
     )
     {
         ImGui::PushID(id);
@@ -204,19 +318,24 @@ namespace menuLayout
         const float rowWidth = ImGui::GetContentRegionAvail().x;
         const float controlX = ControlColumnX(rowStartX, rowWidth);
         const float rowEndX = ControlRightX(rowStartX, rowWidth);
+        const float inlineLabelWidth = (std::max)(
+            ImGui::CalcTextSize("Range").x,
+            ImGui::CalcTextSize("Loose").x);
         const float sliderX = controlX + ImGui::GetFrameHeight() + 12.0f +
-            ImGui::CalcTextSize("Range").x + 6.0f;
+            inlineLabelWidth + 6.0f;
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
         ImGui::SameLine(0.0f, 6.0f);
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), controlX));
         bool changed = ImGui::Checkbox("##toggle", toggleValue);
+        ImGui::BeginDisabled(disableSliderWhenOff && !*toggleValue);
         ImGui::SameLine(0.0f, 12.0f);
         ImGui::TextDisabled("%s", rangeLabel);
         ImGui::SameLine(0.0f, 6.0f);
         ImGui::SetCursorPosX(sliderX);
         ImGui::SetNextItemWidth(std::max(1.0f, rowEndX - sliderX));
         changed |= ImGui::SliderInt("##range", sliderValue, minValue, maxValue, format);
+        ImGui::EndDisabled();
         ImGui::PopID();
         return changed;
     }
@@ -229,20 +348,26 @@ namespace menuLayout
         float* sliderValue,
         float minValue,
         float maxValue,
-        const char* format = "%.1f")
+        const char* format = "%.1f",
+        bool disableSliderWhenOff = false,
+        bool alignSliderToRange = false)
     {
         ImGui::PushID(id);
         const float rowStartX = ImGui::GetCursorPosX();
         const float rowWidth = ImGui::GetContentRegionAvail().x;
         const float controlX = ControlColumnX(rowStartX, rowWidth);
         const float rowEndX = ControlRightX(rowStartX, rowWidth);
+        const float inlineLabelWidth = alignSliderToRange
+            ? ImGui::CalcTextSize("Range").x
+            : ImGui::CalcTextSize(valueLabel).x;
         const float sliderX = controlX + ImGui::GetFrameHeight() + 12.0f +
-            ImGui::CalcTextSize("Range").x + 6.0f;
+            inlineLabelWidth + 6.0f;
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
         ImGui::SameLine(0.0f, 6.0f);
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), controlX));
         bool changed = ImGui::Checkbox("##toggle", toggleValue);
+        ImGui::BeginDisabled(disableSliderWhenOff && !*toggleValue);
         ImGui::SameLine(0.0f, 12.0f);
         ImGui::TextDisabled("%s", valueLabel);
         ImGui::SameLine(0.0f, 6.0f);
@@ -254,6 +379,7 @@ namespace menuLayout
             minValue,
             maxValue,
             format);
+        ImGui::EndDisabled();
         ImGui::PopID();
         return changed;
     }
@@ -270,7 +396,8 @@ namespace menuLayout
         int* sliderValue,
         int minValue,
         int maxValue,
-        const char* format = "%d")
+        const char* format = "%d",
+        bool disableOptionsWhenOff = false)
     {
         ImGui::PushID(id);
         const float rowStartX = ImGui::GetCursorPosX();
@@ -282,6 +409,7 @@ namespace menuLayout
         ImGui::SameLine(0.0f, 6.0f);
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), controlX));
         bool changed = ImGui::Checkbox("##toggle", toggleValue);
+        ImGui::BeginDisabled(disableOptionsWhenOff && !*toggleValue);
         ImGui::SameLine(0.0f, 8.0f);
         ImGui::TextDisabled("%s", comboLabel);
         ImGui::SameLine(0.0f, 5.0f);
@@ -302,6 +430,7 @@ namespace menuLayout
             minValue,
             maxValue,
             format);
+        ImGui::EndDisabled();
         ImGui::PopID();
         return changed;
     }

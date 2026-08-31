@@ -3,7 +3,7 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <curl/curl.h>
-#include "debug.h"
+#include "../../UI/debug.h"
 
 using json = nlohmann::json;
 

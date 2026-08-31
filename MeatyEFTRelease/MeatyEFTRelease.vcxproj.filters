@@ -49,6 +49,9 @@
     <Filter Include="Core">
       <UniqueIdentifier>{71E60CFA-17A5-4DDD-BBB9-A1B80E2F1AF7}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Core\KeyManager">
+      <UniqueIdentifier>{30A28A10-A6CA-4670-A054-E81BA8FBF1D4}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Tarkov\SDK">
       <UniqueIdentifier>{CE30CBB0-156E-4A3C-9042-DC53679A0C12}</UniqueIdentifier>
     </Filter>
@@ -421,6 +424,9 @@
     <ClInclude Include="Core\Utilities.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Core\KeyManager\KeyManager.h">
+      <Filter>Core\KeyManager</Filter>
+    </ClInclude>
     <ClInclude Include="UI\taskManager.h" />
     <ClInclude Include="memory\framework.h" />
     <ClInclude Include="memory\DmaScheduler.h" />
@@ -554,7 +560,7 @@
     <ClInclude Include="Tarkov\GameWorld\Exits\TransitLocations.h">
       <Filter>Tarkov\GameWorld\Exits</Filter>
     </ClInclude>
-    <ClInclude Include="UI\DogTagAPI.h" />
+    <ClInclude Include="Web\MeatyAPI\DogTagAPI.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="UI\DxRenderWindow.h" />
     <ClInclude Include="UI\fuserRender.h" />
@@ -649,6 +655,9 @@
     </ClCompile>
     <ClCompile Include="Core\Utilities.cpp">
       <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\KeyManager\KeyManager.cpp">
+      <Filter>Core\KeyManager</Filter>
     </ClCompile>
     <ClCompile Include="Tarkov\GameWorld\RegisteredPlayers.cpp">
       <Filter>Tarkov\GameWorld</Filter>
@@ -746,7 +755,7 @@
     <ClCompile Include="Tarkov\GameWorld\Exits\Exfil.cpp">
       <Filter>Tarkov\GameWorld\Exits</Filter>
     </ClCompile>
-    <ClCompile Include="UI\DogTagAPI.cpp">
+    <ClCompile Include="Web\MeatyAPI\DogTagAPI.cpp">
       <Filter>UI</Filter>
     </ClCompile>
     <ClCompile Include="UI\DxRenderWindow.cpp">

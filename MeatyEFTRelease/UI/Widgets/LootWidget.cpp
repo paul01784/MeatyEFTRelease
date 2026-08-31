@@ -948,18 +948,6 @@ void renderLootFiltersMenu()
                     configManager.SaveConfig();
 
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(115.0f);
-                if (ImGui::SliderInt(
-                    "Range##containerRange",
-                    &lootGlobals::containerDistance,
-                    10,
-                    1000,
-                    "%d m"))
-                {
-                    configManager.SaveConfig();
-                }
-
-                ImGui::SameLine();
                 if (ImGui::Button("Disable All", ImVec2(120, 0)))
                 {
                     for (int i = 0; i < optionCount; i++)

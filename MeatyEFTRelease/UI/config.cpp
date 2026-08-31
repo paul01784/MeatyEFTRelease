@@ -383,7 +383,6 @@ void from_json(const nlohmann::json& j, DxWindowConfig& f)
 void to_json(nlohmann::json& j, const radarGlobals& r) {
     j = nlohmann::json{
         {"minimalView", r.minimalView},
-        {"drawPlayers", r.drawPlayers},
         {"drawLoot", r.drawLoot},
         {"drawGrenades", r.drawGrenades},
         {"drawTripwires", r.drawTripwires},
@@ -399,6 +398,8 @@ void to_json(nlohmann::json& j, const radarGlobals& r) {
         {"aimLineTargetAngle", r.aimLineTargetAngle},
         {"aimLineTargetMaxDistance", r.aimLineTargetMaxDistance},
         {"getPlayerEquip", r.getPlayerEquip},
+        {"drawPlayerEquip", r.drawPlayerEquip},
+        {"drawHandItem", r.drawHandItem},
         {"getPlayerStats", r.getPlayerStats},
         {"tarkovDevDataMode", r.tarkovDevDataMode},
         {"textScale", r.textScale},
@@ -410,7 +411,6 @@ void to_json(nlohmann::json& j, const radarGlobals& r) {
 
 void from_json(const nlohmann::json& j, radarGlobals& r) {
     r.minimalView = j.value("minimalView", r.minimalView);
-    r.drawPlayers = j.value("drawPlayers", r.drawPlayers);
     r.drawLoot = j.value("drawLoot", r.drawLoot);
     r.drawGrenades = j.value("drawGrenades", r.drawGrenades);
     r.drawTripwires = j.value("drawTripwires", r.drawTripwires);
@@ -426,6 +426,8 @@ void from_json(const nlohmann::json& j, radarGlobals& r) {
     r.aimLineTargetAngle = std::clamp(j.value("aimLineTargetAngle", r.aimLineTargetAngle), 1.0f, 20.0f);
     r.aimLineTargetMaxDistance = std::clamp(j.value("aimLineTargetMaxDistance", r.aimLineTargetMaxDistance), 10, 2000);
     r.getPlayerEquip = j.value("getPlayerEquip", r.getPlayerEquip);
+    r.drawPlayerEquip = j.value("drawPlayerEquip", r.drawPlayerEquip);
+    r.drawHandItem = j.value("drawHandItem", r.drawHandItem);
     r.getPlayerStats = j.value("getPlayerStats", r.getPlayerStats);
     r.tarkovDevDataMode = std::clamp(j.value("tarkovDevDataMode", r.tarkovDevDataMode), 0, 1);
     r.textScale = std::clamp(j.value("textScale", r.textScale), 0.75f, 2.0f);
@@ -438,8 +440,13 @@ void from_json(const nlohmann::json& j, radarGlobals& r) {
 void to_json(nlohmann::json& j, const espGlobals& e) {
     j = nlohmann::json{
         {"espEnabled", e.espEnabled},
-        {"drawPlayers", e.drawPlayers},
-        {"drawPlayerDist", e.drawPlayerDist},
+        {"drawPmcDist", e.drawPmcDist},
+        {"drawPScavDist", e.drawPScavDist},
+        {"drawScavDist", e.drawScavDist},
+        {"drawBossDist", e.drawBossDist},
+        {"drawUsecDist", e.drawUsecDist},
+        {"drawPlayerEquip", e.drawPlayerEquip},
+        {"drawHandItem", e.drawHandItem},
         {"aimOverlayAlert", e.aimOverlayAlert},
         {"drawGrenades", e.drawGrenades},
         {"drawGrenadesDist", e.drawGrenadesDist},
@@ -447,6 +454,10 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"drawTripwiresDist", e.drawTripwiresDist},
         {"drawLoot", e.drawLoot},
         {"drawLootDist", e.drawLootDist},
+        {"drawContainerDist", e.drawContainerDist},
+        {"drawQuestLootDist", e.drawQuestLootDist},
+        {"drawWishlistLootDist", e.drawWishlistLootDist},
+        {"drawValueLootDist", e.drawValueLootDist},
         {"drawQuestHelper", e.drawQuestHelper},
         {"drawCorpse", e.drawCorpse},
         {"drawCorpseDist", e.drawCorpseDist},
@@ -469,21 +480,38 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
 
 void from_json(const nlohmann::json& j, espGlobals& e) {
     e.espEnabled = j.value("espEnabled", e.espEnabled);
-    e.drawPlayers = j.value("drawPlayers", e.drawPlayers);
-    e.drawPlayerDist = j.value("drawPlayerDist", e.drawPlayerDist);
+    const int legacyPlayerDistance = std::clamp(
+        j.value("drawPlayerDist", e.drawPmcDist),
+        10,
+        1000);
+    e.drawPmcDist = std::clamp(j.value("drawPmcDist", legacyPlayerDistance), 10, 1000);
+    e.drawPScavDist = std::clamp(j.value("drawPScavDist", legacyPlayerDistance), 10, 1000);
+    e.drawScavDist = std::clamp(j.value("drawScavDist", legacyPlayerDistance), 10, 1000);
+    e.drawBossDist = std::clamp(j.value("drawBossDist", legacyPlayerDistance), 10, 1000);
+    e.drawUsecDist = std::clamp(j.value("drawUsecDist", legacyPlayerDistance), 10, 1000);
+    e.drawPlayerEquip = j.value("drawPlayerEquip", e.drawPlayerEquip);
+    e.drawHandItem = j.value("drawHandItem", e.drawHandItem);
     e.aimOverlayAlert = std::clamp(
         j.value("aimOverlayAlert", e.aimOverlayAlert),
         0,
         2);
     e.drawGrenades = j.value("drawGrenades", e.drawGrenades);
-    e.drawGrenadesDist = j.value("drawGrenadesDist", e.drawGrenadesDist);
+    e.drawGrenadesDist = std::clamp(j.value("drawGrenadesDist", e.drawGrenadesDist), 10, 400);
     e.drawTripwires = j.value("drawTripwires", e.drawTripwires);
-    e.drawTripwiresDist = j.value("drawTripwiresDist", e.drawTripwiresDist);
+    e.drawTripwiresDist = std::clamp(j.value("drawTripwiresDist", e.drawTripwiresDist), 10, 400);
     e.drawLoot = j.value("drawLoot", e.drawLoot);
-    e.drawLootDist = j.value("drawLootDist", e.drawLootDist);
+    const int legacyLootDistance = std::clamp(
+        j.value("drawLootDist", e.drawLootDist),
+        5,
+        400);
+    e.drawLootDist = legacyLootDistance;
+    e.drawContainerDist = std::clamp(j.value("drawContainerDist", e.drawContainerDist), 5, 1000);
+    e.drawQuestLootDist = std::clamp(j.value("drawQuestLootDist", legacyLootDistance), 5, 1000);
+    e.drawWishlistLootDist = std::clamp(j.value("drawWishlistLootDist", legacyLootDistance), 5, 1000);
+    e.drawValueLootDist = std::clamp(j.value("drawValueLootDist", legacyLootDistance), 5, 1000);
     e.drawQuestHelper = j.value("drawQuestHelper", e.drawQuestHelper);
     e.drawCorpse = j.value("drawCorpse", e.drawCorpse);
-    e.drawCorpseDist = j.value("drawCorpseDist", e.drawCorpseDist);
+    e.drawCorpseDist = std::clamp(j.value("drawCorpseDist", e.drawCorpseDist), 5, 400);
     e.drawBoxPlayers = j.value("drawBoxPlayers", e.drawBoxPlayers);
     e.drawHealthPlayers = j.value("drawHealthPlayers", e.drawHealthPlayers);
     e.gameRes = get_vec2_or_default(j, "gameRes", e.gameRes);
@@ -499,16 +527,33 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
         1,
         20);
     e.drawHeadDot = j.value("drawHeadDot", e.drawHeadDot);
-    e.headDotSize = j.value("headDotSize", e.headDotSize);
+    e.headDotSize = std::clamp(j.value("headDotSize", e.headDotSize), 0.5f, 10.0f);
     if (j.contains("drawFireportLine"))
     {
         aimGlobals::drawFireportLine =
             j.value("drawFireportLine", aimGlobals::drawFireportLine);
     }
-    e.drawExfilDist = j.value("drawExfilDist", e.drawExfilDist);
+    e.drawExfilDist = std::clamp(j.value("drawExfilDist", e.drawExfilDist), 5, 1000);
     e.drawExfil = j.value("drawExfil", e.drawExfil);
     e.drawSecretExfils = j.value("drawSecretExfils", e.drawSecretExfils);
     e.drawTransitExfils = j.value("drawTransitExfils", e.drawTransitExfils);
+}
+
+void to_json(nlohmann::json& j, const AimViewConfig& a)
+{
+    j = nlohmann::json{
+        {"enabled", a.enabled},
+        {"zoom", a.zoom}
+    };
+}
+
+void from_json(const nlohmann::json& j, AimViewConfig& a)
+{
+    a.enabled = j.value("enabled", a.enabled);
+    a.zoom = std::clamp(
+        j.value("zoom", a.zoom),
+        a.minimumZoom,
+        a.maximumZoom);
 }
 
 void to_json(nlohmann::json& j, const atlasVisibilityGlobals& v)
@@ -846,6 +891,12 @@ bool ConfigManager::LoadConfig()
             }
         }
 
+        if (j.contains("aimView") && j["aimView"].is_object())
+        {
+            aimView_ = j.at("aimView").get<AimViewConfig>();
+            g_AimViewWidget.GetConfig() = aimView_;
+        }
+
         if (j.contains("radarGlobals") &&
             j["radarGlobals"].is_object())
         {
@@ -893,6 +944,18 @@ bool ConfigManager::LoadConfig()
         {
             loot_ =
                 j.at("lootGlobals").get<lootGlobals>();
+
+            if (j.contains("espGlobals") &&
+                j["espGlobals"].is_object() &&
+                !j["espGlobals"].contains("drawContainerDist"))
+            {
+                espGlobals::drawContainerDist = std::clamp(
+                    j["lootGlobals"].value(
+                        "containerDistance",
+                        espGlobals::drawContainerDist),
+                    5,
+                    1000);
+            }
         }
 
         if (j.contains("makcu") &&
@@ -951,6 +1014,7 @@ bool ConfigManager::SaveConfig()
     }
 
     fuser_ = g_DxWindow.GetConfig();
+    aimView_ = g_AimViewWidget.GetConfig();
     makcu_ = makcuConfig;
     makcu_.mouseUnitsPerScreenPixelX = makcu.mouseUnitsPerScreenPixelX;
     makcu_.mouseUnitsPerScreenPixelY = makcu.mouseUnitsPerScreenPixelY;
@@ -959,6 +1023,7 @@ bool ConfigManager::SaveConfig()
 
     j["app"] = app_;
     j["fuser"] = fuser_;
+    j["aimView"] = aimView_;
     j["radarGlobals"] = radar_;
     j["espGlobals"] = esp_;
     j["atlasVisibilityGlobals"] = atlasVisibility_;

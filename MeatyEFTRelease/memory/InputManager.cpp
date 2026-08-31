@@ -966,8 +966,11 @@ bool c_keys::InitKeyboard()
     }
 }
 
-void c_keys::UpdateKeys()
+void c_keys::UpdateKeysUnlocked()
 {
+	if (gafAsyncKeyStateExport < 0x7FFFFFFFFFFF)
+		return;
+
 	uint8_t previous_key_state_bitmap[64] = { 0 };
 	memcpy(previous_key_state_bitmap, state_bitmap, 64);
 
@@ -990,14 +993,121 @@ void c_keys::UpdateKeys()
 			previous_state_bitmap[vk / 8] |= 1 << vk % 8;
 }
 
+void c_keys::UpdateKeys()
+{
+	std::lock_guard<std::mutex> stateLock(state_mutex);
+	UpdateKeysUnlocked();
+}
+
 bool c_keys::IsKeyDown(uint32_t virtual_key_code)
 {
+	if (virtual_key_code >= 256)
+		return false;
+
+	std::lock_guard<std::mutex> stateLock(state_mutex);
+
 	if (gafAsyncKeyStateExport < 0x7FFFFFFFFFFF)
 		return false;
 	if (std::chrono::system_clock::now() - start > std::chrono::milliseconds(100))
 	{
-		UpdateKeys();
+		UpdateKeysUnlocked();
 		start = std::chrono::system_clock::now();
 	}
 	return state_bitmap[(virtual_key_code * 2 / 8)] & 1 << virtual_key_code % 4 * 2;
+}
+
+bool c_keys::IsReady() const
+{
+	std::lock_guard<std::mutex> stateLock(state_mutex);
+	return gafAsyncKeyStateExport >= 0x7FFFFFFFFFFF;
+}
+
+void c_keys::BeginKeyCapture()
+{
+	std::lock_guard<std::mutex> stateLock(state_mutex);
+
+	if (gafAsyncKeyStateExport < 0x7FFFFFFFFFFF)
+		return;
+
+	// Snapshot the current state before clearing pending edges. A key that was
+	// already held when capture began must be released and pressed again.
+	UpdateKeysUnlocked();
+	memset(previous_state_bitmap, 0, sizeof(previous_state_bitmap));
+	start = std::chrono::system_clock::now();
+}
+
+uint32_t c_keys::GetFirstPressedKey()
+{
+	std::lock_guard<std::mutex> stateLock(state_mutex);
+
+	if (gafAsyncKeyStateExport < 0x7FFFFFFFFFFF)
+		return 0;
+
+	const auto now = std::chrono::system_clock::now();
+	if (now - start > std::chrono::milliseconds(20))
+	{
+		UpdateKeysUnlocked();
+		start = now;
+	}
+
+	auto consumeKeyPress = [this](uint32_t virtualKeyCode)
+		{
+			const uint8_t mask = static_cast<uint8_t>(1u << (virtualKeyCode % 8));
+			uint8_t& state = previous_state_bitmap[virtualKeyCode / 8];
+			if ((state & mask) == 0)
+				return false;
+
+			state &= static_cast<uint8_t>(~mask);
+			return true;
+		};
+
+	// Windows raises generic modifier VKs as well. Prefer the physical side.
+	constexpr uint32_t preferredModifierKeys[] =
+	{
+		VK_LSHIFT,
+		VK_RSHIFT,
+		VK_LCONTROL,
+		VK_RCONTROL,
+		VK_LMENU,
+		VK_RMENU
+	};
+
+	for (const uint32_t virtualKeyCode : preferredModifierKeys)
+	{
+		if (consumeKeyPress(virtualKeyCode))
+			return virtualKeyCode;
+	}
+
+	for (uint32_t virtualKeyCode = 1; virtualKeyCode < 256; ++virtualKeyCode)
+	{
+		if (virtualKeyCode == VK_SHIFT ||
+			virtualKeyCode == VK_CONTROL ||
+			virtualKeyCode == VK_MENU)
+		{
+			continue;
+		}
+
+		bool isPreferredModifier = false;
+		for (const uint32_t modifierKey : preferredModifierKeys)
+		{
+			if (virtualKeyCode == modifierKey)
+			{
+				isPreferredModifier = true;
+				break;
+			}
+		}
+
+		if (!isPreferredModifier && consumeKeyPress(virtualKeyCode))
+			return virtualKeyCode;
+	}
+
+	// Some sources expose only the generic modifier virtual key.
+	constexpr uint32_t genericModifierKeys[] = { VK_SHIFT, VK_CONTROL, VK_MENU };
+	for (const uint32_t virtualKeyCode : genericModifierKeys)
+	{
+		if (consumeKeyPress(virtualKeyCode))
+			return virtualKeyCode;
+	}
+
+	return 0;
 }

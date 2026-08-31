@@ -246,7 +246,8 @@ struct UnityArray
     explicit UnityArray(
         std::uintptr_t addr,
         std::string_view telemetryLabel = "UnityArray",
-        int maxAllowedCount = 4096)
+        int maxAllowedCount = 4096,
+        DmaCacheMode cacheMode = DmaCacheMode::Cached)
         : baseAddr(addr)
     {
         if (!baseAddr)
@@ -257,7 +258,7 @@ struct UnityArray
             baseAddr + CountOffset,
             &count,
             sizeof(count),
-            DmaCacheMode::Cached,
+            cacheMode,
             telemetryLabel);
 
         const int allowedCount =
@@ -274,7 +275,7 @@ struct UnityArray
             baseAddr + ArrBaseOffset,
             elements,
             static_cast<std::size_t>(count) * sizeof(T),
-            DmaCacheMode::Cached,
+            cacheMode,
             telemetryLabel);
     }
 

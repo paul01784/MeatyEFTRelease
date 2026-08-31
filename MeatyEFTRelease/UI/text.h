@@ -408,10 +408,12 @@ void DrawRadarPlayerMarkers(float x, float y, float zoomLevel, const Player& pla
 				if (nameHeight > 0.0f)
 					nextTextY += nameHeight + lineGap;
 
-				//item in hand
-				const float itemHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, itemInHand.c_str());
-				if (itemHeight > 0.0f)
-					nextTextY += itemHeight + lineGap;
+				if (radarGlobals::drawHandItem)
+				{
+					const float itemHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, itemInHand.c_str());
+					if (itemHeight > 0.0f)
+						nextTextY += itemHeight + lineGap;
+				}
 			}
 			else if (player.isBTR)
 			{
@@ -422,15 +424,19 @@ void DrawRadarPlayerMarkers(float x, float y, float zoomLevel, const Player& pla
 			}
 			else
 			{
-				//item in hand
-				const float itemHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, itemInHand.c_str());
-				if (itemHeight > 0.0f)
-					nextTextY += itemHeight + lineGap;
+				if (radarGlobals::drawHandItem)
+				{
+					const float itemHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, itemInHand.c_str());
+					if (itemHeight > 0.0f)
+						nextTextY += itemHeight + lineGap;
+				}
 			}
 		}
 
 		//draw equipment that is wanted
-		if (!radarGlobals::minimalView && radarGlobals::getPlayerEquip)
+		if (!radarGlobals::minimalView &&
+			radarGlobals::getPlayerEquip &&
+			radarGlobals::drawPlayerEquip)
 		{
 			for (const auto& slot : player._slots)
 			{
@@ -548,8 +554,13 @@ void DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, LootEntity loot
 
 	float equipmentY = rowY + firstRowHeight + spacingY;
 
-	for (auto& slot : lootList.getCorpseState().equipment)
+	const CorpseLootState& corpseState = lootList.getCorpseState();
+
+	for (const auto& slot : corpseState.equipment)
 	{
+		if (!corpseState.isEquipmentLootable(slot))
+			continue;
+
 		if (!slot.wanted)
 			continue;
 
@@ -589,12 +600,23 @@ void DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, LootEntity loot
 
 		ImGui::Text("Value: %s", valueText.c_str());
 
-		if (!lootList.getCorpseState().equipment.empty())
+		const bool hasLootableEquipment = std::any_of(
+			corpseState.equipment.begin(),
+			corpseState.equipment.end(),
+			[&corpseState](const CorpseEquipment& slot)
+			{
+				return corpseState.isEquipmentLootable(slot);
+			});
+
+		if (hasLootableEquipment)
 		{
 			ImGui::Separator();
 
-			for (auto& slot : lootList.getCorpseState().equipment)
+			for (const auto& slot : corpseState.equipment)
 			{
+				if (!corpseState.isEquipmentLootable(slot))
+					continue;
+
 				std::string line = slot.name + " [" + FormatShortValue(slot.value) + "]";
 				ImGui::Text("%s", line.c_str());
 			}

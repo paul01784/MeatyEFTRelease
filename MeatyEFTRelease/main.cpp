@@ -4,7 +4,7 @@
 #include "UI/config.h"
 #include "Web/TarkovDev/TarkovDevClient.h"
 #include "Tarkov/GameWorld/MainGame.h"
-#include "UI/DogTagAPI.h"
+#include "Web/MeatyAPI/DogTagAPI.h"
 
 #include "UI/SplashWindow.h"
 #include "UI/resource.h"

@@ -143,11 +143,9 @@ void AimViewWidget::Render(const ImVec2& sourceResolution) {
 
         drawList->PushClipRect(clipMinimum, clipMaximum, true);
 
-        if (espGlobals::drawPlayers)
-            DrawPlayers(drawList);
+        DrawPlayers(drawList);
 
-        if (espGlobals::drawLoot || espGlobals::drawCorpse)
-            DrawLoot(drawList);
+        DrawLoot(drawList);
 
         DrawContainers(drawList);
 
@@ -578,8 +576,6 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
     if (cache.empty())
         return;
 
-    const float maximumDistance = static_cast<float>(espGlobals::drawPlayerDist);
-
     for (const Player& player : cache) {
         if (!Utils::valid_pointer(player.instance) ||
             player.isZombie ||
@@ -590,8 +586,7 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
             continue;
         }
 
-        if (player.distance <= 0 ||
-            static_cast<float>(player.distance) > maximumDistance) {
+        if (player.distance <= 0 || player.distance > espGlobals::getPlayerDrawDistance(player)) {
             continue;
         }
 
@@ -679,18 +674,59 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
             player.isPlayer ||
             player.isPlayerScav;
 
-        if (!showName)
-            continue;
-
+        std::string label;
         std::string cleanName = CleanText(player.name);
 
-        if (cleanName.empty()) {
+        if (showName && cleanName.empty()) {
             cleanName = player.isBoss
                 ? "Boss"
                 : "Player";
         }
 
-        const std::string label = cleanName;
+        if (showName)
+            label = cleanName;
+
+        if (espGlobals::drawHandItem && !player.isBTR)
+        {
+            const std::string itemName = CleanText(player.observedHandsInfo.itemName);
+            const std::string ammoName = CleanText(player.observedHandsInfo.ammoName);
+
+            if (!itemName.empty() || !ammoName.empty())
+            {
+                if (!label.empty())
+                    label += '\n';
+
+                label += itemName + " (" + ammoName + "/" +
+                    std::to_string(player.observedHandsInfo.magazineCount) + ")";
+            }
+        }
+
+        if (espGlobals::drawPlayerEquip && radarGlobals::getPlayerEquip)
+        {
+            for (const auto& slot : player._slots)
+            {
+                const std::string slotName = TrimEFT(slot.name);
+
+                if (!slot.wanted ||
+                    slotName == "SecuredContainer" ||
+                    (player.isPlayer && slotName == "Scabbard"))
+                {
+                    continue;
+                }
+
+                const std::string equipmentName = CleanText(slot.equipName);
+                if (equipmentName.empty())
+                    continue;
+
+                if (!label.empty())
+                    label += '\n';
+
+                label += equipmentName;
+            }
+        }
+
+        if (label.empty())
+            continue;
 
         constexpr float fontSize = 12.0f;
 
@@ -922,7 +958,6 @@ void AimViewWidget::DrawLoot(ImDrawList* drawList) {
         const bool isQuestItem = loot.isQuestItem();
         const bool isCorpse = loot.isCorpse();
         const bool isRegularLoot = loot.isItem() || isQuestItem;
-
         if (!isRegularLoot && !isCorpse) {
             continue;
         }
@@ -938,15 +973,9 @@ void AimViewWidget::DrawLoot(ImDrawList* drawList) {
         if (!isCorpse && !espGlobals::drawLoot)
             continue;
 
-        if (isQuestItem && !espGlobals::drawQuestHelper)
-            continue;
-
         const float distance = glm::distance(mainGame.localLocation, loot.worldLocation);
 
-        const float maximumDistance = static_cast<float>(
-            isCorpse
-            ? espGlobals::drawCorpseDist
-            : espGlobals::drawLootDist);
+        const float maximumDistance = static_cast<float>(espGlobals::getLootDrawDistance(loot));
 
         if (distance <= 0.0f || distance > maximumDistance) {
             continue;
@@ -1048,7 +1077,7 @@ void AimViewWidget::DrawLoot(ImDrawList* drawList) {
 }
 
 void AimViewWidget::DrawContainers(ImDrawList* drawList) {
-    if (!drawList)
+    if (!drawList || !espGlobals::drawLoot)
         return;
 
     const std::vector<LootEntity> lootList = Loot.getCacheLoot();
@@ -1074,7 +1103,7 @@ void AimViewWidget::DrawContainers(ImDrawList* drawList) {
 
         const float distance = glm::distance(mainGame.localLocation, loot.worldLocation);
 
-        if (distance <= 0.0f || distance > static_cast<float>(lootGlobals::containerDistance)) {
+        if (distance <= 0.0f || distance > static_cast<float>(espGlobals::drawContainerDist)) {
             continue;
         }
 

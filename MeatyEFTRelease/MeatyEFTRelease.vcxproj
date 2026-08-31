@@ -157,9 +157,10 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="UI\Widgets\MapWidget.h" />
     <ClInclude Include="UI\Widgets\QuestWidget.h" />
     <ClInclude Include="UI\Widgets\FuserWidget.h" />
+    <ClInclude Include="Core\KeyManager\KeyManager.h" />
     <ClInclude Include="UI\config.h" />
     <ClInclude Include="UI\debug.h" />
-    <ClInclude Include="UI\DogTagAPI.h" />
+    <ClInclude Include="Web\MeatyAPI\DogTagAPI.h" />
     <ClInclude Include="UI\draw.h" />
     <ClInclude Include="UI\DxRenderWindow.h" />
     <ClInclude Include="UI\FileUpdater.h" />
@@ -597,7 +598,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="UI\aimview.cpp" />
     <ClCompile Include="UI\config.cpp" />
     <ClCompile Include="UI\debug.cpp" />
-    <ClCompile Include="UI\DogTagAPI.cpp" />
+    <ClCompile Include="Web\MeatyAPI\DogTagAPI.cpp" />
     <ClCompile Include="UI\DxRenderWindow.cpp" />
     <ClCompile Include="external\glm\detail\glm.cpp" />
     <ClCompile Include="external\glm\glm.cppm" />
@@ -647,6 +648,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="Web\TarkovDev\TarkovDevClient.cpp" />
     <ClCompile Include="Tarkov\Unity\Transform.cpp" />
     <ClCompile Include="Core\Utilities.cpp" />
+    <ClCompile Include="Core\KeyManager\KeyManager.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Player\WatchList.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Loot\WishList.cpp" />
     <ClCompile Include="UI\globals.cpp" />

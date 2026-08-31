@@ -189,14 +189,63 @@ namespace
             position.z != 0.0f;
     }
 
-    int calculateCorpseValue(const std::vector<CorpseEquipment>& equipment)
+    int calculateCorpseValue(const CorpseLootState& corpseState)
     {
         int value = 0;
 
-        for (const auto& entry : equipment)
+        for (const auto& entry : corpseState.equipment)
+        {
+            if (!corpseState.isEquipmentLootable(entry))
+                continue;
+
             value += entry.value;
+        }
 
         return value;
+    }
+
+    bool updateCorpseOwnerFromPlayerCache(LootEntity& lootItem, const PlayerCollection& playerCache)
+    {
+        CorpseLootState& corpseState = lootItem.getCorpseState();
+
+        for (const Player& player : playerCache)
+        {
+            if (lootItem.m_interactiveClass != player.P_CorpseClass)
+                continue;
+
+            corpseState.ownerResolved = true;
+            corpseState.ownerIsPmc =
+                corpseState.ownerIsPmc ||
+                (player.isPlayer &&
+                    !player.isPlayerScav &&
+                    !player.isAi);
+
+            if (player.isPlayer || player.isBoss)
+            {
+                std::string ownerName = player.name;
+
+                if (corpseState.ownerIsPmc && !player.profileId.empty())
+                {
+                    const auto cachedOwner = g_dogTagCache.GetByProfileId(player.profileId);
+
+                    if (cachedOwner.has_value() &&
+                        !cachedOwner->nickname.empty())
+                    {
+                        ownerName = cachedOwner->nickname;
+                    }
+                }
+
+                if (!ownerName.empty())
+                {
+                    corpseState.ownerName = ownerName;
+                    lootItem.longName = ownerName;
+                }
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     struct CachedMarketItem
@@ -545,24 +594,28 @@ bool loot::tryUpdateLootPosition(LootEntity& item, bool markAsFailedOnError)
                 {
                     transformIndex = mem.Read<int>(
                         transformPtr +
-                        UnityOffsets::TransformAccess_IndexOffset
+                        UnityOffsets::TransformAccess_IndexOffset,
+                        DmaCacheMode::Uncached
                     );
 
                     hierarchyPtr = mem.Read<uint64_t>(
                         transformPtr +
-                        UnityOffsets::TransformAccess_HierarchyOffset
+                        UnityOffsets::TransformAccess_HierarchyOffset,
+                        DmaCacheMode::Uncached
                     );
 
                     if (Utils::valid_pointer(hierarchyPtr))
                     {
                         verticesPtr = mem.Read<uint64_t>(
                             hierarchyPtr +
-                            UnityOffsets::Hierarchy_VerticesOffset
+                            UnityOffsets::Hierarchy_VerticesOffset,
+                            DmaCacheMode::Uncached
                         );
 
                         indicesPtr = mem.Read<uint64_t>(
                             hierarchyPtr +
-                            UnityOffsets::Hierarchy_IndicesOffset
+                            UnityOffsets::Hierarchy_IndicesOffset,
+                            DmaCacheMode::Uncached
                         );
 
                         if (Utils::valid_pointer(indicesPtr) &&
@@ -573,7 +626,8 @@ bool loot::tryUpdateLootPosition(LootEntity& item, bool markAsFailedOnError)
                                 indicesPtr +
                                 static_cast<uint64_t>(
                                     transformIndex
-                                    ) * sizeof(int)
+                                    ) * sizeof(int),
+                                DmaCacheMode::Uncached
                             );
                         }
                     }
@@ -641,7 +695,7 @@ bool loot::tryUpdateLootPosition(LootEntity& item, bool markAsFailedOnError)
         if (!UnityTransform::TryResolveNative(
                 item.m_pointerToTransform1,
                 nativeTransform,
-                !item.isAirdrop()))
+                false))
         {
             LogTransformDebug(
                 "Resolve",
@@ -658,7 +712,7 @@ bool loot::tryUpdateLootPosition(LootEntity& item, bool markAsFailedOnError)
 
         UnityTransform transform(
             nativeTransform,
-            !item.isAirdrop()
+            false
         );
 
         if (!transform.IsValid())
@@ -1041,7 +1095,7 @@ bool loot::buildNewLootItemsScatter(
 
     // MonoBehaviour.
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& shell : shellReads)
             batch.Add(shell.instance + 0x10, shell.monoBehaviour);
@@ -1058,7 +1112,7 @@ bool loot::buildNewLootItemsScatter(
 
     // interactive class and GameObject.
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& shell : shellReads)
         {
@@ -1088,7 +1142,7 @@ bool loot::buildNewLootItemsScatter(
 
     // name pointer and components.
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& shell : shellReads)
         {
@@ -1118,7 +1172,7 @@ bool loot::buildNewLootItemsScatter(
 
     // transform component.
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& shell : shellReads)
         {
@@ -1137,7 +1191,7 @@ bool loot::buildNewLootItemsScatter(
 
     // transform object class.
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& shell : shellReads)
         {
@@ -1160,7 +1214,7 @@ bool loot::buildNewLootItemsScatter(
 
     // native transform access.
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& shell : shellReads)
         {
@@ -1219,13 +1273,14 @@ bool loot::buildNewLootItemsScatter(
         {
             item.m_objectClassName = ReadName(
                 item.instance,
-                MAX_CLASS_NAME_LENGTH
+                MAX_CLASS_NAME_LENGTH,
+                false
             );
 
             item.gameObjectName = mem.readString(
                 item.m_pGameObjectName,
                 MAX_OBJECT_NAME_LENGTH,
-                DmaCacheMode::Cached
+                DmaCacheMode::Uncached
             );
         }
         catch (const std::exception& e)
@@ -1319,7 +1374,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootEntity>& items)
         return;
 
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1341,7 +1396,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootEntity>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1364,7 +1419,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootEntity>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1412,7 +1467,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootEntity>& items)
         try
         {
             item.bsgId = TrimEFT(
-                read.mongoId.ReadString(mem, 128, true)
+                read.mongoId.ReadString(mem, 128, false)
             );
         }
         catch (...)
@@ -1485,7 +1540,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
         return;
 
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1507,7 +1562,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1530,7 +1585,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1553,7 +1608,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
     }
 
     {
-        ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& read : reads)
         {
@@ -1600,7 +1655,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
         try
         {
             item.bsgId = TrimEFT(
-                read.mongoId.ReadString(mem, 128, true)
+                read.mongoId.ReadString(mem, 128, false)
             );
         }
         catch (...)
@@ -1639,7 +1694,7 @@ void loot::classifyCorpseLootItems(std::vector<LootEntity>& items)
         item.shortName = "Corpse";
 
         scanCorpseEquipment(item.m_interactiveClass, item, false);
-        item.getCorpseState().value = calculateCorpseValue(item.getCorpseState().equipment);
+        item.getCorpseState().value = calculateCorpseValue(item.getCorpseState());
     }
 }
 
@@ -1710,6 +1765,7 @@ loot::WantedLookup loot::buildWantedLookup() const
 void loot::applyWantedState(LootEntity& lootItem, const WantedLookup& lookup) const
 {
     lootItem.filterWanted = false;
+    lootItem.filterMatch = LootFilterMatch::None;
     lootItem.wanted = false;
 
     glm::vec4 filterColour{};
@@ -1719,28 +1775,33 @@ void loot::applyWantedState(LootEntity& lootItem, const WantedLookup& lookup) co
         if (lookup.questIds.contains(lootItem.bsgId))
         {
             lootItem.filterWanted = true;
+            lootItem.filterMatch = LootFilterMatch::Quest;
             filterColour = coloursGlobals::questColour;
         }
         else if (lookup.wishlistIds.contains(lootItem.bsgId))
         {
             lootItem.filterWanted = true;
+            lootItem.filterMatch = LootFilterMatch::Wishlist;
             filterColour = coloursGlobals::wishListColour;
         }
         else if (const auto filterIt = lookup.activeFilterItems.find(lootItem.bsgId);
             filterIt != lookup.activeFilterItems.end())
         {
             lootItem.filterWanted = true;
+            lootItem.filterMatch = LootFilterMatch::Other;
             filterColour = filterIt->second;
         }
         else if (lookup.categoryLootIds.contains(lootItem.bsgId))
         {
             lootItem.filterWanted = true;
+            lootItem.filterMatch = LootFilterMatch::Other;
             filterColour = lootGlobals::categoryLootColour;
         }
         else if (lootGlobals::enableValueLoot &&
             GetLootValueFilterPrice(lootItem) >= lootGlobals::valueLootFrom)
         {
             lootItem.filterWanted = true;
+            lootItem.filterMatch = LootFilterMatch::Value;
             filterColour = coloursGlobals::valueLootColour;
         }
     }
@@ -1953,39 +2014,6 @@ void loot::updateCorpseRequirements(std::vector<LootEntity>& workingCache)
         registeredPlayers.getCacheSnapshot();
     const PlayerCollection& playerCache = *playerCacheSnapshot;
 
-    const auto resolveCorpseOwner = [&playerCache](LootEntity& item)
-    {
-        CorpseLootState& corpseState = item.getCorpseState();
-
-        if (corpseState.ownerResolved)
-            return;
-
-        for (const Player& player : playerCache)
-        {
-            if (item.m_interactiveClass != player.P_CorpseClass ||
-                !player.isDead)
-            {
-                continue;
-            }
-
-            if (player.isPlayer || player.isBoss)
-            {
-                if (!player.name.empty())
-                {
-                    item.longName = player.name;
-                    corpseState.ownerName = player.name;
-                    corpseState.ownerResolved = true;
-                }
-            }
-            else
-            {
-                corpseState.ownerResolved = true;
-            }
-
-            break;
-        }
-    };
-
     size_t updated = 0;
 
     for (size_t checked = 0;
@@ -2004,7 +2032,10 @@ void loot::updateCorpseRequirements(std::vector<LootEntity>& workingCache)
         if (!LootClassifier::get(item).needsCorpseUpdate())
             continue;
 
-        resolveCorpseOwner(item);
+        updateCorpseOwnerFromPlayerCache(item, playerCache);
+
+        CorpseLootState& corpseState = item.getCorpseState();
+        corpseState.value = calculateCorpseValue(corpseState);
 
         if (now - item.lastCorpseEquipmentUpdate <
             std::chrono::seconds(20))
@@ -2014,7 +2045,7 @@ void loot::updateCorpseRequirements(std::vector<LootEntity>& workingCache)
 
         scanCorpseEquipment(item.m_interactiveClass, item, true);
 
-        item.getCorpseState().value = calculateCorpseValue(item.getCorpseState().equipment);
+        corpseState.value = calculateCorpseValue(corpseState);
 
         ++updated;
     }
@@ -2069,46 +2100,18 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
 
     try
     {
-        bool isPMC = false;
         CorpseLootState& corpseState = lootItem.getCorpseState();
         const PlayerSnapshot playerCacheSnapshot =
             registeredPlayers.getCacheSnapshot();
         const PlayerCollection& playerCache = *playerCacheSnapshot;
 
-        for (const Player& player : playerCache)
-        {
-            if (interactive != player.P_CorpseClass)
-                continue;
-
-            isPMC = player.isPlayer;
-
-            if (!player.isDead)
-            {
-                break;
-            }
-
-            if (player.isPlayer || player.isBoss)
-            {
-                if (!player.name.empty())
-                {
-                    lootItem.longName = player.name;
-                    corpseState.ownerName = player.name;
-                    corpseState.ownerResolved = true;
-                }
-            }
-            else
-            {
-                corpseState.ownerResolved = true;
-            }
-
-            break;
-        }
+        updateCorpseOwnerFromPlayerCache(lootItem, playerCache);
 
         uint64_t itemBase = 0;
         uint64_t slotsPtr = 0;
 
         {
-            ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
             batch.Add(interactive + sdk::InteractiveLootItem::Item, itemBase);
 
             if (!batch.Execute())
@@ -2119,7 +2122,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
             return;
 
         {
-            ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
             batch.Add(itemBase + sdk::LootItemMod::Slots, slotsPtr);
 
             if (!batch.Execute())
@@ -2132,7 +2135,8 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
         UnityArray<uint64_t> slotsRead(
             slotsPtr,
             "Loot corpse slots",
-            MAX_CORPSE_SLOTS);
+            MAX_CORPSE_SLOTS,
+            DmaCacheMode::Uncached);
 
         if (slotsRead.count <= 0)
             return;
@@ -2169,7 +2173,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
 
         // name template.
         {
-            ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
             for (auto& read : slotReads)
             {
@@ -2186,7 +2190,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
 
         // mongo id.
         {
-            ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Loot");
+            ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
             for (auto& read : slotReads)
             {
@@ -2208,12 +2212,6 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
             if (!Utils::valid_pointer(read.namePtr))
                 continue;
 
-            if (!Utils::valid_pointer(read.containedItem))
-                continue;
-
-            if (!Utils::valid_pointer(read.inventoryTemplate))
-                continue;
-
             if (read.nameLen <= 0 || read.nameLen > 128)
                 continue;
 
@@ -2221,27 +2219,34 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
                 mem.readUnicodeString(
                     read.namePtr + 0x14,
                     read.nameLen,
-                    DmaCacheMode::Cached
+                    DmaCacheMode::Uncached
                 )
             );
 
             if (slotName.empty())
                 continue;
 
+            if (slotName == "Dogtag")
+                corpseState.ownerIsPmc = true;
+
             if (skipNames.contains(slotName))
                 continue;
 
-            if (isPMC && slotName == "Scabbard")
+            if (!Utils::valid_pointer(read.containedItem))
+                continue;
+
+            if (!Utils::valid_pointer(read.inventoryTemplate))
                 continue;
 
             const std::string id = TrimEFT(
-                read.mongoId.ReadString(mem, 128, true)
+                read.mongoId.ReadString(mem, 128, false)
             );
 
             if (id.empty())
                 continue;
 
             CorpseEquipment corpseEq{};
+            corpseEq.slotName = slotName;
 
             if (const CachedMarketItem* marketItem = findMarketItem(id))
             {
@@ -2293,10 +2298,40 @@ void loot::lootTask()
         if (!Utils::valid_pointer(mainGame.localPlayerPtr))
             return;
 
+        const bool filteredLootEnabled =
+            lootGlobals::enableQuestLoot ||
+            lootGlobals::enableWishListLoot ||
+            lootGlobals::enableValueLoot;
+
+        const bool containerLootEnabled =
+            lootGlobals::drawDrawer ||
+            lootGlobals::drawDuffle ||
+            lootGlobals::drawSafe ||
+            lootGlobals::drawWeaponBox ||
+            lootGlobals::drawTechCrate ||
+            lootGlobals::drawRationCrate ||
+            lootGlobals::drawMedicalCrate ||
+            lootGlobals::drawJacket ||
+            lootGlobals::drawMedPackage ||
+            lootGlobals::drawMedBox ||
+            lootGlobals::drawToolbox ||
+            lootGlobals::drawGrenadeBox ||
+            lootGlobals::drawBuriedStash ||
+            lootGlobals::drawGroundCache ||
+            lootGlobals::drawWoodenCrate ||
+            lootGlobals::drawSuitcase ||
+            lootGlobals::drawAmmoBox ||
+            lootGlobals::drawDeadBody ||
+            lootGlobals::drawPCBlock ||
+            lootGlobals::drawRegister ||
+            lootGlobals::drawAirDrops;
+
         if (!radarGlobals::drawLoot &&
             !espGlobals::drawLoot &&
             !espGlobals::drawCorpse &&
-            !espGlobals::drawQuestHelper)
+            !espGlobals::drawQuestHelper &&
+            !filteredLootEnabled &&
+            !containerLootEnabled)
             return;
 
         const auto now = std::chrono::steady_clock::now();
@@ -2522,6 +2557,7 @@ void loot::lootTask()
                     item.forceWanted = current.forceWanted;
                     item.forceColor = current.forceColor;
                     item.filterWanted = current.filterWanted;
+                    item.filterMatch = current.filterMatch;
                     item.wanted = current.wanted;
                     item.color = current.color;
                 }

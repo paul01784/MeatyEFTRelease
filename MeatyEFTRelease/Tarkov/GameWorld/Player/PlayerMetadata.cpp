@@ -3,7 +3,7 @@
 #include "PlayerAppearance.h"
 #include "PlayerLookup.h"
 
-#include "../../../UI/DogTagAPI.h"
+#include "../../../Web/MeatyAPI/DogTagAPI.h"
 #include "../../../UI/debug.h"
 #include "../../../UI/globals.h"
 #include "DogTagCache.h"

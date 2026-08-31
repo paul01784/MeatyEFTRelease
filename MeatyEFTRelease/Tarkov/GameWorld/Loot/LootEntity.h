@@ -18,8 +18,18 @@ enum class LootEntityKind : uint8_t
     Airdrop
 };
 
+enum class LootFilterMatch : uint8_t
+{
+    None = 0,
+    Quest,
+    Wishlist,
+    Other,
+    Value
+};
+
 struct CorpseEquipment
 {
+    std::string slotName;
     std::string name;
     int value = 0;
     bool wanted = false;
@@ -41,9 +51,15 @@ struct ContainerLootState
 struct CorpseLootState
 {
     bool ownerResolved = false;
+    bool ownerIsPmc = false;
     std::string ownerName;
     int value = 0;
     std::vector<CorpseEquipment> equipment;
+
+    [[nodiscard]] bool isEquipmentLootable(const CorpseEquipment& entry) const noexcept
+    {
+        return !(ownerIsPmc && entry.slotName == "Scabbard");
+    }
 };
 
 struct AirdropLootState
@@ -88,6 +104,7 @@ struct LootEntity
     bool wanted = false;
     bool forceWanted = false;
     bool filterWanted = false;
+    LootFilterMatch filterMatch = LootFilterMatch::None;
     glm::vec4 color{};
     glm::vec4 forceColor{};
 

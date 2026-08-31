@@ -771,7 +771,7 @@ namespace fuserRender
             }
 
             const int distance = static_cast<int>(glm::distance(g_frameLocalLocation, loc.pos));
-            if (distance > espGlobals::drawLootDist)
+            if (distance > espGlobals::drawQuestLootDist)
                 continue;
 
             if (loc.objectiveType != "visit" &&
@@ -1249,7 +1249,7 @@ namespace fuserRender
                     continue;
                 }
 
-                if (player.distance > espGlobals::drawPlayerDist)
+                if (player.distance > espGlobals::getPlayerDrawDistance(player))
                     continue;
 
                 if (player.distance == 0)
@@ -1282,20 +1282,56 @@ namespace fuserRender
 
                     if (!player.isBTR)
                     {
-                        const std::string itemName = CleanText(player.observedHandsInfo.itemName);
-                        const std::string ammoName = CleanText(player.observedHandsInfo.ammoName);
+                        float detailY = screenPos.y + 20.0f;
 
-                        if (!itemName.empty() || !ammoName.empty())
+                        if (espGlobals::drawHandItem)
                         {
-                            g_DxWindow.DrawString(
-                                itemName + " (" + ammoName + "/" + std::to_string(player.observedHandsInfo.magazineCount) + ")",
-                                screenPos.x,
-                                screenPos.y + 20.0f,
-                                13.0f,
-                                playerColour,
-                                true,
-                                true
-                            );
+                            const std::string itemName = CleanText(player.observedHandsInfo.itemName);
+                            const std::string ammoName = CleanText(player.observedHandsInfo.ammoName);
+
+                            if (!itemName.empty() || !ammoName.empty())
+                            {
+                                g_DxWindow.DrawString(
+                                    itemName + " (" + ammoName + "/" + std::to_string(player.observedHandsInfo.magazineCount) + ")",
+                                    screenPos.x,
+                                    detailY,
+                                    13.0f,
+                                    playerColour,
+                                    true,
+                                    true
+                                );
+                                detailY += 15.0f;
+                            }
+                        }
+
+                        if (espGlobals::drawPlayerEquip && radarGlobals::getPlayerEquip)
+                        {
+                            for (const auto& slot : player._slots)
+                            {
+                                const std::string slotName = TrimEFT(slot.name);
+
+                                if (!slot.wanted ||
+                                    slotName == "SecuredContainer" ||
+                                    (player.isPlayer && slotName == "Scabbard"))
+                                {
+                                    continue;
+                                }
+
+                                const std::string equipmentName = CleanText(slot.equipName);
+                                if (equipmentName.empty())
+                                    continue;
+
+                                g_DxWindow.DrawString(
+                                    equipmentName,
+                                    screenPos.x,
+                                    detailY,
+                                    13.0f,
+                                    playerColour,
+                                    true,
+                                    true
+                                );
+                                detailY += 15.0f;
+                            }
                         }
                     }
                 }
@@ -1439,14 +1475,9 @@ namespace fuserRender
 
         for (const auto& loot : lootList)
         {
-            const bool isSelectedContainer = loot.isContainer();
             const bool isCorpse = loot.isCorpse();
             const bool isQuestItem = loot.isQuestItem();
-
-            if (!espGlobals::drawLoot &&
-                !isSelectedContainer &&
-                !isCorpse &&
-                !isQuestItem)
+            if (!espGlobals::drawLoot && !isCorpse)
                 continue;
 
             if (loot.pendingResolve || loot.failed)
@@ -1458,19 +1489,12 @@ namespace fuserRender
             if (!loot.wanted)
                 continue;
 
-            if (isQuestItem && !espGlobals::drawQuestHelper)
-                continue;
-
             if (isCorpse && !espGlobals::drawCorpse)
                 continue;
 
             const int distance = static_cast<int>(glm::distance(g_frameLocalLocation, loot.worldLocation));
 
-            const int maximumDistance = isSelectedContainer
-                ? lootGlobals::containerDistance
-                : isCorpse
-                    ? espGlobals::drawCorpseDist
-                    : espGlobals::drawLootDist;
+            const int maximumDistance = espGlobals::getLootDrawDistance(loot);
 
             if (distance > maximumDistance)
                 continue;

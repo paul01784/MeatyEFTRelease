@@ -1,9 +1,13 @@
 #include "includes.h"
 #include "globals.h"
+#include "../Tarkov/GameWorld/Player/Player.h"
+#include "../Tarkov/GameWorld/Loot/LootEntity.h"
+
+#include <algorithm>
 
 
 //define globals
-std::string globals::appVersion = "1.0.29";
+std::string globals::appVersion = "1.0.30";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -81,7 +85,6 @@ bool memoryGlobals::dmaShowStats = true;
 
 
 bool radarGlobals::minimalView = false;
-bool radarGlobals::drawPlayers = false;
 bool radarGlobals::drawLoot = false;
 bool radarGlobals::drawQuestHelper = false;
 bool radarGlobals::drawGrenades = false;
@@ -97,6 +100,8 @@ bool radarGlobals::drawAimLineTargets = true;
 float radarGlobals::aimLineTargetAngle = 7.5f;
 int radarGlobals::aimLineTargetMaxDistance = 1000;
 bool radarGlobals::getPlayerEquip = false;
+bool radarGlobals::drawPlayerEquip = false;
+bool radarGlobals::drawHandItem = true;
 bool radarGlobals::getPlayerStats = false;
 int radarGlobals::tarkovDevDataMode = 1;
 float radarGlobals::textScale = 1.0f;
@@ -104,8 +109,13 @@ int radarGlobals::fontIndex = 0;
 bool radarGlobals::fontBold = true;
 
 bool espGlobals::espEnabled = false;
-bool espGlobals::drawPlayers = false;
-int espGlobals::drawPlayerDist = 200;
+int espGlobals::drawPmcDist = 200;
+int espGlobals::drawPScavDist = 200;
+int espGlobals::drawScavDist = 200;
+int espGlobals::drawBossDist = 200;
+int espGlobals::drawUsecDist = 200;
+bool espGlobals::drawPlayerEquip = false;
+bool espGlobals::drawHandItem = true;
 int espGlobals::aimOverlayAlert = 1;
 int espGlobals::drawCorpseDist = 100;
 bool espGlobals::drawGrenades = false;
@@ -115,6 +125,10 @@ int espGlobals::drawTripwiresDist = 100;
 bool espGlobals::drawLoot = false;
 bool espGlobals::drawCorpse = false;
 int espGlobals::drawLootDist = 40;
+int espGlobals::drawContainerDist = 250;
+int espGlobals::drawQuestLootDist = 40;
+int espGlobals::drawWishlistLootDist = 40;
+int espGlobals::drawValueLootDist = 40;
 bool espGlobals::drawQuestHelper = false;
 bool espGlobals::drawBoxPlayers = false;
 bool espGlobals::drawHealthPlayers = false;
@@ -132,6 +146,61 @@ int espGlobals::drawExfilDist = 1000;
 bool espGlobals::drawExfil = true;
 bool espGlobals::drawSecretExfils = true;
 bool espGlobals::drawTransitExfils = true;
+
+int espGlobals::getPlayerDrawDistance(const Player& player)
+{
+    if (player.isPlayerScav)
+        return drawPScavDist;
+
+    if (player.isPlayer && !player.isAi)
+        return drawPmcDist;
+
+    if (player.isBoss)
+        return drawBossDist;
+
+    const bool isSavageAi =
+        player.isAi &&
+        !player.isPlayer &&
+        !player.isPlayerScav &&
+        (static_cast<std::uint32_t>(player.playerSide) &
+            static_cast<std::uint32_t>(EPlayerSide::Savage)) != 0;
+
+    if (isSavageAi && player.name == "Usec")
+        return drawUsecDist;
+
+    return drawScavDist;
+}
+
+int espGlobals::getMaximumPlayerDrawDistance()
+{
+    return (std::max)({
+        drawPmcDist,
+        drawPScavDist,
+        drawScavDist,
+        drawBossDist,
+        drawUsecDist
+    });
+}
+
+int espGlobals::getLootDrawDistance(const LootEntity& loot)
+{
+    if (loot.isContainer())
+        return drawContainerDist;
+
+    if (loot.isCorpse())
+        return drawCorpseDist;
+
+    if (loot.isQuestItem() || loot.filterMatch == LootFilterMatch::Quest)
+        return drawQuestLootDist;
+
+    if (loot.filterMatch == LootFilterMatch::Wishlist)
+        return drawWishlistLootDist;
+
+    if (loot.filterMatch == LootFilterMatch::Value)
+        return drawValueLootDist;
+
+    return drawLootDist;
+}
 
 bool aimGlobals::aimEnabled = false;
 bool aimGlobals::predictionEnabled = false;
