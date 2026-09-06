@@ -9,7 +9,7 @@
 
 namespace
 {
-    constexpr std::chrono::milliseconds corpseReadInterval{ 250 };
+    constexpr std::chrono::milliseconds corpseReadInterval{ 100 };
     constexpr std::chrono::milliseconds handsReadInterval{ 2000 };
     constexpr std::chrono::milliseconds failedReadRetryInterval{ 2500 };
 }
@@ -63,6 +63,7 @@ std::optional<Player> ClientPlayer::tryCreate(uint64_t instance, std::string_vie
     {
         player.name = "Ai";
         player.isAi = true;
+		player.type = PlayerType::AIScav;
     }
 
     PlayerMemoryAccess::tryReadChain(instance, { sdk::Player::_playerBody, 0x30, 0x30, 0x10 }, player.playerBoneMatrixPtr, DmaCacheMode::Uncached);

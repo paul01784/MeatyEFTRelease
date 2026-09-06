@@ -19,7 +19,7 @@
 #include "../Unity/GameObjectManager.h"
 #include "GameWorld.h"
 #include "RegisteredPlayers.h"
-#include "../Unity/Camera.h"
+#include "../Unity/cameraManager.h"
 #include "Exits/Exfil.h"
 #include "../Unity/UnityContainers.h"
 #include "Loot/Loot.h"
@@ -546,6 +546,8 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
 
     constexpr int kMaxPendingPromoteAttempts = 6;
     constexpr int kRefreshEveryAttempts = 2;
+
+    constexpr int kGomFallbackEveryAttempts = 8;
     constexpr DWORD kRetryDelayMs = 2500;
 
     while (!stopToken.stop_requested())
@@ -579,19 +581,24 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
                 }
             }
 
+            
+            mem.RefreshTarkovPointerSnapshot();
+            this->gameObjectManager = mem.GetTarkovPointerSnapshot().gameObjectManager;
+
             RaidState raid{};
             std::string probe;
             bool resolved = false;
 
             if (Utils::valid_pointer(pending_local_gw))
             {
-                resolved = tryPromotePendingRaid(this->gameObjectManager, pending_local_gw, pending_gw_object, raid, probe);
+                RaidPendingState stillPending{};
+                resolved = tryPromotePendingRaid(this->gameObjectManager, pending_local_gw, pending_gw_object, raid, probe, &stillPending);
 
                 if (!resolved)
                 {
                     ++pendingAttempts;
 
-                    if (pendingAttempts >= kMaxPendingPromoteAttempts)
+                    if (!stillPending.active || pendingAttempts >= kMaxPendingPromoteAttempts)
                     {
                         pending_local_gw = 0;
                         pending_gw_object = 0;
@@ -599,19 +606,22 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
                     }
                 }
             }
-            else
+            
+
+            if (!resolved)
             {
                 RaidPendingState pending{};
 
-                resolved = tryResolveRaid(this->gameObjectManager, raid, probe, &pending);
+                const bool allowGomFallback = waitAttempts == 1 || (waitAttempts % kGomFallbackEveryAttempts) == 0;
 
-                if (!resolved &&
-                    pending.active &&
-                    Utils::valid_pointer(pending.local_game_world))
+                resolved = tryResolveRaid(this->gameObjectManager, raid, probe, &pending, allowGomFallback);
+
+                if (!resolved && pending.active && Utils::valid_pointer(pending.local_game_world))
                 {
+                    if (pending_local_gw != pending.local_game_world)
+                        pendingAttempts = 0;
                     pending_local_gw = pending.local_game_world;
                     pending_gw_object = pending.game_world_object;
-                    pendingAttempts = 0;
                 }
             }
 
@@ -666,8 +676,6 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
 
 void MainGame::mainThread(std::stop_token stopToken)
 {
-    bool doOnce = false;
-
     while (!stopToken.stop_requested())
     {
         const bool initRunning = mem.IsInitRunning();
@@ -682,54 +690,10 @@ void MainGame::mainThread(std::stop_token stopToken)
 
         if (initRunning || !dmaConnected || !processFound)
         {
-            doOnce = false;
-
             if (!WaitForStop(stopToken, std::chrono::milliseconds(250)))
                 break;
             continue;
         }
-
-        if (!doOnce)
-        {
-            //try sig gom check
-
-            const std::string signature = "48 89 05 ?? ?? ?? ?? 48 83 C4 ?? C3 33 C9";
-
-            uint64_t end = mem.base + mem.baseSize;
-            uint64_t gomSig = mem.FindSignature(signature.c_str(), mem.base, end);
-
-            if (!Utils::valid_pointer(gomSig))
-            {
-                if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))
-                    break;
-                continue;
-            }
-
-            int32_t rva = mem.Read<int32_t>(gomSig + 3);
-
-            uint64_t gomPtrAddr = gomSig + 7 + rva;
-
-            this->gameObjectManager = mem.Read<uint64_t>(gomPtrAddr);
-
-            //this->gameObjectManager = mem.Read<uint64_t>(mem.base + UnityOffsets::GameObjectManager);
-
-            if (this->gameObjectManager == NULL)
-            {
-                if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))
-                    break;
-                continue;
-            }
-            else
-                doOnce = true;
-
-            LOGS.logInfo("[GOM] GameObjectManager resolved");
-
-            
-            
-        }
-
-        if (!WaitForStop(stopToken, std::chrono::milliseconds(4000)))
-            break;
 
         // wait here to get game world!
         if (!getGameWorldDetails(stopToken))
@@ -748,7 +712,48 @@ void MainGame::mainThread(std::stop_token stopToken)
         // Fast worker: latency-sensitive camera, aim, input and raid liveness.
         fastWorker.addTask(
             "cameraTask",
-            std::bind(&Camera::cameraTask, &camera),
+            []()
+            {
+                try
+                {
+
+                    const PlayerSnapshot players = ::registeredPlayers.getCacheSnapshot();
+                    const auto local = std::find_if(players->begin(), players->end(),
+                        [](const Player& player) { return player.isLocal; });
+                    (void)cameraManagerTest.updateWithAds(
+                        local != players->end() ? local->P_PWA : 0,
+                        local != players->end() && local->isAiming);
+
+                }
+                catch (const std::exception& exception)
+                {
+                    static auto lastLog =
+                        std::chrono::steady_clock::time_point{};
+                    const auto now = std::chrono::steady_clock::now();
+
+                    if (lastLog == std::chrono::steady_clock::time_point{} ||
+                        (now - lastLog) >= std::chrono::seconds(5))
+                    {
+                        lastLog = now;
+                        LOGS.logWarn(
+                            "[CAMERA MANAGER] Update failed: ",
+                            exception.what());
+                    }
+                }
+                catch (...)
+                {
+                    static auto lastLog = std::chrono::steady_clock::time_point{};
+                    const auto now = std::chrono::steady_clock::now();
+
+                    if (lastLog == std::chrono::steady_clock::time_point{} ||
+                        (now - lastLog) >= std::chrono::seconds(5))
+                    {
+                        lastLog = now;
+                        LOGS.logWarn(
+                            "[CAMERA MANAGER] Unknown update failure.");
+                    }
+                }
+            },
             &globals::taskCamera,
             { TaskPriority::Critical, DmaPriority::Critical, false, 0.0 });
 
@@ -762,14 +767,7 @@ void MainGame::mainThread(std::stop_token stopToken)
             "fireportTask",
             []()
             {
-                const bool fireportNeeded =
-                    makcu.IsConnected() &&
-                    aimGlobals::aimEnabled &&
-                    (aimGlobals::drawFireportLine ||
-                        aimGlobals::predictionEnabled ||
-                        aimGlobals::aimReference == AimReference::Fireport);
-
-                if (fireportNeeded)
+                if (Utils::valid_pointer(mainGame.localPlayerPtr))
                     g_fireport.update(mainGame.localPlayerPtr);
                 else
                     g_fireport.clear();
@@ -904,6 +902,7 @@ void MainGame::mainThread(std::stop_token stopToken)
         fastWorkerThread.join();
         liveWorkerThread.join();
         backgroundWorkerThread.join();
+        cameraManagerTest.reset();
 
         exfil.clearCache();
         Loot.clearCache();
@@ -922,7 +921,6 @@ void MainGame::mainThread(std::stop_token stopToken)
         //clear caches
         mainGame.clearCache();
         ::registeredPlayers.clearCache();
-        camera.clearCache();
         exfil.clearCache();
         g_dogTagCache.ClearProcessedCorpses();
         if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))

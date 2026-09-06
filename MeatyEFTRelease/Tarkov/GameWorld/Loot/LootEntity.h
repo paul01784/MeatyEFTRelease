@@ -53,12 +53,24 @@ struct CorpseLootState
     bool ownerResolved = false;
     bool ownerIsPmc = false;
     std::string ownerName;
+    std::string ownerProfileId;
     int value = 0;
     std::vector<CorpseEquipment> equipment;
 
     [[nodiscard]] bool isEquipmentLootable(const CorpseEquipment& entry) const noexcept
     {
         return !(ownerIsPmc && entry.slotName == "Scabbard");
+    }
+
+    [[nodiscard]] bool hasWantedEquipment() const noexcept
+    {
+        for (const CorpseEquipment& entry : equipment)
+        {
+            if (entry.wanted && isEquipmentLootable(entry))
+                return true;
+        }
+
+        return false;
     }
 };
 

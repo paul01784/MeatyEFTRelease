@@ -2,7 +2,6 @@
 
 #include "../../../UI/debug.h"
 #include "../../../UI/globals.h"
-#include "../../Unity/Camera.h"
 #include "../../../memory/Memory.h"
 #include "../../../memory/ScatterReadBatch.h"
 #include "../MainGame.h"

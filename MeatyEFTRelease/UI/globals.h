@@ -151,6 +151,7 @@ struct espGlobals {
     static int crosshairSize;
     static bool drawHeadDot;
     static float headDotSize;
+    static bool drawFireportLine;
     static bool runEsp;
     static int drawExfilDist;
     static bool drawExfil;
@@ -171,15 +172,13 @@ struct aimGlobals {
     static boneListIndexes pmcBone;
     static TargetMode targetMode;
     static bool targetLock;
+    static bool aimClosestBoneToFireport;
     static float aimSmooth;
     static float aimSpeedPixelsPerSecond;
     static float aimDeadzonePixels;
     static float aimOffsetX;
     static float aimOffsetY;
-    static AimReference aimReference;
-    static bool aimClosestBoneToFireport;
     static bool showAimFovRing;
-    static bool drawFireportLine;
 };
 
 struct coloursGlobals {

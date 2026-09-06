@@ -9,6 +9,9 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <numeric>
+#include <unordered_map>
 #include <vector>
 
 namespace MapNames
@@ -96,11 +99,11 @@ void drawPlayers()
     const PlayerSnapshot cacheSnapshot = registeredPlayers.getCacheSnapshot();
     const PlayerCollection& cache = *cacheSnapshot;
 
+    BeginRadarPlayerPanelFrame();
+
     constexpr float kBtrPassengerRadius = 4.0f;
     constexpr float kBtrPassengerRadiusSquared =
         kBtrPassengerRadius * kBtrPassengerRadius;
-    constexpr float kBtrPassengerStackOffsetX = 20.0f;
-    constexpr float kBtrPassengerStackSpacingY = 18.0f;
     constexpr size_t kBtrPassengerCapacity = 4;
 
     struct BtrPassengerStack
@@ -108,14 +111,6 @@ void drawPlayers()
         const Player* btr{};
         std::array<const Player*, kBtrPassengerCapacity> passengers{};
         size_t count{};
-    };
-
-    struct BtrPassengerMarker
-    {
-        const Player* passenger{};
-        const Player* btr{};
-        size_t slot{};
-        size_t passengerCount{};
     };
 
     std::vector<BtrPassengerStack> btrStacks;
@@ -132,8 +127,6 @@ void drawPlayers()
         }
     }
 
-    // Associate each confirmed passenger with its nearest BTR.  The BTR itself
-    // occupies the centre marker; up to four passenger dots form a stack left of it.
     for (const Player& player : cache)
     {
         if (!player.isInBTR ||
@@ -167,13 +160,8 @@ void drawPlayers()
             nearestBtr->passengers[nearestBtr->count++] = &player;
     }
 
-    std::vector<BtrPassengerMarker> passengerMarkers;
-    passengerMarkers.reserve(kBtrPassengerCapacity);
-
     for (BtrPassengerStack& stack : btrStacks)
     {
-        // The cache order is not guaranteed to be persistent, so sort the four
-        // stack positions by instance address to prevent marker jitter.
         std::sort(
             stack.passengers.begin(),
             stack.passengers.begin() + stack.count,
@@ -182,17 +170,45 @@ void drawPlayers()
                 return first->instance < second->instance;
             }
         );
-
-        for (size_t slot = 0; slot < stack.count; ++slot)
-        {
-            passengerMarkers.push_back({
-                stack.passengers[slot],
-                stack.btr,
-                slot,
-                stack.count
-            });
-        }
     }
+
+    struct BtrRadarHeadingState
+    {
+        glm::vec3 previousWorldPosition{};
+        glm::vec2 rotation{};
+        bool initialized = false;
+    };
+
+    static std::unordered_map<uint64_t, BtrRadarHeadingState> btrHeadingStates;
+    const auto getTrackedBtrRotation = [&](const Player& btr, const glm::vec3& mapPosition)
+        {
+            BtrRadarHeadingState& state = btrHeadingStates[btr.instance];
+            if (!state.initialized)
+            {
+                state.previousWorldPosition = btr.location;
+                state.initialized = true;
+                return state.rotation;
+            }
+
+            const glm::vec3 worldMovement = btr.location - state.previousWorldPosition;
+            const float worldMovementSquared = (worldMovement.x * worldMovement.x) + (worldMovement.z * worldMovement.z);
+
+            if (worldMovementSquared > 0.0025f)
+            {
+                const glm::vec3 previousMapPosition = mapControl.getMapPosition(state.previousWorldPosition, currentMap::configX, currentMap::configY, currentMap::configScale);
+                const float mapMovementX = mapPosition.x - previousMapPosition.x;
+                const float mapMovementY = mapPosition.y - previousMapPosition.y;
+
+                if ((mapMovementX * mapMovementX) + (mapMovementY * mapMovementY) > 0.01f)
+                {
+                    state.rotation.x = static_cast<float>(std::atan2(mapMovementY, mapMovementX) * (180.0 / PI));
+                }
+
+                state.previousWorldPosition = btr.location;
+            }
+
+            return state.rotation;
+        };
 
     for (const auto& player : cache)
     {
@@ -213,36 +229,45 @@ void drawPlayers()
 
             if (player.isInBTR)
             {
-                const auto passengerMarker = std::find_if(
-                    passengerMarkers.begin(),
-                    passengerMarkers.end(),
-                    [&](const BtrPassengerMarker& marker)
+                const bool representedByBtr = std::any_of(
+                    btrStacks.begin(),
+                    btrStacks.end(),
+                    [&player](const BtrPassengerStack& stack)
                     {
-                        return marker.passenger == &player;
+                        return std::find(
+                            stack.passengers.begin(),
+                            stack.passengers.begin() + stack.count,
+                            &player) != stack.passengers.begin() + stack.count;
                     }
                 );
 
-                if (passengerMarker != passengerMarkers.end())
-                {
-                    const glm::vec3 btrPosition = mapControl.getMapPosition(
-                        passengerMarker->btr->location,
-                        currentMap::configX,
-                        currentMap::configY,
-                        currentMap::configScale
-                    );
-                    const float centredSlot =
-                        static_cast<float>(passengerMarker->slot) -
-                        (static_cast<float>(passengerMarker->passengerCount) - 1.0f) * 0.5f;
-
-                    position.x = btrPosition.x - kBtrPassengerStackOffsetX;
-                    position.y = btrPosition.y +
-                        (centredSlot * kBtrPassengerStackSpacingY);
-                }
+                if (representedByBtr)
+                    continue;
             }
 
-            if (!radarGlobals::minimalView &&
-                !player.isBTR &&
-                !player.isInBTR)
+            if (player.isBTR)
+            {
+                std::vector<glm::vec4> passengerColours;
+                const auto stack = std::find_if(
+                    btrStacks.begin(),
+                    btrStacks.end(),
+                    [&player](const BtrPassengerStack& candidate)
+                    {
+                        return candidate.btr == &player;
+                    });
+
+                if (stack != btrStacks.end())
+                {
+                    passengerColours.reserve(stack->count);
+                    for (size_t index = 0; index < stack->count; ++index)
+                        passengerColours.push_back(GetRadarPlayerMarkerColour(*stack->passengers[index]));
+                }
+
+                DrawRadarBtrMarker(position.x, position.y, getTrackedBtrRotation(player, position), GetRadarPlayerMarkerColour(player), passengerColours, mapControl.zoomLevel);
+                continue;
+            }
+
+            if (!player.isInBTR)
             {
                 int aimLineLen = 100;
                 if (player.isFriend)
@@ -259,15 +284,17 @@ void drawPlayers()
                     player.aimLineTargetConfirmed)
                 {
                     const glm::vec3 targetPosition = mapControl.getMapPosition(player.aimLineTargetLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
+					const glm::vec2 lineStart = GetRadarFacingPoint(glm::vec2(position.x, position.y), player.rotation, kRadarPlayerTriangleRadius);
 
-                    DrawLine(position.x, position.y, targetPosition.x, targetPosition.y, player.colour, 3);
+					DrawLine(lineStart.x, lineStart.y, targetPosition.x, targetPosition.y, GetRadarPlayerMarkerColour(player), 3);
                 }
                 else
                 {
-                    drawAimLine(glm::vec2(position.x, position.y), player.rotation, aimLineLen, player.colour);
+					drawAimLine(glm::vec2(position.x, position.y), player.rotation, aimLineLen, GetRadarPlayerMarkerColour(player), kRadarPlayerTriangleRadius);
                 }
 
-                drawGroupLine(position, player);
+                if (!radarGlobals::minimalView)
+                    drawGroupLine(position, player);
             }
 
             DrawRadarPlayerMarkers(position.x, position.y, mapControl.zoomLevel, player);
@@ -276,6 +303,8 @@ void drawPlayers()
 
 
     }
+
+    DrawRadarPlayerLoadoutPanel(cache);
 
 }
 
@@ -311,17 +340,15 @@ void drawLocalPlayer()
 
 
 
-    if (!radarGlobals::minimalView)
-    {
-        drawAimLine(
-            glm::vec2(position.x, position.y),
-            mainGame.localRotation,
-            radarGlobals::localAimLine,
-            coloursGlobals::playerLocal
-        );
-    }
+    drawAimLine(glm::vec2(position.x, position.y), mainGame.localRotation, radarGlobals::localAimLine, coloursGlobals::playerLocal, kRadarPlayerTriangleRadius
+    );
 
-    DrawCircleFilled(position.x, position.y, 8.0f, ImColor(coloursGlobals::playerLocal.x, coloursGlobals::playerLocal.y, coloursGlobals::playerLocal.z, coloursGlobals::playerLocal.w));
+    DrawRadarDirectionalTriangle(position.x, position.y, mainGame.localRotation,
+        ImColor(
+            coloursGlobals::playerLocal.x,
+            coloursGlobals::playerLocal.y,
+            coloursGlobals::playerLocal.z,
+            coloursGlobals::playerLocal.w));
 
 }
 
@@ -897,7 +924,11 @@ void drawExfils() {
 void drawLoot()
 {
     if (radarGlobals::minimalView)
+    {
+        DrawRadarLootClusterPanel({}, {});
+        DrawRadarCorpseHoverPanel({}, {});
         return;
+    }
 
     const auto now = std::chrono::steady_clock::now();
 
@@ -922,78 +953,341 @@ void drawLoot()
     }
 
     if (!radarGlobals::drawLoot)
+    {
+        DrawRadarLootClusterPanel({}, {});
+        DrawRadarCorpseHoverPanel({}, {});
         return;
+    }
 
     const LootCacheSnapshot cacheSnapshot = Loot.getCacheSnapshot();
     const LootCacheCollection& cacheLoot = *cacheSnapshot;
 
-    if (cacheLoot.size() == 0)
-        return;
-
-    for (const auto& itemLoot : cacheLoot)
+    struct VisibleRadarLoot
     {
+        const LootEntity* loot = nullptr;
+        glm::vec3 screenPosition{};
+    };
 
-        if (itemLoot.pendingResolve || itemLoot.failed)
+    std::vector<VisibleRadarLoot> visibleLoot;
+    visibleLoot.reserve(cacheLoot.size());
+
+    for (const LootEntity& itemLoot : cacheLoot)
+    {
+        if (itemLoot.pendingResolve || itemLoot.failed || !itemLoot.hasValidPosition)
             continue;
 
-        if (!itemLoot.hasValidPosition)
-            continue;
-
+        bool visible = false;
         if (itemLoot.isContainer())
         {
-            if (!itemLoot.wanted)
-                continue;
-
-            if (itemLoot.distance > lootGlobals::containerDistance)
-                continue;
-
-            glm::vec3 location = mapControl.getMapPosition(itemLoot.worldLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
-            DrawLootContainerMarker(location.x, location.y, itemLoot.color, mapControl.zoomLevel, itemLoot);
-
+            visible = itemLoot.wanted &&
+                itemLoot.distance <= lootGlobals::containerDistance;
+        }
+        else if (itemLoot.isItem())
+        {
+            visible = itemLoot.wanted || itemLoot.forceWanted;
+        }
+        else if (itemLoot.isQuestItem())
+        {
+            visible = radarGlobals::drawQuestHelper &&
+                (itemLoot.wanted || itemLoot.forceWanted);
+        }
+        else if (itemLoot.isCorpse())
+        {
+            visible = itemLoot.wanted;
         }
 
+        if (!visible)
+            continue;
 
-        if (itemLoot.isItem())
+        visibleLoot.push_back({
+            &itemLoot,
+            mapControl.getMapPosition(
+                itemLoot.worldLocation,
+                currentMap::configX,
+                currentMap::configY,
+                currentMap::configScale)
+            });
+    }
+
+    constexpr float kLootClusterRadiusMetres = 2.0f;
+    constexpr float kLootClusterRadiusSquared =
+        kLootClusterRadiusMetres * kLootClusterRadiusMetres;
+
+    std::vector<size_t> parents(visibleLoot.size());
+    std::iota(parents.begin(), parents.end(), 0);
+
+    auto findRoot = [&parents](size_t index)
         {
-            if (!itemLoot.wanted && !itemLoot.forceWanted)
-                continue;
+            size_t root = index;
+            while (parents[root] != root)
+                root = parents[root];
 
-            glm::vec3 location = mapControl.getMapPosition(itemLoot.worldLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
-            DrawLootItemMarker(location.x, location.y, itemLoot.color, mapControl.zoomLevel, itemLoot);
+            while (parents[index] != index)
+            {
+                const size_t parent = parents[index];
+                parents[index] = root;
+                index = parent;
+            }
+
+            return root;
+        };
+
+    auto makeSpatialCellKey = [](const int x, const int z)
+        {
+            return
+                (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
+                static_cast<uint32_t>(z);
+        };
+
+    std::unordered_map<uint64_t, std::vector<size_t>> spatialCells;
+    spatialCells.reserve(visibleLoot.size());
+
+    for (size_t index = 0; index < visibleLoot.size(); ++index)
+    {
+        // Quest loot keeps its dedicated marker and never joins the compact
+        // nearby-loot cluster
+        if (visibleLoot[index].loot->isQuestItem())
+            continue;
+
+        const glm::vec3& position = visibleLoot[index].loot->worldLocation;
+        const int cellX = static_cast<int>(std::floor(position.x / kLootClusterRadiusMetres));
+        const int cellZ = static_cast<int>(std::floor(position.z / kLootClusterRadiusMetres));
+
+        for (int offsetX = -1; offsetX <= 1; ++offsetX)
+        {
+            for (int offsetZ = -1; offsetZ <= 1; ++offsetZ)
+            {
+                const auto nearbyCell = spatialCells.find(
+                    makeSpatialCellKey(cellX + offsetX, cellZ + offsetZ));
+                if (nearbyCell == spatialCells.end())
+                    continue;
+
+                for (const size_t nearbyIndex : nearbyCell->second)
+                {
+                    const glm::vec3& nearbyPosition = visibleLoot[nearbyIndex].loot->worldLocation;
+                    const float deltaX = position.x - nearbyPosition.x;
+                    const float deltaZ = position.z - nearbyPosition.z;
+                    const float horizontalDistanceSquared =
+                        (deltaX * deltaX) +
+                        (deltaZ * deltaZ);
+
+                    if (horizontalDistanceSquared > kLootClusterRadiusSquared)
+                        continue;
+
+                    const size_t indexRoot = findRoot(index);
+                    const size_t nearbyRoot = findRoot(nearbyIndex);
+                    if (indexRoot != nearbyRoot)
+                        parents[indexRoot] = nearbyRoot;
+                }
+            }
         }
 
-        if (itemLoot.isQuestItem() && radarGlobals::drawQuestHelper)
+        spatialCells[makeSpatialCellKey(cellX, cellZ)].push_back(index);
+    }
+
+    std::vector<size_t> componentRoots;
+    std::vector<std::vector<size_t>> componentMembers;
+    componentRoots.reserve(visibleLoot.size());
+    componentMembers.reserve(visibleLoot.size());
+
+    for (size_t index = 0; index < visibleLoot.size(); ++index)
+    {
+        const size_t root = findRoot(index);
+        const auto existingRoot = std::find(componentRoots.begin(), componentRoots.end(), root);
+        if (existingRoot == componentRoots.end())
         {
-            if (!itemLoot.wanted && !itemLoot.forceWanted)
+            componentRoots.push_back(root);
+            componentMembers.push_back({ index });
+        }
+        else
+        {
+            const size_t componentIndex = static_cast<size_t>(existingRoot - componentRoots.begin());
+            componentMembers[componentIndex].push_back(index);
+        }
+    }
+
+    // Split chain-shaped connected components so every pair of entries in a displayed group is genuinely within the configured 2 metre radius
+    std::vector<std::vector<size_t>> strictComponentMembers;
+    strictComponentMembers.reserve(componentMembers.size());
+
+    for (const std::vector<size_t>& component : componentMembers)
+    {
+        std::vector<std::vector<size_t>> componentGroups;
+
+        for (const size_t candidateIndex : component)
+        {
+            const glm::vec3& candidatePosition = visibleLoot[candidateIndex].loot->worldLocation;
+            bool addedToGroup = false;
+
+            for (std::vector<size_t>& group : componentGroups)
+            {
+                const bool isWithinEveryMember = std::all_of(
+                    group.begin(),
+                    group.end(),
+                    [&](const size_t memberIndex)
+                    {
+                        const glm::vec3& memberPosition = visibleLoot[memberIndex].loot->worldLocation;
+                        const float deltaX = candidatePosition.x - memberPosition.x;
+                        const float deltaZ = candidatePosition.z - memberPosition.z;
+                        return (deltaX * deltaX) + (deltaZ * deltaZ) <=
+                            kLootClusterRadiusSquared;
+                    });
+
+                if (!isWithinEveryMember)
+                    continue;
+
+                group.push_back(candidateIndex);
+                addedToGroup = true;
+                break;
+            }
+
+            if (!addedToGroup)
+                componentGroups.push_back({ candidateIndex });
+        }
+
+        for (std::vector<size_t>& group : componentGroups)
+            strictComponentMembers.push_back(std::move(group));
+    }
+
+    componentMembers = std::move(strictComponentMembers);
+
+    const PlayerSnapshot playerSnapshot = registeredPlayers.getCacheSnapshot();
+    const PlayerCollection& players = *playerSnapshot;
+
+    std::vector<RadarLootCluster> lootClusters;
+    std::vector<size_t> singleLootIndices;
+    lootClusters.reserve(componentMembers.size());
+    singleLootIndices.reserve(componentMembers.size());
+
+    for (const std::vector<size_t>& members : componentMembers)
+    {
+        if (members.size() < 2)
+        {
+            singleLootIndices.push_back(members.front());
+            continue;
+        }
+
+        RadarLootCluster cluster{};
+        cluster.entries.reserve(members.size());
+        uint64_t stableId = 0;
+
+        for (const size_t memberIndex : members)
+        {
+            const VisibleRadarLoot& member = visibleLoot[memberIndex];
+            cluster.entries.push_back(member.loot);
+            cluster.worldCenter += member.loot->worldLocation;
+            cluster.screenPosition.x += member.screenPosition.x;
+            cluster.screenPosition.y += member.screenPosition.y;
+
+            const uint64_t entryId = GetRadarLootEntityUiId(*member.loot);
+            if (entryId != 0 && (stableId == 0 || entryId < stableId))
+                stableId = entryId;
+        }
+
+        const float inverseCount = 1.0f / static_cast<float>(members.size());
+        cluster.worldCenter *= inverseCount;
+        cluster.screenPosition.x *= inverseCount;
+        cluster.screenPosition.y *= inverseCount;
+        cluster.id = stableId;
+
+        for (const Player& player : players)
+        {
+            if (player.isLocal ||
+                player.isDead ||
+                player.hasExfiled ||
+                player.isBTR ||
+                !Utils::valid_pointer(player.instance))
+            {
                 continue;
+            }
 
-                glm::vec3 location =
-                    mapControl.getMapPosition(
-                        itemLoot.worldLocation,
-                        currentMap::configX,
-                        currentMap::configY,
-                        currentMap::configScale);
+            for (const LootEntity* entry : cluster.entries)
+            {
+                const float deltaX = player.location.x - entry->worldLocation.x;
+                const float deltaZ = player.location.z - entry->worldLocation.z;
+                const float horizontalDistanceSquared =
+                    (deltaX * deltaX) +
+                    (deltaZ * deltaZ);
 
+                if (horizontalDistanceSquared <= kLootClusterRadiusSquared)
+                {
+                    cluster.popupSuppressed = true;
+                    break;
+                }
+            }
+
+            if (cluster.popupSuppressed)
+                break;
+        }
+
+        lootClusters.push_back(std::move(cluster));
+    }
+
+    std::vector<RadarCorpseHoverCandidate> hoveredCorpses;
+    std::vector<const LootEntity*> visibleCorpses;
+    std::vector<RadarLootClusterHoverCandidate> hoveredClusters;
+
+    auto drawSingleLoot = [&](const size_t visibleIndex)
+        {
+            const VisibleRadarLoot& visibleEntry = visibleLoot[visibleIndex];
+            const LootEntity& itemLoot = *visibleEntry.loot;
+            const glm::vec3& location = visibleEntry.screenPosition;
+
+            if (itemLoot.isContainer())
+            {
+                DrawLootContainerMarker(
+                    location.x,
+                    location.y,
+                    itemLoot.color,
+                    mapControl.zoomLevel,
+                    itemLoot);
+            }
+            else if (itemLoot.isItem())
+            {
+                DrawLootItemMarker(
+                    location.x,
+                    location.y,
+                    itemLoot.color,
+                    mapControl.zoomLevel,
+                    itemLoot);
+            }
+            else if (itemLoot.isQuestItem())
+            {
                 DrawLootItemMarker(
                     location.x,
                     location.y,
                     coloursGlobals::questColour,
                     mapControl.zoomLevel,
                     itemLoot);
+            }
+            else if (itemLoot.isCorpse())
+            {
+                visibleCorpses.push_back(&itemLoot);
+                const float hoverDistanceSquared = DrawRadarPlayerCorpseMarkers(
+                    static_cast<int>(std::round(location.x)),
+                    static_cast<int>(std::round(location.y)),
+                    mapControl.zoomLevel,
+                    itemLoot);
 
-              
-        }
+                if (hoverDistanceSquared < FLT_MAX)
+                    hoveredCorpses.push_back({ &itemLoot, hoverDistanceSquared });
+            }
+        };
 
-        if (itemLoot.isCorpse())
-        {
-            if (!itemLoot.wanted)
-                continue;
+    for (const size_t visibleIndex : singleLootIndices)
+        drawSingleLoot(visibleIndex);
 
-            glm::vec3 location = mapControl.getMapPosition(itemLoot.worldLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
-            DrawRadarPlayerCorpseMarkers(location.x, location.y, mapControl.zoomLevel, itemLoot);
-        }
-
+    for (const RadarLootCluster& cluster : lootClusters)
+    {
+        const float hoverDistanceSquared = DrawRadarLootClusterMarker(
+            cluster,
+            mapControl.zoomLevel);
+        if (hoverDistanceSquared < FLT_MAX)
+            hoveredClusters.push_back({ &cluster, hoverDistanceSquared });
     }
+
+    DrawRadarLootClusterPanel(hoveredClusters, lootClusters);
+    DrawRadarCorpseHoverPanel(hoveredCorpses, visibleCorpses);
 }
 
 void drawWidgetExfils()

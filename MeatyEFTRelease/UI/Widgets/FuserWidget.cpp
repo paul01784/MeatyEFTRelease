@@ -311,6 +311,7 @@ void renderFuserWindow()
                 changed |= menuLayout::ToggleRow("Borderless", "fuserBorderless", &editorConfig.borderless);
                 changed |= menuLayout::ToggleRow("Always on top", "fuserTopMost", &editorConfig.topMost);
                 changed |= menuLayout::ToggleRow("Show in taskbar", "fuserTaskbar", &editorConfig.showInTaskbar);
+                changed |= menuLayout::ToggleRow("Show FPS counter", "fuserShowFps", &editorConfig.showFPS);
             }
             menuLayout::NextColumn();
             if (menuLayout::Section("Background"))

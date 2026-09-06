@@ -57,6 +57,7 @@ struct DxWindowConfig
     bool useVSync = true;
     bool useMonitorRefreshRate = true;
     int maxFPS = 144;
+    bool showFPS = true;
 
     // Used only when fuserRender::Render() returns false.
     // Keeps the window responsive without rendering at full speed while idle.

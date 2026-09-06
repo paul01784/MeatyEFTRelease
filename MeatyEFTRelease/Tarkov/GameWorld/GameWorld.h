@@ -23,10 +23,8 @@ struct RaidPendingState {
 
 bool isLobbyMapName(const std::string& map);
 
-bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out,
-                    RaidPendingState* pending_out = nullptr);
-bool tryPromotePendingRaid(std::uint64_t gom, std::uint64_t local_game_world, std::uint64_t game_world_object,
-                           RaidState& raid, std::string& debug_out);
+bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out,RaidPendingState* pending_out = nullptr, bool allow_gom_fallback = true);
+bool tryPromotePendingRaid(std::uint64_t gom, std::uint64_t local_game_world, std::uint64_t game_world_object, RaidState& raid, std::string& debug_out, RaidPendingState* pending_out = nullptr);
 bool readRegisteredPlayerPtrs(const RaidState& raid, std::vector<std::uint64_t>& out_ptrs);
 
 void recordDisposedGameWorld(std::uint64_t local_game_world);

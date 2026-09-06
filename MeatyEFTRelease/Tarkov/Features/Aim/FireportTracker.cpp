@@ -1,6 +1,6 @@
 #include "FireportTracker.h"
 
-#include "../../Unity/Camera.h"
+#include "../../Unity/cameraManager.h"
 #include "../../SDK/EftOffsets.h"
 #include "../../Unity/Transform.h"
 #include "../../../Core/Utilities.h"
@@ -30,8 +30,7 @@ bool isGoodVec3(const glm::vec3& v)
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
-std::unique_ptr<UnityTransform> makeMuzzleTransform(
-    uint64_t transformInternal)
+std::unique_ptr<UnityTransform> makeMuzzleTransform(uint64_t transformInternal)
 {
     auto transform = std::make_unique<UnityTransform>(
         transformInternal,
@@ -40,8 +39,7 @@ std::unique_ptr<UnityTransform> makeMuzzleTransform(
     return transform->IsValid() ? std::move(transform) : nullptr;
 }
 
-std::unique_ptr<UnityTransform> makeMuzzleTransformFromBifacial(
-    uint64_t bifacial)
+std::unique_ptr<UnityTransform> makeMuzzleTransformFromBifacial(uint64_t bifacial)
 {
     if (!Utils::valid_pointer(bifacial))
         return nullptr;
@@ -57,8 +55,7 @@ std::unique_ptr<UnityTransform> makeMuzzleTransformFromBifacial(
     return makeMuzzleTransform(native);
 }
 
-std::unique_ptr<UnityTransform> makeMuzzleTransformFromManaged(
-    uint64_t managed)
+std::unique_ptr<UnityTransform> makeMuzzleTransformFromManaged(uint64_t managed)
 {
     uint64_t native = 0;
     if (!UnityTransform::TryResolveNative(managed, native, true))
@@ -86,9 +83,7 @@ void FireportTracker::clear() noexcept
 
 void FireportTracker::publish(FireportPose pose)
 {
-    publishedPose_.store(
-        std::make_shared<const FireportPose>(std::move(pose)),
-        std::memory_order_release);
+    publishedPose_.store(std::make_shared<const FireportPose>(std::move(pose)), std::memory_order_release);
 }
 
 FireportPoseSnapshot FireportTracker::getSnapshot() const noexcept
@@ -109,23 +104,14 @@ void FireportTracker::clearCachedMuzzle() noexcept
     cachedPathIsFallback_ = false;
 }
 
-bool FireportTracker::refreshMuzzleTransform(
-    uint64_t localPlayer,
-    uint64_t handsController,
-    std::chrono::steady_clock::time_point now)
+bool FireportTracker::refreshMuzzleTransform(uint64_t localPlayer, uint64_t handsController, std::chrono::steady_clock::time_point now)
 {
-    // Weapon/hand pointers normally change only when the held item changes.
-    // Retaining the resolved transform avoids rebuilding its parent chain on
-    // every 16 ms fireport tick.
-    // Only retry a failed lookup. A valid path stays valid until the player
-    // pipeline reports a hands-controller change.
+    
     nextPathRefresh_ = now + kFailedPathRefreshInterval;
 
-    auto chooseBifacial = [&](uint64_t bifacial,
-        const char* path) -> std::unique_ptr<UnityTransform>
+    auto chooseBifacial = [&](uint64_t bifacial, const char* path) -> std::unique_ptr<UnityTransform>
     {
-        std::unique_ptr<UnityTransform> transform =
-            makeMuzzleTransformFromBifacial(bifacial);
+        std::unique_ptr<UnityTransform> transform = makeMuzzleTransformFromBifacial(bifacial);
 
         if (transform)
         {
@@ -136,11 +122,9 @@ bool FireportTracker::refreshMuzzleTransform(
         return transform;
     };
 
-    auto chooseManagedTransform = [&](uint64_t transformObject,
-        const char* path) -> std::unique_ptr<UnityTransform>
+    auto chooseManagedTransform = [&](uint64_t transformObject, const char* path) -> std::unique_ptr<UnityTransform>
     {
-        std::unique_ptr<UnityTransform> transform =
-            makeMuzzleTransformFromManaged(transformObject);
+        std::unique_ptr<UnityTransform> transform = makeMuzzleTransformFromManaged(transformObject);
 
         if (transform)
         {
@@ -151,51 +135,36 @@ bool FireportTracker::refreshMuzzleTransform(
         return transform;
     };
 
-    std::unique_ptr<UnityTransform> replacement = chooseBifacial(
-        mem.Read<uint64_t>(handsController + sdk::FirearmController::Fireport),
-        "firearm.fireport");
+    std::unique_ptr<UnityTransform> replacement = chooseBifacial(mem.Read<uint64_t>(handsController + sdk::FirearmController::Fireport), "firearm.fireport");
 
     if (!replacement)
     {
-        const uint64_t playerBones = mem.Read<uint64_t>(
-            localPlayer + sdk::Player::PlayerBones);
+        const uint64_t playerBones = mem.Read<uint64_t>(localPlayer + sdk::Player::PlayerBones);
 
         if (Utils::valid_pointer(playerBones))
         {
-            replacement = chooseBifacial(
-                mem.Read<uint64_t>(
-                    playerBones + sdk::PlayerBones::Fireport),
-                "player_bones.fireport");
+            replacement = chooseBifacial(mem.Read<uint64_t>(playerBones + sdk::PlayerBones::Fireport), "player_bones.fireport");
         }
     }
 
     if (!replacement)
     {
-        const uint64_t firearms = mem.Read<uint64_t>(
-            handsController + sdk::FirearmController::Firearms);
+        const uint64_t firearms = mem.Read<uint64_t>(handsController + sdk::FirearmController::Firearms);
 
         if (Utils::valid_pointer(firearms))
         {
-            replacement = chooseBifacial(
-                mem.Read<uint64_t>(firearms + sdk::Firearms::Fireport),
-                "firearms._fireport");
+            replacement = chooseBifacial(mem.Read<uint64_t>(firearms + sdk::Firearms::Fireport), "firearms._fireport");
         }
     }
 
     if (!replacement)
     {
-        // A number of weapon controllers do not expose a usable Fireport
-        // bifacial, but still expose the gun base transform. It is a less
-        // precise muzzle origin, but it keeps the line and reference usable
-        // while the weapon-specific fireport is unavailable
-        replacement = chooseManagedTransform(mem.Read<uint64_t>(handsController + sdk::FirearmController::GunBaseTransform),
-            "firearm.gun_base_transform");
+        replacement = chooseManagedTransform(mem.Read<uint64_t>(handsController + sdk::FirearmController::GunBaseTransform), "firearm.gun_base_transform");
     }
 
     if (!replacement)
     {
-        const uint64_t pwa = mem.Read<uint64_t>(
-            localPlayer + sdk::Player::ProceduralWeaponAnimation);
+        const uint64_t pwa = mem.Read<uint64_t>(localPlayer + sdk::Player::ProceduralWeaponAnimation);
 
         const uint64_t cachedPwa = mainGame.localPlayerPWA;
         const uint64_t pwaToUse = Utils::valid_pointer(pwa)
@@ -208,9 +177,7 @@ bool FireportTracker::refreshMuzzleTransform(
 
             if (Utils::valid_pointer(handsSpring))
             {
-                replacement = makeMuzzleTransformFromManaged(
-                    mem.Read<uint64_t>(
-                        handsSpring + sdk::PlayerSpring::Fireport));
+                replacement = makeMuzzleTransformFromManaged(mem.Read<uint64_t>(handsSpring + sdk::PlayerSpring::Fireport));
 
                 if (replacement)
                 {
@@ -232,8 +199,6 @@ bool FireportTracker::refreshMuzzleTransform(
         return true;
     }
 
-    // A transient failed refresh must not discard a still-valid path. If the
-    // hands controller genuinely changed, the old path is not safe to retain.
     if (cachedLocalPlayer_ != localPlayer ||
         cachedHandsController_ != handsController)
     {
@@ -249,8 +214,9 @@ bool FireportTracker::refreshMuzzleTransform(
 void FireportTracker::update(uint64_t localPlayer)
 {
     FireportPose pose{};
+    const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
 
-    if (!Utils::valid_pointer(localPlayer) || !camera.cameraPointersReady()) {
+    if (!Utils::valid_pointer(localPlayer) || !cameraSnapshot || !cameraSnapshot->valid) {
         clearCachedMuzzle();
         cachedLocalPlayer_ = 0;
         cachedHandsController_ = 0;
@@ -259,8 +225,6 @@ void FireportTracker::update(uint64_t localPlayer)
         return;
     }
 
-    // The player pipeline already maintains this pointer. Reusing it avoids a
-    // separate uncached read every fireport tick and detects weapon switches.
     const uint64_t handsCtrl = mainGame.localPlayerHands;
     if (!Utils::valid_pointer(handsCtrl)) {
         clearCachedMuzzle();
@@ -271,11 +235,7 @@ void FireportTracker::update(uint64_t localPlayer)
     }
 
     const auto now = std::chrono::steady_clock::now();
-    const bool pathRefreshDue =
-        cachedLocalPlayer_ != localPlayer ||
-        cachedHandsController_ != handsCtrl ||
-        ((!muzzleTransform_ || cachedPathIsFallback_) &&
-            now >= nextPathRefresh_);
+    const bool pathRefreshDue = cachedLocalPlayer_ != localPlayer || cachedHandsController_ != handsCtrl || ((!muzzleTransform_ || cachedPathIsFallback_) && now >= nextPathRefresh_);
 
     if (pathRefreshDue)
     {
@@ -289,9 +249,7 @@ void FireportTracker::update(uint64_t localPlayer)
     }
 
     glm::quat rotation{};
-    if (!muzzleTransform_->UpdateWorldPose(
-        pose.worldOrigin,
-        rotation))
+    if (!muzzleTransform_->UpdateWorldPose(pose.worldOrigin, rotation))
     {
         clearCachedMuzzle();
         nextPathRefresh_ = now + kFailedPathRefreshInterval;
@@ -302,9 +260,7 @@ void FireportTracker::update(uint64_t localPlayer)
     pose.worldForward = UnityTransformExtensions::Down(rotation);
     const float directionLength = glm::length(pose.worldForward);
 
-    if (directionLength < 1e-4f ||
-        !isGoodVec3(pose.worldOrigin) ||
-        !isGoodVec3(pose.worldForward))
+    if (directionLength < 1e-4f || !isGoodVec3(pose.worldOrigin) || !isGoodVec3(pose.worldForward))
     {
         clearCachedMuzzle();
         nextPathRefresh_ = now + kFailedPathRefreshInterval;
@@ -317,22 +273,9 @@ void FireportTracker::update(uint64_t localPlayer)
     pose.valid = true;
 
     if (pose.valid) {
-        const glm::vec3 endWorld =
-            pose.worldOrigin +
-            pose.worldForward * kFireportProjectionDistanceM;
-        const CameraProjectionSnapshot projection = camera.getProjectionSnapshot();
-
-        if (projection)
-        {
-            pose.screenStartOk = Utils::Camera::world_to_screen(
-                pose.worldOrigin,
-                &pose.screenStart,
-                *projection);
-            pose.screenEndOk = Utils::Camera::world_to_screen(
-                endWorld,
-                &pose.screenEnd,
-                *projection);
-        }
+        const glm::vec3 endWorld = pose.worldOrigin + pose.worldForward * kFireportProjectionDistanceM;
+        pose.screenStartOk = CameraManager::worldToScreen(*cameraSnapshot, pose.worldOrigin, pose.screenStart, espGlobals::gameRes.x, espGlobals::gameRes.y);
+        pose.screenEndOk = CameraManager::worldToScreen(*cameraSnapshot, endWorld, pose.screenEnd, espGlobals::gameRes.x, espGlobals::gameRes.y);
 
         const float sw = espGlobals::gameRes.x;
         const float sh = espGlobals::gameRes.y;

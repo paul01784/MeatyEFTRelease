@@ -59,7 +59,7 @@ namespace AimLineTargeting
         return FacingDot(source, targetLocation) >= minimumDot;
     }
 
-    inline bool FindLookedAtTarget(const Player& source, const PlayerCollection& players, const glm::vec3& localLocation, std::string_view localGroupId, float targetAngleDegrees, float maxLocalTargetDistance, glm::vec3& targetLocation, bool& targetIsLocal)
+    inline bool FindLookedAtTarget(const Player& source, const PlayerCollection& players, const glm::vec3& localLocation, std::string_view localGroupId, float targetAngleDegrees, float maxTargetDistance, glm::vec3& targetLocation, bool& targetIsLocal)
     {
         targetIsLocal = false;
 
@@ -76,8 +76,26 @@ namespace AimLineTargeting
         float bestDot = minimumDot;
         bool foundTarget = false;
 
+        const float clampedTargetDistance = std::clamp(maxTargetDistance, 10.0f, 2000.0f);
+        const float maxTargetDistanceSquared = clampedTargetDistance * clampedTargetDistance;
+
+        const auto isWithinTargetRange = [&](const glm::vec3& candidateLocation)
+            {
+                
+                const float deltaX = candidateLocation.x - source.location.x;
+                const float deltaZ = candidateLocation.z - source.location.z;
+                const float distanceSquared =
+                    (deltaX * deltaX) + (deltaZ * deltaZ);
+
+                return distanceSquared <= maxTargetDistanceSquared;
+
+            };
+
         const auto considerTarget = [&](const glm::vec3& candidateLocation, bool candidateIsLocal)
             {
+                if (!isWithinTargetRange(candidateLocation))
+                    return;
+
                 const float facingDot = FacingDot(source, candidateLocation);
                 if (facingDot < bestDot)
                     return;
@@ -88,15 +106,7 @@ namespace AimLineTargeting
                 foundTarget = true;
             };
 
-        const float clampedLocalTargetDistance = std::clamp(maxLocalTargetDistance, 10.0f, 2000.0f);
-        const float localDeltaX = localLocation.x - source.location.x;
-        const float localDeltaZ = localLocation.z - source.location.z;
-        const float localDistanceSquared =
-            (localDeltaX * localDeltaX) +
-            (localDeltaZ * localDeltaZ);
-
-        if (localDistanceSquared <= clampedLocalTargetDistance * clampedLocalTargetDistance)
-            considerTarget(localLocation, true);
+        considerTarget(localLocation, true);
 
         // An empty group id is not a real group and must never match everyone.
         if (localGroupId.empty())

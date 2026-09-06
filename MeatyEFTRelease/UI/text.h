@@ -179,17 +179,176 @@ void DrawRadarHealthDot(float centerX, float centerY, int healthStatus)
 	drawList->AddCircleFilled(center, 2.5f, ImColor(healthColor), 16);
 }
 
-void drawAimLine(glm::vec2 point, glm::vec2 rotation, int aimLineLength, glm::vec4 color)
+constexpr float kRadarPlayerTriangleRadius = 9.0f;
+
+glm::vec2 GetRadarFacingDirection(const glm::vec2& rotation)
 {
+	const float radians = static_cast<float>((PI / 180.0) * rotation.x);
+	return glm::vec2(glm::cos(radians), glm::sin(radians));
+}
 
-	double radians = (PI / 180) * rotation.x;
+glm::vec2 GetRadarFacingPoint(const glm::vec2& point, const glm::vec2& rotation, float distance)
+{
+	return point + (GetRadarFacingDirection(rotation) * distance);
+}
 
-	glm::vec2 endPoint = {
-		point.x + (glm::cos(radians) * aimLineLength),
-		point.y + (glm::sin(radians) * aimLineLength)
+glm::vec4 GetRadarPlayerMarkerColour(const Player& player)
+{
+	if (!mainGame.localGroupId.empty() && player.groupId == mainGame.localGroupId)
+		return coloursGlobals::playerFriendly;
+
+	return player.colour;
+}
+
+void DrawRadarDirectionalTriangle(float centerX, float centerY, const glm::vec2& rotation, ImU32 color)
+{
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const glm::vec2 centre(centerX, centerY);
+	const glm::vec2 forward = GetRadarFacingDirection(rotation);
+	const glm::vec2 sideways(-forward.y, forward.x);
+	const glm::vec2 tip = centre + (forward * kRadarPlayerTriangleRadius);
+	const glm::vec2 rear = centre - (forward * (kRadarPlayerTriangleRadius * 0.72f));
+	const glm::vec2 left = rear + (sideways * (kRadarPlayerTriangleRadius * 0.72f));
+	const glm::vec2 right = rear - (sideways * (kRadarPlayerTriangleRadius * 0.72f));
+
+	drawList->AddTriangleFilled(
+		ImVec2(tip.x, tip.y),
+		ImVec2(left.x, left.y),
+		ImVec2(right.x, right.y),
+		color);
+	drawList->AddTriangle(
+		ImVec2(tip.x, tip.y),
+		ImVec2(left.x, left.y),
+		ImVec2(right.x, right.y),
+		IM_COL32(0, 0, 0, 235),
+		1.25f);
+}
+
+void DrawRadarMarkerText(
+	ImDrawList* drawList,
+	ImFont* font,
+	float fontSize,
+	const ImVec2& position,
+	ImU32 color,
+	const char* text)
+{
+	if (text == nullptr || text[0] == '\0')
+		return;
+
+	drawList->AddText(
+		font,
+		fontSize,
+		ImVec2(position.x + 1.0f, position.y + 1.0f),
+		IM_COL32(0, 0, 0, 235),
+		text);
+	drawList->AddText(font, fontSize, position, color, text);
+}
+
+void DrawRadarBtrMarker(
+	float centerX,
+	float centerY,
+	const glm::vec2& rotation,
+	const glm::vec4& colour,
+	const std::vector<glm::vec4>& passengerColours,
+	float zoomLevel)
+{
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	ImFont* font = ImGui::GetFont();
+	const ImU32 markerColour = ImColor(colour.x, colour.y, colour.z, colour.w);
+	const glm::vec2 centre(centerX, centerY);
+	const glm::vec2 forward = GetRadarFacingDirection(rotation);
+	const glm::vec2 sideways(-forward.y, forward.x);
+
+	const auto point = [&centre, &forward, &sideways](float along, float across)
+		{
+			const glm::vec2 value = centre + (forward * along) + (sideways * across);
+			return ImVec2(value.x, value.y);
+		};
+
+	const ImVec2 bodyPoints[] =
+	{
+		point(13.0f, 0.0f),
+		point(8.0f, 6.0f),
+		point(-8.0f, 6.0f),
+		point(-12.0f, 3.0f),
+		point(-12.0f, -3.0f),
+		point(-8.0f, -6.0f),
+		point(8.0f, -6.0f)
 	};
 
-	DrawLine(point.x, point.y, endPoint.x, endPoint.y, color, 3);
+	drawList->AddConvexPolyFilled(
+		bodyPoints,
+		IM_ARRAYSIZE(bodyPoints),
+		IM_COL32(12, 15, 17, 225));
+	drawList->AddPolyline(
+		bodyPoints,
+		IM_ARRAYSIZE(bodyPoints),
+		markerColour,
+		ImDrawFlags_Closed,
+		1.5f);
+
+	// Slim track rails make the marker read as a vehicle without making it bulky.
+	for (const float side : { -8.0f, 8.0f })
+	{
+		const ImVec2 trackStart = point(-8.0f, side);
+		const ImVec2 trackEnd = point(7.0f, side);
+		drawList->AddLine(trackStart, trackEnd, IM_COL32(0, 0, 0, 235), 3.0f);
+		drawList->AddLine(trackStart, trackEnd, markerColour, 1.25f);
+	}
+
+	const float labelFontSize =
+		ScaleRadarTextSize(std::clamp(21.0f / zoomLevel, 10.0f, 12.0f));
+	const ImVec2 labelSize = MeasureRadarText(font, labelFontSize, "BTR");
+	const float labelX = centerX + 18.0f;
+	const float labelY = passengerColours.empty()
+		? centerY - (labelSize.y * 0.5f)
+		: centerY - labelSize.y + 1.0f;
+
+	DrawRadarMarkerText(
+		drawList,
+		font,
+		labelFontSize,
+		ImVec2(labelX, labelY),
+		markerColour,
+		"BTR");
+
+	const size_t passengerCount = std::min<size_t>(4, passengerColours.size());
+	const float passengerY = centerY + 7.0f;
+	for (size_t index = 0; index < passengerCount; ++index)
+	{
+		const glm::vec4& passengerColour = passengerColours[index];
+		const ImVec2 passengerPosition(
+			labelX + 2.5f + (static_cast<float>(index) * 7.0f),
+			passengerY);
+		drawList->AddCircleFilled(passengerPosition, 3.5f, IM_COL32(0, 0, 0, 245), 12);
+		drawList->AddCircleFilled(
+			passengerPosition,
+			2.5f,
+			ImColor(
+				passengerColour.x,
+				passengerColour.y,
+				passengerColour.z,
+				passengerColour.w),
+			12);
+	}
+}
+
+void drawAimLine(
+	glm::vec2 point,
+	glm::vec2 rotation,
+	int aimLineLength,
+	glm::vec4 color,
+	float startOffset = 0.0f)
+{
+	const glm::vec2 direction = GetRadarFacingDirection(rotation);
+	const glm::vec2 startPoint = point + (direction * startOffset);
+
+	glm::vec2 endPoint = {
+		startPoint.x + (direction.x * aimLineLength),
+		startPoint.y + (direction.y * aimLineLength)
+	};
+
+	DrawLine(startPoint.x, startPoint.y, endPoint.x, endPoint.y, color, 3);
 
 }
 
@@ -207,81 +366,441 @@ std::string FormatShortValue(int value)
 	return std::string(buffer);
 }
 
-void HandlePlayerSlotClick(int x, int y, int radius, const Player& player, uint64_t& selectedPlayerInstance)
+std::string GetRadarHeightIndicator(float worldHeight)
 {
-	ImVec2 windowPos = ImGui::GetWindowPos();
-	ImVec2 mouseScreen = ImGui::GetIO().MousePos;
-	ImVec2 mouseLocal(mouseScreen.x - windowPos.x, mouseScreen.y - windowPos.y);
+	const float heightDifference = worldHeight - mainGame.localLocation.y;
 
-	float clickRadius = radius + 16.0f;  // increase this
+	if (heightDifference > 8.0f)
+		return ICON_FK_ANGLE_DOUBLE_UP;
+	if (heightDifference >= 4.0f)
+		return ICON_FK_ANGLE_UP;
+	if (heightDifference < -8.0f)
+		return ICON_FK_ANGLE_DOUBLE_DOWN;
+	if (heightDifference <= -4.0f)
+		return ICON_FK_ANGLE_DOWN;
 
-	ImRect rect(
-		ImVec2((float)x - clickRadius, (float)y - clickRadius),
-		ImVec2((float)x + clickRadius, (float)y + clickRadius)
-	);
-
-	if (!rect.Contains(mouseLocal))
-		return;
-
-	if (ImGui::IsMouseClicked(0))
-	{
-		if (selectedPlayerInstance == player.instance)
-			selectedPlayerInstance = 0;
-		else
-			selectedPlayerInstance = player.instance;
-	}
+	return {};
 }
 
-void DrawPinnedPlayerSlotsBox(int x, int y, const Player& player)
+struct RadarPlayerPanelState
 {
-	ImDrawList* draw_list = ImGui::GetForegroundDrawList();
+	uint64_t selectedPlayerInstance = 0;
+	ImVec2 position{};
+	ImVec2 size = ImVec2(260.0f, 280.0f);
+	bool visible = false;
+	bool panelHoveredLastFrame = false;
+	bool markerClickedThisFrame = false;
+};
 
-	constexpr float pad = 6.0f;
-	constexpr float rounding = 4.0f;
-	constexpr float fontSize = 16.0f;
-	const float lineHeight = fontSize + 2.0f;
+RadarPlayerPanelState& GetRadarPlayerPanelState()
+{
+	static RadarPlayerPanelState state;
+	return state;
+}
 
-	float maxWidth = 0.0f;
-	std::vector<std::string> lines;
-	lines.reserve(player._slots.size());
+void BeginRadarPlayerPanelFrame()
+{
+	GetRadarPlayerPanelState().markerClickedThisFrame = false;
+}
 
-	for (const auto& slot : player._slots)
+std::string GetRadarPlayerDisplayName(const Player& player)
+{
+	if (player.isBlackDivision)
+		return "Black Division";
+
+	if (!player.name.empty() && player.name != "Ai")
+		return player.name;
+
+	if (player.isBoss)
+		return "Boss";
+
+	if (player.isPlayerScav)
+		return "PScav";
+
+	if (player.isPlayer && !player.isAi)
+		return "PMC";
+
+	return "AI";
+}
+
+std::string GetRadarPlayerTypeLabel(const Player& player)
+{
+	if (player.isBlackDivision)
+		return "BLACK DIVISION";
+
+	if (player.isCultist)
+		return "CULTIST";
+
+	if (player.isBoss)
+		return "BOSS";
+
+	if (player.isPlayerScav)
+		return "PLAYER SCAV";
+
+	if (player.type == PlayerType::AIRaider)
+		return "RAIDER";
+
+	if (player.playerSide == EPlayerSide::Usec)
+		return player.isAi ? "USEC RAIDER" : "USEC";
+
+	if (player.playerSide == EPlayerSide::Bear)
+		return player.isAi ? "BEAR RAIDER" : "BEAR";
+
+	return player.isAi ? "AI" : "PLAYER";
+}
+
+std::string GetRadarEquipmentSlotLabel(const std::string& rawSlotName)
+{
+	const std::string slotName = TrimEFT(rawSlotName);
+
+	if (slotName == "FirstPrimaryWeapon")
+		return "PRIMARY";
+	if (slotName == "SecondPrimaryWeapon")
+		return "SECONDARY";
+	if (slotName == "Holster")
+		return "HOLSTER";
+	if (slotName == "Scabbard")
+		return "MELEE";
+	if (slotName == "Headwear")
+		return "HELMET";
+	if (slotName == "Earpiece")
+		return "HEADSET";
+	if (slotName == "ArmorVest")
+		return "ARMOUR";
+	if (slotName == "TacticalVest")
+		return "RIG";
+	if (slotName == "Backpack")
+		return "BACKPACK";
+	if (slotName == "FaceCover")
+		return "FACE";
+	if (slotName == "Eyewear")
+		return "EYEWEAR";
+	if (slotName == "ArmBand")
+		return "ARMBAND";
+
+	return slotName.empty() ? "EQUIPMENT" : slotName;
+}
+
+bool IsRadarPlayerEquipmentSlotVisible(const Player& player, const slots& slot)
+{
+	if (slot.equipName.empty())
+		return false;
+
+	const std::string slotName = TrimEFT(slot.name);
+	if (slotName == "SecuredContainer" || slotName == "Dogtag")
+		return false;
+
+	return !(player.isPlayer && slotName == "Scabbard");
+}
+
+bool IsGenericRadarAiScav(const Player& player)
+{
+	if (!player.isAi || player.isPlayer || player.isPlayerScav ||
+		player.isBoss || player.isBlackDivision || player.isCultist)
 	{
-		if (slot.equipName.empty())
-			continue;
-
-		std::string line = slot.equipName;
-
-		if (slot.price > 0)
-			line += " (" + FormatShortValue(slot.price) + ")";
-
-		ImVec2 size = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, line.c_str());
-		if (size.x > maxWidth)
-			maxWidth = size.x;
-
-		lines.push_back(line);
+		return false;
 	}
 
-	if (lines.empty())
-		return;
+	return player.type == PlayerType::AIScav ||
+		player.name.empty() ||
+		player.name == "Ai" ||
+		player.name == "AI" ||
+		player.name == "Scav";
+}
 
-	ImVec2 windowPos = ImGui::GetWindowPos();
-	ImVec2 anchor((float)x + windowPos.x, (float)y + windowPos.y);
+bool HasWantedRadarPlayerEquipment(const Player& player)
+{
+	return std::any_of(
+		player._slots.begin(),
+		player._slots.end(),
+		[&player](const slots& slot)
+		{
+			return slot.wanted && IsRadarPlayerEquipmentSlotVisible(player, slot);
+		});
+}
 
-	ImVec2 boxMin(anchor.x + 16.0f, anchor.y - 8.0f);
-	ImVec2 boxMax(
-		boxMin.x + maxWidth + (pad * 2.0f),
-		boxMin.y + (lines.size() * lineHeight) + (pad * 2.0f));
+std::string GetRadarHeldItemLabel(const Player& player)
+{
+	const std::string itemName = TrimEFT(player.observedHandsInfo.itemName);
+	if (itemName.empty())
+		return {};
 
-	draw_list->AddRectFilled(boxMin, boxMax, IM_COL32(0, 0, 0, 230), rounding);
-	draw_list->AddRect(boxMin, boxMax, IM_COL32(255, 255, 255, 80), rounding);
+	const std::string ammoName = TrimEFT(player.observedHandsInfo.ammoName);
+	if (ammoName.empty())
+		return itemName;
 
-	ImVec2 drawPos(boxMin.x + pad, boxMin.y + pad);
+	return itemName + "  " + ammoName + " / " +
+		std::to_string(std::max(0, player.observedHandsInfo.magazineCount));
+}
 
-	for (const auto& line : lines)
+void PositionRadarPopupNearMouse(ImVec2& position, const ImVec2& size)
+{
+	const ImVec2 mousePosition = ImGui::GetIO().MousePos;
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	const ImVec2 workMinimum = viewport->WorkPos;
+	const ImVec2 workMaximum(
+		viewport->WorkPos.x + viewport->WorkSize.x,
+		viewport->WorkPos.y + viewport->WorkSize.y);
+	const float panelWidth = size.x > 0.0f ? size.x : 380.0f;
+	const float panelHeight = size.y > 0.0f ? size.y : 520.0f;
+
+	position = ImVec2(mousePosition.x + 18.0f, mousePosition.y + 18.0f);
+	if (position.x + panelWidth > workMaximum.x - 8.0f)
+		position.x = mousePosition.x - panelWidth - 18.0f;
+	if (position.y + panelHeight > workMaximum.y - 8.0f)
+		position.y = mousePosition.y - panelHeight - 18.0f;
+
+	position.x = std::clamp(position.x, workMinimum.x + 8.0f, std::max(workMinimum.x + 8.0f, workMaximum.x - panelWidth - 8.0f));
+	position.y = std::clamp(position.y, workMinimum.y + 8.0f, std::max(workMinimum.y + 8.0f, workMaximum.y - panelHeight - 8.0f));
+}
+
+void HandlePlayerSlotClick(float x, float y, float radius, const Player& player)
+{
+	RadarPlayerPanelState& state = GetRadarPlayerPanelState();
+	if (state.markerClickedThisFrame ||
+		state.panelHoveredLastFrame ||
+		!ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
 	{
-		draw_list->AddText(ImGui::GetFont(), fontSize, drawPos, IM_COL32(255, 255, 255, 255), line.c_str());
-		drawPos.y += lineHeight;
+		return;
+	}
+
+	const float clickRadius = radius + 16.0f;
+	const ImRect markerBounds(
+		ImVec2(x - clickRadius, y - clickRadius),
+		ImVec2(x + clickRadius, y + clickRadius));
+
+	if (!markerBounds.Contains(ImGui::GetIO().MousePos) ||
+		!ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+	{
+		return;
+	}
+
+	state.markerClickedThisFrame = true;
+	if (state.visible && state.selectedPlayerInstance == player.instance)
+	{
+		state.visible = false;
+		state.selectedPlayerInstance = 0;
+		return;
+	}
+
+	state.visible = true;
+	state.selectedPlayerInstance = player.instance;
+
+	PositionRadarPopupNearMouse(state.position, state.size);
+}
+
+void DrawRadarPlayerLoadoutPanel(const PlayerCollection& players)
+{
+	RadarPlayerPanelState& state = GetRadarPlayerPanelState();
+	if (!state.visible)
+	{
+		state.panelHoveredLastFrame = false;
+		return;
+	}
+
+	const auto selectedPlayer = std::find_if(
+		players.begin(),
+		players.end(),
+		[&state](const Player& player)
+		{
+			return player.instance == state.selectedPlayerInstance &&
+				!player.isLocal &&
+				!player.isDead &&
+				!player.hasExfiled;
+		});
+
+	if (selectedPlayer == players.end())
+	{
+		state.visible = false;
+		state.selectedPlayerInstance = 0;
+		state.panelHoveredLastFrame = false;
+		return;
+	}
+
+	std::vector<const slots*> visibleSlots;
+	visibleSlots.reserve(selectedPlayer->_slots.size());
+	for (const slots& slot : selectedPlayer->_slots)
+	{
+		if (IsRadarPlayerEquipmentSlotVisible(*selectedPlayer, slot))
+			visibleSlots.push_back(&slot);
+	}
+
+	const ImVec4 accentColour(0.88f, 0.30f, 0.32f, 1.00f);
+	const ImVec4 labelColour(0.54f, 0.58f, 0.62f, 1.00f);
+	const ImVec4 primaryColour(0.94f, 0.95f, 0.96f, 1.00f);
+	const ImVec4 valueColour(0.96f, 0.78f, 0.42f, 1.00f);
+	const ImVec4 ammoColour(0.46f, 0.84f, 0.62f, 1.00f);
+
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.045f, 0.052f, 0.060f, 0.97f));
+	ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.27f, 0.30f, 1.00f));
+	ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.88f, 0.30f, 0.32f, 0.55f));
+	ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.88f, 0.30f, 0.32f, 0.13f));
+	ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.88f, 0.30f, 0.32f, 0.18f));
+	ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.88f, 0.30f, 0.32f, 0.22f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
+
+	ImGui::SetNextWindowPos(state.position, ImGuiCond_Always);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(245.0f, 0.0f), ImVec2(290.0f, 360.0f));
+	const ImGuiWindowFlags panelFlags =
+		ImGuiWindowFlags_NoTitleBar |
+		ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoResize |
+		ImGuiWindowFlags_NoSavedSettings |
+		ImGuiWindowFlags_NoFocusOnAppearing |
+		ImGuiWindowFlags_NoNav |
+		ImGuiWindowFlags_AlwaysAutoResize;
+
+	bool panelHovered = false;
+	if (ImGui::Begin("##radar_player_loadout_panel", nullptr, panelFlags))
+	{
+		ImGui::TextColored(accentColour, ICON_FA_USER "  LOADOUT");
+
+		const int distance = selectedPlayer->distance > 0
+			? selectedPlayer->distance
+			: static_cast<int>(glm::distance(mainGame.localLocation, selectedPlayer->location));
+		const std::string distanceText = std::to_string(distance) + " m";
+		const float distanceX =
+			ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(distanceText.c_str()).x;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), distanceX));
+		ImGui::TextColored(labelColour, "%s", distanceText.c_str());
+
+		ImGui::Separator();
+		if (ImGui::BeginTable(
+			"##player_summary",
+			2,
+			ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings))
+		{
+			ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+
+			const std::string playerName = GetRadarPlayerDisplayName(*selectedPlayer);
+			ImGui::TextColored(primaryColour, "%s", playerName.c_str());
+			std::string playerMeta = GetRadarPlayerTypeLabel(*selectedPlayer);
+			if (selectedPlayer->DT_lvl > 0)
+				playerMeta += "  |  LEVEL " + std::to_string(selectedPlayer->DT_lvl);
+			if (selectedPlayer->isFriend)
+				playerMeta += "  |  FRIEND";
+			else if (!mainGame.localGroupId.empty() && selectedPlayer->groupId == mainGame.localGroupId)
+				playerMeta += "  |  GROUP";
+			ImGui::TextColored(labelColour, "%s", playerMeta.c_str());
+
+			ImGui::TableSetColumnIndex(1);
+			const char* valueLabel = "VALUE";
+			ImGui::SetCursorPosX(
+				ImGui::GetCursorPosX() +
+				std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(valueLabel).x));
+			ImGui::TextColored(labelColour, "%s", valueLabel);
+			const std::string totalValue = selectedPlayer->playerValue > 0
+				? FormatShortValue(selectedPlayer->playerValue)
+				: "-";
+			ImGui::SetCursorPosX(
+				ImGui::GetCursorPosX() +
+				std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(totalValue.c_str()).x));
+			ImGui::TextColored(valueColour, "%s", totalValue.c_str());
+
+			ImGui::EndTable();
+		}
+
+		const std::string heldItem = GetRadarHeldItemLabel(*selectedPlayer);
+		if (!heldItem.empty())
+		{
+			ImGui::TextColored(labelColour, "IN HAND");
+			ImGui::SameLine(0.0f, 7.0f);
+			ImGui::TextColored(ammoColour, "%s", heldItem.c_str());
+		}
+
+		ImGui::Separator();
+		ImGui::TextColored(labelColour, "EQUIPMENT");
+		const std::string slotCountText =
+			std::to_string(visibleSlots.size()) +
+			(visibleSlots.size() == 1 ? " SLOT" : " SLOTS");
+		const float slotCountX =
+			ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(slotCountText.c_str()).x;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), slotCountX));
+		ImGui::TextColored(labelColour, "%s", slotCountText.c_str());
+
+		if (visibleSlots.empty())
+		{
+			ImGui::TextColored(labelColour, "Equipment data not available yet");
+		}
+		else
+		{
+			const float rowHeight = ImGui::GetTextLineHeight() + 4.0f;
+			const float requestedHeight = static_cast<float>(visibleSlots.size()) * rowHeight;
+			const float listHeight = std::min(190.0f, requestedHeight);
+
+			ImGui::BeginChild(
+				"##player_equipment_rows",
+				ImVec2(0.0f, listHeight),
+				false,
+				requestedHeight > listHeight ? ImGuiWindowFlags_AlwaysVerticalScrollbar : ImGuiWindowFlags_None);
+
+			if (ImGui::BeginTable(
+				"##player_equipment_table",
+				3,
+				ImGuiTableFlags_SizingStretchProp |
+				ImGuiTableFlags_RowBg |
+				ImGuiTableFlags_NoSavedSettings))
+			{
+				ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+				ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+				ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+
+				for (const slots* slot : visibleSlots)
+				{
+					ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
+					ImGui::TableSetColumnIndex(0);
+					ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1.0f);
+					const std::string slotLabel = GetRadarEquipmentSlotLabel(slot->name);
+					ImGui::TextColored(labelColour, "%s", slotLabel.c_str());
+
+					ImGui::TableSetColumnIndex(1);
+					ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1.0f);
+					if (slot->wanted)
+					{
+						ImGui::TextColored(valueColour, "*");
+						ImGui::SameLine(0.0f, 4.0f);
+					}
+					ImGui::TextColored(primaryColour, "%s", slot->equipName.c_str());
+
+					ImGui::TableSetColumnIndex(2);
+					ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1.0f);
+					const std::string priceText = slot->price > 0 ? FormatShortValue(slot->price) : "-";
+					ImGui::SetCursorPosX(
+						ImGui::GetCursorPosX() +
+						std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(priceText.c_str()).x));
+					ImGui::TextColored(valueColour, "%s", priceText.c_str());
+				}
+
+				ImGui::EndTable();
+			}
+
+			ImGui::EndChild();
+		}
+
+		state.size = ImGui::GetWindowSize();
+		panelHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
+			ImGui::IsAnyItemHovered();
+	}
+	ImGui::End();
+
+	ImGui::PopStyleVar(4);
+	ImGui::PopStyleColor(6);
+
+	state.panelHoveredLastFrame = panelHovered;
+	if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+		!state.markerClickedThisFrame &&
+		!panelHovered)
+	{
+		state.visible = false;
+		state.selectedPlayerInstance = 0;
 	}
 }
 
@@ -289,187 +808,1074 @@ void DrawRadarPlayerMarkers(float x, float y, float zoomLevel, const Player& pla
 {
 	const float markerFontSize = std::clamp(30.f / zoomLevel, 7.f, 9.f);
 	const float labelFontSize = ScaleRadarTextSize(markerFontSize + 8.0f);
-	const float heightIconFontSize = labelFontSize * 0.5f;
-	const float equipmentFontSize = ScaleRadarTextSize(markerFontSize + 10.0f);
-	constexpr float markerRadius = 8.0f;
-	constexpr float labelGap = 3.0f;
+	const float metaFontSize = std::max(8.0f, labelFontSize * 0.76f);
+	const float itemFontSize = std::max(8.0f, labelFontSize * 0.78f);
+	const float heightIconFontSize = std::max(7.0f, labelFontSize * 0.56f);
+	constexpr float labelGap = 7.0f;
 	constexpr float lineGap = 1.0f;
 
-	//player height
 	const float height = player.location.y;
-
-	//player height indicator
-	std::string hString = "";
-	std::string hStringVal = "";
-
-	//arrow up and down calc
+	std::string hString;
+	std::string hStringVal;
 
 	if (height > (mainGame.localLocation.y + 2.f)) // 2.f per level?!
 	{
-
 		if (height > (mainGame.localLocation.y + 4.f))
 			hString = ICON_FK_ANGLE_DOUBLE_UP;
 		else
 			hString = ICON_FK_ANGLE_UP;
-
 	}
 	if (height < (mainGame.localLocation.y - 2.f))
 	{
-
 		if (height < (mainGame.localLocation.y - 4.f))
 			hString = ICON_FK_ANGLE_DOUBLE_DOWN;
 		else
 			hString = ICON_FK_ANGLE_DOWN;
-
 	}
 	if (height != mainGame.localLocation.y)
 	{
-		int correctedNumber = static_cast<int>(height - mainGame.localLocation.y);
-		hStringVal = std::to_string(correctedNumber); // height difference
+		const int correctedNumber = static_cast<int>(height - mainGame.localLocation.y);
+		hStringVal = std::to_string(correctedNumber);
 	}
 
+	const bool genericAiScav = IsGenericRadarAiScav(player);
+	const bool hasWantedEquipment =
+		radarGlobals::getPlayerEquip &&
+		radarGlobals::drawPlayerEquip &&
+		HasWantedRadarPlayerEquipment(player);
+	const std::string itemInHand = GetRadarHeldItemLabel(player);
+	const bool showHeldItem =
+		radarGlobals::drawHandItem &&
+		!player.isBTR &&
+		!itemInHand.empty();
+	const glm::vec4 color = GetRadarPlayerMarkerColour(player);
 
-
-
-	std::string prefix;
-
-	if (player.playerSide == EPlayerSide::Usec)
-		prefix = "U:";
-	else if (player.playerSide == EPlayerSide::Bear)
-		prefix = "B:";
-
-	const std::string name = prefix + player.name;
-
-	//item in hand
-	const std::string itemInHand = player.observedHandsInfo.itemName + " (" + std::string(player.observedHandsInfo.ammoName) + ")";
-
-	//color 
-	ImVec4 color;
-	color.x = player.colour.x;
-	color.y = player.colour.y;
-	color.z = player.colour.z;
-	color.w = player.colour.w;
-
-	//friendly
-	if (player.groupId == mainGame.localGroupId)
-	{
-		if (mainGame.localGroupId != "")
-		{
-			color.x = coloursGlobals::playerFriendly.x;
-			color.y = coloursGlobals::playerFriendly.y;
-			color.z = coloursGlobals::playerFriendly.z;
-			color.w = coloursGlobals::playerFriendly.w;
-		}
-	}
-
-	//draw list
 	ImDrawList* draw_list = ImGui::GetWindowDrawList();
 	ImFont* font = ImGui::GetFont();
 	const ImU32 drawColor = ImColor(color.x, color.y, color.z, color.w);
-
-	static uint64_t selectedPlayerInstance = 0;
+	const ImU32 primaryTextColor = IM_COL32(238, 241, 244, 255);
+	const ImU32 metaTextColor = IM_COL32(165, 173, 181, 255);
+	const ImU32 itemTextColor = IM_COL32(202, 208, 213, 255);
+	const ImU32 wantedColor = IM_COL32(245, 190, 76, 255);
 
 	if (!player.isDead)
 	{
-		// main marker
-		DrawCircleFilled(x, y, markerRadius, ImColor(color.x, color.y, color.z, color.w));
+		// Vehicles retain their circular marker; live players use the facing triangle.
+		if (player.isBTR)
+			DrawCircleFilled(x, y, kRadarPlayerTriangleRadius, ImColor(color.x, color.y, color.z, color.w));
+		else
+			DrawRadarDirectionalTriangle(x, y, player.rotation, drawColor);
 
 		if (player.isInBTR)
 			return;
 
 		if (!player.isBTR)
-			DrawRadarHealthDot(x, y, player.healthETAG);
+			DrawRadarHealthDot(
+				x - kRadarPlayerTriangleRadius - 1.0f,
+				y + kRadarPlayerTriangleRadius - 1.0f,
+				player.healthETAG);
 
-		// hover tooltip
-		HandlePlayerSlotClick(static_cast<int>(std::round(x)), static_cast<int>(std::round(y)), static_cast<int>(markerRadius), player, selectedPlayerInstance);
+		HandlePlayerSlotClick(x, y, kRadarPlayerTriangleRadius, player);
 
-		if (selectedPlayerInstance == player.instance)
-			DrawPinnedPlayerSlotsBox(static_cast<int>(std::round(x)), static_cast<int>(std::round(y)), player);
+		if (radarGlobals::minimalView)
+			return;
 
-		//Height indicator
-		const float heightTextX = x + markerRadius + 4.0f;
+		// Height is useful positional information for every player type, including
+		// anonymous AI scavs.
+		const float heightRightX = x - kRadarPlayerTriangleRadius - 5.0f;
 		const ImVec2 heightIconSize = MeasureRadarText(font, heightIconFontSize, hString.c_str());
-		draw_list->AddText(font, heightIconFontSize, ImVec2(heightTextX, y - (heightIconSize.y * 0.5f)), drawColor, hString.c_str());
+		DrawRadarMarkerText(
+			draw_list,
+			font,
+			heightIconFontSize,
+			ImVec2(heightRightX - heightIconSize.x, y - (heightIconSize.y * 0.5f)),
+			drawColor,
+			hString.c_str());
 
 		if (hStringVal != "0" && hStringVal != "1" && hStringVal != "-1")
 		{
-			const ImVec2 heightValueSize = MeasureRadarText(font, labelFontSize, hStringVal.c_str());
-			draw_list->AddText(font, labelFontSize, ImVec2(heightTextX, y - heightIconSize.y - heightValueSize.y), drawColor, hStringVal.c_str());
+			const ImVec2 heightValueSize = MeasureRadarText(font, metaFontSize, hStringVal.c_str());
+			DrawRadarMarkerText(
+				draw_list,
+				font,
+				metaFontSize,
+				ImVec2(heightRightX - heightValueSize.x, y - heightIconSize.y - heightValueSize.y),
+				drawColor,
+				hStringVal.c_str());
 		}
 
-		float nextTextY = y + markerRadius + labelGap;
-
-		if (!radarGlobals::minimalView)
+		const float textX = x + kRadarPlayerTriangleRadius + labelGap;
+		if (genericAiScav)
 		{
-			if (player.isPlayer || player.isBoss || player.isPlayerScav)
+			if (showHeldItem)
 			{
-				//name text
-				const float nameHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, name.c_str());
-				if (nameHeight > 0.0f)
-					nextTextY += nameHeight + lineGap;
+				const ImVec2 itemSize = MeasureRadarText(font, itemFontSize, itemInHand.c_str());
+				const float itemY = y - (itemSize.y * 0.5f);
+				DrawRadarMarkerText(
+					draw_list,
+					font,
+					itemFontSize,
+					ImVec2(textX, itemY),
+					itemTextColor,
+					itemInHand.c_str());
 
-				if (radarGlobals::drawHandItem)
+				if (hasWantedEquipment)
 				{
-					const float itemHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, itemInHand.c_str());
-					if (itemHeight > 0.0f)
-						nextTextY += itemHeight + lineGap;
+					DrawRadarMarkerText(
+						draw_list,
+						font,
+						labelFontSize,
+						ImVec2(textX + itemSize.x + 4.0f, itemY - 1.0f),
+						wantedColor,
+						"*");
 				}
 			}
-			else if (player.isBTR)
+			else if (hasWantedEquipment)
 			{
-				//name text
-				const float nameHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, name.c_str());
-				if (nameHeight > 0.0f)
-					nextTextY += nameHeight + lineGap;
+				const ImVec2 wantedSize = MeasureRadarText(font, labelFontSize, "*");
+				DrawRadarMarkerText(
+					draw_list,
+					font,
+					labelFontSize,
+					ImVec2(textX, y - (wantedSize.y * 0.5f)),
+					wantedColor,
+					"*");
 			}
-			else
-			{
-				if (radarGlobals::drawHandItem)
-				{
-					const float itemHeight = DrawCenteredRadarText(draw_list, font, labelFontSize, x, nextTextY, drawColor, itemInHand.c_str());
-					if (itemHeight > 0.0f)
-						nextTextY += itemHeight + lineGap;
-				}
-			}
+
+			return;
 		}
 
-		//draw equipment that is wanted
-		if (!radarGlobals::minimalView &&
-			radarGlobals::getPlayerEquip &&
-			radarGlobals::drawPlayerEquip)
+		const std::string displayName = GetRadarPlayerDisplayName(player);
+		std::string metaText = GetRadarPlayerTypeLabel(player);
+
+		const ImVec2 nameSize = MeasureRadarText(font, labelFontSize, displayName.c_str());
+		const ImVec2 metaSize = MeasureRadarText(font, metaFontSize, metaText.c_str());
+		const ImVec2 itemSize = showHeldItem
+			? MeasureRadarText(font, itemFontSize, itemInHand.c_str())
+			: ImVec2(0.0f, 0.0f);
+		const float totalTextHeight =
+			nameSize.y + lineGap + metaSize.y +
+			(showHeldItem ? lineGap + itemSize.y : 0.0f);
+		float nextTextY = y - (totalTextHeight * 0.5f);
+
+		DrawRadarMarkerText(draw_list, font, labelFontSize, ImVec2(textX, nextTextY), primaryTextColor, displayName.c_str());
+		if (hasWantedEquipment)
 		{
-			for (const auto& slot : player._slots)
-			{
-				const std::string slotn = TrimEFT(slot.name);
+			DrawRadarMarkerText(
+				draw_list,
+				font,
+				labelFontSize,
+				ImVec2(textX + nameSize.x + 4.0f, nextTextY),
+				wantedColor,
+				"*");
+		}
 
-				if (!slot.wanted)
-					continue;
+		nextTextY += nameSize.y + lineGap;
+		DrawRadarMarkerText(draw_list, font, metaFontSize, ImVec2(textX, nextTextY), metaTextColor, metaText.c_str());
 
-				if (slotn == "SecuredContainer")
-					continue;
-
-				if (player.isPlayer && slotn == "Scabbard")
-					continue;
-
-				const std::string text = slot.equipName + " " + FormatShortValue(slot.price);
-				const float textHeight = DrawCenteredRadarText(draw_list, font, equipmentFontSize, x, nextTextY, drawColor, text.c_str());
-				if (textHeight > 0.0f)
-					nextTextY += textHeight + lineGap;
-			}
+		if (showHeldItem)
+		{
+			nextTextY += metaSize.y + lineGap;
+			DrawRadarMarkerText(draw_list, font, itemFontSize, ImVec2(textX, nextTextY), itemTextColor, itemInHand.c_str());
 		}
 	}
 }
 
-void DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, LootEntity lootList)
+void DrawRadarCorpseTooltip(const LootEntity& lootList)
+{
+	const CorpseLootState& corpseState = lootList.getCorpseState();
+	const std::string valueText = FormatShortValue(lootList.getCorpseValue());
+
+	std::vector<const CorpseEquipment*> lootableEquipment;
+	lootableEquipment.reserve(corpseState.equipment.size());
+
+	for (const auto& slot : corpseState.equipment)
+	{
+		if (corpseState.isEquipmentLootable(slot))
+			lootableEquipment.push_back(&slot);
+	}
+
+	const std::string resolvedOwnerName = GetCorpseOwnerLabel(lootList);
+	const std::string ownerName = resolvedOwnerName.empty()
+		? "Corpse"
+		: resolvedOwnerName;
+
+	const ImVec4 accentColour(0.88f, 0.30f, 0.32f, 1.00f);
+	const ImVec4 labelColour(0.54f, 0.58f, 0.62f, 1.00f);
+	const ImVec4 primaryColour(0.94f, 0.95f, 0.96f, 1.00f);
+	const ImVec4 valueColour(0.96f, 0.78f, 0.42f, 1.00f);
+
+	ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.045f, 0.052f, 0.060f, 0.97f));
+	ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.27f, 0.30f, 1.00f));
+	ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.88f, 0.30f, 0.32f, 0.55f));
+	ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(1.00f, 1.00f, 1.00f, 0.025f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(7.0f, 5.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 3.0f));
+
+	ImGui::SetNextWindowSizeConstraints(ImVec2(235.0f, 0.0f), ImVec2(310.0f, 360.0f));
+	if (ImGui::BeginTooltip())
+	{
+		ImGui::TextColored(accentColour, ICON_FA_CUBE "  CORPSE LOOT");
+
+		const std::string itemCountText =
+			std::to_string(lootableEquipment.size()) +
+			(lootableEquipment.size() == 1 ? " item" : " items");
+		const float itemCountX =
+			ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(itemCountText.c_str()).x;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), itemCountX));
+		ImGui::TextColored(labelColour, "%s", itemCountText.c_str());
+
+		if (ImGui::BeginTable(
+			"##corpse_summary",
+			2,
+			ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings))
+		{
+			ImGui::TableSetupColumn("Owner", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed);
+
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(labelColour, "OWNER");
+			ImGui::TableSetColumnIndex(1);
+			ImGui::SetCursorPosX(
+				ImGui::GetCursorPosX() +
+				std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("EST. VALUE").x));
+			ImGui::TextColored(labelColour, "EST. VALUE");
+
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(primaryColour, "%s", ownerName.c_str());
+			ImGui::TableSetColumnIndex(1);
+			ImGui::SetCursorPosX(
+				ImGui::GetCursorPosX() +
+				std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(valueText.c_str()).x));
+			ImGui::TextColored(valueColour, "%s", valueText.c_str());
+
+			ImGui::EndTable();
+		}
+
+		if (!lootableEquipment.empty())
+		{
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Spacing();
+
+			if (ImGui::BeginTable(
+				"##corpse_equipment",
+				2,
+				ImGuiTableFlags_SizingStretchProp |
+				ImGuiTableFlags_RowBg |
+				ImGuiTableFlags_NoSavedSettings,
+				ImVec2(0.0f, 0.0f)))
+			{
+				ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+				ImGui::TableSetupColumn("Price", ImGuiTableColumnFlags_WidthFixed);
+
+				for (const CorpseEquipment* slot : lootableEquipment)
+				{
+					ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetTextLineHeight() + 4.0f);
+					ImGui::TableSetColumnIndex(0);
+					ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1.0f);
+					if (slot->wanted)
+					{
+						ImGui::TextColored(accentColour, ICON_FA_STAR);
+						ImGui::SameLine(0.0f, 4.0f);
+					}
+					ImGui::TextColored(primaryColour, "%s", slot->name.c_str());
+
+					ImGui::TableSetColumnIndex(1);
+					ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1.0f);
+					const std::string itemValue = FormatShortValue(slot->value);
+					ImGui::SetCursorPosX(
+						ImGui::GetCursorPosX() +
+						std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(itemValue.c_str()).x));
+					ImGui::TextColored(valueColour, "%s", itemValue.c_str());
+				}
+
+				ImGui::EndTable();
+			}
+		}
+
+		ImGui::EndTooltip();
+	}
+
+	ImGui::PopStyleVar(4);
+	ImGui::PopStyleColor(4);
+}
+
+struct RadarCorpseHoverCandidate
+{
+	const LootEntity* corpse = nullptr;
+	float distanceSquared = FLT_MAX;
+};
+
+uint64_t GetRadarCorpseUiId(const LootEntity& corpse)
+{
+	return corpse.instance != 0
+		? corpse.instance
+		: corpse.m_interactiveClass;
+}
+
+void DrawRadarCorpseHoverPanel(
+	const std::vector<RadarCorpseHoverCandidate>& hoveredCorpses,
+	const std::vector<const LootEntity*>& visibleCorpses)
+{
+	struct HoverPanelState
+	{
+		std::vector<LootEntity> corpses;
+		uint64_t expandedCorpseId = 0;
+		ImVec2 position{};
+		ImVec2 size = ImVec2(250.0f, 220.0f);
+		bool visible = false;
+		bool panelHoveredLastFrame = false;
+	};
+
+	static HoverPanelState state;
+	const bool leftClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+	const bool markerClicked =
+		leftClicked &&
+		!state.panelHoveredLastFrame &&
+		!hoveredCorpses.empty();
+
+	if (markerClicked)
+	{
+		state.corpses.clear();
+		state.corpses.reserve(hoveredCorpses.size());
+
+		for (const RadarCorpseHoverCandidate& candidate : hoveredCorpses)
+			state.corpses.push_back(*candidate.corpse);
+
+		const auto nearestCorpse = std::min_element(
+			hoveredCorpses.begin(),
+			hoveredCorpses.end(),
+			[](const RadarCorpseHoverCandidate& left, const RadarCorpseHoverCandidate& right)
+			{
+				return left.distanceSquared < right.distanceSquared;
+			});
+
+		state.expandedCorpseId = GetRadarCorpseUiId(*nearestCorpse->corpse);
+
+		const ImVec2 mousePosition = ImGui::GetIO().MousePos;
+		const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+		const float panelWidth = state.size.x > 0.0f ? state.size.x : 285.0f;
+		const float panelHeight = state.size.y > 0.0f ? state.size.y : 250.0f;
+
+		state.position = ImVec2(mousePosition.x + 18.0f, mousePosition.y + 18.0f);
+		if (state.position.x + panelWidth > displaySize.x - 8.0f)
+			state.position.x = mousePosition.x - panelWidth - 18.0f;
+		if (state.position.y + panelHeight > displaySize.y - 8.0f)
+			state.position.y = mousePosition.y - panelHeight - 18.0f;
+
+		state.position.x = std::max(8.0f, state.position.x);
+		state.position.y = std::max(8.0f, state.position.y);
+		state.visible = true;
+	}
+
+	if (!state.visible)
+	{
+		state.panelHoveredLastFrame = false;
+		return;
+	}
+
+	for (auto corpse = state.corpses.begin(); corpse != state.corpses.end();)
+	{
+		const auto liveCorpse = std::find_if(
+			visibleCorpses.begin(),
+			visibleCorpses.end(),
+			[corpse](const LootEntity* candidate)
+			{
+				return GetRadarCorpseUiId(*candidate) == GetRadarCorpseUiId(*corpse);
+			});
+
+		if (liveCorpse == visibleCorpses.end())
+		{
+			corpse = state.corpses.erase(corpse);
+			continue;
+		}
+
+		*corpse = **liveCorpse;
+		++corpse;
+	}
+
+	if (state.corpses.empty())
+	{
+		state.visible = false;
+		state.panelHoveredLastFrame = false;
+		return;
+	}
+
+	const auto expandedCorpse = std::find_if(
+		state.corpses.begin(),
+		state.corpses.end(),
+		[](const LootEntity& corpse)
+		{
+			return GetRadarCorpseUiId(corpse) == state.expandedCorpseId;
+		});
+	if (state.expandedCorpseId != 0 && expandedCorpse == state.corpses.end())
+		state.expandedCorpseId = GetRadarCorpseUiId(state.corpses.front());
+
+	const ImVec4 accentColour(0.88f, 0.30f, 0.32f, 1.00f);
+	const ImVec4 labelColour(0.54f, 0.58f, 0.62f, 1.00f);
+	const ImVec4 primaryColour(0.94f, 0.95f, 0.96f, 1.00f);
+	const ImVec4 valueColour(0.96f, 0.78f, 0.42f, 1.00f);
+
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.045f, 0.052f, 0.060f, 0.97f));
+	ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.27f, 0.30f, 1.00f));
+	ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.88f, 0.30f, 0.32f, 0.55f));
+	ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(1.00f, 1.00f, 1.00f, 0.025f));
+	ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.88f, 0.30f, 0.32f, 0.13f));
+	ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.88f, 0.30f, 0.32f, 0.18f));
+	ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.88f, 0.30f, 0.32f, 0.22f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
+
+	ImGui::SetNextWindowPos(state.position, ImGuiCond_Always);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(235.0f, 0.0f), ImVec2(285.0f, 360.0f));
+	const ImGuiWindowFlags panelFlags =
+		ImGuiWindowFlags_NoTitleBar |
+		ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoResize |
+		ImGuiWindowFlags_NoSavedSettings |
+		ImGuiWindowFlags_NoFocusOnAppearing |
+		ImGuiWindowFlags_NoNav |
+		ImGuiWindowFlags_AlwaysAutoResize;
+
+	if (ImGui::Begin("##radar_corpse_hover_panel", nullptr, panelFlags))
+	{
+		ImGui::TextColored(accentColour, ICON_FA_CUBE "  CORPSE LOOT");
+
+		const std::string corpseCountText = state.corpses.size() == 1
+			? "1 corpse"
+			: std::to_string(state.corpses.size()) + " nearby";
+		const float corpseCountX =
+			ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(corpseCountText.c_str()).x;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), corpseCountX));
+		ImGui::TextColored(labelColour, "%s", corpseCountText.c_str());
+
+		for (const LootEntity& corpse : state.corpses)
+		{
+			const CorpseLootState& corpseState = corpse.getCorpseState();
+			std::vector<const CorpseEquipment*> lootableEquipment;
+			lootableEquipment.reserve(corpseState.equipment.size());
+
+			for (const auto& slot : corpseState.equipment)
+			{
+				if (corpseState.isEquipmentLootable(slot))
+					lootableEquipment.push_back(&slot);
+			}
+
+			const std::string resolvedOwnerName = GetCorpseOwnerLabel(corpse);
+			const std::string ownerName = resolvedOwnerName.empty()
+				? "Corpse"
+				: resolvedOwnerName;
+			const std::string valueText = FormatShortValue(corpse.getCorpseValue());
+			const std::string itemCountText =
+				std::to_string(lootableEquipment.size()) +
+				(lootableEquipment.size() == 1 ? " item" : " items");
+			const uint64_t corpseId = GetRadarCorpseUiId(corpse);
+			const bool expanded = state.expandedCorpseId == corpseId;
+
+			ImGui::PushID(reinterpret_cast<const void*>(static_cast<uintptr_t>(corpseId)));
+			const float rowHeight = ImGui::GetTextLineHeight() + 7.0f;
+			const bool clicked = ImGui::Selectable(
+				"##corpse_toggle",
+				expanded,
+				ImGuiSelectableFlags_None,
+				ImVec2(ImGui::GetContentRegionAvail().x, rowHeight));
+			const ImVec2 rowMinimum = ImGui::GetItemRectMin();
+			const ImVec2 rowMaximum = ImGui::GetItemRectMax();
+			ImDrawList* panelDrawList = ImGui::GetWindowDrawList();
+			ImFont* panelFont = ImGui::GetFont();
+			const float textY = rowMinimum.y + ((rowHeight - ImGui::GetTextLineHeight()) * 0.5f);
+			const char* caret = expanded ? ICON_FA_ANGLE_DOWN : ICON_FA_ANGLE_RIGHT;
+
+			panelDrawList->AddText(
+				ImVec2(rowMinimum.x + 5.0f, textY),
+				ImGui::GetColorU32(expanded ? accentColour : labelColour),
+				caret);
+
+			const float ownerX = rowMinimum.x + 21.0f;
+			const float valueWidth = ImGui::CalcTextSize(valueText.c_str()).x;
+			const float valueX = rowMaximum.x - valueWidth - 5.0f;
+			const ImVec4 ownerClip(
+				ownerX,
+				rowMinimum.y,
+				std::max(ownerX, valueX - 7.0f),
+				rowMaximum.y);
+			panelDrawList->AddText(
+				panelFont,
+				panelFont->FontSize,
+				ImVec2(ownerX, textY),
+				ImGui::GetColorU32(primaryColour),
+				ownerName.c_str(),
+				nullptr,
+				0.0f,
+				&ownerClip);
+			panelDrawList->AddText(
+				ImVec2(valueX, textY),
+				ImGui::GetColorU32(valueColour),
+				valueText.c_str());
+
+			const float itemCountFontSize = panelFont->FontSize * 0.72f;
+			const ImVec2 ownerSize = panelFont->CalcTextSizeA(
+				panelFont->FontSize,
+				FLT_MAX,
+				0.0f,
+				ownerName.c_str());
+			const float itemCountX = ownerX + ownerSize.x + 6.0f;
+			if (itemCountX < ownerClip.z - 36.0f)
+			{
+				panelDrawList->AddText(
+					panelFont,
+					itemCountFontSize,
+					ImVec2(itemCountX, textY + 3.0f),
+					ImGui::GetColorU32(labelColour),
+					itemCountText.c_str());
+			}
+
+			if (clicked)
+			{
+				state.expandedCorpseId = expanded ? 0 : corpseId;
+			}
+
+			if (expanded)
+			{
+				ImGui::Separator();
+
+				if (lootableEquipment.empty())
+				{
+					ImGui::TextColored(labelColour, "No lootable equipment");
+				}
+				else if (ImGui::BeginTable(
+					"##corpse_equipment",
+					2,
+					ImGuiTableFlags_SizingStretchProp |
+					ImGuiTableFlags_RowBg |
+					ImGuiTableFlags_NoSavedSettings,
+					ImVec2(0.0f, 0.0f)))
+				{
+					ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+					ImGui::TableSetupColumn("Price", ImGuiTableColumnFlags_WidthFixed);
+
+					for (const CorpseEquipment* slot : lootableEquipment)
+					{
+					ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetTextLineHeight() + 3.0f);
+					ImGui::TableSetColumnIndex(0);
+					ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1.0f);
+						if (slot->wanted)
+						{
+							ImGui::TextColored(accentColour, ICON_FA_STAR);
+						ImGui::SameLine(0.0f, 4.0f);
+						}
+						ImGui::TextColored(primaryColour, "%s", slot->name.c_str());
+
+						ImGui::TableSetColumnIndex(1);
+					ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1.0f);
+						const std::string itemValue = FormatShortValue(slot->value);
+						ImGui::SetCursorPosX(
+							ImGui::GetCursorPosX() +
+							std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(itemValue.c_str()).x));
+						ImGui::TextColored(valueColour, "%s", itemValue.c_str());
+					}
+
+					ImGui::EndTable();
+				}
+
+			}
+
+			ImGui::PopID();
+		}
+
+		state.size = ImGui::GetWindowSize();
+		state.panelHoveredLastFrame = ImGui::IsWindowHovered(
+			ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+	}
+	else
+	{
+		state.panelHoveredLastFrame = false;
+	}
+	ImGui::End();
+
+	ImGui::PopStyleVar(4);
+	ImGui::PopStyleColor(7);
+
+	if (leftClicked && !markerClicked && !state.panelHoveredLastFrame)
+		state.visible = false;
+}
+
+struct RadarLootCluster
+{
+	uint64_t id = 0;
+	glm::vec3 worldCenter{};
+	ImVec2 screenPosition{};
+	std::vector<const LootEntity*> entries;
+	bool popupSuppressed = false;
+};
+
+struct RadarLootClusterHoverCandidate
+{
+	const RadarLootCluster* cluster = nullptr;
+	float distanceSquared = FLT_MAX;
+};
+
+uint64_t GetRadarLootEntityUiId(const LootEntity& loot)
+{
+	if (loot.instance != 0)
+		return loot.instance;
+
+	if (loot.m_interactiveClass != 0)
+		return loot.m_interactiveClass;
+
+	return loot.m_itemObject;
+}
+
+int GetRadarLootEntityValue(const LootEntity& loot)
+{
+	return loot.isCorpse()
+		? loot.getCorpseValue()
+		: static_cast<int>(GetLootDisplayPrice(loot));
+}
+
+std::string GetRadarLootClusterEntryName(const LootEntity& loot)
+{
+	if (loot.isCorpse())
+	{
+		const std::string ownerName = GetCorpseOwnerLabel(loot);
+		return ownerName.empty() ? "Corpse" : ownerName;
+	}
+
+	if (!loot.shortName.empty())
+		return loot.shortName;
+
+	if (!loot.longName.empty())
+		return loot.longName;
+
+	return loot.isContainer() ? "Container" : "Loot";
+}
+
+float DrawRadarLootClusterMarker(const RadarLootCluster& cluster, float zoomLevel)
+{
+	if (cluster.entries.size() < 2)
+		return FLT_MAX;
+
+	const float fontSize = ScaleRadarTextSize(std::clamp(19.0f / zoomLevel, 9.0f, 11.5f));
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	ImFont* font = ImGui::GetFont();
+	const std::string countText = std::to_string(cluster.entries.size());
+	const ImVec2 countSize = MeasureRadarText(font, fontSize, countText.c_str());
+	const float iconSize = fontSize * 0.66f;
+	const float horizontalPadding = 5.0f;
+	const float gap = 3.0f;
+	const ImVec2 markerSize(
+		horizontalPadding * 2.0f + iconSize + gap + countSize.x,
+		std::max(20.0f, countSize.y + 7.0f));
+	const ImVec2 markerMinimum(
+		cluster.screenPosition.x - markerSize.x * 0.5f,
+		cluster.screenPosition.y - markerSize.y * 0.5f);
+	const ImVec2 markerMaximum(
+		markerMinimum.x + markerSize.x,
+		markerMinimum.y + markerSize.y);
+
+	glm::vec4 markerColour = cluster.entries.front()->color;
+	const LootEntity* highestValueEntry = cluster.entries.front();
+	for (const LootEntity* entry : cluster.entries)
+	{
+		if (GetRadarLootEntityValue(*entry) > GetRadarLootEntityValue(*highestValueEntry))
+			highestValueEntry = entry;
+	}
+
+	if (highestValueEntry->isQuestItem())
+		markerColour = coloursGlobals::questColour;
+	else if (highestValueEntry->isCorpse())
+		markerColour = coloursGlobals::playerCorpse;
+	else
+		markerColour = highestValueEntry->color;
+
+	const ImU32 drawColour = ImColor(markerColour.x, markerColour.y, markerColour.z, markerColour.w);
+	drawList->AddRectFilled(markerMinimum, markerMaximum, IM_COL32(12, 15, 17, 240), 3.0f);
+	drawList->AddRect(markerMinimum, markerMaximum, drawColour, 3.0f, 0, 1.0f);
+
+	const float iconLeft = markerMinimum.x + horizontalPadding;
+	const float iconTop = cluster.screenPosition.y - iconSize * 0.5f;
+	drawList->AddText(
+		font,
+		iconSize,
+		ImVec2(iconLeft, iconTop),
+		drawColour,
+		ICON_FA_DIAMOND);
+	drawList->AddText(
+		font,
+		fontSize,
+		ImVec2(iconLeft + iconSize + gap, cluster.screenPosition.y - countSize.y * 0.5f),
+		drawColour,
+		countText.c_str());
+
+	const float hitPadding = 6.0f;
+	const ImRect hitBounds(
+		ImVec2(markerMinimum.x - hitPadding, markerMinimum.y - hitPadding),
+		ImVec2(markerMaximum.x + hitPadding, markerMaximum.y + hitPadding));
+	if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
+		!hitBounds.Contains(ImGui::GetIO().MousePos))
+	{
+		return FLT_MAX;
+	}
+
+	const ImVec2 mousePosition = ImGui::GetIO().MousePos;
+	const float deltaX = mousePosition.x - cluster.screenPosition.x;
+	const float deltaY = mousePosition.y - cluster.screenPosition.y;
+	return (deltaX * deltaX) + (deltaY * deltaY);
+}
+
+void DrawRadarLootClusterPanel(
+	const std::vector<RadarLootClusterHoverCandidate>& hoveredClusters,
+	const std::vector<RadarLootCluster>& visibleClusters)
+{
+	struct LootClusterPanelState
+	{
+		uint64_t clusterId = 0;
+		uint64_t expandedCorpseId = 0;
+		std::vector<LootEntity> entries;
+		glm::vec3 worldCenter{};
+		ImVec2 position{};
+		ImVec2 size = ImVec2(260.0f, 280.0f);
+		bool visible = false;
+		bool panelHoveredLastFrame = false;
+	};
+
+	static LootClusterPanelState state;
+	const bool leftClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+	const bool markerClicked =
+		leftClicked &&
+		!state.panelHoveredLastFrame &&
+		!hoveredClusters.empty();
+
+	if (markerClicked)
+	{
+		const auto nearestCluster = std::min_element(
+			hoveredClusters.begin(),
+			hoveredClusters.end(),
+			[](const RadarLootClusterHoverCandidate& left, const RadarLootClusterHoverCandidate& right)
+			{
+				return left.distanceSquared < right.distanceSquared;
+			});
+		const RadarLootCluster& cluster = *nearestCluster->cluster;
+
+		if (cluster.popupSuppressed)
+		{
+			state.visible = false;
+			state.clusterId = 0;
+			state.expandedCorpseId = 0;
+		}
+		else if (state.visible && state.clusterId == cluster.id)
+		{
+			state.visible = false;
+			state.clusterId = 0;
+			state.expandedCorpseId = 0;
+		}
+		else
+		{
+			state.visible = true;
+			state.clusterId = cluster.id;
+			state.expandedCorpseId = 0;
+			state.worldCenter = cluster.worldCenter;
+			state.entries.clear();
+			state.entries.reserve(cluster.entries.size());
+			for (const LootEntity* entry : cluster.entries)
+				state.entries.push_back(*entry);
+			PositionRadarPopupNearMouse(state.position, state.size);
+		}
+	}
+
+	if (!state.visible)
+	{
+		state.panelHoveredLastFrame = false;
+		return;
+	}
+
+	const auto liveCluster = std::find_if(
+		visibleClusters.begin(),
+		visibleClusters.end(),
+		[](const RadarLootCluster& cluster)
+		{
+			return cluster.id == state.clusterId;
+		});
+
+	if (liveCluster == visibleClusters.end() || liveCluster->popupSuppressed)
+	{
+		state.visible = false;
+		state.clusterId = 0;
+		state.expandedCorpseId = 0;
+		state.panelHoveredLastFrame = false;
+		return;
+	}
+
+	state.worldCenter = liveCluster->worldCenter;
+	state.entries.clear();
+	state.entries.reserve(liveCluster->entries.size());
+	for (const LootEntity* entry : liveCluster->entries)
+		state.entries.push_back(*entry);
+
+	std::stable_sort(
+		state.entries.begin(),
+		state.entries.end(),
+		[](const LootEntity& left, const LootEntity& right)
+		{
+			return GetRadarLootEntityValue(left) > GetRadarLootEntityValue(right);
+		});
+
+	if (state.expandedCorpseId != 0)
+	{
+		const bool expandedCorpseStillPresent = std::any_of(
+			state.entries.begin(),
+			state.entries.end(),
+			[](const LootEntity& entry)
+			{
+				return entry.isCorpse() &&
+					GetRadarLootEntityUiId(entry) == state.expandedCorpseId;
+			});
+		if (!expandedCorpseStillPresent)
+			state.expandedCorpseId = 0;
+	}
+
+	const ImVec4 accentColour(0.88f, 0.30f, 0.32f, 1.00f);
+	const ImVec4 labelColour(0.54f, 0.58f, 0.62f, 1.00f);
+	const ImVec4 primaryColour(0.94f, 0.95f, 0.96f, 1.00f);
+	const ImVec4 valueColour(0.96f, 0.78f, 0.42f, 1.00f);
+
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.045f, 0.052f, 0.060f, 0.97f));
+	ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.27f, 0.30f, 1.00f));
+	ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.88f, 0.30f, 0.32f, 0.55f));
+	ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.88f, 0.30f, 0.32f, 0.13f));
+	ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.88f, 0.30f, 0.32f, 0.18f));
+	ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.88f, 0.30f, 0.32f, 0.22f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
+
+	ImGui::SetNextWindowPos(state.position, ImGuiCond_Always);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(245.0f, 0.0f), ImVec2(295.0f, 370.0f));
+	const ImGuiWindowFlags panelFlags =
+		ImGuiWindowFlags_NoTitleBar |
+		ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoResize |
+		ImGuiWindowFlags_NoSavedSettings |
+		ImGuiWindowFlags_NoFocusOnAppearing |
+		ImGuiWindowFlags_NoNav |
+		ImGuiWindowFlags_AlwaysAutoResize;
+
+	bool panelHovered = false;
+	if (ImGui::Begin("##radar_loot_cluster_panel", nullptr, panelFlags))
+	{
+		ImGui::TextColored(accentColour, ICON_FA_CUBES_STACKED "  NEARBY LOOT");
+		const int distance = static_cast<int>(glm::distance(mainGame.localLocation, state.worldCenter));
+		const std::string entryCountText =
+			std::to_string(state.entries.size()) + " | 2 m | " +
+			std::to_string(distance) + " m";
+		const float entryCountX =
+			ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(entryCountText.c_str()).x;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), entryCountX));
+		ImGui::TextColored(labelColour, "%s", entryCountText.c_str());
+
+		ImGui::Separator();
+
+		const float rowHeight = ImGui::GetTextLineHeight() + 6.0f;
+		float requestedHeight = static_cast<float>(state.entries.size()) * rowHeight;
+		if (state.expandedCorpseId != 0)
+		{
+			const auto expandedCorpse = std::find_if(
+				state.entries.begin(),
+				state.entries.end(),
+				[](const LootEntity& entry)
+				{
+					return entry.isCorpse() &&
+						GetRadarLootEntityUiId(entry) == state.expandedCorpseId;
+				});
+			if (expandedCorpse != state.entries.end())
+			{
+				const CorpseLootState& corpseState =
+					expandedCorpse->getCorpseState();
+				const size_t lootableCount = static_cast<size_t>(std::count_if(
+					corpseState.equipment.begin(),
+					corpseState.equipment.end(),
+					[&corpseState](const CorpseEquipment& equipment)
+					{
+						return corpseState.isEquipmentLootable(equipment);
+					}));
+				requestedHeight += std::min(
+					110.0f,
+					17.0f * static_cast<float>(lootableCount));
+			}
+		}
+		const float listHeight = std::min(235.0f, std::max(rowHeight, requestedHeight));
+
+		ImGui::BeginChild(
+			"##loot_cluster_entries",
+			ImVec2(0.0f, listHeight),
+			false,
+			requestedHeight > listHeight ? ImGuiWindowFlags_AlwaysVerticalScrollbar : ImGuiWindowFlags_None);
+
+		for (const LootEntity& entry : state.entries)
+		{
+			const bool isCorpse = entry.isCorpse();
+			const uint64_t entryId = GetRadarLootEntityUiId(entry);
+			const bool expanded = isCorpse && state.expandedCorpseId == entryId;
+			const CorpseLootState* corpseState = isCorpse ? &entry.getCorpseState() : nullptr;
+			size_t lootableCorpseItems = 0;
+			if (corpseState)
+			{
+				lootableCorpseItems = static_cast<size_t>(std::count_if(
+					corpseState->equipment.begin(),
+					corpseState->equipment.end(),
+					[corpseState](const CorpseEquipment& equipment)
+					{
+						return corpseState->isEquipmentLootable(equipment);
+					}));
+			}
+
+			const float entryRowHeight = rowHeight;
+			ImGui::PushID(reinterpret_cast<const void*>(static_cast<uintptr_t>(entryId)));
+			const bool clicked = ImGui::Selectable(
+				"##loot_cluster_entry",
+				expanded,
+				ImGuiSelectableFlags_None,
+				ImVec2(ImGui::GetContentRegionAvail().x, entryRowHeight));
+			const ImVec2 rowMinimum = ImGui::GetItemRectMin();
+			const ImVec2 rowMaximum = ImGui::GetItemRectMax();
+			ImDrawList* panelDrawList = ImGui::GetWindowDrawList();
+			ImFont* panelFont = ImGui::GetFont();
+			const float textY = rowMinimum.y + 2.0f;
+
+			const char* marker = isCorpse
+				? (expanded ? ICON_FA_ANGLE_DOWN : ICON_FA_ANGLE_RIGHT)
+				: ICON_FA_DIAMOND;
+			panelDrawList->AddText(
+				panelFont,
+				isCorpse ? panelFont->FontSize : panelFont->FontSize * 0.65f,
+				ImVec2(rowMinimum.x + 4.0f, textY + (isCorpse ? 0.0f : 3.0f)),
+				ImGui::GetColorU32(isCorpse ? accentColour : valueColour),
+				marker);
+
+			const std::string heightIndicator = GetRadarHeightIndicator(entry.worldLocation.y);
+			if (!heightIndicator.empty())
+			{
+				panelDrawList->AddText(
+					panelFont,
+					panelFont->FontSize * 0.72f,
+					ImVec2(rowMinimum.x + 18.0f, textY + 2.0f),
+					ImGui::GetColorU32(labelColour),
+					heightIndicator.c_str());
+			}
+
+			const float nameX = rowMinimum.x + 32.0f;
+			const std::string valueText = GetRadarLootEntityValue(entry) > 0
+				? FormatShortValue(GetRadarLootEntityValue(entry))
+				: "-";
+			const float valueWidth = ImGui::CalcTextSize(valueText.c_str()).x;
+			const float valueX = rowMaximum.x - valueWidth - 5.0f;
+			const ImVec4 nameClip(nameX, rowMinimum.y, std::max(nameX, valueX - 7.0f), rowMaximum.y);
+			std::string entryName = GetRadarLootClusterEntryName(entry);
+			if (isCorpse)
+				entryName += " [" + std::to_string(lootableCorpseItems) + "]";
+			panelDrawList->AddText(
+				panelFont,
+				panelFont->FontSize,
+				ImVec2(nameX, textY),
+				ImGui::GetColorU32(primaryColour),
+				entryName.c_str(),
+				nullptr,
+				0.0f,
+				&nameClip);
+			panelDrawList->AddText(
+				ImVec2(valueX, textY),
+				ImGui::GetColorU32(valueColour),
+				valueText.c_str());
+
+			if (isCorpse && clicked)
+				state.expandedCorpseId = expanded ? 0 : entryId;
+
+			if (expanded && corpseState)
+			{
+				ImGui::Spacing();
+				ImGui::Indent(16.0f);
+				if (lootableCorpseItems == 0)
+				{
+					ImGui::TextColored(labelColour, "No lootable equipment");
+				}
+				else if (ImGui::BeginTable(
+					"##cluster_corpse_equipment",
+					2,
+					ImGuiTableFlags_SizingStretchProp |
+					ImGuiTableFlags_RowBg |
+					ImGuiTableFlags_NoSavedSettings))
+				{
+					ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+					ImGui::TableSetupColumn("Price", ImGuiTableColumnFlags_WidthFixed);
+					for (const CorpseEquipment& equipment : corpseState->equipment)
+					{
+						if (!corpseState->isEquipmentLootable(equipment))
+							continue;
+
+						ImGui::TableNextRow();
+						ImGui::TableSetColumnIndex(0);
+						ImGui::TextColored(primaryColour, "%s", equipment.name.c_str());
+						ImGui::TableSetColumnIndex(1);
+						const std::string equipmentValue = FormatShortValue(equipment.value);
+						ImGui::SetCursorPosX(
+							ImGui::GetCursorPosX() +
+							std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(equipmentValue.c_str()).x));
+						ImGui::TextColored(valueColour, "%s", equipmentValue.c_str());
+					}
+					ImGui::EndTable();
+				}
+				ImGui::Unindent(16.0f);
+				ImGui::Spacing();
+			}
+
+			ImGui::PopID();
+		}
+
+		ImGui::EndChild();
+		state.size = ImGui::GetWindowSize();
+		panelHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
+			ImGui::IsAnyItemHovered();
+	}
+	ImGui::End();
+
+	ImGui::PopStyleVar(4);
+	ImGui::PopStyleColor(6);
+
+	state.panelHoveredLastFrame = panelHovered;
+	if (leftClicked && !markerClicked && !panelHovered)
+	{
+		state.visible = false;
+		state.clusterId = 0;
+		state.expandedCorpseId = 0;
+	}
+}
+
+float DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, const LootEntity& lootList)
 {
 	float markerFontSize = std::clamp(30.f / zoomLevel, 7.f, 9.f);
 	const float textFontSize = ScaleRadarTextSize(markerFontSize + 8.0f);
-	const float itemFontSize = ScaleRadarTextSize(markerFontSize + 6.0f);
 	const float spacingX = 6.0f;
 	const float spacingY = 1.0f;
 
 	const std::string markerText = ICON_FK_TIMES;
-	const std::string valueText = FormatShortValue(lootList.getCorpseValue());
+	const int corpseValue = lootList.getCorpseValue();
+	const std::string valueText = corpseValue > 0
+		? FormatShortValue(corpseValue)
+		: std::string{};
+	const std::string ownerText = GetRenderableCorpseOwnerLabel(lootList);
+	const bool hasWantedEquipment =
+		lootList.getCorpseState().hasWantedEquipment();
 
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImFont* font = ImGui::GetFont();
@@ -497,11 +1903,20 @@ void DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, LootEntity loot
 		markerText.c_str()
 	);
 
+	if (hasWantedEquipment)
+	{
+		const float wantedFontSize = std::max(textFontSize * 1.15f, 12.0f);
+		DrawRadarMarkerText(
+			drawList,
+			font,
+			wantedFontSize,
+			ImVec2(markerPos.x + markerSize.x + 1.0f, markerPos.y - 9.0f),
+			IM_COL32(245, 190, 76, 255),
+			"*");
+	}
+
 	float rowX = baseX + (markerSize.x * 0.5f) + spacingX;
 	float rowY = baseY - (markerSize.y * 0.5f);
-
-	float currentX = rowX;
-	float firstRowHeight = 0.0f;
 
 	// hover bounds
 	float minX = markerPos.x;
@@ -509,32 +1924,12 @@ void DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, LootEntity loot
 	float maxX = markerPos.x + markerSize.x;
 	float maxY = markerPos.y + markerSize.y;
 
-	if (!lootList.longName.empty())
-	{
-		std::string nameText = lootList.longName;
-		ImVec2 nameSize = font->CalcTextSizeA(textFontSize, FLT_MAX, 0.0f, nameText.c_str());
-		ImVec2 namePos(currentX, rowY);
+	float firstRowHeight = markerSize.y;
 
-		drawList->AddText(
-			font,
-			textFontSize,
-			namePos,
-			drawColor,
-			nameText.c_str()
-		);
-
-		currentX += nameSize.x + spacingX;
-		firstRowHeight = std::max(firstRowHeight, nameSize.y);
-
-		minX = std::min(minX, namePos.x);
-		minY = std::min(minY, namePos.y);
-		maxX = std::max(maxX, namePos.x + nameSize.x);
-		maxY = std::max(maxY, namePos.y + nameSize.y);
-	}
-
+	if (!valueText.empty())
 	{
 		ImVec2 valueSize = font->CalcTextSizeA(textFontSize, FLT_MAX, 0.0f, valueText.c_str());
-		ImVec2 valuePos(currentX, rowY);
+		ImVec2 valuePos(rowX, rowY);
 
 		drawList->AddText(
 			font,
@@ -552,36 +1947,24 @@ void DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, LootEntity loot
 		maxY = std::max(maxY, valuePos.y + valueSize.y);
 	}
 
-	float equipmentY = rowY + firstRowHeight + spacingY;
-
-	const CorpseLootState& corpseState = lootList.getCorpseState();
-
-	for (const auto& slot : corpseState.equipment)
+	if (!ownerText.empty())
 	{
-		if (!corpseState.isEquipmentLootable(slot))
-			continue;
-
-		if (!slot.wanted)
-			continue;
-
-		std::string text = slot.name + " [" + FormatShortValue(slot.value) + "]";
-		ImVec2 itemSize = font->CalcTextSizeA(itemFontSize, FLT_MAX, 0.0f, text.c_str());
-		ImVec2 itemPos(rowX, equipmentY);
+		const float ownerY = rowY + firstRowHeight + spacingY;
+		ImVec2 nameSize = font->CalcTextSizeA(textFontSize, FLT_MAX, 0.0f, ownerText.c_str());
+		ImVec2 namePos(rowX, ownerY);
 
 		drawList->AddText(
 			font,
-			itemFontSize,
-			itemPos,
+			textFontSize,
+			namePos,
 			drawColor,
-			text.c_str()
+			ownerText.c_str()
 		);
 
-		minX = std::min(minX, itemPos.x);
-		minY = std::min(minY, itemPos.y);
-		maxX = std::max(maxX, itemPos.x + itemSize.x);
-		maxY = std::max(maxY, itemPos.y + itemSize.y);
-
-		equipmentY += itemSize.y + spacingY;
+		minX = std::min(minX, namePos.x);
+		minY = std::min(minY, namePos.y);
+		maxX = std::max(maxX, namePos.x + nameSize.x);
+		maxY = std::max(maxY, namePos.y + nameSize.y);
 	}
 
 	// make hover area a bit easier to hit
@@ -589,41 +1972,14 @@ void DrawRadarPlayerCorpseMarkers(int x, int y, float zoomLevel, LootEntity loot
 	ImVec2 hoverMin(minX - hoverPadding, minY - hoverPadding);
 	ImVec2 hoverMax(maxX + hoverPadding, maxY + hoverPadding);
 
-	if (ImGui::IsMouseHoveringRect(hoverMin, hoverMax))
-	{
-		ImGui::BeginTooltip();
+	if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
+		!ImGui::IsMouseHoveringRect(hoverMin, hoverMax))
+		return FLT_MAX;
 
-		ImGui::Separator();
-
-		if (!lootList.longName.empty())
-			ImGui::Text("%s", lootList.longName.c_str());
-
-		ImGui::Text("Value: %s", valueText.c_str());
-
-		const bool hasLootableEquipment = std::any_of(
-			corpseState.equipment.begin(),
-			corpseState.equipment.end(),
-			[&corpseState](const CorpseEquipment& slot)
-			{
-				return corpseState.isEquipmentLootable(slot);
-			});
-
-		if (hasLootableEquipment)
-		{
-			ImGui::Separator();
-
-			for (const auto& slot : corpseState.equipment)
-			{
-				if (!corpseState.isEquipmentLootable(slot))
-					continue;
-
-				std::string line = slot.name + " [" + FormatShortValue(slot.value) + "]";
-				ImGui::Text("%s", line.c_str());
-			}
-		}	
-
-		ImGui::EndTooltip();
-	}
+	const ImVec2 mousePosition = ImGui::GetIO().MousePos;
+	const float deltaX = mousePosition.x - baseX;
+	const float deltaY = mousePosition.y - baseY;
+	return (deltaX * deltaX) + (deltaY * deltaY);
 }
 
 void drawGroupLine(glm::vec3 position, Player player)
@@ -782,30 +2138,7 @@ void DrawLootContainerMarker(float x, float y, glm::vec4 color, float zoomLevel,
 	constexpr float markerHalfSize = 3.5f;
 	constexpr float labelGap = 3.0f;
 
-	//loot height indicator
-	std::string hString;
-
-	//local height
-	const float height = loot.worldLocation.y;
-
-	if (height > (mainGame.localLocation.y + 2.f)) // 2.f per level?!
-	{
-
-		if (height > (mainGame.localLocation.y + 4.f))
-			hString = ICON_FK_ANGLE_DOUBLE_UP;
-		else
-			hString = ICON_FK_ANGLE_UP;
-
-	}
-	if (height < (mainGame.localLocation.y - 2.f))
-	{
-
-		if (height < (mainGame.localLocation.y - 4.f))
-			hString = ICON_FK_ANGLE_DOUBLE_DOWN;
-		else
-			hString = ICON_FK_ANGLE_DOWN;
-
-	}
+	const std::string hString = GetRadarHeightIndicator(loot.worldLocation.y);
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImFont* font = ImGui::GetFont();
 	const ImU32 drawColor = ImColor(color.x, color.y, color.z, color.w);
@@ -834,30 +2167,7 @@ void DrawLootItemMarker(float x, float y, glm::vec4 color, float zoomLevel, cons
 	constexpr float markerHalfSize = 3.0f;
 	constexpr float labelGap = 3.0f;
 
-	//loot height indicator
-	std::string hString;
-
-	//local height
-	const float height = loot.worldLocation.y;
-
-	if (height > (mainGame.localLocation.y + 2.f)) // 2.f per level?!
-	{
-
-		if (height > (mainGame.localLocation.y + 4.f))
-			hString = ICON_FK_ANGLE_DOUBLE_UP;
-		else
-			hString = ICON_FK_ANGLE_UP;
-
-	}
-	if (height < (mainGame.localLocation.y - 2.f))
-	{
-
-		if (height < (mainGame.localLocation.y - 4.f))
-			hString = ICON_FK_ANGLE_DOUBLE_DOWN;
-		else
-			hString = ICON_FK_ANGLE_DOWN;
-
-	}
+	const std::string hString = GetRadarHeightIndicator(loot.worldLocation.y);
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImFont* font = ImGui::GetFont();
 	const ImU32 drawColor = ImColor(color.x, color.y, color.z, color.w);

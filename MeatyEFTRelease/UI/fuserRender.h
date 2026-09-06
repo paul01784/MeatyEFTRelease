@@ -16,7 +16,7 @@
 #include "../Tarkov/GameWorld/Loot/Loot.h"
 #include "../Tarkov/GameWorld/Explosives/ExplosiveManager.h"
 #include "../Tarkov/GameWorld/QuestManager.h"
-#include "../Tarkov/Unity/Camera.h"
+#include "../Tarkov/Unity/cameraManager.h"
 #include "../Tarkov/Features/Aim/FireportTracker.h"
 #include "../Tarkov/Features/Aim/ReadOnlyAim.h"
 #include "../Tarkov/Features/Visibility/AtlasVisibility.h"
@@ -61,7 +61,7 @@ namespace MapNamesRender
 
 namespace fuserRender
 {
-    inline thread_local CameraProjectionSnapshot g_frameCameraSnapshot;
+    inline thread_local CameraManagerSnapshot g_frameManagedCameraSnapshot;
     inline thread_local PlayerSnapshot g_framePlayerSnapshot;
     inline thread_local LootCacheSnapshot g_frameLootSnapshot;
     inline thread_local GrenadeCacheSnapshot g_frameGrenadeSnapshot;
@@ -74,27 +74,58 @@ namespace fuserRender
         const glm::vec3& world,
         glm::vec2* screen)
     {
-        return g_frameCameraSnapshot &&
-            Utils::Camera::world_to_screen(
+        if (!screen)
+            return false;
+
+        return g_frameManagedCameraSnapshot &&
+            CameraManager::worldToScreen(
+                *g_frameManagedCameraSnapshot,
                 world,
-                screen,
-                *g_frameCameraSnapshot);
+                *screen,
+                espGlobals::gameRes.x,
+                espGlobals::gameRes.y);
     }
 
     static inline bool ProjectSkeletonWorldToScreen(
         const glm::vec3& world,
         glm::vec2* screen)
     {
-        return g_frameCameraSnapshot &&
-            Utils::Camera::world_to_screen(
-                world,
-                screen,
-                *g_frameCameraSnapshot);
+        return ProjectWorldToScreen(world, screen);
+    }
+
+    static inline bool FrameCameraValid()
+    {
+        return g_frameManagedCameraSnapshot &&
+            g_frameManagedCameraSnapshot->valid;
+    }
+
+    static inline bool FrameCameraScoped()
+    {
+        return g_frameManagedCameraSnapshot &&
+            g_frameManagedCameraSnapshot->valid &&
+            g_frameManagedCameraSnapshot->scoped;
     }
 
     static inline void CaptureFrameSnapshots()
     {
-        g_frameCameraSnapshot = camera.getProjectionSnapshot();
+        constexpr auto kManagedCameraMaxAge =
+            std::chrono::milliseconds(250);
+
+        g_frameManagedCameraSnapshot = cameraManagerTest.snapshot();
+
+        const auto now = std::chrono::steady_clock::now();
+        const bool managedCameraFresh =
+            g_frameManagedCameraSnapshot &&
+            g_frameManagedCameraSnapshot->valid &&
+            g_frameManagedCameraSnapshot->publishedAt !=
+                std::chrono::steady_clock::time_point{} &&
+            now >= g_frameManagedCameraSnapshot->publishedAt &&
+            (now - g_frameManagedCameraSnapshot->publishedAt) <=
+                kManagedCameraMaxAge;
+
+        if (!managedCameraFresh)
+            g_frameManagedCameraSnapshot.reset();
+
         g_framePlayerSnapshot = registeredPlayers.getCacheSnapshot();
         g_frameLootSnapshot = Loot.getCacheSnapshot();
         g_frameGrenadeSnapshot = explosiveManager.getGrenadesSnapshot();
@@ -115,7 +146,7 @@ namespace fuserRender
 
     static inline void ReleaseFrameSnapshots()
     {
-        g_frameCameraSnapshot.reset();
+        g_frameManagedCameraSnapshot.reset();
         g_framePlayerSnapshot.reset();
         g_frameLootSnapshot.reset();
         g_frameGrenadeSnapshot.reset();
@@ -513,19 +544,22 @@ namespace fuserRender
             true
         );
 
-        std::ostringstream fpsStream;
-        fpsStream.precision(0);
-        fpsStream << std::fixed << fps;
+        if (g_DxWindow.GetConfig().showFPS)
+        {
+            std::ostringstream fpsStream;
+            fpsStream.precision(0);
+            fpsStream << std::fixed << fps;
 
-        g_DxWindow.DrawString(
-            "FPS: " + fpsStream.str(),
-            20.0f,
-            90.0f,
-            13.0f,
-            fpsColour,
-            false,
-            true
-        );
+            g_DxWindow.DrawString(
+                "FPS: " + fpsStream.str(),
+                20.0f,
+                90.0f,
+                13.0f,
+                fpsColour,
+                false,
+                true
+            );
+        }
     }
 
     static inline void RenderTestScene()
@@ -620,30 +654,32 @@ namespace fuserRender
             true
         );
 
-        std::string fpsText = "FPS: " + std::to_string(static_cast<int>(fps));
+        if (g_DxWindow.GetConfig().showFPS)
+        {
+            const std::string fpsText =
+                "FPS: " + std::to_string(static_cast<int>(fps));
 
-
-        g_DxWindow.DrawString(
-            fpsText,
-            screenW - 100.0f,
-            40.0f,
-            14.0f,
-            glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
-            false,
-            true
-        );
+            g_DxWindow.DrawString(
+                fpsText,
+                screenW - 100.0f,
+                40.0f,
+                14.0f,
+                glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
+                false,
+                true
+            );
+        }
     }
 
     static inline void RenderCrosshair()
     {
-        if (!g_frameCameraSnapshot ||
-            !g_frameCameraSnapshot->valid)
+        if (!FrameCameraValid())
             return;
 
         if (!espGlobals::drawCrosshair)
             return;
 
-        if (g_frameCameraSnapshot && g_frameCameraSnapshot->scoped)
+        if (FrameCameraScoped())
             return;
 
         const float screenW = ScreenWidth();
@@ -683,11 +719,8 @@ namespace fuserRender
 
     static inline void RenderFireportVisual()
     {
-        if (!g_frameCameraSnapshot ||
-            !g_frameCameraSnapshot->valid ||
-            !makcu.IsConnected() ||
-            !aimGlobals::aimEnabled ||
-            !aimGlobals::drawFireportLine)
+        if (!FrameCameraValid() ||
+            !espGlobals::drawFireportLine)
             return;
 
 
@@ -700,16 +733,13 @@ namespace fuserRender
         if (!ProjectWorldToScreen(pose.worldOrigin, &screenStart))
             return;
 
-        glm::vec2 screenEnd{
-            ScreenWidth() * 0.5f,
-            ScreenHeight() * 0.5f
-        };
+        const glm::vec3 endWorld =
+            pose.worldOrigin +
+            pose.worldForward * kFireportProjectionDistanceM;
+        glm::vec2 screenEnd{};
 
-        if (aimGlobals::aimReference == AimReference::Fireport)
-        {
-            if (pose.aimRefOk)
-                screenEnd = pose.screenEnd;
-        }
+        if (!ProjectWorldToScreen(endWorld, &screenEnd))
+            return;
 
         static const glm::vec4 kFireportLine{1.0f, 0.86f, 0.24f, 0.95f};
         g_DxWindow.DrawLine(
@@ -731,13 +761,12 @@ namespace fuserRender
         if (aimGlobals::aimFOV <= 0.f)
             return;
 
-        glm::vec2 ringCenter{
-            ScreenWidth() * 0.5f,
-            ScreenHeight() * 0.5f
-        };
+        const AimReferencePoint aimReference =
+            readOnlyAim.resolveAimReference();
+        if (!aimReference.valid)
+            return;
 
-        if (aimGlobals::aimReference == AimReference::Fireport)
-            ringCenter = readOnlyAim.resolveAimReference().pos;
+        const glm::vec2 ringCenter = aimReference.pos;
 
         g_DxWindow.DrawCircle(
             ringCenter.x,
@@ -1230,6 +1259,104 @@ namespace fuserRender
         }
     }
 
+    static inline const Player* FindPassengerBtr(const Player& passenger, const PlayerCollection& players)
+    {
+        if (!passenger.isInBTR || passenger.isBTR)
+            return nullptr;
+
+        constexpr float kPassengerRadiusSquared = 16.0f;
+        const Player* nearestBtr = nullptr;
+        float nearestDistanceSquared = kPassengerRadiusSquared;
+
+        for (const Player& candidate : players)
+        {
+            if (!candidate.isBTR ||
+                candidate.isDead ||
+                candidate.hasExfiled ||
+                !Utils::valid_pointer(candidate.instance))
+            {
+                continue;
+            }
+
+            const glm::vec3 offset = passenger.location - candidate.location;
+            const float distanceSquared =
+                (offset.x * offset.x) +
+                (offset.y * offset.y) +
+                (offset.z * offset.z);
+
+            if (distanceSquared <= nearestDistanceSquared)
+            {
+                nearestDistanceSquared = distanceSquared;
+                nearestBtr = &candidate;
+            }
+        }
+
+        return nearestBtr;
+    }
+
+    static inline std::vector<glm::vec4> GetBtrPassengerColours(const Player& btr, const PlayerCollection& players)
+    {
+        std::vector<const Player*> passengers;
+        passengers.reserve(4);
+
+        for (const Player& player : players)
+        {
+            if (player.isDead ||
+                player.hasExfiled ||
+                !Utils::valid_pointer(player.instance) ||
+                FindPassengerBtr(player, players) != &btr)
+            {
+                continue;
+            }
+
+            passengers.push_back(&player);
+        }
+
+        std::sort(
+            passengers.begin(),
+            passengers.end(),
+            [](const Player* left, const Player* right)
+            {
+                return left->instance < right->instance;
+            });
+
+        std::vector<glm::vec4> colours;
+        colours.reserve(std::min<size_t>(4, passengers.size()));
+        for (size_t index = 0; index < passengers.size() && index < 4; ++index)
+            colours.push_back(passengers[index]->colour);
+
+        return colours;
+    }
+
+    static inline void RenderFuserBtrMarker(const glm::vec2& screenPosition, const glm::vec4& colour, const std::vector<glm::vec4>& passengerColours)
+    {
+        const float centerX = screenPosition.x;
+        const float centerY = screenPosition.y;
+
+        g_DxWindow.DrawString(
+            "BTR",
+            centerX,
+            centerY - 18.0f,
+            13.0f,
+            colour,
+            true,
+            true);
+
+        const size_t passengerCount = std::min<size_t>(4, passengerColours.size());
+        const float passengerSpacing = 8.0f;
+        const float passengerStartX = centerX -
+            ((static_cast<float>(passengerCount) - 1.0f) * passengerSpacing * 0.5f);
+
+        for (size_t index = 0; index < passengerCount; ++index)
+        {
+            const float passengerX = passengerStartX +
+                (static_cast<float>(index) * passengerSpacing);
+            const float passengerY = centerY;
+            g_DxWindow.DrawFilledCircle(passengerX, passengerY, 3.5f, glm::vec4(0.0f, 0.0f, 0.0f, 0.96f));
+            g_DxWindow.DrawFilledCircle(passengerX, passengerY, 2.4f, passengerColours[index]);
+        }
+    }
+
     static inline void RenderPlayers()
     {
         
@@ -1255,10 +1382,23 @@ namespace fuserRender
                 if (player.distance == 0)
                     continue;
 
+                if (FindPassengerBtr(player, cache) != nullptr)
+                    continue;
+
                 glm::vec2 screenPos{};
                 const bool rootVisible = ProjectWorldToScreen(player.location, &screenPos);
 
                 const glm::vec4 playerColour = player.colour;
+
+                if (player.isBTR)
+                {
+                    if (rootVisible)
+                    {
+                        RenderFuserBtrMarker(screenPos, playerColour, GetBtrPassengerColours(player, cache));
+                    }
+
+                    continue;
+                }
 
                 if (rootVisible)
                 {
@@ -1507,15 +1647,36 @@ namespace fuserRender
                 ? coloursGlobals::questMarker
                 : loot.color;
 
-            std::string lootText =
-                GetLootDisplayName(loot) +
-                " " +
-                std::to_string(distance) +
-                "m";
-
-            const std::string corpseOwnerName = loot.isCorpse()
-                ? CleanText(loot.getCorpseState().ownerName)
+            const std::string corpseOwnerName = isCorpse
+                ? CleanText(GetRenderableCorpseOwnerLabel(loot))
                 : "";
+            const bool corpseHasWantedEquipment =
+                isCorpse && loot.getCorpseState().hasWantedEquipment();
+
+            std::string lootText;
+            std::string corpseDetailText;
+
+            if (isCorpse)
+            {
+                lootText = "Corpse";
+
+                const std::string corpseValue = FormatLootPrice(loot.getCorpseValue());
+                if (!corpseValue.empty())
+                    lootText += " (" + corpseValue + ")";
+
+                if (!corpseOwnerName.empty())
+                    corpseDetailText = corpseOwnerName + " [" + std::to_string(distance) + "m]";
+                else
+                    corpseDetailText = "[" + std::to_string(distance) + "m]";
+            }
+            else
+            {
+                lootText =
+                    GetLootDisplayName(loot) +
+                    " " +
+                    std::to_string(distance) +
+                    "m";
+            }
 
             g_DxWindow.DrawFilledCircle(
                 screenPos.x,
@@ -1523,6 +1684,19 @@ namespace fuserRender
                 2.0f,
                 lootColour
             );
+
+            if (corpseHasWantedEquipment)
+            {
+                g_DxWindow.DrawString(
+                    "*",
+                    screenPos.x + 2.0f,
+                    screenPos.y - 13.0f,
+                    11.0f,
+                    glm::vec4(0.96f, 0.75f, 0.30f, 1.0f),
+                    true,
+                    true
+                );
+            }
 
             g_DxWindow.DrawString(
                 lootText,
@@ -1534,10 +1708,10 @@ namespace fuserRender
                 true
             );
 
-            if (!corpseOwnerName.empty())
+            if (isCorpse)
             {
                 g_DxWindow.DrawString(
-                    corpseOwnerName,
+                    corpseDetailText,
                     screenPos.x + 6.0f,
                     screenPos.y + 11.0f,
                     13.0f,
@@ -1553,7 +1727,10 @@ namespace fuserRender
     {
         const int alertMode = std::clamp(espGlobals::aimOverlayAlert, 0, 2);
 
-        if (alertMode == 0)
+        // The menu disables this selector with Extend aimlines. Keep the
+        // renderer aligned with it as well, so a stale frame snapshot cannot
+        // leave the edge alert visible after that feature is turned off.
+        if (!radarGlobals::drawAimLineTargets || alertMode == 0)
             return;
 
         const PlayerCollection& cache = *g_framePlayerSnapshot;

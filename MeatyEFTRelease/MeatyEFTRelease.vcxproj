@@ -538,7 +538,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="fuser\colour.h" />
     <ClInclude Include="Tarkov\Features\Aim\Ballistics.h" />
     <ClInclude Include="Tarkov\Features\Visibility\AtlasVisibility.h" />
-    <ClInclude Include="Tarkov\Unity\Camera.h" />
+    <ClInclude Include="Tarkov\Unity\cameraManager.h" />
     <ClInclude Include="Tarkov\GameWorld\Player\DogTagCache.h" />
     <ClInclude Include="Tarkov\GameWorld\Exits\Exfil.h" />
     <ClInclude Include="Tarkov\GameWorld\Explosives\ExplosiveManager.h" />
@@ -611,7 +611,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="external\imgui\imgui_widgets.cpp" />
     <ClCompile Include="external\imgui\misc\cpp\imgui_stdlib.cpp" />
     <ClCompile Include="UI\FileUpdater.cpp" />
-    <ClCompile Include="Tarkov\Unity\Camera.cpp" />
+    <ClCompile Include="Tarkov\Unity\cameraManager.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Player\DogTagCache.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Exits\Exfil.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Explosives\ExplosiveManager.cpp" />

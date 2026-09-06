@@ -71,10 +71,4 @@ enum class TargetMode
     CQB
 };
 
-enum class AimReference : int
-{
-    Crosshair = 0,
-    Fireport = 1,
-};
-
 static bool setCurrentMapSpecs = false;

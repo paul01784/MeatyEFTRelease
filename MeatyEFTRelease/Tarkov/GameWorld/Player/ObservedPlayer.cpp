@@ -12,7 +12,7 @@
 
 namespace
 {
-    constexpr std::chrono::milliseconds corpseReadInterval{ 250 };
+    constexpr std::chrono::milliseconds corpseReadInterval{ 100 };
     constexpr std::chrono::milliseconds healthReadInterval{ 2000 };
     constexpr std::chrono::milliseconds handsReadInterval{ 2000 };
     constexpr std::chrono::milliseconds failedReadRetryInterval{ 2500 };
@@ -156,6 +156,7 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
         uint64_t voicePointer = 0;
         PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::Voice, voicePointer);
         const AIRole role = getAiRole(PlayerMemoryAccess::readString(voicePointer));
+		player.type = role.Type;
         player.name = role.Name.empty() ? "Ai" : role.Name;
         player.isBoss = role.Type == PlayerType::AIBoss;
         player.isBlackDivision = role.IsBlackDivision;
@@ -165,6 +166,7 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
     }
     else if (isSavage)
     {
+		player.type = PlayerType::PScav;
         player.name = "PScav " + std::to_string(mainGame.pmcNumber++);
         player.isPlayerScav = true;
         player.isAi = false;
@@ -172,6 +174,7 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
     }
     else
     {
+		player.type = PlayerType::PMC;
         player.name = "PMC " + std::to_string(mainGame.pmcNumber++);
         player.isPlayerScav = false;
         player.isAi = false;

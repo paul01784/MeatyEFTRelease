@@ -1128,25 +1128,6 @@ namespace
         }
     }
 
-    bool DrawBoneIndexInput(const char* label, boneListIndexes& bone)
-    {
-        using BoneUnderlying =
-            std::underlying_type_t<boneListIndexes>;
-
-        int value = static_cast<int>(
-            static_cast<BoneUnderlying>(bone)
-            );
-
-        if (!ImGui::InputInt(label, &value))
-            return false;
-
-        // Prevent invalid negative indexes.
-        value = std::max(value, 0);
-
-        bone = static_cast<boneListIndexes>(value);
-        return true;
-    }
-
     void DrawTargetDebugBlock(const char* title, const std::optional<TargetResult>& target)
     {
         ImGui::SeparatorText(title);
@@ -1208,68 +1189,53 @@ namespace
         );
     }
 
-    
-
-    std::vector<boneListIndexes> getAllBones() {
-        return {
-            boneListIndexes::Pelvis,
-            boneListIndexes::Head,
-            boneListIndexes::Neck,
-            boneListIndexes::Spine,
-            boneListIndexes::LForearm,
-            boneListIndexes::LPalm,
-            boneListIndexes::RForearm,
-            boneListIndexes::RPalm,
-            boneListIndexes::LThigh,
-            boneListIndexes::LFoot,
-            boneListIndexes::RThigh,
-            boneListIndexes::RFoot
-        };
-    }
+    constexpr std::array<boneListIndexes, 12> kSelectableAimBones =
+    {
+        boneListIndexes::Pelvis,
+        boneListIndexes::Head,
+        boneListIndexes::Neck,
+        boneListIndexes::Spine,
+        boneListIndexes::LForearm,
+        boneListIndexes::LPalm,
+        boneListIndexes::RForearm,
+        boneListIndexes::RPalm,
+        boneListIndexes::LThigh,
+        boneListIndexes::LFoot,
+        boneListIndexes::RThigh,
+        boneListIndexes::RFoot
+    };
 
     bool ShowBoneSelectionBox(boneListIndexes& bone, const char* label)
     {
-        static const std::vector<boneListIndexes> bones = getAllBones();
+        const auto currentIt = std::find(
+            kSelectableAimBones.begin(),
+            kSelectableAimBones.end(),
+            bone);
+        const int currentIndex = currentIt == kSelectableAimBones.end()
+            ? 0
+            : static_cast<int>(std::distance(kSelectableAimBones.begin(), currentIt));
 
-        auto currentIt = std::find(
-            bones.begin(),
-            bones.end(),
-            bone
-        );
-
-        int currentIndex = 0;
-
-        if (currentIt != bones.end())
-        {
-            currentIndex = static_cast<int>(std::distance(bones.begin(), currentIt));
-        }
-
-        const char* preview = BoneToString(bones[currentIndex]);
+        if (!ImGui::BeginCombo(label, BoneToString(kSelectableAimBones[currentIndex])))
+            return false;
 
         bool changed = false;
-
-        if (ImGui::BeginCombo(label, preview))
+        for (int i = 0; i < static_cast<int>(kSelectableAimBones.size()); ++i)
         {
-            for (int i = 0; i < static_cast<int>(bones.size()); ++i)
+            const bool selected = i == currentIndex;
+            if (ImGui::Selectable(BoneToString(kSelectableAimBones[i]), selected))
             {
-                const bool selected = (i == currentIndex);
-                const char* boneName = BoneToString(bones[i]);
-
-                if (ImGui::Selectable(boneName, selected))
-                {
-                    bone = bones[i];
-                    changed = true;
-                }
-
-                if (selected)
-                    ImGui::SetItemDefaultFocus();
+                bone = kSelectableAimBones[i];
+                changed = true;
             }
 
-            ImGui::EndCombo();
+            if (selected)
+                ImGui::SetItemDefaultFocus();
         }
 
+        ImGui::EndCombo();
         return changed;
     }
+
 }
 
 void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<void()>& onConfigChanged)
@@ -1585,94 +1551,36 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 "%.0f px"
             );
             ShowSettingsTooltip(
-                "Maximum screen-pixel radius used to find a target from the selected aim reference."
+                "Maximum screen-pixel radius used to find a target from the projected fireport endpoint."
             );
 
-            static constexpr const char* aimReferenceOptions[] =
+            ImGui::SeparatorText("Fireport Reference");
+            const FireportPose fireport = g_fireport.snapshot();
+
+            if (fireport.aimRefOk && fireport.pathUsed)
             {
-                "Crosshair (screen centre)",
-                "Fireport (barrel ray end)"
-            };
-
-            int aimReferenceIndex =
-                static_cast<int>(
-                    aimGlobals::aimReference
-                    );
-
-            aimReferenceIndex = std::clamp(
-                aimReferenceIndex,
-                0,
-                IM_ARRAYSIZE(aimReferenceOptions) - 1
-            );
-
-            if (ImGui::Combo(
-                "Aim reference",
-                &aimReferenceIndex,
-                aimReferenceOptions,
-                IM_ARRAYSIZE(aimReferenceOptions)
-            ))
-            {
-                aimGlobals::aimReference =
-                    static_cast<AimReference>(
-                        aimReferenceIndex
-                        );
-
-                configChanged = true;
+                ImGui::TextColored(
+                    ImVec4(0.35f, 0.90f, 0.45f, 1.0f),
+                    "Fireport tracker: READY | Path: %s",
+                    fireport.pathUsed);
             }
-            ShowSettingsTooltip(
-                "Crosshair uses the screen centre. Fireport uses the projected barrel/fireport ray endpoint."
-            );
+            else
+            {
+                ImGui::TextColored(
+                    ImVec4(1.0f, 0.55f, 0.31f, 1.0f),
+                    "Fireport tracker: RUNNING | Waiting for a valid barrel ray");
+            }
 
-            const bool fireportReferenceSelected =
-                aimGlobals::aimReference == AimReference::Fireport;
-
-            ImGui::BeginDisabled(!fireportReferenceSelected);
-            configChanged |= ImGui::Checkbox(
-                "Closest valid bone to fireport",
-                &aimGlobals::aimClosestBoneToFireport
-            );
-            ImGui::EndDisabled();
-            ShowSettingsTooltip(
-                "Uses the valid cached bone nearest the live fireport point. It runs only while a real fireport reference is available."
-            );
+            ImGui::TextDisabled(
+                "MAKCU always uses the projected fireport endpoint. Target movement pauses while it is unavailable.");
 
             configChanged |= ImGui::Checkbox(
                 "Show aim FOV ring",
                 &aimGlobals::showAimFovRing
             );
             ShowSettingsTooltip(
-                "Draw the configured FOV circle around the active aim reference while aim is enabled and MAKCU is connected."
+                "Draw the configured FOV circle around the projected fireport endpoint while aim is enabled and MAKCU is connected."
             );
-
-            configChanged |= ImGui::Checkbox(
-                "Draw fireport line",
-                &aimGlobals::drawFireportLine
-            );
-            ShowSettingsTooltip(
-                "Draw a line from the barrel to the selected aim reference. It only updates when aim is enabled and MAKCU is connected."
-            );
-
-            if (aimGlobals::aimReference ==
-                AimReference::Fireport)
-            {
-                const FireportPose pose =
-                    g_fireport.snapshot();
-
-                if (pose.valid && pose.pathUsed)
-                {
-                    ImGui::TextDisabled(
-                        "Fireport path: %s",
-                        pose.pathUsed
-                    );
-                }
-                else
-                {
-                    ImGui::TextColored(
-                        ImVec4(1.0f, 0.55f, 0.31f, 1.0f),
-                        "Fireport unavailable; aim uses screen centre fallback"
-                    );
-                }
-            }
 
             configChanged |= ImGui::DragInt(
                 "Aim distance",
@@ -1788,7 +1696,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
 
             static constexpr const char* targetModeOptions[] =
             {
-                "FOV - closest to screen centre",
+                "FOV - closest to fireport",
                 "CQB - closest to local player"
             };
 
@@ -1815,7 +1723,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 configChanged = true;
             }
             ShowSettingsTooltip(
-                "FOV selects the target nearest the aim reference. CQB selects the nearest target in world distance."
+                "FOV selects the target nearest the fireport endpoint. CQB selects the nearest target in world distance."
             );
 
             configChanged |= ImGui::Checkbox(
@@ -1827,23 +1735,30 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             );
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Aim Bones");
+            ImGui::SeparatorText("Target Bone");
 
+            configChanged |= ImGui::Checkbox(
+                "Closest Bone",
+                &aimGlobals::aimClosestBoneToFireport);
+            ShowSettingsTooltip(
+                "Uses the valid player bone nearest the projected fireport endpoint. Disable it to use the selected AI and PMC bones below."
+            );
+
+            ImGui::BeginDisabled(aimGlobals::aimClosestBoneToFireport);
             configChanged |= ShowBoneSelectionBox(
                 aimGlobals::aiBone,
-                "AI target bone"
-            );
+                "AI target bone");
             ShowSettingsTooltip(
-                "Bone used when the selected target is an AI player."
+                "Bone used for AI and Scav targets when closest-bone selection is disabled."
             );
 
             configChanged |= ShowBoneSelectionBox(
                 aimGlobals::pmcBone,
-                "PMC target bone"
-            );
+                "PMC target bone");
             ShowSettingsTooltip(
-                "Bone used when the selected target is a PMC player."
+                "Bone used for PMC targets when closest-bone selection is disabled."
             );
+            ImGui::EndDisabled();
 
             ImGui::PopItemWidth();
             ImGui::EndDisabled();
@@ -1901,12 +1816,7 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
                 aimGlobals::aimDistance
             );
 
-            ImGui::Text(
-                "Closest fireport bone: %s",
-                aimGlobals::aimClosestBoneToFireport
-                ? "Enabled"
-                : "Disabled"
-            );
+            ImGui::Text("Aim reference: Fireport (required)");
 
             ImGui::Text(
                 "Aim smoothing: %.2f",
@@ -1932,20 +1842,16 @@ void RenderMakcuWindow(bool* pOpen, float backgroundAlpha, const std::function<v
             );
 
             ImGui::Text(
-                "AI bone: %s (%d)",
-                BoneToString(aimGlobals::aiBone),
-                static_cast<int>(
-                    aimGlobals::aiBone
-                    )
-            );
+                "Closest fireport bone: %s",
+                aimGlobals::aimClosestBoneToFireport ? "Enabled" : "Disabled");
 
-            ImGui::Text(
-                "PMC bone: %s (%d)",
-                BoneToString(aimGlobals::pmcBone),
-                static_cast<int>(
-                    aimGlobals::pmcBone
-                    )
-            );
+            if (!aimGlobals::aimClosestBoneToFireport)
+            {
+                ImGui::Text(
+                    "AI / Scav bone: %s | PMC bone: %s",
+                    BoneToString(aimGlobals::aiBone),
+                    BoneToString(aimGlobals::pmcBone));
+            }
 
             ImGui::Spacing();
 

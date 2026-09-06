@@ -313,6 +313,7 @@ void to_json(nlohmann::json& j, const DxWindowConfig& f)
         { "useVSync", f.useVSync },
         { "useMonitorRefreshRate", f.useMonitorRefreshRate },
         { "maxFPS", f.maxFPS },
+        { "showFPS", f.showFPS },
 
         { "antiAliasing", f.antiAliasing },
 
@@ -349,6 +350,7 @@ void from_json(const nlohmann::json& j, DxWindowConfig& f)
     f.useVSync = j.value("useVSync", f.useVSync);
     f.useMonitorRefreshRate = j.value("useMonitorRefreshRate", f.useMonitorRefreshRate);
     f.maxFPS = j.value("maxFPS", f.maxFPS);
+    f.showFPS = j.value("showFPS", f.showFPS);
 
     f.antiAliasing = j.value("antiAliasing", f.antiAliasing);
 
@@ -471,6 +473,7 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"crosshairSize", e.crosshairSize},
         {"headDotSize", e.headDotSize},
         {"drawHeadDot", e.drawHeadDot},
+        {"drawFireportLine", e.drawFireportLine},
         {"drawExfilDist", e.drawExfilDist},
         {"drawExfil", e.drawExfil},
         {"drawSecretExfils", e.drawSecretExfils},
@@ -528,11 +531,7 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
         20);
     e.drawHeadDot = j.value("drawHeadDot", e.drawHeadDot);
     e.headDotSize = std::clamp(j.value("headDotSize", e.headDotSize), 0.5f, 10.0f);
-    if (j.contains("drawFireportLine"))
-    {
-        aimGlobals::drawFireportLine =
-            j.value("drawFireportLine", aimGlobals::drawFireportLine);
-    }
+    e.drawFireportLine = j.value("drawFireportLine", e.drawFireportLine);
     e.drawExfilDist = std::clamp(j.value("drawExfilDist", e.drawExfilDist), 5, 1000);
     e.drawExfil = j.value("drawExfil", e.drawExfil);
     e.drawSecretExfils = j.value("drawSecretExfils", e.drawSecretExfils);
@@ -584,16 +583,14 @@ void to_json(nlohmann::json& j, const aimGlobals& a) {
         {"aiBone", a.aiBone},
         {"pmcBone", a.pmcBone},
         {"targetLock", a.targetLock},
+        {"aimClosestBoneToFireport", a.aimClosestBoneToFireport},
         {"targetMode", a.targetMode},
         {"aimSmooth", a.aimSmooth},
         {"aimSpeedPixelsPerSecond", a.aimSpeedPixelsPerSecond},
         {"aimDeadzonePixels", a.aimDeadzonePixels},
         {"aimOffsetX", a.aimOffsetX},
         {"aimOffsetY", a.aimOffsetY},
-        {"aimReference", a.aimReference},
-        {"aimClosestBoneToFireport", a.aimClosestBoneToFireport},
-        {"showAimFovRing", a.showAimFovRing},
-        {"drawFireportLine", a.drawFireportLine}
+        {"showAimFovRing", a.showAimFovRing}
     };
 }
 
@@ -605,16 +602,21 @@ void from_json(const nlohmann::json& j, aimGlobals& a) {
     a.aiBone = j.value("aiBone", a.aiBone);
     a.pmcBone = j.value("pmcBone", a.pmcBone);
     a.targetLock = j.value("targetLock", a.targetLock);
+    a.aimClosestBoneToFireport =
+        j.value("aimClosestBoneToFireport", a.aimClosestBoneToFireport);
     a.targetMode = j.value("targetMode", a.targetMode);
     a.aimSmooth = j.value("aimSmooth", a.aimSmooth);
     a.aimSpeedPixelsPerSecond = j.value("aimSpeedPixelsPerSecond", a.aimSpeedPixelsPerSecond);
     a.aimDeadzonePixels = j.value("aimDeadzonePixels", a.aimDeadzonePixels);
     a.aimOffsetX = j.value("aimOffsetX", a.aimOffsetX);
     a.aimOffsetY = j.value("aimOffsetY", a.aimOffsetY);
-    a.aimReference = j.value("aimReference", a.aimReference);
-    a.aimClosestBoneToFireport = j.value("aimClosestBoneToFireport", a.aimClosestBoneToFireport);
     a.showAimFovRing = j.value("showAimFovRing", a.showAimFovRing);
-    a.drawFireportLine = j.value("drawFireportLine", a.drawFireportLine);
+
+    if (j.contains("drawFireportLine"))
+    {
+        espGlobals::drawFireportLine =
+            j.value("drawFireportLine", espGlobals::drawFireportLine);
+    }
 }
 
 

@@ -503,7 +503,7 @@
     <ClInclude Include="Tarkov\Unity\UnityContainers.h">
       <Filter>Tarkov\Unity</Filter>
     </ClInclude>
-    <ClInclude Include="Tarkov\Unity\Camera.h">
+    <ClInclude Include="Tarkov\Unity\cameraManager.h">
       <Filter>Tarkov\Unity</Filter>
     </ClInclude>
     <ClInclude Include="Web\TarkovDev\TarkovDevClient.h">
@@ -707,7 +707,7 @@
     <ClCompile Include="Tarkov\GameWorld\PlayerExfil.cpp">
       <Filter>Tarkov\GameWorld</Filter>
     </ClCompile>
-    <ClCompile Include="Tarkov\Unity\Camera.cpp">
+    <ClCompile Include="Tarkov\Unity\cameraManager.cpp">
       <Filter>Tarkov\Unity</Filter>
     </ClCompile>
     <ClCompile Include="Web\TarkovDev\TarkovDevClient.cpp">

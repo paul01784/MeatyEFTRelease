@@ -14,6 +14,7 @@
 #include <thread>
 #include <mutex>
 #include <source_location>
+#include <span>
 #include <string_view>
 
 struct MemoryTrafficStats
@@ -85,6 +86,17 @@ struct MemoryConnectionStats
     uint64_t processCacheTotalTicks = 0;
     uint64_t readCacheTicks = 0;
     uint64_t tlbCacheTicks = 0;
+};
+
+struct TarkovPointerSnapshot
+{
+    uint64_t unityPlayerBase = 0;
+    uint64_t unityPlayerSize = 0;
+    uint64_t gameAssemblyBase = 0;
+    uint64_t gameObjectManagerSlot = 0;
+    uint64_t gameObjectManager = 0;
+    bool gameObjectManagerSignatureAttempted = false;
+    bool gameObjectManagerResolvedBySignature = false;
 };
 
 enum class DmaConnectionState : uint8_t
@@ -242,6 +254,12 @@ private:
     mutable std::mutex handleMutex;
     mutable PriorityDmaMutex dmaOpsMutex;
 
+    mutable std::mutex tarkovPointersMutex;
+    TarkovPointerSnapshot tarkovPointers{};
+
+    [[nodiscard]] bool TryGetModuleInfo(const std::string& moduleName, uintptr_t& moduleBase, size_t& moduleSize) const;
+    void ClearTarkovPointerSnapshot();
+
     std::chrono::steady_clock::time_point lastMemoryCacheRefresh{};
     std::chrono::steady_clock::time_point lastTlbCacheRefresh{};
 
@@ -307,6 +325,10 @@ public:
 
     uintptr_t GetBaseDaddy(const std::string& module_name);
     size_t GetBaseSize(const std::string& module_name);
+
+    void PreloadTarkovPointerSnapshot();
+    void RefreshTarkovPointerSnapshot();
+    [[nodiscard]] TarkovPointerSnapshot GetTarkovPointerSnapshot() const;
 
     uintptr_t GetExportTableAddress(std::string import, std::string process, std::string module);
     uintptr_t GetImportTableAddress(std::string import, std::string process, std::string module);
@@ -518,7 +540,7 @@ public:
 
     bool ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Cached, std::string_view callingFunc = {});
 
-    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Cached, std::string_view callingFunc = {});
+    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Cached, std::string_view callingFunc = {}, std::span<DWORD> bytesRead = {});
 
     [[nodiscard]] static bool IsValidPointer(uintptr_t pointer)
     {

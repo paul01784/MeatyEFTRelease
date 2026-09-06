@@ -4,7 +4,7 @@
 
 namespace UnityOffsets
 {
-    constexpr uint64_t GameObjectManager = 0x1A46AF0;
+    constexpr uint64_t GameObjectManager = 0x19F33A0;
     constexpr uint64_t AllCamera = 0x19F3080; //0x19EACC0;
     constexpr uint64_t GameObject_ObjectClassOffset = 0x80;
     constexpr uint64_t GameObject_ComponentsOffset = 0x58;

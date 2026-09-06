@@ -1063,7 +1063,9 @@ void renderLootFiltersMenu()
                         "mark of the unheard", "radio transmitter", "recorder"
                     } },
                     { "Repair Kits", { "repair kits" } },
-                    { "Battle Pass", { "battle pass doc", "Battle Pass Document" } },
+                    { "Battle Pass", {
+                        "Battle Pass", "battle pass doc", "Battle Pass Document"
+                    } },
                     { "Others", {} }
                 };
 

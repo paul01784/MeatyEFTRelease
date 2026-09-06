@@ -5,10 +5,12 @@
 #include "../UI/debug.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <set>
 #include <sstream>
 #include <system_error>
@@ -51,6 +53,34 @@ namespace
     json tarkovDevDataTasks = json::array();
     json tarkovDevDataItems = json::array();
     json tarkovDevItemCategoriesById = json::object();
+
+    std::string MakeTarkovDevClientName()
+    {
+        constexpr char NameCharacters[] =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        constexpr std::size_t ClientNameLength = 24;
+
+        std::random_device randomDevice;
+        std::uniform_int_distribution<std::size_t> characterIndex(
+            0,
+            sizeof(NameCharacters) - 2);
+        std::string clientName;
+        clientName.reserve(ClientNameLength);
+
+        for (std::size_t i = 0; i < ClientNameLength; ++i)
+            clientName.push_back(NameCharacters[characterIndex(randomDevice)]);
+
+        return clientName;
+    }
+
+    const std::string& TarkovDevClientName()
+    {
+        // Use one opaque identifier per application run. It stays valid for the
+        // duration of each cURL call while preventing separate clients from
+        // presenting the same hard-coded identifier.
+        static const std::string clientName = MakeTarkovDevClientName();
+        return clientName;
+    }
 
     class CurlGlobalGuard final
     {
@@ -770,7 +800,7 @@ std::string TarkovDevProfileClient::HttpGet(const std::string& url, long& httpCo
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "WindowsDesktopClient/1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, TarkovDevClientName().c_str());
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -1354,6 +1384,34 @@ void TarkovDev::buildItemList()
             }
         }
 
+        // Tarkov.dev currently classifies Battle Pass crates only under broad
+        // item types such as Other and Random Loot Container. Preserve a
+        // dedicated derived category so they remain selectable as a group.
+        const auto hasBattlePassLabel = [](const std::string& value)
+        {
+            std::string normalized;
+            normalized.reserve(value.size());
+
+            for (const unsigned char character : value)
+            {
+                if (std::isalnum(character))
+                    normalized.push_back(
+                        static_cast<char>(std::tolower(character)));
+            }
+
+            return normalized.contains("battlepass");
+        };
+
+        if ((hasBattlePassLabel(item.name) ||
+             hasBattlePassLabel(item.shortName)) &&
+            std::find(
+                item.bsgCategory.begin(),
+                item.bsgCategory.end(),
+                "Battle Pass") == item.bsgCategory.end())
+        {
+            item.bsgCategory.emplace_back("Battle Pass");
+        }
+
         marketList.emplace_back(std::move(item));
     }
 
@@ -1511,7 +1569,7 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
         code = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         if (code != CURLE_OK) break;
 
-        code = curl_easy_setopt(curl, CURLOPT_USERAGENT, "MeatyEFTRelease/1.0");
+        code = curl_easy_setopt(curl, CURLOPT_USERAGENT, TarkovDevClientName().c_str());
         if (code != CURLE_OK) break;
 
         code = curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");

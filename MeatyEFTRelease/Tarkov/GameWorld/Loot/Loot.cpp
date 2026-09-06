@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <cctype>
 
 loot::loot()
     : publishedLootCache(
@@ -85,6 +86,63 @@ std::string GetLootDisplayName(const LootEntity& lootItem)
         return itemName;
 
     return itemName + " (" + formattedPrice + ")";
+}
+
+namespace
+{
+    bool equalsIgnoreCase(std::string_view left, std::string_view right)
+    {
+        if (left.size() != right.size())
+            return false;
+
+        for (size_t index = 0; index < left.size(); ++index)
+        {
+            const auto leftCharacter = static_cast<unsigned char>(left[index]);
+            const auto rightCharacter = static_cast<unsigned char>(right[index]);
+
+            if (std::tolower(leftCharacter) != std::tolower(rightCharacter))
+                return false;
+        }
+
+        return true;
+    }
+}
+
+std::string GetCorpseOwnerLabel(const LootEntity& corpse)
+{
+    if (!corpse.isCorpse())
+        return {};
+
+    const CorpseLootState& corpseState = corpse.getCorpseState();
+
+    if (!corpseState.ownerName.empty())
+        return corpseState.ownerName;
+
+    if (!corpse.longName.empty() &&
+        !equalsIgnoreCase(corpse.longName, "Corpse"))
+        return corpse.longName;
+
+    if (!corpseState.ownerResolved)
+        return "Corpse";
+
+    return corpseState.ownerIsPmc ? "PMC" : "Scav";
+}
+
+bool ShouldRenderCorpseOwnerLabel(const std::string_view label)
+{
+    return !label.empty() &&
+        !equalsIgnoreCase(label, "Ai") &&
+        !equalsIgnoreCase(label, "Scav") &&
+        !equalsIgnoreCase(label, "Corpse") &&
+        !equalsIgnoreCase(label, "Body");
+}
+
+std::string GetRenderableCorpseOwnerLabel(const LootEntity& corpse)
+{
+    std::string label = GetCorpseOwnerLabel(corpse);
+    return ShouldRenderCorpseOwnerLabel(label)
+        ? label
+        : std::string{};
 }
 
 constexpr std::uint8_t MAX_LOOT_RESOLVE_ATTEMPTS = 20;
@@ -170,6 +228,7 @@ namespace
         uint64_t namePtr = 0;
         uint64_t containedItem = 0;
         uint64_t inventoryTemplate = 0;
+        uint64_t dogTagComponent = 0;
 
         int nameLen = 0;
         MongoID mongoId{};
@@ -204,43 +263,171 @@ namespace
         return value;
     }
 
+    std::string getCorpseOwnerDisplayName(const Player& player)
+    {
+        if (player.isBlackDivision)
+            return "B.Division";
+
+        if (player.isBoss)
+            return !player.name.empty() && player.name != "Ai"
+                ? player.name
+                : "Boss";
+
+        if (player.isPlayerScav)
+            return !player.name.empty()
+                ? player.name
+                : "PScav";
+
+        if (player.isPlayer && !player.isAi)
+            return !player.name.empty()
+                ? player.name
+                : "PMC";
+
+        if (player.isAi)
+            return !player.name.empty() && player.name != "Ai"
+                ? player.name
+                : "Scav";
+
+        return !player.name.empty()
+            ? player.name
+            : "Scav";
+    }
+
+    bool isGenericCorpseOwnerName(const std::string_view name)
+    {
+        if (name.empty() ||
+            equalsIgnoreCase(name, "PMC") ||
+            equalsIgnoreCase(name, "PScav") ||
+            equalsIgnoreCase(name, "Scav") ||
+            equalsIgnoreCase(name, "Ai") ||
+            equalsIgnoreCase(name, "Boss"))
+        {
+            return true;
+        }
+
+        constexpr std::string_view pmcPrefix = "PMC";
+        if (name.size() <= pmcPrefix.size())
+            return false;
+
+        for (std::size_t index = 0; index < pmcPrefix.size(); ++index)
+        {
+            if (std::tolower(static_cast<unsigned char>(name[index])) !=
+                std::tolower(static_cast<unsigned char>(pmcPrefix[index])))
+            {
+                return false;
+            }
+        }
+
+        const unsigned char suffix = static_cast<unsigned char>(name[pmcPrefix.size()]);
+        return std::isspace(suffix) || std::isdigit(suffix);
+    }
+
+    void setCorpseOwnerName(LootEntity& lootItem, CorpseLootState& corpseState, const std::string_view name, const bool authoritative)
+    {
+        if (name.empty() ||
+            (!authoritative &&
+                !corpseState.ownerName.empty() &&
+                !isGenericCorpseOwnerName(corpseState.ownerName)))
+        {
+            return;
+        }
+
+        corpseState.ownerName = name;
+        lootItem.longName = name;
+    }
+
+    bool updateCorpseOwnerFromDogTagCache(LootEntity& lootItem)
+    {
+        CorpseLootState& corpseState = lootItem.getCorpseState();
+
+        if (corpseState.ownerProfileId.empty())
+            return false;
+
+        const auto cachedDogTag = g_dogTagCache.GetByProfileId(corpseState.ownerProfileId);
+
+        if (!cachedDogTag.has_value())
+            return false;
+
+        const std::string nickname = TrimEFT(cachedDogTag->nickname);
+        if (nickname.empty())
+            return false;
+
+        corpseState.ownerResolved = true;
+        corpseState.ownerIsPmc = true;
+        setCorpseOwnerName(lootItem, corpseState, nickname, true);
+        return true;
+    }
+
+    bool updateCorpseOwnerFromDogTag(LootEntity& lootItem, const std::uint64_t dogTagComponent)
+    {
+        if (!Utils::valid_pointer(dogTagComponent))
+            return false;
+
+        CorpseLootState& corpseState = lootItem.getCorpseState();
+        const std::string profileId = TrimEFT(mem.readUnityStringField(
+            dogTagComponent + sdk::DogtagComponent::ProfileId,
+            256,
+            DmaCacheMode::Uncached));
+        const std::string nickname = TrimEFT(mem.readUnityStringField(
+            dogTagComponent + sdk::DogtagComponent::Nickname,
+            256,
+            DmaCacheMode::Uncached));
+
+        if (profileId.empty() && nickname.empty())
+            return false;
+
+        corpseState.ownerResolved = true;
+        corpseState.ownerIsPmc = true;
+
+        if (!profileId.empty())
+            corpseState.ownerProfileId = profileId;
+
+        if (!nickname.empty())
+        {
+            setCorpseOwnerName(lootItem, corpseState, nickname, true);
+            return true;
+        }
+
+        return updateCorpseOwnerFromDogTagCache(lootItem);
+    }
+
+    bool corpsePointerMatchesPlayer(const LootEntity& lootItem, const Player& player)
+    {
+        if (!Utils::valid_pointer(lootItem.m_interactiveClass) || !Utils::valid_pointer(player.P_CorpseClass))
+        {
+            return false;
+        }
+
+        return lootItem.m_interactiveClass == player.P_CorpseClass;
+    }
+
     bool updateCorpseOwnerFromPlayerCache(LootEntity& lootItem, const PlayerCollection& playerCache)
     {
         CorpseLootState& corpseState = lootItem.getCorpseState();
 
         for (const Player& player : playerCache)
         {
-            if (lootItem.m_interactiveClass != player.P_CorpseClass)
+            if (!corpsePointerMatchesPlayer(lootItem, player))
                 continue;
 
+            const bool ownerIsPmc =
+                player.isPlayer &&
+                !player.isPlayerScav &&
+                !player.isAi;
+
             corpseState.ownerResolved = true;
-            corpseState.ownerIsPmc =
-                corpseState.ownerIsPmc ||
-                (player.isPlayer &&
-                    !player.isPlayerScav &&
-                    !player.isAi);
+            corpseState.ownerIsPmc = ownerIsPmc;
 
-            if (player.isPlayer || player.isBoss)
-            {
-                std::string ownerName = player.name;
+            if (!player.profileId.empty())
+                corpseState.ownerProfileId = player.profileId;
 
-                if (corpseState.ownerIsPmc && !player.profileId.empty())
-                {
-                    const auto cachedOwner = g_dogTagCache.GetByProfileId(player.profileId);
+            if (updateCorpseOwnerFromDogTagCache(lootItem))
+                return true;
 
-                    if (cachedOwner.has_value() &&
-                        !cachedOwner->nickname.empty())
-                    {
-                        ownerName = cachedOwner->nickname;
-                    }
-                }
+            const std::string ownerName = getCorpseOwnerDisplayName(player);
 
-                if (!ownerName.empty())
-                {
-                    corpseState.ownerName = ownerName;
-                    lootItem.longName = ownerName;
-                }
-            }
+            if (!ownerName.empty())
+                setCorpseOwnerName(lootItem, corpseState, ownerName, false);
 
             return true;
         }
@@ -292,18 +479,79 @@ namespace
         return it != itemById.end() ? &it->second : nullptr;
     }
 
+    bool tryGetBattlePassInfoDocumentName(std::string_view gameObjectName, std::string& displayName)
+    {
+        constexpr std::string_view prefix = "item_barter_info_";
+
+        std::string normalized;
+        normalized.reserve(gameObjectName.size());
+
+        for (const unsigned char character : gameObjectName)
+            normalized.push_back(static_cast<char>(std::tolower(character)));
+
+        constexpr std::string_view cloneSuffix = "(clone)";
+        const size_t clonePosition = normalized.find(cloneSuffix);
+        if (clonePosition != std::string::npos)
+            normalized.erase(clonePosition);
+
+        while (!normalized.empty() &&
+            std::isspace(static_cast<unsigned char>(normalized.back())))
+        {
+            normalized.pop_back();
+        }
+
+        if (!normalized.starts_with(prefix) || normalized.size() == prefix.size())
+            return false;
+
+        const std::string_view documentType = std::string_view(normalized).substr(prefix.size());
+
+        displayName.clear();
+        displayName.reserve(documentType.size() + sizeof(" document"));
+
+        bool capitalizeNext = true;
+        for (const char character : documentType)
+        {
+            if (character == '_')
+            {
+                displayName.push_back(' ');
+                capitalizeNext = true;
+                continue;
+            }
+
+            displayName.push_back(capitalizeNext
+                ? static_cast<char>(std::toupper(static_cast<unsigned char>(character)))
+                : character);
+            capitalizeNext = false;
+        }
+
+        displayName += " doc";
+        return true;
+    }
+
+    bool isBattlePassInfoDocument(const LootEntity& item)
+    {
+        std::string displayName;
+        return tryGetBattlePassInfoDocumentName(item.gameObjectName, displayName);
+    }
+
     bool applyMarketDetails(const std::string& bsgid, LootEntity& item)
     {
         if (const CachedMarketItem* marketItem = findMarketItem(bsgid))
         {
             item.longName = marketItem->name;
             item.shortName = marketItem->shortName;
-            item.traderPrice =
-                static_cast<int>(marketItem->traderPrice);
-            item.avgMarketPrice =
-                static_cast<int>(marketItem->marketPrice);
+            item.traderPrice = static_cast<int>(marketItem->traderPrice);
+            item.avgMarketPrice = static_cast<int>(marketItem->marketPrice);
 
             return true;
+        }
+
+        std::string infoDocumentName;
+        if (tryGetBattlePassInfoDocumentName(item.gameObjectName, infoDocumentName))
+        {
+            item.shortName = infoDocumentName;
+            item.longName = infoDocumentName;
+            return false;
         }
 
         if (item.shortName.empty())
@@ -1670,8 +1918,11 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
             continue;
         }
 
-        item.shortName = getContainerName(item.bsgId);
-        item.longName = item.shortName;
+        if (!applyMarketDetails(item.bsgId, item))
+        {
+            item.shortName = getContainerName(item.bsgId);
+            item.longName = item.shortName;
+        }
     }
 }
 
@@ -1742,6 +1993,8 @@ loot::WantedLookup loot::buildWantedLookup() const
             lootGlobals::selectedLootCategories.begin(),
             lootGlobals::selectedLootCategories.end());
 
+        lookup.battlePassInfoDocumentsSelected = selectedCategories.contains("Battle Pass");
+
         lookup.categoryLootIds.reserve(marketList.size());
 
         for (const auto& marketItem : marketList)
@@ -1770,7 +2023,7 @@ void loot::applyWantedState(LootEntity& lootItem, const WantedLookup& lookup) co
 
     glm::vec4 filterColour{};
 
-    if (LootClassifier::get(lootItem).canApplyWantedState() && !lootItem.bsgId.empty())
+    if (LootClassifier::get(lootItem).canApplyWantedState())
     {
         if (lookup.questIds.contains(lootItem.bsgId))
         {
@@ -1791,7 +2044,9 @@ void loot::applyWantedState(LootEntity& lootItem, const WantedLookup& lookup) co
             lootItem.filterMatch = LootFilterMatch::Other;
             filterColour = filterIt->second;
         }
-        else if (lookup.categoryLootIds.contains(lootItem.bsgId))
+        else if (lookup.categoryLootIds.contains(lootItem.bsgId) ||
+            (lookup.battlePassInfoDocumentsSelected &&
+             isBattlePassInfoDocument(lootItem)))
         {
             lootItem.filterWanted = true;
             lootItem.filterMatch = LootFilterMatch::Other;
@@ -2032,6 +2287,7 @@ void loot::updateCorpseRequirements(std::vector<LootEntity>& workingCache)
         if (!LootClassifier::get(item).needsCorpseUpdate())
             continue;
 
+        updateCorpseOwnerFromDogTagCache(item);
         updateCorpseOwnerFromPlayerCache(item, playerCache);
 
         CorpseLootState& corpseState = item.getCorpseState();
@@ -2181,7 +2437,10 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
                     batch.Add(read.namePtr + 0x10, read.nameLen);
 
                 if (Utils::valid_pointer(read.containedItem))
+                {
                     batch.Add(read.containedItem + sdk::LootItem::Template, read.inventoryTemplate);
+                    batch.Add(read.containedItem + sdk::BarterOtherOffsets::Dogtag, read.dogTagComponent);
+                }
             }
 
             if (!batch.Execute())
@@ -2227,7 +2486,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
                 continue;
 
             if (slotName == "Dogtag")
-                corpseState.ownerIsPmc = true;
+                updateCorpseOwnerFromDogTag(lootItem, read.dogTagComponent);
 
             if (skipNames.contains(slotName))
                 continue;

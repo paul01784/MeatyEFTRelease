@@ -5,7 +5,7 @@
 #include <random>
 #include "../external/glm/glm.hpp"
 #include "../UI/globals.h"
-#include "../Tarkov/Unity/Camera.h"
+#include "../Tarkov/Unity/cameraManager.h"
 #include "../Tarkov/GameWorld/MainGame.h"
 
 
@@ -80,142 +80,21 @@ namespace Utils {
 
 	namespace Camera {
 
-		inline bool world_to_screentight(
-			glm::vec3 world,
-			glm::vec2* screen,
-			const ::CameraProjectionState& projection)
-		{
-			if (!projection.valid)
-				return false;
-
-			const glm::highp_mat4& cameraMatrix = projection.viewMatrix;
-
-			const auto pos_vec = glm::vec3{ cameraMatrix[3][0], cameraMatrix[3][1], cameraMatrix[3][2] };
-
-			const auto z = glm::dot(pos_vec, world) + cameraMatrix[3][3];
-
-			if (z < 0.50f)
-				return false;
-
-			auto x = glm::dot(glm::vec3{ cameraMatrix[0][0], cameraMatrix[0][1], cameraMatrix[0][2] }, world) + cameraMatrix[0][3];
-			auto y = glm::dot(glm::vec3{ cameraMatrix[1][0], cameraMatrix[1][1], cameraMatrix[1][2] }, world) + cameraMatrix[1][3];
-
-			const float screen_center_x = espGlobals::gameRes.x * 0.5f;
-			const float screen_center_y = espGlobals::gameRes.y * 0.5f;
-
-			if (projection.usingOptic)
-			{
-				float AngleRadHalf = (M_PI / 180) * projection.gameFOV * 0.5f;
-				float AngleCtg = cosf(AngleRadHalf) / sinf(AngleRadHalf);
-
-				x /= AngleCtg * projection.gameAspect * 0.5f;
-				y /= AngleCtg * 0.5f;
-
-			}
-
-
-			if (screen)
-			{
-				*screen =
-				{
-					screen_center_x * (1.f + x / z),
-					screen_center_y * (1.f - y / z)
-				};
-			}
-
-			return true;
-
-		}
-
-		inline bool world_to_screentight(glm::vec3 world, glm::vec2* screen)
-		{
-			const ::CameraProjectionSnapshot projection =
-				camera.getProjectionSnapshot();
-
-			return projection &&
-				world_to_screentight(world, screen, *projection);
-		}
-
-		inline bool world_to_screen(
-			glm::vec3 world,
-			glm::vec2* screen,
-			const ::CameraProjectionState& projection)
-		{
-			if (!projection.valid)
-				return false;
-
-			const glm::highp_mat4& cameraMatrix = projection.viewMatrix;
-
-			const auto pos_vec = glm::vec3{
-				cameraMatrix[3][0],
-				cameraMatrix[3][1],
-				cameraMatrix[3][2]
-			};
-
-			const float z = glm::dot(pos_vec, world) + cameraMatrix[3][3];
-
-			// Behind camera / too close
-			if (!std::isfinite(z) || z <= 0.010f)
-				return false;
-
-			float x = glm::dot(glm::vec3{
-				cameraMatrix[0][0],
-				cameraMatrix[0][1],
-				cameraMatrix[0][2]
-				}, world) + cameraMatrix[0][3];
-
-			float y = glm::dot(glm::vec3{
-				cameraMatrix[1][0],
-				cameraMatrix[1][1],
-				cameraMatrix[1][2]
-				}, world) + cameraMatrix[1][3];
-
-			if (projection.usingOptic)
-			{
-				float angleRadHalf = (PI / 180.0f) * projection.gameFOV * 0.5f;
-				float angleCtg = cosf(angleRadHalf) / sinf(angleRadHalf);
-
-				x /= angleCtg * projection.gameAspect * 0.5f;
-				y /= angleCtg * 0.5f;
-			}
-
-			const float ndcX = x / z;
-			const float ndcY = y / z;
-
-			if (!std::isfinite(ndcX) || !std::isfinite(ndcY))
-				return false;
-
-			// Only return true if actually inside screen bounds.
-			constexpr float edgeBuffer = 1.5f;
-
-			if (ndcX < -edgeBuffer || ndcX > edgeBuffer ||
-				ndcY < -edgeBuffer || ndcY > edgeBuffer)
-			{
-				return false;
-			}
-
-			const float screen_center_x = espGlobals::gameRes.x * 0.5f;
-			const float screen_center_y = espGlobals::gameRes.y * 0.5f;
-
-			if (screen)
-			{
-				*screen =
-				{
-					screen_center_x * (1.0f + ndcX),
-					screen_center_y * (1.0f - ndcY)
-				};
-			}
-
-			return true;
-		}
-
 		inline bool world_to_screen(glm::vec3 world, glm::vec2* screen)
 		{
-			const ::CameraProjectionSnapshot projection =
-				camera.getProjectionSnapshot();
+			if (!screen)
+				return false;
+
+			const ::CameraManagerSnapshot projection =
+				cameraManagerTest.snapshot();
 
 			return projection &&
-				world_to_screen(world, screen, *projection);
+				::CameraManager::worldToScreen(
+					*projection,
+					world,
+					*screen,
+					espGlobals::gameRes.x,
+					espGlobals::gameRes.y);
 		}
 	}
 }

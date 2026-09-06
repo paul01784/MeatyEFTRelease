@@ -162,6 +162,7 @@ public:
 	uint64_t instance;
 	bool isLocal;
 	PlayerKind kind{ PlayerKind::Unknown };
+	PlayerType type{ PlayerType::Default };
 	std::string className;
 	std::string name;
 	std::string groupId;

@@ -43,11 +43,14 @@ std::optional<Player> LocalPlayer::tryCreate(uint64_t instance, std::string_view
     if (!player.has_value())
         return std::nullopt;
 
+    initialize(*player);
+
     const bool isSavage = (static_cast<uint32_t>(player->playerSide) & static_cast<uint32_t>(EPlayerSide::Savage)) != 0;
     mainGame.localIsSavage = isSavage;
     mainGame.localplayerProfile = player->P_Profile;
     player->isPlayer = !isSavage;
     player->isPlayerScav = isSavage;
+	player->type = isSavage ? PlayerType::PScav : PlayerType::PMC;
 
     try
     {

@@ -9,6 +9,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -66,6 +67,7 @@ private:
         std::unordered_set<std::string> wishlistIds;
         std::unordered_map<std::string, glm::vec4> activeFilterItems;
         std::unordered_set<std::string> categoryLootIds;
+        bool battlePassInfoDocumentsSelected = false;
     };
 
 private:
@@ -143,6 +145,9 @@ long GetLootSelectedPrice(long marketPrice, long traderPrice);
 long GetLootDisplayPrice(const LootEntity& lootItem);
 std::string FormatLootPrice(long price);
 std::string GetLootDisplayName(const LootEntity& lootItem);
+std::string GetCorpseOwnerLabel(const LootEntity& corpse);
+bool ShouldRenderCorpseOwnerLabel(std::string_view label);
+std::string GetRenderableCorpseOwnerLabel(const LootEntity& corpse);
 
 std::string getContainerName(const std::string& bsgid);
 std::string GetQuestItemDisplayName(const std::string& itemId);

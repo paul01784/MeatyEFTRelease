@@ -1,12 +1,12 @@
 #include "ReadOnlyAim.h"
-#include "../../Unity/Camera.h"
+#include "../../Unity/cameraManager.h"
 #include "FireportTracker.h"
 #include "../../../UI/globals.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <limits>
 #include <cmath>
+#include <limits>
 #include "../../../UI/makcu.h"
 
 ReadOnlyAim readOnlyAim;
@@ -45,24 +45,14 @@ namespace
 
 AimReferencePoint ReadOnlyAim::resolveAimReference() const
 {
-    const glm::vec2 screenCentre(espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
-    if (aimGlobals::aimReference != AimReference::Fireport)
-        return {screenCentre, true, false};
-
     const FireportPose pose = g_fireport.snapshot();
     if (pose.aimRefOk)
-        return {pose.screenEnd, true, true, false};
+        return {pose.screenEnd, true};
 
-    // Some weapons do not expose a usable fireport, and the projected ray
-    // can also leave the screen. Keep aim usable by falling back to the
-    // crosshair reference until a valid fireport is available again
-    return {screenCentre, true, true, true};
+    return {};
 }
 
-std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity, float maxDistance,
-                                                             float fovRadiusPx, const glm::vec2& aimRef,
-                                                             const AimPredictionContext& prediction,
-                                                             bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
 {
     if (!Utils::valid_pointer(entity.instance) ||
         entity.instance == mainGame.localPlayerPtr ||
@@ -89,7 +79,6 @@ std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity,
         return std::nullopt;
 
     boneListIndexes selectedBone = entity.isAi ? aimGlobals::aiBone : aimGlobals::pmcBone;
-
     glm::vec3 selectedBoneWorldPos{};
     const bool foundSelectedBone = useClosestBoneToFireport
         ? getClosestBoneToAimReference(entity, aimRef, selectedBone, selectedBoneWorldPos)
@@ -142,8 +131,7 @@ std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity,
     return result;
 }
 
-bool ReadOnlyAim::getSelectedBonePosition(const Player& entity, boneListIndexes selectedBone,
-                                          glm::vec3& outPosition) const
+bool ReadOnlyAim::getSelectedBonePosition(const Player& entity, boneListIndexes selectedBone, glm::vec3& outPosition) const
 {
     const size_t boneIndex = static_cast<size_t>(selectedBone);
 
@@ -166,9 +154,7 @@ bool ReadOnlyAim::getSelectedBonePosition(const Player& entity, boneListIndexes 
     return true;
 }
 
-bool ReadOnlyAim::getClosestBoneToAimReference(const Player& entity, const glm::vec2& aimRef,
-                                                boneListIndexes& outBone,
-                                                glm::vec3& outPosition) const
+bool ReadOnlyAim::getClosestBoneToAimReference(const Player& entity, const glm::vec2& aimRef, boneListIndexes& outBone, glm::vec3& outPosition) const
 {
     bool foundBone = false;
     float closestDistanceSq = std::numeric_limits<float>::max();
@@ -198,11 +184,7 @@ bool ReadOnlyAim::getClosestBoneToAimReference(const Player& entity, const glm::
     return foundBone;
 }
 
-std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player>& snapshot, TargetMode mode,
-                                                        float maxDistance, float fovRadiusPx,
-                                                        const glm::vec2& aimRef,
-                                                        const AimPredictionContext& prediction,
-                                                        bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player>& snapshot, TargetMode mode, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
 {
     std::optional<TargetResult> bestTarget;
 
@@ -246,11 +228,7 @@ std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player
     return bestTarget;
 }
 
-std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vector<Player>& snapshot,
-                                                                 uint64_t instance, float maxDistance,
-                                                                 float fovRadiusPx, const glm::vec2& aimRef,
-                                                                 const AimPredictionContext& prediction,
-                                                                 bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vector<Player>& snapshot,uint64_t instance, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
 {
     if (!instance)
         return std::nullopt;
@@ -309,20 +287,20 @@ void ReadOnlyAim::aimTask()
 
     const bool keyIsHeld = keyboard->IsKeyDown(static_cast<int>(keyGlobals::aimKey));
 
-    if (!camera.cameraPointersReady()) {
+    const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
+    if (!cameraSnapshot || !cameraSnapshot->valid) {
         clearTargetState(keyIsHeld);
         return;
     }
 
-    //g_fireport.update(mainGame.localPlayerPtr);
     const AimReferencePoint aimRefPoint = resolveAimReference();
-    const glm::vec2 aimRef = aimRefPoint.valid ? aimRefPoint.pos
-                                               : glm::vec2(espGlobals::gameRes.x * 0.5f, espGlobals::gameRes.y * 0.5f);
-    const bool fireportReady = aimRefPoint.valid;
-    const bool useClosestBoneToFireport =
-        aimGlobals::aimClosestBoneToFireport &&
-        aimRefPoint.fireportMode &&
-        !aimRefPoint.fallbackToCrosshair;
+    if (!aimRefPoint.valid)
+    {
+        clearTargetState(keyIsHeld);
+        return;
+    }
+
+    const glm::vec2 aimRef = aimRefPoint.pos;
 
     const PlayerSnapshot snapshotHandle = registeredPlayers.getCacheSnapshot();
     const PlayerCollection& snapshot = *snapshotHandle;
@@ -336,6 +314,7 @@ void ReadOnlyAim::aimTask()
         ? std::clamp(aimGlobals::aimFOV, 1.0f, 200.0f)
         : 1.0f;
     const bool targetLockEnabled = aimGlobals::targetLock;
+    const bool useClosestBoneToFireport = aimGlobals::aimClosestBoneToFireport;
 
     AimPredictionContext prediction{};
 
@@ -362,16 +341,14 @@ void ReadOnlyAim::aimTask()
         }
     }
 
-    const auto liveTarget = fireportReady
-        ? findBestTarget(
-            snapshot,
-            aimGlobals::targetMode,
-            maxDistance,
-            fovRadius,
-            aimRef,
-            prediction,
-            useClosestBoneToFireport)
-        : std::nullopt;
+    const auto liveTarget = findBestTarget(
+        snapshot,
+        aimGlobals::targetMode,
+        maxDistance,
+        fovRadius,
+        aimRef,
+        prediction,
+        useClosestBoneToFireport);
 
     std::optional<TargetResult> previousActiveTarget;
     bool wasKeyHeld = false;
@@ -412,7 +389,7 @@ void ReadOnlyAim::aimTask()
         targetToMove = m_activeTarget;
     }
 
-    if (keyIsHeld && fireportReady && targetToMove.has_value())
+    if (keyIsHeld && targetToMove.has_value())
         moveToTargetBone(*targetToMove, aimRef);
     else
     {

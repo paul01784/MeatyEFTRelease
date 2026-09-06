@@ -3,6 +3,7 @@
 #include "../UI/globals.h"
 #include "../UI/debug.h"
 #include "../UI/perfMonitor.h"
+#include "../Tarkov/Unity/UnityOffsets.h"
 
 #include <thread>
 #include <iostream>
@@ -1149,6 +1150,8 @@ bool Memory::Init(bool memMap, bool debug)
 			current_process.base_address = 0;
 			current_process.base_size = 0;
 			current_process.process_name.clear();
+
+			ClearTarkovPointerSnapshot();
 		};
 
 	auto closeAndReset = [this, &clearProcessState]()
@@ -1596,6 +1599,8 @@ bool Memory::Init(bool memMap, bool debug)
 					std::memory_order_release
 				);
 
+				PreloadTarkovPointerSnapshot();
+
 				MemoryLogInfo("Target process initialised successfully");
 
 				mem.GetKeyboard()->InitKeyboard();
@@ -1662,6 +1667,8 @@ void Memory::CloseAndReset()
 		current_process.base_address = 0;
 		current_process.base_size = 0;
 		current_process.process_name.clear();
+
+		ClearTarkovPointerSnapshot();
 
 		if (vHandle)
 		{
@@ -1820,16 +1827,15 @@ PEB Memory::GetProcessPeb()
 	return peb;
 }
 
-uintptr_t Memory::GetBaseDaddy(const std::string& module_name)
+bool Memory::TryGetModuleInfo(const std::string& moduleName, uintptr_t& moduleBase, size_t& moduleSize) const
 {
-	if (!vHandle || !current_process.PID || module_name.empty())
-	{
-		MemoryLogError("GetBaseDaddy failed: invalid args");
-		return 0;
-	}
+	moduleBase = 0;
+	moduleSize = 0;
 
-	std::wstring wideName(module_name.begin(), module_name.end());
+	if (!vHandle || !current_process.PID || moduleName.empty())
+		return false;
 
+	std::wstring wideName(moduleName.begin(), moduleName.end());
 	PVMMDLL_MAP_MODULEENTRY moduleInfo = nullptr;
 
 	if (!VMMDLL_Map_GetModuleFromNameW(
@@ -1840,41 +1846,185 @@ uintptr_t Memory::GetBaseDaddy(const std::string& module_name)
 		VMMDLL_MODULE_FLAG_NORMAL
 	))
 	{
-		MemoryLogError("Could not find base address for module: " + module_name);
+		return false;
+	}
+
+	moduleBase = moduleInfo->vaBase;
+	moduleSize = moduleInfo->cbImageSize;
+	return moduleBase != 0;
+}
+
+uintptr_t Memory::GetBaseDaddy(const std::string& module_name)
+{
+	uintptr_t moduleBase = 0;
+	size_t moduleSize = 0;
+
+	if (!TryGetModuleInfo(module_name, moduleBase, moduleSize))
+	{
+		MemoryLogError(
+			module_name.empty() || !vHandle || !current_process.PID
+			? "GetBaseDaddy failed: invalid args"
+			: "Could not find base address for module: " + module_name);
 		return 0;
 	}
 
-	base = moduleInfo->vaBase;
-	baseSize = moduleInfo->cbImageSize;
+	
+	base = moduleBase;
+	baseSize = moduleSize;
 
-	return moduleInfo->vaBase;
+	return moduleBase;
 }
 
 size_t Memory::GetBaseSize(const std::string& module_name)
 {
-	if (!vHandle || !current_process.PID || module_name.empty())
+	uintptr_t moduleBase = 0;
+	size_t moduleSize = 0;
+
+	if (!TryGetModuleInfo(module_name, moduleBase, moduleSize))
 	{
-		MemoryLogError("GetBaseSize failed: invalid args");
+		MemoryLogError(
+			module_name.empty() || !vHandle || !current_process.PID
+			? "GetBaseSize failed: invalid args"
+			: "Could not find base size for module: " + module_name);
 		return 0;
 	}
 
-	std::wstring wideName(module_name.begin(), module_name.end());
+	return moduleSize;
+}
 
-	PVMMDLL_MAP_MODULEENTRY moduleInfo = nullptr;
+void Memory::ClearTarkovPointerSnapshot()
+{
+	std::lock_guard<std::mutex> lock(tarkovPointersMutex);
+	tarkovPointers = {};
+}
 
-	if (!VMMDLL_Map_GetModuleFromNameW(
-		vHandle,
-		current_process.PID,
-		const_cast<LPWSTR>(wideName.c_str()),
-		&moduleInfo,
-		VMMDLL_MODULE_FLAG_NORMAL
-	))
+void Memory::PreloadTarkovPointerSnapshot()
+{
+	constexpr const char* kGameObjectManagerSignature = "48 89 05 ?? ?? ?? ?? 48 83 C4 ?? C3 33 C9";
+	constexpr uint64_t kGameObjectManagerLastActiveNode = 0x20;
+	constexpr uint64_t kGameObjectManagerActiveNodes = 0x28;
+
+	TarkovPointerSnapshot snapshot{};
+	uintptr_t unityPlayerBase = 0;
+	uintptr_t gameAssemblyBase = 0;
+	size_t unityPlayerSize = 0;
+	size_t gameAssemblySize = 0;
+
+	if (TryGetModuleInfo("UnityPlayer.dll", unityPlayerBase, unityPlayerSize))
 	{
-		MemoryLogError("Could not find base size for module: " + module_name);
-		return 0;
+		snapshot.unityPlayerBase = unityPlayerBase;
+		snapshot.unityPlayerSize = unityPlayerSize;
 	}
 
-	return moduleInfo->cbImageSize;
+	if (TryGetModuleInfo("GameAssembly.dll", gameAssemblyBase, gameAssemblySize))
+	{
+		snapshot.gameAssemblyBase = gameAssemblyBase;
+	}
+
+	if (IsValidPointer(snapshot.unityPlayerBase))
+	{
+		snapshot.gameObjectManagerSlot = snapshot.unityPlayerBase + UnityOffsets::GameObjectManager;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(tarkovPointersMutex);
+		tarkovPointers = snapshot;
+	}
+
+	RefreshTarkovPointerSnapshot();
+
+	if (IsValidPointer(GetTarkovPointerSnapshot().gameObjectManager) ||
+		!IsValidPointer(snapshot.unityPlayerBase) ||
+		snapshot.unityPlayerSize == 0)
+	{
+		return;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(tarkovPointersMutex);
+		if (tarkovPointers.unityPlayerBase == snapshot.unityPlayerBase)
+			tarkovPointers.gameObjectManagerSignatureAttempted = true;
+	}
+
+	const uint64_t signature = FindSignature(
+		kGameObjectManagerSignature,
+		snapshot.unityPlayerBase,
+		snapshot.unityPlayerBase + snapshot.unityPlayerSize,
+		0,
+		DmaCacheMode::Uncached);
+
+	std::int32_t displacement = 0;
+	uint64_t resolvedSlot = 0;
+	uint64_t resolvedManager = 0;
+	uint64_t activeNodes = 0;
+	uint64_t lastActiveNode = 0;
+
+	if (IsValidPointer(signature) &&
+		TryRead(signature + 3, displacement, DmaCacheMode::Uncached))
+	{
+		resolvedSlot = static_cast<uint64_t>(
+			static_cast<int64_t>(signature) + 7 + displacement);
+	}
+
+	if (IsValidPointer(resolvedSlot) &&
+		TryRead(resolvedSlot, resolvedManager, DmaCacheMode::Uncached) &&
+		IsValidPointer(resolvedManager) &&
+		TryRead(
+			resolvedManager + kGameObjectManagerActiveNodes,
+			activeNodes,
+			DmaCacheMode::Uncached) &&
+		TryRead(
+			resolvedManager + kGameObjectManagerLastActiveNode,
+			lastActiveNode,
+			DmaCacheMode::Uncached) &&
+		IsValidPointer(activeNodes) &&
+		IsValidPointer(lastActiveNode))
+	{
+		std::lock_guard<std::mutex> lock(tarkovPointersMutex);
+		if (tarkovPointers.unityPlayerBase == snapshot.unityPlayerBase &&
+			!IsValidPointer(tarkovPointers.gameObjectManager))
+		{
+			tarkovPointers.gameObjectManagerSlot = resolvedSlot;
+			tarkovPointers.gameObjectManager = resolvedManager;
+			tarkovPointers.gameObjectManagerResolvedBySignature = true;
+		}
+	}
+}
+
+void Memory::RefreshTarkovPointerSnapshot()
+{
+	uint64_t gameObjectManagerSlot = 0;
+
+	{
+		std::lock_guard<std::mutex> lock(tarkovPointersMutex);
+		gameObjectManagerSlot = tarkovPointers.gameObjectManagerSlot;
+	}
+
+	uint64_t gameObjectManager = 0;
+	bool readSucceeded = false;
+	if (IsValidPointer(gameObjectManagerSlot))
+	{
+		uint64_t candidate = 0;
+		readSucceeded = TryRead(
+			gameObjectManagerSlot,
+			candidate,
+			DmaCacheMode::Uncached);
+		if (readSucceeded && IsValidPointer(candidate))
+		{
+			gameObjectManager = candidate;
+		}
+	}
+
+	std::lock_guard<std::mutex> lock(tarkovPointersMutex);
+	if (readSucceeded &&
+		tarkovPointers.gameObjectManagerSlot == gameObjectManagerSlot)
+		tarkovPointers.gameObjectManager = gameObjectManager;
+}
+
+TarkovPointerSnapshot Memory::GetTarkovPointerSnapshot() const
+{
+	std::lock_guard<std::mutex> lock(tarkovPointersMutex);
+	return tarkovPointers;
 }
 
 uintptr_t Memory::GetExportTableAddress(std::string import, std::string process, std::string module)
@@ -3080,8 +3230,12 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 	return executed;
 }
 
-Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc)
+Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc, std::span<DWORD> bytesRead)
 {
+	std::fill(bytesRead.begin(), bytesRead.end(), 0);
+	if (!bytesRead.empty() && bytesRead.size() < requestCount)
+		return TryScatterReadResult::Failed;
+
 	if (!requests || requestCount == 0)
 		return TryScatterReadResult::Failed;
 
@@ -3137,7 +3291,7 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 			request.address,
 			request.size,
 			static_cast<PBYTE>(request.buffer),
-			nullptr))
+			bytesRead.empty() ? nullptr : &bytesRead[i]))
 		{
 			prepared = false;
 			failedAddress = request.address;

@@ -168,11 +168,10 @@ void RegisteredPlayers::updateEntity()
                 continue;
             }
 
-            if (isProtectedLocalGroupMember(player, rosterProtectionActive))
+            if (isProtectedLocalGroupMember(player, rosterProtectionActive) && !Utils::valid_pointer(player.P_CorpseClass))
             {
                 player.isDead = false;
                 player.hasExfiled = false;
-                player.P_CorpseClass = 0;
             }
 
             if (player.isDead || player.hasExfiled)

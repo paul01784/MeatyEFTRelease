@@ -236,6 +236,22 @@ namespace
         static_cast<int>(boneListIndexes::RFoot),
     };
 
+    constexpr int kFireportAimBoneSlots[] =
+    {
+        static_cast<int>(boneListIndexes::Pelvis),
+        static_cast<int>(boneListIndexes::Head),
+        static_cast<int>(boneListIndexes::Neck),
+        static_cast<int>(boneListIndexes::Spine),
+        static_cast<int>(boneListIndexes::LForearm),
+        static_cast<int>(boneListIndexes::LPalm),
+        static_cast<int>(boneListIndexes::RForearm),
+        static_cast<int>(boneListIndexes::RPalm),
+        static_cast<int>(boneListIndexes::LThigh),
+        static_cast<int>(boneListIndexes::LFoot),
+        static_cast<int>(boneListIndexes::RThigh),
+        static_cast<int>(boneListIndexes::RFoot),
+    };
+
     enum class BoneReadKind : uint8_t
     {
         Normal
@@ -1343,8 +1359,18 @@ namespace
 
             if (aimGlobals::aimEnabled)
             {
-                QueueBone(static_cast<int>(aimGlobals::aiBone));
-                QueueBone(static_cast<int>(aimGlobals::pmcBone));
+                if (aimGlobals::aimClosestBoneToFireport)
+                {
+                    for (const int slot : kFireportAimBoneSlots)
+                    {
+                        QueueBone(slot);
+                    }
+                }
+                else
+                {
+                    QueueBone(static_cast<int>(aimGlobals::aiBone));
+                    QueueBone(static_cast<int>(aimGlobals::pmcBone));
+                }
             }
         }
 
@@ -1395,13 +1421,11 @@ void RegisteredPlayers::boneTask()
 
         const float drawPlayerDistance = static_cast<float>(espGlobals::getMaximumPlayerDrawDistance());
         const bool closestFireportBoneEnabled =
-            aimGlobals::aimEnabled &&
-            aimGlobals::aimReference == AimReference::Fireport &&
-            aimGlobals::aimClosestBoneToFireport;
+            aimGlobals::aimEnabled && aimGlobals::aimClosestBoneToFireport;
         const float fullSkeletonDistance = closestFireportBoneEnabled
             ? (std::max)(drawPlayerDistance, static_cast<float>(aimGlobals::aimDistance))
             : drawPlayerDistance;
-        const CameraProjectionSnapshot projection = camera.getProjectionSnapshot();
+        const CameraManagerSnapshot projection = cameraManagerTest.snapshot();
 
         const auto IsFiniteVector = [](const glm::vec3& value) -> bool
             {
@@ -1437,7 +1461,12 @@ void RegisteredPlayers::boneTask()
 
                 glm::vec2 screenPosition{};
 
-                if (!Utils::Camera::world_to_screen(PlayerPosition::getBestBasePosition(player), &screenPosition, *projection))
+                if (!CameraManager::worldToScreen(
+                    *projection,
+                    PlayerPosition::getBestBasePosition(player),
+                    screenPosition,
+                    espGlobals::gameRes.x,
+                    espGlobals::gameRes.y))
                 {
                     return false;
                 }
@@ -1587,8 +1616,8 @@ void RegisteredPlayers::boneTask()
                 pending.snapshot.bonePtrs = player.bonePtrs;
                 pending.snapshot.transformCache = player.boneTransformCache;
 
-                // Every player gets Base/LFoot/RFoot. Expand to the full
-                // skeleton within a small boundary beyond the viewport.
+                // Every player gets Base/LFoot/RFoot. A full scan is also
+                // needed when closest-bone-to-fireport selection is enabled.
                 pending.readFullBoneList =
                     runFullBonePass &&
                     (espGlobals::drawSkeletons || closestFireportBoneEnabled) &&

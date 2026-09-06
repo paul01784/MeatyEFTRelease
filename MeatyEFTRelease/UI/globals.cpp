@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.30";
+std::string globals::appVersion = "1.0.31";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -31,7 +31,7 @@ double globals::taskWishManager = 1000;
 double globals::taskTripWire = 100;
 double globals::taskKeyManager = 25;
 // Poll frequently so a busy DMA gate can be retried on the next scheduler tick.
-// Camera::cameraTask limits successful matrix reads to its own target interval.
+// CameraManager enforces its own four-millisecond update interval.
 double globals::taskCamera = 1;
 double globals::taskFireport = 16;
 // Lightweight scheduler tick; RunCacheMaintenance enforces the actual
@@ -141,6 +141,7 @@ int espGlobals::crosshairType = 0;
 int espGlobals::crosshairSize = 2;
 bool espGlobals::drawHeadDot = false;
 float espGlobals::headDotSize = 1.5f;
+bool espGlobals::drawFireportLine = true;
 bool espGlobals::runEsp = false;
 int espGlobals::drawExfilDist = 1000;
 bool espGlobals::drawExfil = true;
@@ -210,15 +211,13 @@ boneListIndexes aimGlobals::aiBone = boneListIndexes::Head;
 boneListIndexes aimGlobals::pmcBone = boneListIndexes::Head;
 TargetMode aimGlobals::targetMode = TargetMode::FOV;
 bool aimGlobals::targetLock = false;
+bool aimGlobals::aimClosestBoneToFireport = false;
 float aimGlobals::aimSmooth = 4.f;
 float aimGlobals::aimSpeedPixelsPerSecond = 1200.f;
 float aimGlobals::aimDeadzonePixels = 2.5f;
 float aimGlobals::aimOffsetX = 0.f;
 float aimGlobals::aimOffsetY = 0.f;
-AimReference aimGlobals::aimReference = AimReference::Crosshair;
-bool aimGlobals::aimClosestBoneToFireport = false;
 bool aimGlobals::showAimFovRing = true;
-bool aimGlobals::drawFireportLine = true;
 
 
 glm::vec4 coloursGlobals::playerPMC = { 1,1,1,1 };

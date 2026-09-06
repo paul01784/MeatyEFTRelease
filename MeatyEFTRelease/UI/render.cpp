@@ -637,6 +637,11 @@ static void renderMenuSettings()
                     20,
                     "%d",
                     true));
+                saveIfChanged(menuLayout::ToggleRow(
+                    "Draw Fireport Line",
+                    "drawFireportLine",
+                    &espGlobals::drawFireportLine));
+
             }
 
             if (menuLayout::Section("ESP Exfils"))
@@ -1085,9 +1090,8 @@ static void renderDebugWindow()
                 static MemoryTrafficStats traffic{};
                 static DxFuserPerformanceSnapshot fuserPerformance{};
                 static PlayerSnapshotTelemetry playerTelemetry{};
-                static CameraProjectionSnapshot cameraProjection;
+                static CameraManagerSnapshot cameraProjection;
                 static double cameraAgeMs = -1.0;
-                static std::uint64_t cameraBusySkips = 0;
                 static auto lastRefresh =
                     std::chrono::steady_clock::time_point{};
 
@@ -1104,8 +1108,7 @@ static void renderDebugWindow()
                     fuserPerformance =
                         g_DxWindow.GetPerformanceSnapshot();
                     playerTelemetry = registeredPlayers.getSnapshotTelemetry();
-                    cameraProjection = camera.getProjectionSnapshot();
-                    cameraBusySkips = camera.getBusyReadSkips();
+                    cameraProjection = cameraManagerTest.snapshot();
 
                     cameraAgeMs = -1.0;
                     if (cameraProjection &&
@@ -1289,17 +1292,17 @@ static void renderDebugWindow()
                     cameraProjection && cameraProjection->valid
                     ? freshnessColour(cameraAgeMs, globals::taskCamera)
                     : ImVec4(1.0f, 0.30f, 0.30f, 1.0f),
-                    "Camera (%s): %.1f ms old | rolling %.1f ms | v%llu | busy skips %llu",
+                    "Camera (%s): %.1f ms old | v%llu | busy skips %llu",
                     cameraProjection && cameraProjection->valid
                     ? "VALID"
                     : "INVALID",
                     cameraAgeMs,
-                    cameraProjection
-                    ? cameraProjection->averageIntervalMs
-                    : 0.0,
                     static_cast<unsigned long long>(
                         cameraProjection ? cameraProjection->version : 0),
-                    static_cast<unsigned long long>(cameraBusySkips));
+                    static_cast<unsigned long long>(
+                        cameraProjection
+                        ? cameraProjection->busyReadSkips
+                        : 0));
 
                 ImGui::TextColored(
                     freshnessColour(
@@ -1500,6 +1503,7 @@ static void renderDebugWindow()
                     {
                         static MemoryConnectionStats connection{};
                         static MemoryTrafficStats traffic{};
+                        static TarkovPointerSnapshot tarkovPointers{};
                         static auto lastStatsRefresh =
                             std::chrono::steady_clock::time_point{};
 
@@ -1512,6 +1516,9 @@ static void renderDebugWindow()
                         {
                             connection = mem.GetConnectionStats();
                             traffic = mem.GetTrafficStats();
+                            mem.RefreshTarkovPointerSnapshot();
+                            tarkovPointers =
+                                mem.GetTarkovPointerSnapshot();
                             lastStatsRefresh = now;
                         }
 
@@ -1582,6 +1589,57 @@ static void renderDebugWindow()
                                 static_cast<int>(
                                     std::size(mainGame.player_buffer))),
                             playerSnapshot->size());
+
+                        if (ImGui::CollapsingHeader(
+                            "Preloaded module and Unity pointers"))
+                        {
+                            DebugTextPtr(
+                                "UnityPlayer.dll base",
+                                tarkovPointers.unityPlayerBase);
+                            DebugTextPtr(
+                                "GameAssembly.dll base",
+                                tarkovPointers.gameAssemblyBase);
+                            DebugTextPtr(
+                                "GameObjectManager slot",
+                                tarkovPointers.gameObjectManagerSlot);
+                            ImGui::Text(
+                                "GameObjectManager offset: 0x%llX",
+                                static_cast<unsigned long long>(
+                                    tarkovPointers.gameObjectManagerSlot >=
+                                            tarkovPointers.unityPlayerBase
+                                    ? tarkovPointers.gameObjectManagerSlot -
+                                        tarkovPointers.unityPlayerBase
+                                    : 0));
+                            DebugTextPtr(
+                                "GameObjectManager",
+                                tarkovPointers.gameObjectManager);
+                            ImGui::Text(
+                                "GOM resolution: %s",
+                                tarkovPointers.gameObjectManagerResolvedBySignature
+                                ? "connection signature fallback"
+                                : tarkovPointers.gameObjectManagerSignatureAttempted
+                                ? "fixed offset; fallback did not resolve"
+                                : "fixed UnityPlayer offset");
+
+                            if (ImGui::Button("Refresh GameObjectManager"))
+                            {
+                                mem.RefreshTarkovPointerSnapshot();
+                                tarkovPointers =
+                                    mem.GetTarkovPointerSnapshot();
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Rescan GOM slot"))
+                            {
+                                mem.PreloadTarkovPointerSnapshot();
+                                tarkovPointers =
+                                    mem.GetTarkovPointerSnapshot();
+                            }
+
+                            ImGui::TextDisabled(
+                                "Module bases are captured at target attach; "
+                                "the GOM value is reread from its cached "
+                                "UnityPlayer slot.");
+                        }
 
                         ImGui::SeparatorText("DMA Traffic");
 
@@ -2933,28 +2991,26 @@ static void renderDebugWindow()
                     }
                     if (ImGui::BeginTabItem("Camera"))
                     {
-                        const CameraProjectionSnapshot cameraSnapshot =
-                            camera.getProjectionSnapshot();
-                        const CameraProjectionState& cameraState =
+                        const CameraManagerSnapshot cameraSnapshot =
+                            cameraManagerTest.snapshot();
+                        const CameraManagerState& cameraState =
                             *cameraSnapshot;
-                        const auto& matrixDebug = cameraState.matrixDebug;
-                        const bool fpsReady = cameraState.fpsPointersReady;
-                        const bool opticReady = cameraState.opticPointersReady;
+                        const bool fpsReady =
+                            Utils::valid_pointer(cameraState.fpsCamera);
+                        const bool opticReady =
+                            Utils::valid_pointer(cameraState.opticCamera);
                         const bool fovValid =
-                            std::isfinite(cameraState.gameFOV) &&
-                            cameraState.gameFOV > 1.0f &&
-                            cameraState.gameFOV < 180.0f;
+                            std::isfinite(cameraState.fov) &&
+                            cameraState.fov > 1.0f &&
+                            cameraState.fov < 180.0f;
                         const bool aspectValid =
-                            std::isfinite(cameraState.gameAspect) &&
-                            cameraState.gameAspect > 0.1f &&
-                            cameraState.gameAspect < 10.0f;
-                        const bool activeMatrixValid =
-                            cameraState.usingOptic
-                            ? matrixDebug.opticMatrixValid
-                            : matrixDebug.fpsMatrixValid;
+                            std::isfinite(cameraState.aspect) &&
+                            cameraState.aspect > 0.1f &&
+                            cameraState.aspect < 10.0f;
                         const bool cameraHealthy =
-                            cameraState.valid && fpsReady && fovValid &&
-                            aspectValid && activeMatrixValid;
+                            cameraState.valid && fpsReady &&
+                            (!cameraState.usingOptic ||
+                                (opticReady && fovValid && aspectValid));
 
                         ImGui::SeparatorText("Status");
                         ImGui::TextColored(
@@ -2967,96 +3023,103 @@ static void renderDebugWindow()
                         ImGui::Text(
                             "| Active %s | FOV %.2f | Aspect %.3f",
                             cameraState.usingOptic ? "OPTIC" : "FPS",
-                            cameraState.gameFOV,
-                            cameraState.gameAspect);
+                            cameraState.fov,
+                            cameraState.aspect);
                         ImGui::Text(
-                            "FPS path: %s | Optic path: %s | Scoped: %s",
+                            "FPS path: %s | Optic path: %s | ADS: %s | Scoped: %s",
                             fpsReady ? "READY" : "MISSING",
                             opticReady ? "READY" : "MISSING",
-                            mainGame.localIsScoped ? "YES" : "NO");
+                            cameraState.ads ? "YES" : "NO",
+                            cameraState.scoped ? "YES" : "NO");
+                        ImGui::Text(
+                            "Zoom %.2fx | Sight %d/%zu | Stacked match: %s",
+                            cameraState.magnification,
+                            cameraState.activeSightVectorIndex,
+                            cameraState.sights.size(),
+                            cameraState.stackedSightResolved ? "YES" : "NO");
 
-                        if (mainGame.localIsScoped && !opticReady)
+                        if (cameraState.scoped && !opticReady)
                         {
                             ImGui::TextColored(
                                 ImVec4(1.0f, 0.65f, 0.20f, 1.0f),
                                 "Warning: scoped, but the optic camera path is unavailable.");
                         }
-                        if (!activeMatrixValid)
+                        if (!cameraState.valid)
                         {
                             ImGui::TextColored(
                                 ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
                                 "Warning: the active view matrix is invalid.");
                         }
-                        if (!fovValid || !aspectValid)
+                        if (cameraState.usingOptic &&
+                            (!fovValid || !aspectValid))
                         {
                             ImGui::TextColored(
                                 ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
                                 "Warning: lens values are outside their expected range.");
                         }
-                        if (matrixDebug.localScoped &&
-                            matrixDebug.opticMatrixActive &&
-                            !cameraState.usingOptic)
-                        {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.65f, 0.20f, 1.0f),
-                                "Warning: optic activity was detected, but FPS is selected.");
-                        }
-                        if (!matrixDebug.opticMatrixActive &&
-                            cameraState.usingOptic)
-                        {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.65f, 0.20f, 1.0f),
-                                "Warning: optic is selected while its matrix is inactive.");
-                        }
-
-                        if (ImGui::Button("Refresh pointers"))
-                        {
-                            camera.getCameraPtrs();
-                            camera.getMatrixPtrs();
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("Clear camera cache"))
-                            camera.clearCache();
-
                         if (ImGui::CollapsingHeader("Optic selection details"))
                         {
-                            DebugTextBool("Local scoped", matrixDebug.localScoped);
-                            DebugTextBool("FPS matrix valid", matrixDebug.fpsMatrixValid);
-                            DebugTextBool("Optic matrix valid", matrixDebug.opticMatrixValid);
-                            DebugTextBool("Optic matrix changed", matrixDebug.opticMatrixChanged);
-                            DebugTextBool("Optic matrix active", matrixDebug.opticMatrixActive);
-                            DebugTextBool("Using optic matrix", matrixDebug.usingOpticMatrix);
-                            ImGui::Text(
-                                "Tick: %d | Static samples: %d | Diff: %.8f",
-                                matrixDebug.activityTick,
-                                matrixDebug.noChangeSamples,
-                                matrixDebug.opticMatrixDiff);
-                            ImGui::TextDisabled(
-                                "%s",
-                                matrixDebug.localScoped &&
-                                    matrixDebug.opticMatrixActive
-                                ? "Decision: scoped with active optic matrix."
-                                : matrixDebug.localScoped
-                                ? "Decision: scoped, optic static; using FPS."
-                                : "Decision: not scoped; using FPS.");
+                            DebugTextBool("ADS", cameraState.ads);
+                            DebugTextBool("Magnified scope", cameraState.scoped);
+                            DebugTextBool("Using optic camera", cameraState.usingOptic);
+                            DebugTextBool("Stacked sight resolved", cameraState.stackedSightResolved);
+
+                            for (const CameraSightState& sight : cameraState.sights)
+                            {
+                                ImGui::Text(
+                                    "[%d] scope %d mode %d | %.2fx | %s%s",
+                                    sight.opticsListIndex,
+                                    sight.selectedScope,
+                                    sight.selectedMode,
+                                    sight.resolvedZoom,
+                                    sight.valid ? "VALID" : "INVALID",
+                                    sight.selectedByCurrentOptic
+                                        ? " | CURRENT"
+                                        : "");
+                            }
                         }
 
                         if (ImGui::CollapsingHeader("Pointer details"))
                         {
                             DebugTextPtr("FPS camera", cameraState.fpsCamera);
-                            DebugTextPtr("FPS matrix address", cameraState.fpsMatrixAddress);
                             DebugTextPtr("Optic camera", cameraState.opticCamera);
-                            DebugTextPtr("Optic matrix address", cameraState.opticMatrixAddress);
-                            DebugTextPtr("Camera entity", cameraState.cameraEntity);
-                            DebugTextPtr("Optic camera matrix", cameraState.opticCameraMatrix);
+                            DebugTextPtr("Active camera", cameraState.activeCamera);
+                            DebugTextPtr(
+                                "Active matrix address",
+                                cameraState.activeViewMatrixAddress);
+                            DebugTextPtr(
+                                "AllCameras global",
+                                cameraState.allCamerasGlobal);
+                            DebugTextPtr(
+                                "EFT camera manager",
+                                cameraState.eftCameraManager);
+                            DebugTextPtr(
+                                "Optic camera manager",
+                                cameraState.opticCameraManager);
+                            DebugTextPtr(
+                                "Current optic sight",
+                                cameraState.currentOpticSight);
+                            DebugTextPtr(
+                                "Current scope transform",
+                                cameraState.currentOpticScopeTransform);
+                            ImGui::Text(
+                                "Offsets: matrix 0x%X | FOV 0x%X | aspect 0x%X",
+                                cameraState.viewMatrixOffset,
+                                cameraState.fovOffset,
+                                cameraState.aspectOffset);
+                            ImGui::Text(
+                                "AllCameras offset path: %s | busy skips: %llu",
+                                cameraState.usedAllCamerasOffset
+                                    ? "YES"
+                                    : "NO",
+                                static_cast<unsigned long long>(
+                                    cameraState.busyReadSkips));
                         }
 
                         if (ImGui::CollapsingHeader("Matrix validation"))
                         {
-                            DebugMatrixSummary("FPS raw", cameraState.fpsRawMatrix);
-                            DebugMatrixSummary("FPS transposed", cameraState.fpsViewMatrix);
-                            DebugMatrixSummary("Optic raw", cameraState.opticRawMatrix);
-                            DebugMatrixSummary("Optic transposed", cameraState.opticViewMatrix);
+                            DebugMatrixSummary("Active raw", cameraState.rawViewMatrix);
+                            DebugMatrixSummary("Active transposed", cameraState.viewMatrix);
                         }
 
                         ImGui::EndTabItem();
@@ -3069,13 +3132,12 @@ static void renderDebugWindow()
                             readOnlyAim.getActiveTarget();
                         const AimReferencePoint aimReference =
                             readOnlyAim.resolveAimReference();
+                        const CameraManagerSnapshot aimCameraSnapshot =
+                            cameraManagerTest.snapshot();
                         const bool cameraReady =
-                            camera.cameraPointersReady();
+                            aimCameraSnapshot && aimCameraSnapshot->valid;
                         const bool deviceReady = makcu.IsConnected();
-                        const bool referenceReady =
-                            aimGlobals::aimReference !=
-                                AimReference::Fireport ||
-                            aimReference.valid;
+                        const bool referenceReady = aimReference.valid;
 
                         ImGui::SeparatorText("Pipeline");
                         ImGui::Text(
@@ -3088,23 +3150,16 @@ static void renderDebugWindow()
                             cameraReady ? "READY" : "MISSING",
                             deviceReady ? "CONNECTED" : "DISCONNECTED");
                         ImGui::Text(
-                            "Reference: %s at %.1f, %.1f | %s",
-                            aimGlobals::aimReference ==
-                                AimReference::Fireport
-                            ? aimReference.fallbackToCrosshair
-                                ? "FIREPORT -> CROSSHAIR"
-                                : "FIREPORT"
-                            : "CROSSHAIR",
+                            "Reference: FIREPORT at %.1f, %.1f | %s",
                             aimReference.pos.x,
                             aimReference.pos.y,
                             referenceReady ? "VALID" : "INVALID");
 
-                        if (aimGlobals::aimEnabled &&
-                            aimReference.fallbackToCrosshair)
+                        if (aimGlobals::aimEnabled && !referenceReady)
                         {
                             ImGui::TextColored(
                                 ImVec4(1.0f, 0.70f, 0.25f, 1.0f),
-                                "Fireport unavailable for this weapon; using screen centre fallback.");
+                                "Fireport unavailable for this weapon; target movement is paused.");
                         }
 
                         if (aimGlobals::aimEnabled &&
@@ -3127,10 +3182,11 @@ static void renderDebugWindow()
                             aimGlobals::aimFOV,
                             aimGlobals::aimDistance);
                         ImGui::Text(
-                            "Smoothing: %.2f | AI bone: %d | PMC bone: %d",
+                            "Smoothing: %.2f | Bone mode: %s",
                             aimGlobals::aimSmooth,
-                            static_cast<int>(aimGlobals::aiBone),
-                            static_cast<int>(aimGlobals::pmcBone));
+                            aimGlobals::aimClosestBoneToFireport
+                            ? "Closest Bone"
+                            : "Selected Bones");
                         ImGui::Text(
                             "Speed: %.0f px/s | Deadzone: %.1f px | Offset: %.1f, %.1f",
                             aimGlobals::aimSpeedPixelsPerSecond,
@@ -4485,14 +4541,15 @@ static void renderMainScreen()
                 ImGui::PushFont(radarFont);
 
             //render what we want on map as runRadar is true
-            drawLocalPlayer();
-            drawPlayers();
             drawExfils();
             drawGrenades();
             drawTripwires();
             drawLoot();
-
             drawQuests();
+
+            // Player markers and their labels must remain above every map entity.
+            drawLocalPlayer();
+            drawPlayers();
 
             if (radarFont != nullptr)
                 ImGui::PopFont();

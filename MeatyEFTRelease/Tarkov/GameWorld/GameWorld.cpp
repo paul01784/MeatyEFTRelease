@@ -38,6 +38,10 @@ struct LinkedListObject {
 constexpr std::uint64_t kGomLastActiveNode = 0x20;
 constexpr std::uint64_t kGomActiveNodes = 0x28;
 
+constexpr std::uint64_t kGameWorldSingletonClassBss = 0x5D71168;
+constexpr std::uint64_t kIl2CppClassStaticFields = 0xB8;
+constexpr std::uint64_t kGameWorldSingletonInstance = 0x10;
+
 bool plausibleGameObjectName(const std::string& name)
 {
     if (name.empty() || name.size() >= 64)
@@ -106,7 +110,7 @@ bool mapKnown(const std::string& map)
 
 std::uint64_t readGomListPtr(std::uint64_t gom, std::uint64_t field_offset)
 {
-    const std::uint64_t list_ptr = mem.Read<std::uint64_t>(gom + field_offset);
+    const std::uint64_t list_ptr = mem.Read<std::uint64_t>(gom + field_offset, DmaCacheMode::Uncached);
     if (!Utils::valid_pointer(list_ptr))
         return 0;
     return list_ptr;
@@ -117,15 +121,16 @@ bool countRegisteredPlayers(std::uint64_t local_gw, int& out_count)
     out_count = 0;
 
     const std::uint64_t registered =
-        mem.Read<std::uint64_t>(local_gw + sdk::ClientLocalGameWorld::RegisteredPlayers);
+        mem.Read<std::uint64_t>(local_gw + sdk::ClientLocalGameWorld::RegisteredPlayers, DmaCacheMode::Uncached);
     if (!Utils::valid_pointer(registered))
         return false;
 
-    const std::uint64_t list = mem.Read<std::uint64_t>(registered + 0x10);
+    const std::uint64_t list = mem.Read<std::uint64_t>(registered + 0x10, DmaCacheMode::Uncached);
     if (!Utils::valid_pointer(list))
         return false;
 
-    const std::int32_t count = mem.Read<std::int32_t>(registered + 0x18);
+    const std::int32_t count = mem.Read<std::int32_t>(registered + 0x18, DmaCacheMode::Uncached);
+    out_count = count;
     if (count <= 0)
         return false;
 
@@ -134,10 +139,13 @@ bool countRegisteredPlayers(std::uint64_t local_gw, int& out_count)
 }
 
 bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::uint64_t local_player,
-                                std::uint64_t game_world_object, RaidState& raid, std::string& debug_out)
+                                std::uint64_t game_world_object, RaidState& raid, std::string& debug_out,
+                                RaidPendingState* pending_out = nullptr)
 {
     raid = {};
     debug_out.clear();
+    if (pending_out)
+        *pending_out = {};
 
     if (!Utils::valid_pointer(local_gw))
         return false;
@@ -147,40 +155,43 @@ bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::
         return false;
     }
 
-    std::uint64_t map_ptr = mem.Read<std::uint64_t>(local_gw + sdk::GameWorld::Location);
+    std::uint64_t map_ptr = mem.Read<std::uint64_t>(local_gw + sdk::GameWorld::Location, DmaCacheMode::Uncached);
     if (!Utils::valid_pointer(map_ptr) && Utils::valid_pointer(local_player))
-        map_ptr = mem.Read<std::uint64_t>(local_player + sdk::Player::Location);
+        map_ptr = mem.Read<std::uint64_t>(local_player + sdk::Player::Location, DmaCacheMode::Uncached);
 
     std::string map;
     if (Utils::valid_pointer(map_ptr)) {
-        const int len = mem.Read<int>(map_ptr + 0x10);
+        const int len = mem.Read<int>(map_ptr + 0x10, DmaCacheMode::Uncached);
         if (len > 0 && len <= 64)
-            map = mem.readUnicodeString(map_ptr + 0x14, static_cast<SIZE_T>(len));
+            map = mem.readUnicodeString(map_ptr + 0x14, static_cast<SIZE_T>(len), DmaCacheMode::Uncached);
     }
 
-    int reg_count{};
-    if (!countRegisteredPlayers(local_gw, reg_count)) {
-        debug_out = map.empty()
-            ? "registered player list is not ready"
-            : std::format("map={} registered player list is not ready", map);
-        return false;
-    }
-
+    // Reject lobby/unknown worlds before treating missing players as loading.
     if (isLobbyMapName(map)) {
-        debug_out = std::format(
-            "lobby map={} registeredPlayers={}",
-            map,
-            reg_count
-        );
+        debug_out = std::format("lobby or unavailable map='{}'", map);
         return false;
     }
 
     if (!map.empty() && !mapKnown(map)) {
-        debug_out = std::format(
-            "unknown map='{}' registeredPlayers={}",
-            map,
-            reg_count
-        );
+        debug_out = std::format("unknown map='{}'", map);
+        return false;
+    }
+
+    int reg_count{};
+    const bool players_ready = countRegisteredPlayers(local_gw, reg_count);
+    if (reg_count < 0 || reg_count > 512) {
+        debug_out = std::format("invalid registered player count={}", reg_count);
+        return false;
+    }
+
+    if (!players_ready || !Utils::valid_pointer(local_player)) {
+        debug_out = std::format("map={} local player or registered player list is not ready", map);
+        if (pending_out) {
+            pending_out->active = true;
+            pending_out->game_world_object = game_world_object;
+            pending_out->local_game_world = local_gw;
+            pending_out->map_name = map;
+        }
         return false;
     }
 
@@ -199,6 +210,34 @@ bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::
     return true;
 }
 
+bool tryResolveRaidFromBss(std::uint64_t gom, RaidState& raid, std::string& debug_out, RaidPendingState* pending_out)
+{
+    const std::uint64_t gameAssembly = mem.GetTarkovPointerSnapshot().gameAssemblyBase;
+    std::uint64_t gameWorldClass = 0;
+    std::uint64_t staticFields = 0;
+    std::uint64_t localGameWorld = 0;
+
+    if (!Utils::valid_pointer(gameAssembly) ||
+        !mem.TryRead(gameAssembly + kGameWorldSingletonClassBss, gameWorldClass, DmaCacheMode::Uncached) || !Utils::valid_pointer(gameWorldClass) ||
+        !mem.TryRead(gameWorldClass + kIl2CppClassStaticFields, staticFields, DmaCacheMode::Uncached) || !Utils::valid_pointer(staticFields) ||
+        !mem.TryRead(staticFields + kGameWorldSingletonInstance, localGameWorld, DmaCacheMode::Uncached) || !Utils::valid_pointer(localGameWorld))
+    {
+        return false;
+    }
+
+    std::uint64_t localPlayer = 0;
+    (void)mem.TryRead(localGameWorld + sdk::ClientLocalGameWorld::MainPlayer, localPlayer, DmaCacheMode::Uncached);
+
+    if (fillRaidFromLocalGameWorld(gom, localGameWorld, localPlayer, localGameWorld, raid, debug_out, pending_out))
+    {
+        debug_out = "BSS " + debug_out;
+        return true;
+    }
+
+    debug_out = "BSS GameWorld: " + debug_out;
+    return false;
+}
+
 } // namespace
 
 bool isLobbyMapName(const std::string& map)
@@ -208,22 +247,23 @@ bool isLobbyMapName(const std::string& map)
     return _stricmp(map.c_str(), "hideout") == 0 || _stricmp(map.c_str(), "default") == 0;
 }
 
-bool tryPromotePendingRaid(std::uint64_t gom, std::uint64_t local_game_world, std::uint64_t game_world_object,
-                           RaidState& raid, std::string& debug_out)
+bool tryPromotePendingRaid(std::uint64_t gom, std::uint64_t local_game_world, std::uint64_t game_world_object, RaidState& raid, std::string& debug_out, RaidPendingState* pending_out)
 {
+    raid = {};
+    if (pending_out)
+        *pending_out = {};
     if (!Utils::valid_pointer(local_game_world))
     {
         debug_out = "Pending GameWorld pointer is invalid";
         return false;
     }
 
-    const std::uint64_t local_player =
-        mem.Read<std::uint64_t>(local_game_world + sdk::ClientLocalGameWorld::MainPlayer);
+    const std::uint64_t local_player = mem.Read<std::uint64_t>(local_game_world + sdk::ClientLocalGameWorld::MainPlayer, DmaCacheMode::Uncached);
 
-    return fillRaidFromLocalGameWorld(gom, local_game_world, local_player, game_world_object, raid, debug_out);
+    return fillRaidFromLocalGameWorld(gom, local_game_world, local_player, game_world_object, raid, debug_out, pending_out);
 }
 
-bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, RaidPendingState* pending_out)
+bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, RaidPendingState* pending_out, bool allow_gom_fallback)
 {
     if (pending_out)
         *pending_out = {};
@@ -231,8 +271,25 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     raid = {};
     debug_out.clear();
 
+    
+    if (tryResolveRaidFromBss(gom, raid, debug_out, pending_out))
+        return true;
+
+    if (!allow_gom_fallback)
+    {
+        debug_out += " | GOM fallback deferred";
+        return false;
+    }
+
     std::ostringstream object_dump;
     object_dump << "Game World object scan\n";
+
+    
+    if (!Utils::valid_pointer(gom) || !readGomListPtr(gom, kGomActiveNodes) || !readGomListPtr(gom, kGomLastActiveNode))
+    {
+        mem.RefreshTarkovPointerSnapshot();
+        gom = mem.GetTarkovPointerSnapshot().gameObjectManager;
+    }
 
     if (!Utils::valid_pointer(gom))
     {
@@ -579,6 +636,7 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
         );
 
         RaidState attempt{};
+        RaidPendingState candidate_pending{};
         std::string candidate_result;
 
         const bool raid_ready = fillRaidFromLocalGameWorld(
@@ -587,7 +645,8 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
             local_player,
             nodes[i].this_object,
             attempt,
-            candidate_result
+            candidate_result,
+            &candidate_pending
         );
 
         const bool selected = raid_ready && !resolved_raid;
@@ -614,8 +673,12 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
 
         last_reject = candidate_result;
 
+        if (!candidate_pending.active)
+            continue;
+
         pending_gw = local_gw;
         pending_gw_object = nodes[i].this_object;
+        pending_map.clear();
 
         std::uint64_t map_ptr = mem.Read<std::uint64_t>(
             local_gw + sdk::GameWorld::Location
@@ -648,6 +711,8 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
 
     if (resolved_raid)
     {
+        if (pending_out)
+            *pending_out = {};
         raid = selected_raid;
         debug_out = std::format(
             "{}; scan complete: {} objects checked{}",
