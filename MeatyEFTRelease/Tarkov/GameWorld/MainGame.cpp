@@ -767,7 +767,9 @@ void MainGame::mainThread(std::stop_token stopToken)
             "fireportTask",
             []()
             {
-                if (Utils::valid_pointer(mainGame.localPlayerPtr))
+                const bool fireportNeeded = aimGlobals::aimEnabled || espGlobals::drawFireportLine;
+
+                if (fireportNeeded && Utils::valid_pointer(mainGame.localPlayerPtr))
                     g_fireport.update(mainGame.localPlayerPtr);
                 else
                     g_fireport.clear();
