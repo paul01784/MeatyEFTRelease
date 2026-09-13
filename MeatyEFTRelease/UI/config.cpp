@@ -205,6 +205,8 @@ void to_json(nlohmann::json& j, const globals& r) {
     j = nlohmann::json{
         {"appWindowAlpha", r.appWindowAlpha},
         {"appRadarMaxFPS", r.appRadarMaxFPS},
+        {"appMaximizeWindow", r.appMaximizeWindow},
+        {"appHideTitlebar", r.appHideTitlebar},
         {"dogTagAPIKey", r.dogTagAPIKey}
     };
 }
@@ -215,6 +217,8 @@ void from_json(const nlohmann::json& j, globals& r) {
         j.value("appRadarMaxFPS", r.appRadarMaxFPS),
         15.0f,
         240.0f);
+    r.appMaximizeWindow = j.value("appMaximizeWindow", r.appMaximizeWindow);
+    r.appHideTitlebar = j.value("appHideTitlebar", r.appHideTitlebar);
     r.dogTagAPIKey = j.value("dogTagAPIKey", r.dogTagAPIKey);
 }
 
@@ -449,6 +453,10 @@ void to_json(nlohmann::json& j, const espGlobals& e) {
         {"drawScavDist", e.drawScavDist},
         {"drawBossDist", e.drawBossDist},
         {"drawUsecDist", e.drawUsecDist},
+        {"fuserDistanceFadeEnabled", e.fuserDistanceFadeEnabled},
+        {"fuserFadeStartDistance", e.fuserFadeStartDistance},
+        {"fuserFadeEndDistance", e.fuserFadeEndDistance},
+        {"fuserFadeMinimumOpacity", e.fuserFadeMinimumOpacity},
         {"drawPlayerEquip", e.drawPlayerEquip},
         {"drawHandItem", e.drawHandItem},
         {"aimOverlayAlert", e.aimOverlayAlert},
@@ -494,6 +502,10 @@ void from_json(const nlohmann::json& j, espGlobals& e) {
     e.drawScavDist = std::clamp(j.value("drawScavDist", legacyPlayerDistance), 10, 1000);
     e.drawBossDist = std::clamp(j.value("drawBossDist", legacyPlayerDistance), 10, 1000);
     e.drawUsecDist = std::clamp(j.value("drawUsecDist", legacyPlayerDistance), 10, 1000);
+    e.fuserDistanceFadeEnabled = j.value("fuserDistanceFadeEnabled", j.value("playerDistanceFadeEnabled", e.fuserDistanceFadeEnabled));
+    e.fuserFadeStartDistance = std::clamp(j.value("fuserFadeStartDistance", j.value("playerFadeStartDistance", e.fuserFadeStartDistance)), 0, 999);
+    e.fuserFadeEndDistance = std::clamp(j.value("fuserFadeEndDistance", j.value("playerFadeEndDistance", e.fuserFadeEndDistance)), e.fuserFadeStartDistance + 1, 1000);
+    e.fuserFadeMinimumOpacity = std::clamp(j.value("fuserFadeMinimumOpacity", j.value("playerFadeMinimumOpacity", e.fuserFadeMinimumOpacity)), 0, 100);
     e.drawPlayerEquip = j.value("drawPlayerEquip", e.drawPlayerEquip);
     e.drawHandItem = j.value("drawHandItem", e.drawHandItem);
     e.aimOverlayAlert = std::clamp(

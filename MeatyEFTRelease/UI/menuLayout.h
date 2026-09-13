@@ -166,7 +166,7 @@ namespace menuLayout
         const bool changed = ImGui::ColorEdit4(
             "##colour",
             colour,
-            ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs
+            ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf
         );
         ImGui::PopID();
         return changed;
@@ -451,6 +451,35 @@ namespace menuLayout
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), controlX));
         ImGui::SetNextItemWidth(std::clamp(ImGui::GetContentRegionAvail().x, 120.0f, 220.0f));
         const bool changed = ImGui::Combo("##combo", value, items, itemCount);
+        ImGui::PopID();
+        return changed;
+    }
+
+    inline bool ComboToggleRow(const char* label, const char* id, int* value, const char* const items[], int itemCount, const char* toggleLabel, bool* toggleValue)
+    {
+        ImGui::PushID(id);
+        const float rowStartX = ImGui::GetCursorPosX();
+        const float rowWidth = ImGui::GetContentRegionAvail().x;
+        const float controlX = ControlColumnX(rowStartX, rowWidth);
+        const float rowEndX = ControlRightX(rowStartX, rowWidth);
+        const float toggleX = rowEndX - ImGui::GetFrameHeight();
+        const float toggleLabelWidth = ImGui::CalcTextSize(toggleLabel).x;
+        const float toggleLabelX = toggleX - toggleLabelWidth - 6.0f;
+        const float comboWidth = std::max(80.0f, toggleLabelX - controlX - 12.0f);
+
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), controlX));
+        ImGui::SetNextItemWidth(comboWidth);
+        bool changed = ImGui::Combo("##combo", value, items, itemCount);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), toggleLabelX));
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(toggleLabel);
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), toggleX));
+        changed |= ImGui::Checkbox("##toggle", toggleValue);
         ImGui::PopID();
         return changed;
     }

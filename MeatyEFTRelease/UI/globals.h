@@ -16,6 +16,8 @@ struct globals {
     static float appTextScale;
     static float appWindowAlpha;
     static float appRadarMaxFPS;
+    static bool appMaximizeWindow;
+    static bool appHideTitlebar;
     static std::string dogTagAPIKey;
 
     static std::string radarSubText;
@@ -38,6 +40,8 @@ struct globals {
     static double taskMemoryManager;
     static double taskRaidMonitor;
     static double taskAim;
+
+    static void resetTaskIntervals();
 
 };
 
@@ -124,6 +128,10 @@ struct espGlobals {
     static int drawScavDist;
     static int drawBossDist;
     static int drawUsecDist;
+    static bool fuserDistanceFadeEnabled;
+    static int fuserFadeStartDistance;
+    static int fuserFadeEndDistance;
+    static int fuserFadeMinimumOpacity;
     static bool drawPlayerEquip;
     static bool drawHandItem;
     // 0 = off, 1 = all valid sources, 2 = PMCs and player scavs only.
@@ -162,6 +170,7 @@ struct espGlobals {
     [[nodiscard]] static int getPlayerDrawDistance(const Player& player);
     [[nodiscard]] static int getMaximumPlayerDrawDistance();
     [[nodiscard]] static int getLootDrawDistance(const LootEntity& loot);
+    [[nodiscard]] static float getFuserDistanceOpacity(float distance);
 };
 
 struct aimGlobals {
@@ -180,6 +189,10 @@ struct aimGlobals {
     static float aimOffsetX;
     static float aimOffsetY;
     static bool showAimFovRing;
+};
+
+struct cameraDebugGlobals {
+    static std::atomic_bool lensStabilityOverlay;
 };
 
 struct coloursGlobals {

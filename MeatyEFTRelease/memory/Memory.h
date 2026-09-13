@@ -7,6 +7,7 @@
 #include "DmaScheduler.h"
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <optional>
 #include <type_traits>
@@ -112,6 +113,14 @@ enum class DmaCacheMode : uint8_t
 {
     Cached,
     Uncached
+};
+
+enum class DmaHealthSource : uint8_t
+{
+    GameWorldSingleton,
+    CameraChain,
+    OpticMesh,
+    Count
 };
 
 class Memory
@@ -263,6 +272,21 @@ private:
     std::chrono::steady_clock::time_point lastMemoryCacheRefresh{};
     std::chrono::steady_clock::time_point lastTlbCacheRefresh{};
 
+    struct DmaHealthFailureState
+    {
+        uint64_t fingerprint = 0;
+        uint32_t consecutiveFailures = 0;
+        std::chrono::steady_clock::time_point firstFailure{};
+        bool recoveryQueued = false;
+    };
+
+    mutable std::mutex dmaHealthMutex;
+    std::array<DmaHealthFailureState,
+        static_cast<size_t>(DmaHealthSource::Count)> dmaHealthFailures{};
+    std::atomic_bool dmaHealthRecoveryPending{ false };
+    std::atomic<uint64_t> dmaRecoveryEpoch{ 0 };
+    std::chrono::steady_clock::time_point lastDmaHealthRecovery{};
+
 private:
     [[nodiscard]] static DWORD BuildReadFlags(DmaCacheMode cacheMode);
     [[nodiscard]] static DWORD BuildScatterFlags(DmaCacheMode cacheMode);
@@ -353,6 +377,9 @@ public:
 
     bool RefreshProcessInformationNow();
     void RunCacheMaintenance();
+    void ReportDmaHealthFailure(DmaHealthSource source, uint64_t fingerprint = 0);
+    void ReportDmaHealthSuccess(DmaHealthSource source);
+    [[nodiscard]] uint64_t GetDmaRecoveryEpoch() const noexcept;
 
 
     bool WriteBufferEnsure(

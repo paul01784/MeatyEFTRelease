@@ -506,6 +506,9 @@
     <ClInclude Include="Tarkov\Unity\cameraManager.h">
       <Filter>Tarkov\Unity</Filter>
     </ClInclude>
+    <ClInclude Include="Tarkov\Unity\OpticProjection.h">
+      <Filter>Tarkov\Unity</Filter>
+    </ClInclude>
     <ClInclude Include="Web\TarkovDev\TarkovDevClient.h">
       <Filter>Web\TarkovDev</Filter>
     </ClInclude>
@@ -708,6 +711,9 @@
       <Filter>Tarkov\GameWorld</Filter>
     </ClCompile>
     <ClCompile Include="Tarkov\Unity\cameraManager.cpp">
+      <Filter>Tarkov\Unity</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\Unity\OpticProjection.cpp">
       <Filter>Tarkov\Unity</Filter>
     </ClCompile>
     <ClCompile Include="Web\TarkovDev\TarkovDevClient.cpp">

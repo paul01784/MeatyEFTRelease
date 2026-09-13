@@ -170,8 +170,8 @@ PDIRECT3DTEXTURE9 terminal_texture = NULL;
 int terminal_orgW = 1516;
 int terminal_orgH = 1908;
 
-float terminal_configX = 2886.f;
-float terminal_configY = 2654.f;
+float terminal_configX = 1443.f;
+float terminal_configY = 1327.f;
 float terminal_configScale = 2.f;
 
 // Icebreaker

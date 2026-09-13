@@ -31,7 +31,8 @@ enum GameResolution
 {
     RES_1080P = 0,
     RES_1440P,
-    RES_3440X1440
+    RES_3440X1440,
+    RES_3840X2160
 };
 
 

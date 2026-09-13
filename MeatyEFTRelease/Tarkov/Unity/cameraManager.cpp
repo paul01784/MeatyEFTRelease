@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cctype>
+#include <functional>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -28,8 +29,10 @@ namespace
     constexpr auto kViewMatrixRetryInterval = std::chrono::milliseconds(250);
     constexpr auto kManagedCameraRetryInterval = std::chrono::seconds(3);
     constexpr std::uint8_t kOpticMatrixFailureLimit = 3;
+    constexpr auto kCameraReadFailureGrace = std::chrono::milliseconds(750);
     constexpr auto kAllCamerasRetryInterval = std::chrono::seconds(3);
-    constexpr auto kSnapshotMaxAge = std::chrono::milliseconds(250);
+    
+    constexpr auto kSnapshotMaxAge = std::chrono::seconds(2);
 
     constexpr std::uint64_t kManagedListItems = 0x10;
     constexpr std::uint64_t kManagedListCount = 0x18;
@@ -211,7 +214,7 @@ namespace
 CameraManager cameraManagerTest;
 
 CameraManager::CameraManager()
-    : m_viewMatrixOffset(static_cast<std::uint32_t>(UnityOffsets::Camera_ViewMatrixOffset)),
+    : m_viewMatrixOffset(static_cast<std::uint32_t>(UnityOffsets::Camera_WorldToCameraMatrixOffset)),
       m_fovOffset(static_cast<std::uint32_t>(UnityOffsets::Camera_FOVOffset)),
       m_aspectOffset(static_cast<std::uint32_t>(UnityOffsets::Camera_AspectRatioOffset)),
       m_snapshot(std::make_shared<const CameraManagerState>())
@@ -231,6 +234,17 @@ CameraManagerSnapshot CameraManager::snapshot() const noexcept
     return empty;
 }
 
+CameraProjectionDiagnostics CameraManager::diagnostics() const noexcept
+{
+    CameraProjectionDiagnostics result{};
+    result.attempts = m_opticSampleAttempts.load(std::memory_order_relaxed);
+    result.accepted = m_opticAcceptedSamples.load(std::memory_order_relaxed);
+    result.rejected = m_opticRejectedSamples.load(std::memory_order_relaxed);
+    result.retained = m_opticRetainedPackets.load(std::memory_order_relaxed);
+    result.lastOutcome = m_lastOpticOutcome.load(std::memory_order_relaxed);
+    return result;
+}
+
 void CameraManager::reset()
 {
     m_allCamerasGlobal = 0;
@@ -242,7 +256,7 @@ void CameraManager::reset()
     m_opticCameraManager = 0;
     m_gameAssemblyBase = 0;
 
-    m_viewMatrixOffset = static_cast<std::uint32_t>(UnityOffsets::Camera_ViewMatrixOffset);
+    m_viewMatrixOffset = static_cast<std::uint32_t>(UnityOffsets::Camera_WorldToCameraMatrixOffset);
     m_fovOffset = static_cast<std::uint32_t>(UnityOffsets::Camera_FOVOffset);
     m_aspectOffset = static_cast<std::uint32_t>(UnityOffsets::Camera_AspectRatioOffset);
 
@@ -263,7 +277,15 @@ void CameraManager::reset()
     m_lastAds = false;
     m_lastUsingOptic = false;
     m_opticMatrixReadFailures = 0;
+    m_cameraReadFailureSince = {};
     m_busyReadSkips = 0;
+    m_opticSampleAttempts.store(0, std::memory_order_relaxed);
+    m_opticAcceptedSamples.store(0, std::memory_order_relaxed);
+    m_opticRejectedSamples.store(0, std::memory_order_relaxed);
+    m_opticRetainedPackets.store(0, std::memory_order_relaxed);
+    m_lastOpticOutcome.store(
+        OpticPacketOutcome::Idle, std::memory_order_relaxed);
+    m_opticProjectionEngine.reset();
 
     CameraManagerState empty{};
     publish(std::move(empty));
@@ -529,23 +551,7 @@ std::uint64_t CameraManager::resolveViewMatrixAddress(std::uint64_t camera) cons
     if (readUncached(directAddress, matrix) && matrixLooksValid(matrix))
         return directAddress;
 
-    std::uint64_t gameObject = 0;
-    std::uint64_t componentArray = 0;
-    std::uint64_t matrixBase = 0;
-
-    if (!readPointer(camera + UnityOffsets::GameObject_ComponentsOffset, gameObject) ||
-        !readPointer(gameObject + UnityOffsets::GameObject_ComponentsOffset, componentArray) ||
-        !readPointer(componentArray + 0x18, matrixBase))
-    {
-        return 0;
-    }
-
-    const std::uint64_t legacyAddress = matrixBase + m_viewMatrixOffset;
-    matrix = {};
-
-    return readUncached(legacyAddress, matrix) && matrixLooksValid(matrix)
-        ? legacyAddress
-        : 0;
+    return 0;
 }
 
 bool CameraManager::resolveCamerasFromAllCameras(std::uint64_t& fps, std::uint64_t& optic)
@@ -676,8 +682,16 @@ bool CameraManager::initialize()
         m_lastManagedCameraResolve = std::chrono::steady_clock::now();
         (void)resolveOpticCameraManager();
 
-        LOGS.logInfo(
-            "[CAMERA MANAGER] Resolved camera bootstrap.");
+        static auto lastBootstrapLog =
+            std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (lastBootstrapLog == std::chrono::steady_clock::time_point{} ||
+            (now - lastBootstrapLog) >= std::chrono::seconds(5))
+        {
+            lastBootstrapLog = now;
+            LOGS.logInfo(
+                "[CAMERA MANAGER] Resolved camera bootstrap.");
+        }
     }
 
     return resolved;
@@ -859,7 +873,7 @@ int CameraManager::selectActiveSight(const std::vector<CameraSightState>& sights
     return -1;
 }
 
-bool CameraManager::update(std::uint64_t localPwa, std::uint64_t currentOpticSight)
+bool CameraManager::update(std::uint64_t localPwa, std::uint64_t currentOpticSight, std::uint64_t localPlayer)
 {
     if (!mem.IsDmaOperational())
         return false;
@@ -880,13 +894,20 @@ bool CameraManager::update(std::uint64_t localPwa, std::uint64_t currentOpticSig
         readUncached(localPwa + sdk::ProceduralWeaponAnimation::_isAiming, isAds);
     }
 
-    return updateFrame(localPwa, isAds, currentOpticSight, now);
+    return updateFrame(localPwa, isAds, currentOpticSight, localPlayer, now);
 }
 
-bool CameraManager::updateWithAds(std::uint64_t localPwa, bool isAds, std::uint64_t currentOpticSight)
+bool CameraManager::updateWithAds(std::uint64_t localPwa, bool isAds, std::uint64_t currentOpticSight, std::uint64_t localPlayer)
 {
     if (!mem.IsDmaOperational())
         return false;
+
+    const std::uint64_t recoveryEpoch = mem.GetDmaRecoveryEpoch();
+    if (recoveryEpoch != m_observedDmaRecoveryEpoch)
+    {
+        m_observedDmaRecoveryEpoch = recoveryEpoch;
+        reset();
+    }
 
     const auto now = std::chrono::steady_clock::now();
     if (m_lastUpdate != std::chrono::steady_clock::time_point{} &&
@@ -896,10 +917,10 @@ bool CameraManager::updateWithAds(std::uint64_t localPwa, bool isAds, std::uint6
         return current && current->valid;
     }
 
-    return updateFrame(localPwa, isAds, currentOpticSight, now);
+    return updateFrame(localPwa, isAds, currentOpticSight, localPlayer, now);
 }
 
-bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_t currentOpticSight, std::chrono::steady_clock::time_point now)
+bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_t currentOpticSight, std::uint64_t localPlayer, std::chrono::steady_clock::time_point now)
 {
     m_lastUpdate = now;
 
@@ -915,11 +936,18 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
         m_lastInitializeAttempt = now;
 
         if (!initialize())
+        {
+            m_cameraHealthFailureActive = true;
+            mem.ReportDmaHealthFailure(
+                DmaHealthSource::CameraChain,
+                m_allCamerasGlobal ^ (m_gameAssemblyBase << 1));
             return false;
+        }
     }
 
     // EFT's managed camera objects may become available after the FPS camera.
-    if ((!validPointer(m_opticCameraManager) ||
+    if (isAds &&
+        (!validPointer(m_opticCameraManager) ||
             !validPointer(m_opticCamera) ||
             !validPointer(m_opticViewMatrixAddress)) &&
         (m_lastManagedCameraResolve ==
@@ -1010,6 +1038,14 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
     state.opticCameraManager = m_opticCameraManager;
     state.currentOpticSight = m_cachedCurrentOpticSight;
     state.currentOpticScopeTransform = m_cachedCurrentScopeTransform;
+    state.fpsCamera = m_fpsCamera;
+    state.opticCamera = m_opticCamera;
+    state.allCamerasGlobal = m_allCamerasGlobal;
+    state.viewMatrixOffset = m_viewMatrixOffset;
+    state.fovOffset = m_fovOffset;
+    state.aspectOffset = m_aspectOffset;
+    state.usedAllCamerasOffset = m_usedAllCamerasOffset;
+    state.busyReadSkips = m_busyReadSkips;
     state.sights = m_cachedSights;
     state.activeSightVectorIndex = m_cachedActiveSightIndex;
 
@@ -1024,7 +1060,11 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
     const bool wantOptic = state.scoped && validPointer(m_opticCamera);
 
     if (!wantOptic)
+    {
         m_opticMatrixReadFailures = 0;
+        m_lastOpticOutcome.store(
+            OpticPacketOutcome::Idle, std::memory_order_relaxed);
+    }
 
     if (wantOptic && !validPointer(m_opticViewMatrixAddress) &&
         (m_lastViewMatrixResolve == std::chrono::steady_clock::time_point{} ||
@@ -1034,61 +1074,180 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
         m_opticViewMatrixAddress = resolveViewMatrixAddress(m_opticCamera);
     }
 
-    // Read FPS even while scoped, so an unavailable optic has a fresh fallback
-    // NaN sentinels prevent untouched/partial destinations becoming valid data
-    glm::highp_mat4 fpsRaw{};
-    glm::highp_mat4 opticRaw{};
-    for (int column = 0; column < 4; ++column)
-        for (int row = 0; row < 4; ++row)
-            fpsRaw[column][row] = opticRaw[column][row] = std::numeric_limits<float>::quiet_NaN();
 
-    float fov = std::numeric_limits<float>::quiet_NaN();
-    float aspect = std::numeric_limits<float>::quiet_NaN();
-    const bool readLens = wantOptic &&
-        (m_lastLensRefresh == std::chrono::steady_clock::time_point{} ||
-            (now - m_lastLensRefresh) >= kLensRefreshInterval);
-    const bool readOptic = wantOptic && validPointer(m_opticViewMatrixAddress);
+    CameraMatrixSample fpsSample{};
+    CameraMatrixSample opticSample{};
+    OpticProjectionState opticProjection{};
 
-    Memory::ScatterReadRequest requests[4]{};
-    std::size_t requestCount = 0;
-    requests[requestCount++] = { m_fpsViewMatrixAddress, &fpsRaw, sizeof(fpsRaw) };
-    if (readOptic)
-        requests[requestCount++] = { m_opticViewMatrixAddress, &opticRaw, sizeof(opticRaw) };
-    if (readLens)
-    {
-        requests[requestCount++] = { m_fpsCamera + m_fovOffset, &fov, sizeof(fov) };
-        requests[requestCount++] = { m_fpsCamera + m_aspectOffset, &aspect, sizeof(aspect) };
-    }
-
-    DWORD bytesRead[4]{};
-    const auto readResult = mem.TryReadScatter(requests, requestCount,
-        DmaCacheMode::Uncached, "Camera Manager Update", bytesRead);
-    if (readResult == Memory::TryScatterReadResult::Busy)
-    {
-        ++m_busyReadSkips;
-        const auto current = snapshot();
-        if (current->valid && current->ads == isAds)
-            return true;
-
-        publish(std::move(state));
-        return false;
-    }
-
-    const bool batchRead = readResult == Memory::TryScatterReadResult::Success;
-    const bool fpsRead = batchRead && bytesRead[0] == sizeof(fpsRaw) && matrixLooksValid(fpsRaw);
-    const bool opticRead = batchRead && readOptic && bytesRead[1] == sizeof(opticRaw) && matrixLooksValid(opticRaw);
-    if (readLens)
+    bool properOpticRead = false;
+    bool properOpticBusy = false;
+    std::string opticFailureOverride;
+    const CameraManagerSnapshot previous = snapshot();
+    const bool routeWasReady = previous &&
+        previous->opticProjection.valid &&
+        previous->currentOpticSight == state.currentOpticSight;
+    const bool retryLensRoute =
+        m_lastLensRefresh == std::chrono::steady_clock::time_point{} ||
+        (now - m_lastLensRefresh) >= kLensRefreshInterval;
+    if (wantOptic && validPointer(localPlayer) &&
+        validPointer(state.currentOpticSight) &&
+        (routeWasReady || retryLensRoute))
     {
         m_lastLensRefresh = now;
-        const std::size_t lensIndex = readOptic ? 2 : 1;
-        if (batchRead && bytesRead[lensIndex] == sizeof(fov) && validFov(fov))
-            m_lastFov = fov;
-        if (batchRead && bytesRead[lensIndex + 1] == sizeof(aspect) && validAspect(aspect))
-            m_lastAspect = aspect;
+        const auto retryDeadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(6);
+        do
+        {
+            m_opticSampleAttempts.fetch_add(1, std::memory_order_relaxed);
+            properOpticRead = m_opticProjectionEngine.update(
+                localPlayer,
+                state.currentOpticSight,
+                m_fpsCamera,
+                m_opticCamera,
+                fpsSample,
+                opticSample,
+                opticProjection,
+                &properOpticBusy);
+            if (properOpticRead)
+                m_opticAcceptedSamples.fetch_add(1, std::memory_order_relaxed);
+            else if (m_opticProjectionEngine.failureReason() !=
+                "awaiting adjacent lens sample")
+            {
+                m_opticRejectedSamples.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        while (!properOpticRead &&
+            std::chrono::steady_clock::now() < retryDeadline);
+
+        if (properOpticRead)
+        {
+            if (m_opticMeshHealthFailureActive)
+            {
+                mem.ReportDmaHealthSuccess(DmaHealthSource::OpticMesh);
+                m_opticMeshHealthFailureActive = false;
+            }
+            m_lastOpticOutcome.store(
+                OpticPacketOutcome::Accepted, std::memory_order_relaxed);
+            std::uint64_t liveOpticSight = 0;
+            std::uint64_t liveScopeTransform = 0;
+            if (!readCurrentOpticSight(liveOpticSight, liveScopeTransform) ||
+                liveOpticSight != state.currentOpticSight)
+            {
+                properOpticRead = false;
+                opticProjection = {};
+                m_opticProjectionEngine.reset();
+                opticFailureOverride = "active optic changed during sample";
+                m_lastOpticOutcome.store(
+                    OpticPacketOutcome::Rejected, std::memory_order_relaxed);
+            }
+        }
+        else
+        {
+            const std::string& failure = m_opticProjectionEngine.failureReason();
+            if (failure.find("vertex buffer read") != std::string::npos ||
+                failure.find("index-buffer read") != std::string::npos)
+            {
+                m_opticMeshHealthFailureActive = true;
+                mem.ReportDmaHealthFailure(
+                    DmaHealthSource::OpticMesh,
+                    static_cast<std::uint64_t>(std::hash<std::string>{}(failure)));
+            }
+            m_lastOpticOutcome.store(
+                OpticPacketOutcome::Rejected, std::memory_order_relaxed);
+        }
+    }
+    else if (wantOptic && !validPointer(localPlayer))
+    {
+        opticFailureOverride = "local Player pointer unavailable";
+    }
+    else if (wantOptic && !validPointer(state.currentOpticSight))
+    {
+        opticFailureOverride = "CurrentOpticSight unavailable";
+    }
+
+    bool fpsSampleBusy = false;
+    bool opticSampleBusy = false;
+    if (!fpsSample.valid)
+        (void)OpticProjectionEngine::readCamera(
+            m_fpsCamera, fpsSample, &fpsSampleBusy);
+    if (wantOptic && !opticSample.valid)
+        (void)OpticProjectionEngine::readCamera(
+            m_opticCamera, opticSample, &opticSampleBusy);
+
+    if (!wantOptic && m_lastUsingOptic)
+        m_opticProjectionEngine.reset();
+
+    const bool fpsRead = fpsSample.valid;
+    const bool opticRead = wantOptic && opticSample.valid;
+    if (!fpsRead)
+    {
+        state.cameraSampleFailure = fpsSampleBusy || properOpticBusy
+            ? "DMA busy during camera sample"
+            : "main camera view/projection read or validation";
+    }
+    if (!properOpticRead)
+    {
+        state.opticProjectionFailure = opticFailureOverride.empty()
+            ? m_opticProjectionEngine.failureReason()
+            : opticFailureOverride;
+    }
+
+
+    if (wantOptic && !properOpticRead && routeWasReady && previous &&
+        previous->valid && previous->scoped && previous->usingOptic &&
+        previous->fpsCamera == m_fpsCamera &&
+        previous->opticCamera == m_opticCamera &&
+        previous->currentOpticSight == state.currentOpticSight &&
+        std::fabs(previous->magnification - state.magnification) <= 0.001f &&
+        previous->publishedAt != std::chrono::steady_clock::time_point{} &&
+        now >= previous->publishedAt &&
+        (now - previous->publishedAt) <= std::chrono::milliseconds(20) &&
+        opticFailureOverride.empty() &&
+        state.opticProjectionFailure !=
+            "lens mesh or material changed during sample")
+    {
+        std::uint64_t liveOpticSight = 0;
+        std::uint64_t liveScopeTransform = 0;
+        if (readCurrentOpticSight(liveOpticSight, liveScopeTransform) &&
+            liveOpticSight == state.currentOpticSight)
+        {
+            m_opticRetainedPackets.fetch_add(1, std::memory_order_relaxed);
+            m_lastOpticOutcome.store(
+                OpticPacketOutcome::Retained, std::memory_order_relaxed);
+            if (properOpticBusy || fpsSampleBusy || opticSampleBusy)
+                ++m_busyReadSkips;
+            return true;
+        }
     }
 
     if (!fpsRead)
     {
+        const auto current = snapshot();
+        if (fpsSampleBusy || properOpticBusy)
+        {
+            ++m_busyReadSkips;
+            if (current->valid)
+                return true;
+            publish(std::move(state));
+            return false;
+        }
+
+        if (m_cameraReadFailureSince == std::chrono::steady_clock::time_point{})
+            m_cameraReadFailureSince = now;
+
+        if ((now - m_cameraReadFailureSince) < kCameraReadFailureGrace)
+        {
+            if (current->valid)
+                return true;
+            publish(std::move(state));
+            return false;
+        }
+
+        m_cameraHealthFailureActive = true;
+        mem.ReportDmaHealthFailure(
+            DmaHealthSource::CameraChain,
+            m_fpsCamera ^ (m_fpsViewMatrixAddress << 1));
+
         m_fpsCamera = 0;
         m_fpsViewMatrixAddress = 0;
         m_eftCameraManager = 0;
@@ -1098,8 +1257,18 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
         m_lastFov = 0.0f;
         m_lastAspect = 0.0f;
         m_lastLensRefresh = {};
+        m_opticProjectionEngine.reset();
     }
-    else if (wantOptic && readOptic && !opticRead)
+    else
+    {
+        if (m_cameraHealthFailureActive)
+        {
+            mem.ReportDmaHealthSuccess(DmaHealthSource::CameraChain);
+            m_cameraHealthFailureActive = false;
+        }
+        m_cameraReadFailureSince = {};
+    }
+    if (fpsRead && wantOptic && !opticRead && !opticSampleBusy)
     {
         
         if (m_opticMatrixReadFailures < kOpticMatrixFailureLimit)
@@ -1122,14 +1291,14 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
             }
         }
     }
-    else if (opticRead)
+    else if (fpsRead && opticRead)
     {
         m_opticMatrixReadFailures = 0;
     }
 
     state.fov = m_lastFov;
     state.aspect = m_lastAspect;
-    state.usingOptic = fpsRead && opticRead && validFov(state.fov) && validAspect(state.aspect);
+    state.usingOptic = fpsRead && opticRead;
     state.activeKind = state.usingOptic ? ManagedCameraKind::Optic : ManagedCameraKind::Fps;
     state.activeCamera = state.usingOptic ? m_opticCamera : m_fpsCamera;
     state.activeViewMatrixAddress = state.usingOptic ? m_opticViewMatrixAddress : m_fpsViewMatrixAddress;
@@ -1137,8 +1306,15 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
     state.valid = fpsRead;
     if (fpsRead)
     {
-        state.rawViewMatrix = state.usingOptic ? opticRaw : fpsRaw;
-        state.viewMatrix = glm::transpose(state.rawViewMatrix);
+        state.mainViewProjection = fpsSample.viewProjection;
+        state.opticViewProjection = opticSample.viewProjection;
+        state.opticProjection = std::move(opticProjection);
+        state.rawViewMatrix = state.usingOptic
+            ? opticSample.viewProjection
+            : fpsSample.viewProjection;
+        state.viewMatrix = properOpticRead
+            ? state.opticProjection.combined
+            : state.rawViewMatrix;
     }
     else
     {
@@ -1206,7 +1382,7 @@ bool CameraManager::validAspect(float value)
     return std::isfinite(value) && value > 0.1f && value < 10.0f;
 }
 
-bool CameraManager::worldToScreen(const CameraManagerState& state, const glm::vec3& world, glm::vec2& screen, float viewportWidth, float viewportHeight)
+bool CameraManager::worldToScreen(const CameraManagerState& state, const glm::vec3& world, glm::vec2& screen, float viewportWidth, float viewportHeight, bool opticOnly)
 {
     if (!state.valid ||
         !std::isfinite(viewportWidth) ||
@@ -1217,57 +1393,68 @@ bool CameraManager::worldToScreen(const CameraManagerState& state, const glm::ve
         return false;
     }
 
-    const glm::highp_mat4& matrix = state.viewMatrix;
-
-    const float w = glm::dot(
-        glm::vec3{ matrix[3][0], matrix[3][1], matrix[3][2] },
-        world) + matrix[3][3];
-
-    if (!std::isfinite(w) || w <= 0.010f)
-        return false;
-
-    float x = glm::dot(
-        glm::vec3{ matrix[0][0], matrix[0][1], matrix[0][2] },
-        world) + matrix[0][3];
-    float y = glm::dot(
-        glm::vec3{ matrix[1][0], matrix[1][1], matrix[1][2] },
-        world) + matrix[1][3];
-
-    if (state.usingOptic)
+    glm::vec2 ndc{};
+    if (state.usingOptic && state.opticProjection.valid)
     {
-        if (!validFov(state.fov) || !validAspect(state.aspect))
+        glm::vec2 opticNdc{};
+        
+        if (OpticProjectionEngine::projectPoint(state.opticViewProjection,
+                world, opticNdc) &&
+            OpticProjectionEngine::projectPoint(state.opticProjection.combined,
+                world, ndc) &&
+            OpticProjectionEngine::pointInConvexMask(ndc,
+                state.opticProjection.mask))
+        {
+            // Use the correctly zoomed optic projection inside the glass
+        }
+        else if (!opticOnly &&
+            OpticProjectionEngine::projectPoint(state.mainViewProjection,
+                     world, ndc) &&
+            !OpticProjectionEngine::pointInConvexMask(ndc,
+                state.opticProjection.mask))
+        {
+            // Use the main camera everywhere outside the glass
+        }
+        else
+        {
             return false;
-
-        constexpr float kPi = 3.14159265358979323846f;
-        const float halfAngle =
-            (kPi / 180.0f) * state.fov * 0.5f;
-        const float cotangent =
-            std::cos(halfAngle) / std::sin(halfAngle);
-
-        if (!std::isfinite(cotangent) || std::fabs(cotangent) < 0.00001f)
-            return false;
-
-        x /= cotangent * state.aspect * 0.5f;
-        y /= cotangent * 0.5f;
+        }
     }
-
-    const float ndcX = x / w;
-    const float ndcY = y / w;
-
-    if (!std::isfinite(ndcX) || !std::isfinite(ndcY))
-        return false;
+    else
+    {
+        if (!OpticProjectionEngine::projectPoint(state.mainViewProjection, world, ndc))
+            return false;
+    }
 
     constexpr float edgeBuffer = 1.5f;
-    if (ndcX < -edgeBuffer || ndcX > edgeBuffer ||
-        ndcY < -edgeBuffer || ndcY > edgeBuffer)
-    {
+    if (ndc.x < -edgeBuffer || ndc.x > edgeBuffer ||
+        ndc.y < -edgeBuffer || ndc.y > edgeBuffer)
         return false;
-    }
 
     screen = {
-        viewportWidth * 0.5f * (1.0f + ndcX),
-        viewportHeight * 0.5f * (1.0f - ndcY)
+        viewportWidth * 0.5f * (1.0f + ndc.x),
+        viewportHeight * 0.5f * (1.0f - ndc.y)
     };
+    return std::isfinite(screen.x) && std::isfinite(screen.y);
+}
 
-    return true;
+bool CameraManager::worldSegmentToScreen(const CameraManagerState& state, const glm::vec3& worldStart, const glm::vec3& worldEnd, float viewportWidth, float viewportHeight, std::vector<CameraScreenSegment>& segments, bool opticOnly)
+{
+    segments.clear();
+    if (!state.valid)
+        return false;
+
+    const OpticProjectionState& optic = state.usingOptic
+        ? state.opticProjection
+        : OpticProjectionState{};
+    return OpticProjectionEngine::projectSegment(
+        state.mainViewProjection,
+        state.opticViewProjection,
+        optic,
+        worldStart,
+        worldEnd,
+        viewportWidth,
+        viewportHeight,
+        segments,
+        opticOnly);
 }

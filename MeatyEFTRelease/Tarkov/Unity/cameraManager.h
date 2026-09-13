@@ -10,10 +10,29 @@
 
 #include <glm/glm.hpp>
 
+#include "OpticProjection.h"
+
 enum class ManagedCameraKind : std::uint8_t
 {
     Fps,
     Optic
+};
+
+enum class OpticPacketOutcome : std::uint8_t
+{
+    Idle,
+    Accepted,
+    Rejected,
+    Retained
+};
+
+struct CameraProjectionDiagnostics
+{
+    std::uint64_t attempts = 0;
+    std::uint64_t accepted = 0;
+    std::uint64_t rejected = 0;
+    std::uint64_t retained = 0;
+    OpticPacketOutcome lastOutcome = OpticPacketOutcome::Idle;
 };
 
 struct CameraSightState
@@ -39,6 +58,11 @@ struct CameraManagerState
 {
     glm::highp_mat4 rawViewMatrix{};
     glm::highp_mat4 viewMatrix{};
+    glm::highp_mat4 mainViewProjection{};
+    glm::highp_mat4 opticViewProjection{};
+    OpticProjectionState opticProjection{};
+    std::string cameraSampleFailure;
+    std::string opticProjectionFailure;
 
     std::vector<CameraSightState> sights;
 
@@ -86,15 +110,19 @@ public:
 
     [[nodiscard]] bool initialize();
 
-    [[nodiscard]] bool update(std::uint64_t localPwa, std::uint64_t currentOpticSight = 0);
+    [[nodiscard]] bool update(std::uint64_t localPwa, std::uint64_t currentOpticSight = 0, std::uint64_t localPlayer = 0);
 
-    [[nodiscard]] bool updateWithAds(std::uint64_t localPwa, bool isAds, std::uint64_t currentOpticSight = 0);
+    [[nodiscard]] bool updateWithAds(std::uint64_t localPwa, bool isAds, std::uint64_t currentOpticSight = 0, std::uint64_t localPlayer = 0);
 
     void reset();
 
     [[nodiscard]] CameraManagerSnapshot snapshot() const noexcept;
 
-    [[nodiscard]] static bool worldToScreen(const CameraManagerState& state, const glm::vec3& world, glm::vec2& screen, float viewportWidth, float viewportHeight);
+    [[nodiscard]] CameraProjectionDiagnostics diagnostics() const noexcept;
+
+    [[nodiscard]] static bool worldToScreen(const CameraManagerState& state, const glm::vec3& world, glm::vec2& screen, float viewportWidth, float viewportHeight, bool opticOnly = false);
+
+    [[nodiscard]] static bool worldSegmentToScreen(const CameraManagerState& state, const glm::vec3& worldStart, const glm::vec3& worldEnd, float viewportWidth, float viewportHeight, std::vector<CameraScreenSegment>& segments, bool opticOnly = false);
 
 private:
     struct CameraListView
@@ -107,7 +135,7 @@ private:
     [[nodiscard]] bool resolveCameras();
     [[nodiscard]] bool resolveCamerasFromAllCameras(std::uint64_t& fps, std::uint64_t& optic);
 
-    [[nodiscard]] bool updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_t currentOpticSight, std::chrono::steady_clock::time_point now);
+    [[nodiscard]] bool updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_t currentOpticSight, std::uint64_t localPlayer, std::chrono::steady_clock::time_point now);
 
     [[nodiscard]] bool readCameraList(std::uint64_t globalAddress, CameraListView& list) const;
     [[nodiscard]] std::string readCameraName(std::uint64_t camera) const;
@@ -163,11 +191,23 @@ private:
     bool m_lastUsingOptic = false;
 
     std::uint8_t m_opticMatrixReadFailures = 0;
+    std::chrono::steady_clock::time_point m_cameraReadFailureSince{};
 
     std::uint64_t m_busyReadSkips = 0;
+    std::uint64_t m_observedDmaRecoveryEpoch = 0;
+    bool m_cameraHealthFailureActive = false;
+    bool m_opticMeshHealthFailureActive = false;
+
+    OpticProjectionEngine m_opticProjectionEngine{};
 
     std::atomic<CameraManagerSnapshot> m_snapshot;
     std::atomic<std::uint64_t> m_version{ 0 };
+    std::atomic<std::uint64_t> m_opticSampleAttempts{ 0 };
+    std::atomic<std::uint64_t> m_opticAcceptedSamples{ 0 };
+    std::atomic<std::uint64_t> m_opticRejectedSamples{ 0 };
+    std::atomic<std::uint64_t> m_opticRetainedPackets{ 0 };
+    std::atomic<OpticPacketOutcome> m_lastOpticOutcome{
+        OpticPacketOutcome::Idle };
 };
 
 extern CameraManager cameraManagerTest;

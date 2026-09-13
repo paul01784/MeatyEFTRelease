@@ -5,6 +5,7 @@
 #include "Web/TarkovDev/TarkovDevClient.h"
 #include "Tarkov/GameWorld/MainGame.h"
 #include "Web/MeatyAPI/DogTagAPI.h"
+#include "memory/Memory.h"
 
 #include "UI/SplashWindow.h"
 #include "UI/resource.h"
@@ -49,6 +50,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     ::ShowWindow(::GetConsoleWindow(), SW_HIDE);
 
     LOGS.logInfo("[MAIN] Loading application");
+    LOGS.logNotice(NoticeColour::GREEN, "Application loaded, waiting for connection...");
 
     SplashWindow splash;
 
@@ -324,6 +326,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
         mainGameThread.request_stop();
         mainGameThread.join();
     }
+
+    mem.doDMADisconnect();
+    while (mem.IsInitRunning())
+        Sleep(10);
 
     return 0;
 }

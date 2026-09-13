@@ -7,12 +7,14 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.34";
+std::string globals::appVersion = "1.0.35";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
 float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
+bool globals::appMaximizeWindow = true;
+bool globals::appHideTitlebar = false;
 std::string globals::dogTagAPIKey = "";
 
 std::string globals::radarSubText = "";
@@ -39,6 +41,28 @@ double globals::taskFireport = 16;
 double globals::taskMemoryManager = 100;
 double globals::taskRaidMonitor = 800;
 double globals::taskAim = 1;
+
+void globals::resetTaskIntervals()
+{
+    taskPlayers = 20;
+    taskPlayerPositions = 10;
+    taskPlayersBones = 33;
+    taskStaticVisibility = 250;
+    taskGrenades = 100;
+    taskPlayersEquipment = 2000;
+    taskPlayerMetadata = 250;
+    taskExfil = 5000;
+    taskLoot = 250;
+    taskQuest = 7000;
+    taskWishManager = 1000;
+    taskTripWire = 100;
+    taskKeyManager = 25;
+    taskCamera = 1;
+    taskFireport = 16;
+    taskMemoryManager = 100;
+    taskRaidMonitor = 800;
+    taskAim = 1;
+}
 
 // App menu settings/status
 bool appMenu::appSettings = false;
@@ -115,6 +139,10 @@ int espGlobals::drawPScavDist = 200;
 int espGlobals::drawScavDist = 200;
 int espGlobals::drawBossDist = 200;
 int espGlobals::drawUsecDist = 200;
+bool espGlobals::fuserDistanceFadeEnabled = false;
+int espGlobals::fuserFadeStartDistance = 100;
+int espGlobals::fuserFadeEndDistance = 200;
+int espGlobals::fuserFadeMinimumOpacity = 20;
 bool espGlobals::drawPlayerEquip = false;
 bool espGlobals::drawHandItem = true;
 int espGlobals::aimOverlayAlert = 1;
@@ -184,6 +212,20 @@ int espGlobals::getMaximumPlayerDrawDistance()
     });
 }
 
+float espGlobals::getFuserDistanceOpacity(float distance)
+{
+    if (!fuserDistanceFadeEnabled || !std::isfinite(distance))
+        return 1.0f;
+
+    const float start = static_cast<float>(std::max(0, fuserFadeStartDistance));
+    const float end = static_cast<float>(std::max(fuserFadeStartDistance + 1, fuserFadeEndDistance));
+    const float minimum = std::clamp(static_cast<float>(fuserFadeMinimumOpacity) / 100.0f, 0.0f, 1.0f);
+
+    const float linear = std::clamp((distance - start) / (end - start), 0.0f, 1.0f);
+    const float smooth = linear * linear * (3.0f - 2.0f * linear);
+    return 1.0f + (minimum - 1.0f) * smooth;
+}
+
 int espGlobals::getLootDrawDistance(const LootEntity& loot)
 {
     if (loot.isContainer())
@@ -219,6 +261,8 @@ float aimGlobals::aimDeadzonePixels = 2.5f;
 float aimGlobals::aimOffsetX = 0.f;
 float aimGlobals::aimOffsetY = 0.f;
 bool aimGlobals::showAimFovRing = true;
+
+std::atomic_bool cameraDebugGlobals::lensStabilityOverlay{ false };
 
 
 glm::vec4 coloursGlobals::playerPMC = { 1,1,1,1 };

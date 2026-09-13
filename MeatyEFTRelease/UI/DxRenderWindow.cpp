@@ -651,6 +651,7 @@ void DxRenderWindow::DrawString(
     cmd.fontName = fontName;
     cmd.textColour = colour;
     cmd.outlineColour = outlineColour;
+    cmd.outlineColour.a = std::clamp(outlineColour.a * colour.a, 0.0f, 1.0f);
     cmd.centered = centered;
     cmd.outlined = outlined;
 
@@ -685,6 +686,7 @@ void DxRenderWindow::DrawMarkerWithText(
     cmd.thickness = outlineThickness;
     cmd.outlined = outlinedText;
     cmd.colour = textOutlineColour;
+    cmd.colour.a = std::clamp(textOutlineColour.a * textColour.a, 0.0f, 1.0f);
     PushDrawCommand(std::move(cmd));
 }
 

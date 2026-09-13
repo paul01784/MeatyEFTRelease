@@ -2,10 +2,12 @@
 
 Debug LOGS;
 
-Debug::Debug() {
+Debug::Debug()
+{
     start_time = std::chrono::steady_clock::now();
 
-    try {
+    try
+    {
         logsDirectory = std::filesystem::current_path() / "logs";
         std::filesystem::create_directories(logsDirectory);
 
@@ -14,7 +16,8 @@ Debug::Debug() {
 
         cleanupOldLogFiles();
     }
-    catch (...) {
+    catch (...)
+    {
         logsDirectory = ".";
         logFileStem = "errors_" + currentDateTimeFileString();
         errorLogPath = makeLogPath(0);
@@ -24,20 +27,24 @@ Debug::Debug() {
     fileThread = std::thread(&Debug::fileWorkerLoop, this);
 }
 
-Debug::~Debug() {
+Debug::~Debug()
+{
     shutdownWorker();
 }
 
-void Debug::shutdownWorker() noexcept {
+void Debug::shutdownWorker() noexcept
+{
     workerRunning.store(false, std::memory_order_release);
     fileQueueCv.notify_all();
 
-    if (fileThread.joinable()) {
+    if (fileThread.joinable())
+    {
         fileThread.join();
     }
 }
 
-std::string Debug::currentDateTimeFileString() {
+std::string Debug::currentDateTimeFileString()
+{
     using namespace std::chrono;
 
     const auto now = system_clock::now();
@@ -54,7 +61,8 @@ std::string Debug::currentDateTimeFileString() {
     return oss.str();
 }
 
-std::string Debug::currentDateTimeString() {
+std::string Debug::currentDateTimeString()
+{
     using namespace std::chrono;
 
     const auto now = system_clock::now();
@@ -66,17 +74,15 @@ std::string Debug::currentDateTimeString() {
     localtime_s(&tm, &nowTimeT);
 
     std::ostringstream oss;
-    oss << std::put_time(&tm, "%d-%m-%Y %H:%M:%S")
-        << '.'
-        << std::setfill('0')
-        << std::setw(3)
-        << ms.count();
+    oss << std::put_time(&tm, "%d-%m-%Y %H:%M:%S") << '.' << std::setfill('0') << std::setw(3) << ms.count();
 
     return oss.str();
 }
 
-std::filesystem::path Debug::makeLogPath(int part) const {
-    if (part <= 0) {
+std::filesystem::path Debug::makeLogPath(int part) const
+{
+    if (part <= 0)
+    {
         return logsDirectory / (logFileStem + ".log");
     }
 
@@ -86,72 +92,120 @@ std::filesystem::path Debug::makeLogPath(int part) const {
     return logsDirectory / oss.str();
 }
 
-void Debug::cleanupOldLogFiles() noexcept {
-    try {
-        if (logsDirectory.empty() || !std::filesystem::exists(logsDirectory)) {
+void Debug::cleanupOldLogFiles() noexcept
+{
+    try
+    {
+        if (logsDirectory.empty() || !std::filesystem::exists(logsDirectory))
+        {
             return;
         }
 
-        struct LogFileInfo {
+        struct LogFileInfo
+        {
             std::filesystem::path path;
             std::filesystem::file_time_type writeTime;
         };
 
         std::vector<LogFileInfo> logFiles;
 
-        for (const auto& entry : std::filesystem::directory_iterator(logsDirectory)) {
-            if (!entry.is_regular_file()) {
+        for (const auto& entry : std::filesystem::directory_iterator(logsDirectory))
+        {
+            if (!entry.is_regular_file())
+            {
                 continue;
             }
 
             const auto path = entry.path();
             const auto filename = path.filename().string();
 
-            if (filename.rfind("errors_", 0) != 0) {
+            if (filename.rfind("errors_", 0) != 0)
+            {
                 continue;
             }
 
-            if (path.extension() != ".log") {
+            if (path.extension() != ".log")
+            {
                 continue;
             }
 
-            logFiles.push_back({
-                path,
-                std::filesystem::last_write_time(path)
-                });
+            logFiles.push_back({path, std::filesystem::last_write_time(path)});
         }
 
-        std::sort(logFiles.begin(), logFiles.end(),
-            [](const LogFileInfo& a, const LogFileInfo& b) {
-                return a.writeTime > b.writeTime;
-            });
+        std::sort(logFiles.begin(), logFiles.end(), [](const LogFileInfo& a, const LogFileInfo& b) { return a.writeTime > b.writeTime; });
 
-        if (logFiles.size() <= MaxLogFilesToKeep) {
+        if (logFiles.size() <= MaxLogFilesToKeep)
+        {
             return;
         }
 
-        for (size_t i = MaxLogFilesToKeep; i < logFiles.size(); ++i) {
+        for (size_t i = MaxLogFilesToKeep; i < logFiles.size(); ++i)
+        {
             std::error_code ec;
             std::filesystem::remove(logFiles[i].path, ec);
         }
     }
-    catch (...) {
-
+    catch (...)
+    {
     }
 }
 
-std::vector<Message> Debug::getMessages() const {
+std::vector<Message> Debug::getMessages() const
+{
     std::lock_guard<std::mutex> lock(messagesMutex);
     return messages;
 }
 
-void Debug::clearLog() {
+void Debug::clearLog()
+{
     std::lock_guard<std::mutex> lock(messagesMutex);
     messages.clear();
+    radarNoticeQueue.clear();
+    radarNoticeText.clear();
+    radarNoticeColour = NoticeColour::WHITE;
+    radarNoticeStartedAt = {};
 }
 
-void Debug::addMessage(const std::string& message, MessageLevel level) noexcept {
-    try {
+std::optional<RadarNotice> Debug::getRadarNotice(double lifetimeSeconds)
+{
+    std::lock_guard<std::mutex> lock(messagesMutex);
+    const auto now = std::chrono::steady_clock::now();
+
+    const auto startNextNotice = [&]()
+    {
+        if (radarNoticeQueue.empty())
+            return false;
+
+        radarNoticeText = std::move(radarNoticeQueue.front().first);
+        radarNoticeColour = radarNoticeQueue.front().second;
+        radarNoticeQueue.pop_front();
+        radarNoticeStartedAt = now;
+        return true;
+    };
+
+    if (radarNoticeText.empty() && !startNextNotice())
+        return std::nullopt;
+
+    double ageSeconds = std::chrono::duration<double>(now - radarNoticeStartedAt).count();
+    if (ageSeconds >= lifetimeSeconds)
+    {
+        radarNoticeText.clear();
+        radarNoticeColour = NoticeColour::WHITE;
+        radarNoticeStartedAt = {};
+
+        if (!startNextNotice())
+            return std::nullopt;
+
+        ageSeconds = 0.0;
+    }
+
+    return RadarNotice{radarNoticeText, radarNoticeColour, ageSeconds};
+}
+
+void Debug::addMessage(const std::string& message, MessageLevel level, NoticeColour noticeColour) noexcept
+{
+    try
+    {
         const auto now = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed_seconds = now - start_time;
         const double timestamp = elapsed_seconds.count();
@@ -159,29 +213,38 @@ void Debug::addMessage(const std::string& message, MessageLevel level) noexcept 
         {
             std::lock_guard<std::mutex> lock(messagesMutex);
 
-            messages.emplace_back(message, level, timestamp);
+            messages.emplace_back(message, level, timestamp, noticeColour);
 
-            if (messages.size() > MaxStoredMessages) {
+            if (level == MessageLevel::NOTICE)
+            {
+                if (radarNoticeQueue.size() >= MaxQueuedRadarNotices)
+                    radarNoticeQueue.pop_front();
+                radarNoticeQueue.emplace_back(message, noticeColour);
+            }
+
+            if (messages.size() > MaxStoredMessages)
+            {
                 const size_t extra = messages.size() - MaxStoredMessages;
                 messages.erase(messages.begin(), messages.begin() + extra);
             }
         }
 
         enqueueFileWrite(formatFileLine(message, level, timestamp));
-
     }
-    catch (...) {
-        
+    catch (...)
+    {
     }
 }
 
-void Debug::enqueueFileWrite(std::string line) noexcept {
-    try {
+void Debug::enqueueFileWrite(std::string line) noexcept
+{
+    try
+    {
         {
             std::lock_guard<std::mutex> lock(fileQueueMutex);
 
-            
-            if (fileQueue.size() >= MaxFileQueue) {
+            if (fileQueue.size() >= MaxFileQueue)
+            {
                 fileQueue.pop_front();
             }
 
@@ -190,58 +253,73 @@ void Debug::enqueueFileWrite(std::string line) noexcept {
 
         fileQueueCv.notify_one();
     }
-    catch (...) {
-        
+    catch (...)
+    {
     }
 }
 
-void Debug::fileWorkerLoop() noexcept {
-    try {
+void Debug::fileWorkerLoop() noexcept
+{
+    try
+    {
         std::ofstream file;
         std::deque<std::string> localQueue;
 
         int logPart = 0;
         size_t currentFileBytes = 0;
 
-        auto refreshFileSize = [&]() {
+        auto refreshFileSize = [&]()
+        {
             currentFileBytes = 0;
 
-            try {
-                if (std::filesystem::exists(errorLogPath)) {
+            try
+            {
+                if (std::filesystem::exists(errorLogPath))
+                {
                     currentFileBytes = static_cast<size_t>(std::filesystem::file_size(errorLogPath));
                 }
             }
-            catch (...) {
+            catch (...)
+            {
                 currentFileBytes = 0;
             }
-            };
+        };
 
-        auto openFile = [&]() -> bool {
-            if (file.is_open()) {
+        auto openFile = [&]() -> bool
+        {
+            if (file.is_open())
+            {
                 return true;
             }
 
-            try {
-                if (!logsDirectory.empty()) {
+            try
+            {
+                if (!logsDirectory.empty())
+                {
                     std::filesystem::create_directories(logsDirectory);
                 }
 
                 file.open(errorLogPath, std::ios::out | std::ios::app);
 
-                if (file.is_open()) {
+                if (file.is_open())
+                {
                     refreshFileSize();
                 }
             }
-            catch (...) {
+            catch (...)
+            {
                 return false;
             }
 
             return file.is_open();
-            };
+        };
 
-        auto rotateFile = [&]() -> bool {
-            try {
-                if (file.is_open()) {
+        auto rotateFile = [&]() -> bool
+        {
+            try
+            {
+                if (file.is_open())
+                {
                     file.flush();
                     file.close();
                 }
@@ -252,38 +330,42 @@ void Debug::fileWorkerLoop() noexcept {
 
                 return openFile();
             }
-            catch (...) {
+            catch (...)
+            {
                 return false;
             }
-            };
+        };
 
-        while (true) {
+        while (true)
+        {
             {
                 std::unique_lock<std::mutex> lock(fileQueueMutex);
 
-                fileQueueCv.wait(lock, [&]() {
-                    return !fileQueue.empty() ||
-                        !workerRunning.load(std::memory_order_acquire);
-                    });
+                fileQueueCv.wait(lock, [&]() { return !fileQueue.empty() || !workerRunning.load(std::memory_order_acquire); });
 
-                if (!workerRunning.load(std::memory_order_acquire) && fileQueue.empty()) {
+                if (!workerRunning.load(std::memory_order_acquire) && fileQueue.empty())
+                {
                     break;
                 }
 
                 localQueue.swap(fileQueue);
             }
 
-            if (localQueue.empty()) {
+            if (localQueue.empty())
+            {
                 continue;
             }
 
-            if (openFile()) {
-                for (const auto& line : localQueue) {
+            if (openFile())
+            {
+                for (const auto& line : localQueue)
+                {
                     const size_t lineBytes = line.size() + 1;
 
-                    if (currentFileBytes > 0 &&
-                        currentFileBytes + lineBytes > MaxLogFileBytes) {
-                        if (!rotateFile()) {
+                    if (currentFileBytes > 0 && currentFileBytes + lineBytes > MaxLogFileBytes)
+                    {
+                        if (!rotateFile())
+                        {
                             break;
                         }
                     }
@@ -298,35 +380,35 @@ void Debug::fileWorkerLoop() noexcept {
             localQueue.clear();
         }
 
-        if (file.is_open()) {
+        if (file.is_open())
+        {
             file.flush();
             file.close();
         }
     }
-    catch (...) {
-
+    catch (...)
+    {
     }
 }
 
-std::string Debug::formatFileLine(
-    const std::string& message,
-    MessageLevel level,
-    double timestamp
-) const {
+std::string Debug::formatFileLine(const std::string& message, MessageLevel level, double timestamp) const
+{
     std::ostringstream oss;
 
-    oss << '[' << currentDateTimeString() << "] "
-        << '[' << levelToString(level) << "] "
-        << "[+" << std::fixed << std::setprecision(3) << timestamp << "s] "
-        << message;
+    oss << '[' << currentDateTimeString() << "] " << '[' << levelToString(level) << "] "
+        << "[+" << std::fixed << std::setprecision(3) << timestamp << "s] " << message;
 
     return oss.str();
 }
 
-const char* Debug::levelToString(MessageLevel level) {
-    switch (level) {
+const char* Debug::levelToString(MessageLevel level)
+{
+    switch (level)
+    {
     case MessageLevel::INFO:
         return "INFO";
+    case MessageLevel::NOTICE:
+        return "NOTICE";
     case MessageLevel::WARN:
         return "WARN";
     case MessageLevel::ERR:

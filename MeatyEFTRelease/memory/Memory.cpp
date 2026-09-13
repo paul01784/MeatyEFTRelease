@@ -1025,14 +1025,90 @@ bool Memory::RefreshProcessInformationNow()
 	return ok;
 }
 
+void Memory::ReportDmaHealthFailure(DmaHealthSource source, uint64_t fingerprint)
+{
+	using Clock = std::chrono::steady_clock;
+
+	constexpr uint32_t kFailureThreshold = 3;
+	constexpr auto kMinimumFailureDuration = std::chrono::seconds(1);
+	const size_t sourceIndex = static_cast<size_t>(source);
+	if (sourceIndex >= dmaHealthFailures.size())
+		return;
+
+	const auto now = Clock::now();
+	std::lock_guard<std::mutex> lock(dmaHealthMutex);
+	DmaHealthFailureState& state = dmaHealthFailures[sourceIndex];
+
+	if (state.consecutiveFailures == 0 || state.fingerprint != fingerprint)
+	{
+		state = {};
+		state.fingerprint = fingerprint;
+		state.firstFailure = now;
+	}
+
+	if (state.consecutiveFailures < (std::numeric_limits<uint32_t>::max)())
+		++state.consecutiveFailures;
+
+	if (!state.recoveryQueued &&
+		state.consecutiveFailures >= kFailureThreshold &&
+		(now - state.firstFailure) >= kMinimumFailureDuration)
+	{
+		// One refresh is allowed for each stable failure fingerprint. A source
+		// must recover, or expose a different failing address, before it can
+		// queue another expensive full VMM refresh.
+		state.recoveryQueued = true;
+		dmaHealthRecoveryPending.store(true, std::memory_order_release);
+	}
+}
+
+void Memory::ReportDmaHealthSuccess(DmaHealthSource source)
+{
+	const size_t sourceIndex = static_cast<size_t>(source);
+	if (sourceIndex >= dmaHealthFailures.size())
+		return;
+
+	std::lock_guard<std::mutex> lock(dmaHealthMutex);
+	dmaHealthFailures[sourceIndex] = {};
+}
+
+uint64_t Memory::GetDmaRecoveryEpoch() const noexcept
+{
+	return dmaRecoveryEpoch.load(std::memory_order_acquire);
+}
+
 void Memory::RunCacheMaintenance()
 {
 	using Clock = std::chrono::steady_clock;
 
 	constexpr auto kMemoryRefreshInterval = std::chrono::milliseconds(300);
 	constexpr auto kTlbRefreshInterval = std::chrono::seconds(2);
+	constexpr auto kHealthRecoveryCooldown = std::chrono::seconds(15);
 
 	const auto now = Clock::now();
+
+	if (dmaHealthRecoveryPending.load(std::memory_order_acquire))
+	{
+		bool runFullRecovery = false;
+		{
+			std::lock_guard<std::mutex> healthLock(dmaHealthMutex);
+			if (dmaHealthRecoveryPending.load(std::memory_order_relaxed) &&
+				(lastDmaHealthRecovery.time_since_epoch().count() == 0 ||
+					(now - lastDmaHealthRecovery) >= kHealthRecoveryCooldown))
+			{
+				lastDmaHealthRecovery = now;
+				dmaHealthRecoveryPending.store(false, std::memory_order_release);
+				runFullRecovery = true;
+			}
+		}
+
+		if (runFullRecovery && RefreshProcessInformationNow())
+		{
+			// Re-read fixed roots before consumers observe the new epoch. Their
+			// derived pointer chains are invalidated independently on that epoch.
+			RefreshTarkovPointerSnapshot();
+			dmaRecoveryEpoch.fetch_add(1, std::memory_order_acq_rel);
+		}
+	}
 
 	// Cache maintenance must never queue behind live camera/player reads. The
 	// background task will try again on its next short scheduler tick.
@@ -1681,6 +1757,14 @@ void Memory::CloseAndReset()
 
 	memoryGlobals::dmaConnected.store(false, std::memory_order_release);
 
+	{
+		std::lock_guard<std::mutex> healthLock(dmaHealthMutex);
+		dmaHealthFailures = {};
+		dmaHealthRecoveryPending.store(false, std::memory_order_release);
+		lastDmaHealthRecovery = {};
+	}
+	dmaRecoveryEpoch.fetch_add(1, std::memory_order_acq_rel);
+
 	MemoryLogInfo("DMA disconnected");
 }
 
@@ -1933,7 +2017,26 @@ void Memory::PreloadTarkovPointerSnapshot()
 
 	RefreshTarkovPointerSnapshot();
 
-	if (IsValidPointer(GetTarkovPointerSnapshot().gameObjectManager) ||
+	const TarkovPointerSnapshot refreshedSnapshot =
+		GetTarkovPointerSnapshot();
+	uint64_t refreshedActiveNodes = 0;
+	uint64_t refreshedLastActiveNode = 0;
+	const bool fixedManagerUsable =
+		IsValidPointer(refreshedSnapshot.gameObjectManager) &&
+		TryRead(
+			refreshedSnapshot.gameObjectManager +
+				kGameObjectManagerActiveNodes,
+			refreshedActiveNodes,
+			DmaCacheMode::Uncached) &&
+		TryRead(
+			refreshedSnapshot.gameObjectManager +
+				kGameObjectManagerLastActiveNode,
+			refreshedLastActiveNode,
+			DmaCacheMode::Uncached) &&
+		IsValidPointer(refreshedActiveNodes) &&
+		IsValidPointer(refreshedLastActiveNode);
+
+	if (fixedManagerUsable ||
 		!IsValidPointer(snapshot.unityPlayerBase) ||
 		snapshot.unityPlayerSize == 0)
 	{

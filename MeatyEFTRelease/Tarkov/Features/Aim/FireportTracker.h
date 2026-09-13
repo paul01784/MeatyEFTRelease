@@ -20,6 +20,9 @@ struct FireportPose
     glm::vec2 screenStart{};
     glm::vec2 screenEnd{};
     const char* pathUsed = nullptr;
+    std::uint64_t cameraVersion = 0;
+    std::uint64_t version = 0;
+    std::chrono::steady_clock::time_point publishedAt{};
 };
 
 using FireportPoseSnapshot = std::shared_ptr<const FireportPose>;
@@ -44,6 +47,7 @@ private:
     void clearCachedMuzzle() noexcept;
 
     std::atomic<FireportPoseSnapshot> publishedPose_;
+    std::atomic<std::uint64_t> publishedVersion_{ 0 };
     std::unique_ptr<UnityTransform> muzzleTransform_;
     uint64_t cachedLocalPlayer_ = 0;
     uint64_t cachedHandsController_ = 0;

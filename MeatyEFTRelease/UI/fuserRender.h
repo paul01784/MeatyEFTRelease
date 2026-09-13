@@ -7,6 +7,7 @@
 #include <cmath>
 #include <string>
 #include <atomic>
+#include <iomanip>
 #include <sstream>
 #include <iostream>
 
@@ -108,23 +109,7 @@ namespace fuserRender
 
     static inline void CaptureFrameSnapshots()
     {
-        constexpr auto kManagedCameraMaxAge =
-            std::chrono::milliseconds(250);
-
         g_frameManagedCameraSnapshot = cameraManagerTest.snapshot();
-
-        const auto now = std::chrono::steady_clock::now();
-        const bool managedCameraFresh =
-            g_frameManagedCameraSnapshot &&
-            g_frameManagedCameraSnapshot->valid &&
-            g_frameManagedCameraSnapshot->publishedAt !=
-                std::chrono::steady_clock::time_point{} &&
-            now >= g_frameManagedCameraSnapshot->publishedAt &&
-            (now - g_frameManagedCameraSnapshot->publishedAt) <=
-                kManagedCameraMaxAge;
-
-        if (!managedCameraFresh)
-            g_frameManagedCameraSnapshot.reset();
 
         g_framePlayerSnapshot = registeredPlayers.getCacheSnapshot();
         g_frameLootSnapshot = Loot.getCacheSnapshot();
@@ -276,9 +261,11 @@ namespace fuserRender
         return (std::sin(value) * 0.5f) + 0.5f;
     }
 
-    static inline glm::vec4 WithAlpha(const glm::vec4& colour, float alpha)
+    static inline glm::vec4 WithOpacityMultiplier(const glm::vec4& colour, float opacityMultiplier)
     {
-        return glm::vec4(colour.r, colour.g, colour.b, alpha);
+        glm::vec4 result = colour;
+        result.a = std::clamp(result.a * opacityMultiplier, 0.0f, 1.0f);
+        return result;
     }
 
     static inline void RenderMovingBox(float time, float screenW, float screenH, float renderScale)
@@ -725,28 +712,15 @@ namespace fuserRender
 
 
         const FireportPose& pose = *g_frameFireportSnapshot;
-        if (!pose.valid)
-            return;
-
-        glm::vec2 screenStart{};
-
-        if (!ProjectWorldToScreen(pose.worldOrigin, &screenStart))
-            return;
-
-        const glm::vec3 endWorld =
-            pose.worldOrigin +
-            pose.worldForward * kFireportProjectionDistanceM;
-        glm::vec2 screenEnd{};
-
-        if (!ProjectWorldToScreen(endWorld, &screenEnd))
+        if (!pose.valid || !pose.screenStartOk || !pose.screenEndOk)
             return;
 
         static const glm::vec4 kFireportLine{1.0f, 0.86f, 0.24f, 0.95f};
         g_DxWindow.DrawLine(
-            screenStart.x,
-            screenStart.y,
-            screenEnd.x,
-            screenEnd.y,
+            pose.screenStart.x,
+            pose.screenStart.y,
+            pose.screenEnd.x,
+            pose.screenEnd.y,
             kFireportLine,
             2.0f
         );
@@ -761,20 +735,121 @@ namespace fuserRender
         if (aimGlobals::aimFOV <= 0.f)
             return;
 
-        const AimReferencePoint aimReference =
-            readOnlyAim.resolveAimReference();
-        if (!aimReference.valid)
+        const FireportPose& pose = *g_frameFireportSnapshot;
+        if (!pose.valid || !pose.aimRefOk)
             return;
 
-        const glm::vec2 ringCenter = aimReference.pos;
-
         g_DxWindow.DrawCircle(
-            ringCenter.x,
-            ringCenter.y,
+            pose.screenEnd.x,
+            pose.screenEnd.y,
             aimGlobals::aimFOV,
             coloursGlobals::fovCircle,
             1.5f
         );
+    }
+
+    static inline glm::vec2 DiagnosticNdcToScreen(const glm::vec2& ndc)
+    {
+        return {
+            (ndc.x + 1.0f) * ScreenWidth() * 0.5f,
+            (1.0f - ndc.y) * ScreenHeight() * 0.5f
+        };
+    }
+
+    static inline void DrawDiagnosticCross(const glm::vec2& point, const glm::vec4& colour, float size)
+    {
+        g_DxWindow.DrawLine(point.x - size, point.y, point.x + size, point.y, colour, 2.0f);
+        g_DxWindow.DrawLine(point.x, point.y - size, point.x, point.y + size, colour, 2.0f);
+    }
+
+    static inline void RenderLensStabilityDiagnostics()
+    {
+        if (!cameraDebugGlobals::lensStabilityOverlay.load(
+            std::memory_order_acquire) ||
+            !g_frameManagedCameraSnapshot ||
+            !g_frameManagedCameraSnapshot->scoped ||
+            !g_frameManagedCameraSnapshot->opticProjection.valid)
+        {
+            return;
+        }
+
+        const CameraManagerState& camera = *g_frameManagedCameraSnapshot;
+        const OpticProjectionState& optic = camera.opticProjection;
+        const glm::vec4 quadColour{ 1.0f, 0.82f, 0.10f, 0.95f };
+        const glm::vec4 maskColour{ 1.0f, 0.15f, 0.75f, 0.95f };
+        const glm::vec4 centerColour{ 1.0f, 0.45f, 0.05f, 1.0f };
+        const glm::vec4 mainPointColour{ 0.25f, 1.0f, 0.30f, 1.0f };
+        const glm::vec4 opticPointColour{ 0.10f, 0.90f, 1.0f, 1.0f };
+
+        for (std::size_t index = 0; index < optic.imageQuad.size(); ++index)
+        {
+            const glm::vec2 start = DiagnosticNdcToScreen(optic.imageQuad[index]);
+            const glm::vec2 end = DiagnosticNdcToScreen(optic.imageQuad[(index + 1) % optic.imageQuad.size()]);
+            g_DxWindow.DrawLine(start.x, start.y, end.x, end.y, quadColour, 1.5f);
+        }
+
+        for (std::size_t index = 0; index < optic.mask.size(); ++index)
+        {
+            const glm::vec2 start = DiagnosticNdcToScreen(optic.mask[index]);
+            const glm::vec2 end = DiagnosticNdcToScreen(optic.mask[(index + 1) % optic.mask.size()]);
+            g_DxWindow.DrawLine(start.x, start.y, end.x, end.y, maskColour, 1.5f);
+        }
+
+        const glm::vec2 imageCenter = DiagnosticNdcToScreen(optic.imageCenterNdc);
+        DrawDiagnosticCross(imageCenter, centerColour, 8.0f);
+
+        const FireportPose& fireport = *g_frameFireportSnapshot;
+        if (fireport.valid)
+        {
+            const glm::vec3 testWorld = fireport.worldOrigin +
+                fireport.worldForward * kFireportProjectionDistanceM;
+            glm::vec2 mainNdc{};
+            if (OpticProjectionEngine::projectPoint(camera.mainViewProjection, testWorld, mainNdc))
+            {
+                DrawDiagnosticCross(DiagnosticNdcToScreen(mainNdc), mainPointColour, 6.0f);
+            }
+
+            if (fireport.screenEndOk)
+                DrawDiagnosticCross(fireport.screenEnd, opticPointColour, 6.0f);
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const auto ageMs = [&](std::chrono::steady_clock::time_point time)
+        {
+            if (time == std::chrono::steady_clock::time_point{} || now < time)
+                return -1.0;
+            return std::chrono::duration<double, std::milli>(now - time).count();
+        };
+        const double cameraAgeMs = ageMs(camera.publishedAt);
+        const double lensAgeMs = ageMs(optic.sampledAt);
+        const double fireportAgeMs = ageMs(fireport.publishedAt);
+        const PlayerSnapshotTelemetry players = registeredPlayers.getSnapshotTelemetry();
+        const CameraProjectionDiagnostics diagnostics = cameraManagerTest.diagnostics();
+        const bool held = diagnostics.lastOutcome == OpticPacketOutcome::Retained;
+
+        std::ostringstream firstLine;
+        firstLine << std::fixed << std::setprecision(1)
+            << "LENS DIAG  packet " << camera.version
+            << "  sample " << optic.sampleSequence
+            << (held ? "  HELD/STALE" : "  FRESH")
+            << "  camera " << cameraAgeMs << "ms"
+            << "  lens " << lensAgeMs << "ms";
+        g_DxWindow.DrawString(
+            firstLine.str(), 20.0f, 108.0f, 13.0f,
+            held ? glm::vec4(1.0f, 0.30f, 0.20f, 1.0f)
+                 : glm::vec4(0.30f, 1.0f, 0.40f, 1.0f),
+            false, true);
+
+        std::ostringstream secondLine;
+        secondLine << std::fixed << std::setprecision(1)
+            << "player motion " << players.motionAgeMs << "ms"
+            << "  fireport " << fireportAgeMs << "ms"
+            << "  lens px " << imageCenter.x << ", " << imageCenter.y
+            << "  A/R/H " << diagnostics.accepted << "/"
+            << diagnostics.rejected << "/" << diagnostics.retained;
+        g_DxWindow.DrawString(
+            secondLine.str(), 20.0f, 126.0f, 13.0f,
+            glm::vec4(0.95f, 0.95f, 0.95f, 1.0f), false, true);
     }
 
     static inline void RenderTasks()
@@ -803,6 +878,10 @@ namespace fuserRender
             if (distance > espGlobals::drawQuestLootDist)
                 continue;
 
+            const glm::vec4 questColour = WithOpacityMultiplier(coloursGlobals::questMarker, espGlobals::getFuserDistanceOpacity(static_cast<float>(distance)));
+            if (questColour.a <= 0.001f)
+                continue;
+
             if (loc.objectiveType != "visit" &&
                 loc.objectiveType != "plantItem" &&
                 loc.objectiveType != "plantQuestItem" &&
@@ -827,7 +906,7 @@ namespace fuserRender
                 screenPos.x,
                 screenPos.y,
                 2.0f,
-                coloursGlobals::questMarker
+                questColour
             );
 
             g_DxWindow.DrawString(
@@ -835,7 +914,7 @@ namespace fuserRender
                 screenPos.x + 6.0f,
                 screenPos.y - 3.0f,
                 13.0f,
-                coloursGlobals::questMarker,
+                questColour,
                 false,
                 true
             );
@@ -940,6 +1019,10 @@ namespace fuserRender
                     break;
                 }
             }
+
+            statusColour = WithOpacityMultiplier(statusColour, espGlobals::getFuserDistanceOpacity(static_cast<float>(distance)));
+            if (statusColour.a <= 0.001f)
+                continue;
 
             const std::string exfilText = currentExfil.extractName + " [" + statusText + "]" + " " + std::to_string(distance) + "m";
 
@@ -1050,6 +1133,10 @@ namespace fuserRender
             if (distance > espGlobals::drawTripwiresDist)
                 continue;
 
+            const glm::vec4 tripwireColour = WithOpacityMultiplier(coloursGlobals::tripwires, espGlobals::getFuserDistanceOpacity(distance));
+            if (tripwireColour.a <= 0.001f)
+                continue;
+
             glm::vec2 toScreen{};
 
             if (!ProjectWorldToScreen(tripwire.worldLocation, &toScreen))
@@ -1064,7 +1151,7 @@ namespace fuserRender
                     fromScreen.y,
                     toScreen.x,
                     toScreen.y,
-                    coloursGlobals::tripwires,
+                    tripwireColour,
                     2.0f);
             }
 
@@ -1076,13 +1163,14 @@ namespace fuserRender
                 toScreen.x,
                 toScreen.y + 3.0f,
                 14.0f,
-                coloursGlobals::tripwires,
+                tripwireColour,
                 true,
                 true);
         }
     }
 
     static inline void DrawPlayerSkeleton(
+        const Player& player,
         const std::vector<glm::vec2>& bones,
         const std::vector<bool>& visibleBones,
         const glm::vec4& colour)
@@ -1097,13 +1185,40 @@ namespace fuserRender
 
                 if (firstBone >= bones.size() ||
                     secondBone >= bones.size() ||
+                    firstBone >= player.bonePositions.size() ||
+                    secondBone >= player.bonePositions.size() ||
                     firstBone >= visibleBones.size() ||
-                    secondBone >= visibleBones.size() ||
-                    !visibleBones[firstBone] ||
-                    !visibleBones[secondBone])
+                    secondBone >= visibleBones.size())
                 {
                     return;
                 }
+
+                std::vector<CameraScreenSegment> segments;
+                if (g_frameManagedCameraSnapshot &&
+                    CameraManager::worldSegmentToScreen(
+                        *g_frameManagedCameraSnapshot,
+                        player.bonePositions[firstBone],
+                        player.bonePositions[secondBone],
+                        espGlobals::gameRes.x,
+                        espGlobals::gameRes.y,
+                        segments,
+                        false))
+                {
+                    for (const CameraScreenSegment& segment : segments)
+                    {
+                        g_DxWindow.DrawLine(
+                            segment.start.x,
+                            segment.start.y,
+                            segment.end.x,
+                            segment.end.y,
+                            colour,
+                            1.0f);
+                    }
+                    return;
+                }
+
+                if (!visibleBones[firstBone] || !visibleBones[secondBone])
+                    return;
 
                 g_DxWindow.DrawLine(
                     bones[firstBone].x,
@@ -1294,7 +1409,7 @@ namespace fuserRender
         return nearestBtr;
     }
 
-    static inline std::vector<glm::vec4> GetBtrPassengerColours(const Player& btr, const PlayerCollection& players)
+    static inline std::vector<glm::vec4> GetBtrPassengerColours(const Player& btr, const PlayerCollection& players, float opacityMultiplier)
     {
         std::vector<const Player*> passengers;
         passengers.reserve(4);
@@ -1323,7 +1438,11 @@ namespace fuserRender
         std::vector<glm::vec4> colours;
         colours.reserve(std::min<size_t>(4, passengers.size()));
         for (size_t index = 0; index < passengers.size() && index < 4; ++index)
-            colours.push_back(passengers[index]->colour);
+        {
+            glm::vec4 colour = passengers[index]->colour;
+            colour.a = std::clamp(colour.a * opacityMultiplier, 0.0f, 1.0f);
+            colours.push_back(colour);
+        }
 
         return colours;
     }
@@ -1352,7 +1471,7 @@ namespace fuserRender
             const float passengerX = passengerStartX +
                 (static_cast<float>(index) * passengerSpacing);
             const float passengerY = centerY;
-            g_DxWindow.DrawFilledCircle(passengerX, passengerY, 3.5f, glm::vec4(0.0f, 0.0f, 0.0f, 0.96f));
+            g_DxWindow.DrawFilledCircle(passengerX, passengerY, 3.5f, glm::vec4(0.0f, 0.0f, 0.0f, 0.96f * colour.a));
             g_DxWindow.DrawFilledCircle(passengerX, passengerY, 2.4f, passengerColours[index]);
         }
     }
@@ -1387,15 +1506,21 @@ namespace fuserRender
                     continue;
 
                 glm::vec2 screenPos{};
-                const bool rootVisible = ProjectWorldToScreen(player.location, &screenPos);
+                const bool rootVisible = ProjectWorldToScreen(
+                    player.location, &screenPos);
 
-                const glm::vec4 playerColour = player.colour;
+                const float distanceOpacity = espGlobals::getFuserDistanceOpacity(frameDistance);
+                const glm::vec4 playerColour = WithOpacityMultiplier(player.colour, distanceOpacity);
+
+                if (playerColour.a <= 0.001f)
+                    continue;
 
                 if (player.isBTR)
                 {
                     if (rootVisible)
                     {
-                        RenderFuserBtrMarker(screenPos, playerColour, GetBtrPassengerColours(player, cache));
+                        RenderFuserBtrMarker(screenPos, playerColour,
+                            GetBtrPassengerColours(player, cache, distanceOpacity));
                     }
 
                     continue;
@@ -1605,7 +1730,7 @@ namespace fuserRender
                     if (!GetPlayerBoneScreenPositions(player, boneScreenPositions, visibleBones))
                         continue;
 
-                    DrawPlayerSkeleton(boneScreenPositions, visibleBones, playerColour);
+                    DrawPlayerSkeleton(player, boneScreenPositions, visibleBones, playerColour);
                 }
             }
         
@@ -1645,9 +1770,10 @@ namespace fuserRender
             if (!ProjectWorldToScreen(loot.worldLocation, &screenPos))
                 continue;
 
-            const glm::vec4 lootColour = loot.isQuestItem()
-                ? coloursGlobals::questMarker
-                : loot.color;
+            const float distanceOpacity = espGlobals::getFuserDistanceOpacity(static_cast<float>(distance));
+            const glm::vec4 lootColour = WithOpacityMultiplier(loot.isQuestItem() ? coloursGlobals::questMarker : loot.color, distanceOpacity);
+            if (lootColour.a <= 0.001f)
+                continue;
 
             const std::string corpseOwnerName = isCorpse
                 ? CleanText(GetRenderableCorpseOwnerLabel(loot))
@@ -1694,7 +1820,7 @@ namespace fuserRender
                     screenPos.x + 2.0f,
                     screenPos.y - 13.0f,
                     11.0f,
-                    glm::vec4(0.96f, 0.75f, 0.30f, 1.0f),
+                    WithOpacityMultiplier(glm::vec4(0.96f, 0.75f, 0.30f, 1.0f), distanceOpacity),
                     true,
                     true
                 );
@@ -1788,6 +1914,11 @@ namespace fuserRender
         SafeRenderStage("RenderAimFovRing", []()
             {
                 RenderAimFovRing();
+            });
+
+        SafeRenderStage("RenderLensStabilityDiagnostics", []()
+            {
+                RenderLensStabilityDiagnostics();
             });
 
         SafeRenderStage("RenderPlayers", []()

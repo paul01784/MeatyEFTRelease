@@ -14,6 +14,7 @@
 #include "../MainGame.h"
 #include "../../Unity/UnityContainers.h"
 #include "../../Unity/UnityOffsets.h"
+#include "../../Unity/Transform.h"
 #include "../../../Core/Utilities.h"
 
 #include <algorithm>
@@ -29,6 +30,7 @@ namespace
     bool HasMinimalBonePointers(const Player& player);
     bool IsMinimalBoneSlot(int slot);
     bool IsUsableBonePosition(const glm::vec3& position);
+    bool RefreshLocalInternalTransform(Player& player);
 }
 
 bool RegisteredPlayers::getBonePtrs(Player& player, bool forceResolve)
@@ -70,6 +72,9 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool forceResolve)
     {
         player.playerBoneMatrixPtr = 0;
         player.bonePointersNeedResolve = true;
+
+        if (player.isLocal)
+            RefreshLocalInternalTransform(player);
 
         return false;
     }
@@ -140,7 +145,7 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool forceResolve)
 
     player.bonePointersNeedResolve = !HasMinimalBonePointers(player);
 
-    return std::any_of(
+    const bool hasAnyBonePointer = std::any_of(
         player.bonePtrs.begin(),
         player.bonePtrs.end(),
         [](uint64_t bonePtr)
@@ -148,6 +153,11 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool forceResolve)
             return Utils::valid_pointer(bonePtr);
         }
     );
+
+    if (player.isLocal && player.bonePointersNeedResolve)
+        RefreshLocalInternalTransform(player);
+
+    return hasAnyBonePointer;
 }
 
 void RegisteredPlayers::readDogTagComponent(Player& player, bool force)
@@ -347,6 +357,85 @@ namespace
         return std::fabs(position.x) >= epsilon ||
             std::fabs(position.y) >= epsilon ||
             std::fabs(position.z) >= epsilon;
+    }
+
+    static bool TryReadInternalTransformPosition(uint64_t nativeTransform, glm::vec3& position)
+    {
+        if (!Utils::valid_pointer(nativeTransform))
+            return false;
+
+        UnityTransform transform(nativeTransform, false);
+
+        if (!transform.IsValid())
+            return false;
+
+        position = transform.UpdatePosition();
+        return IsUsableBonePosition(position);
+    }
+
+    static bool TryResolveManagedTransform(uint64_t managedTransform, uint64_t& nativeTransform)
+    {
+        return Utils::valid_pointer(managedTransform) && UnityTransform::TryResolveNative(managedTransform, nativeTransform, false);
+    }
+
+    bool RefreshLocalInternalTransform(Player& player)
+    {
+        player.internalTransformPositionValid = false;
+
+        try
+        {
+            glm::vec3 position{};
+
+            const uint64_t latestLocalPlayer = Utils::valid_pointer(mainGame.localPlayerPtr) ? mainGame.localPlayerPtr : player.instance;
+
+            if (!Utils::valid_pointer(latestLocalPlayer))
+                return false;
+
+            uint64_t nativeTransform = 0;
+            const uint64_t playerBones = mem.Read<uint64_t>(latestLocalPlayer + sdk::Player::PlayerBones, DmaCacheMode::Uncached);
+
+            if (Utils::valid_pointer(playerBones))
+            {
+                const uint64_t weaponRoot = mem.Read<uint64_t>(playerBones + sdk::PlayerBones::WeaponRootThird, DmaCacheMode::Uncached);
+                TryResolveManagedTransform(weaponRoot, nativeTransform);
+
+                if (!Utils::valid_pointer(nativeTransform))
+                {
+                    const uint64_t ribcage = mem.Read<uint64_t>(playerBones + sdk::PlayerBones::Ribcage, DmaCacheMode::Uncached);
+                    const uint64_t original = Utils::valid_pointer(ribcage) ? mem.Read<uint64_t>(ribcage + sdk::BifacialTransform::Original, DmaCacheMode::Uncached) : 0;
+                    TryResolveManagedTransform(original, nativeTransform);
+                }
+            }
+
+            if (!Utils::valid_pointer(nativeTransform))
+            {
+                const uint64_t lookTransform = mem.Read<uint64_t>(latestLocalPlayer + sdk::Player::_playerLookRaycastTransform, DmaCacheMode::Uncached);
+                TryResolveManagedTransform(lookTransform, nativeTransform);
+            }
+
+            if (!TryReadInternalTransformPosition(nativeTransform, position))
+            {
+                player.internalTransformPtr = 0;
+                return false;
+            }
+
+            player.internalTransformPtr = nativeTransform;
+            player.internalTransformPosition = position;
+            player.internalTransformPositionValid = true;
+
+            if (!player.usingInternalTransformFallback)
+            {
+                player.usingInternalTransformFallback = true;
+                LOGS.logNotice(NoticeColour::RED, "Local player bone pointers lost, using internal transform fallback");
+            }
+
+            return true;
+        }
+        catch (...)
+        {
+            player.internalTransformPtr = 0;
+            return false;
+        }
     }
 
     static bool HasValidMinimalBonePose(const Player& player)
@@ -1197,6 +1286,13 @@ namespace
             player->bonePointersNeedResolve = false;
             player->invalidBones = false;
 
+            if (player->isLocal && player->usingInternalTransformFallback)
+            {
+                player->usingInternalTransformFallback = false;
+                player->internalTransformPositionValid = false;
+                LOGS.logNotice(NoticeColour::GREEN, "Local player bone pointers recovered");
+            }
+
             player->location = PlayerPosition::getBestBasePosition(*player);
 
             if (player->isLocal)
@@ -1507,11 +1603,26 @@ void RegisteredPlayers::boneTask()
 
             if (!cache.empty())
             {
+                const auto localPlayer = std::find_if(cache.begin(), cache.end(), [](const Player& player)
+                    {
+                        return player.isLocal && player.instance == mainGame.localPlayerPtr && !player.isBTR && !player.isDead && !player.hasExfiled &&
+                            (player.bonePointersNeedResolve || !HasMinimalBonePointers(player));
+                    });
+
+                if (localPlayer != cache.end())
+                {
+                    PendingBoneResolve resolve{};
+                    resolve.instance = localPlayer->instance;
+                    resolve.workingCopy = *localPlayer;
+                    pendingResolves.emplace_back(std::move(resolve));
+                }
+
+                const size_t maximumPendingResolves = kMaxBonePointerResolvesPerPass + (localPlayer != cache.end() ? 1 : 0);
                 const size_t start = boneResolveCursor % cache.size();
                 size_t inspected = 0;
 
                 while (inspected < cache.size() &&
-                    pendingResolves.size() < kMaxBonePointerResolvesPerPass)
+                    pendingResolves.size() < maximumPendingResolves)
                 {
                     const size_t index = (start + inspected) % cache.size();
                     Player& player = cache[index];
@@ -1519,6 +1630,7 @@ void RegisteredPlayers::boneTask()
 
                     if (!Utils::valid_pointer(player.instance) ||
                         player.isBTR ||
+                        player.isLocal ||
                         player.isDead ||
                         player.hasExfiled)
                     {
@@ -1566,6 +1678,18 @@ void RegisteredPlayers::boneTask()
                 player->boneTransformCache = std::move(resolve.workingCopy.boneTransformCache);
                 player->invalidBones = resolve.workingCopy.invalidBones;
                 player->bonePointersNeedResolve = resolve.workingCopy.bonePointersNeedResolve;
+                player->internalTransformPtr = resolve.workingCopy.internalTransformPtr;
+                player->internalTransformPosition = resolve.workingCopy.internalTransformPosition;
+                player->internalTransformPositionValid = resolve.workingCopy.internalTransformPositionValid;
+                player->usingInternalTransformFallback = resolve.workingCopy.usingInternalTransformFallback;
+
+                if (player->isLocal && player->internalTransformPositionValid && !HasMinimalBonePointers(*player))
+                {
+                    player->location = player->internalTransformPosition;
+                    player->distance = 0;
+                    mainGame.localLocation = player->location;
+                    motionUpdated = true;
+                }
             }
         }
 
@@ -1631,7 +1755,10 @@ void RegisteredPlayers::boneTask()
         }
 
         if (pendingScans.empty())
+        {
+            publishCacheSnapshot(motionUpdated);
             return;
+        }
 
         std::vector<LiveBoneRead> reads;
 

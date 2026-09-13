@@ -822,7 +822,7 @@ void renderLootFiltersMenu()
                 const bool colourChanged = ImGui::ColorEdit4(
                     colourId,
                     colour,
-                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs
+                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf
                 );
                 return toggleChanged || colourChanged;
             };
@@ -937,8 +937,7 @@ void renderLootFiltersMenu()
                 if (ImGui::ColorEdit4(
                     "##containercolour",
                     (float*)&coloursGlobals::containerColour,
-                    ImGuiColorEditFlags_Float |
-                    ImGuiColorEditFlags_NoInputs))
+                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf))
                 {
                     configManager.SaveConfig();
                 }
@@ -1001,7 +1000,7 @@ void renderLootFiltersMenu()
                 if (ImGui::ColorEdit4(
                     "##categorylootcolour",
                     (float*)&lootGlobals::categoryLootColour,
-                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs))
+                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf))
                 {
                     configManager.SaveConfig();
                 }
@@ -1641,7 +1640,8 @@ void renderLootFiltersMenu()
 
                     // Filter colour column
                     ImGui::TableSetColumnIndex(2);
-                    if (ImGui::ColorEdit4(("##Color" + std::to_string(lootFilters[i].id)).c_str(), (float*)&lootFilters[i].filterColour, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs))
+                    if (ImGui::ColorEdit4(("##Color" + std::to_string(lootFilters[i].id)).c_str(), (float*)&lootFilters[i].filterColour,
+                        ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf))
                     {
                         configManager.SaveLootFilterConfig();
                     }

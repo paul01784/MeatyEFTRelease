@@ -17,6 +17,11 @@ namespace
 		LOGS.logInfo("[Memory] " + message);
 	}
 
+    void MemoryLogNotice(NoticeColour colour, const std::string& message)
+    {
+        LOGS.logNotice(colour, message);
+    }
+
     class KeyboardInitOutcome
     {
     public:
@@ -24,16 +29,13 @@ namespace
         {
             if (succeeded_)
             {
-                MemoryLogInfo(
-                    "[KEYS] Keyboard initialised successfully via " +
-                    successPath_);
+                MemoryLogInfo("[KEYS] Keyboard initialised successfully via " + successPath_);
+                MemoryLogNotice(NoticeColour::GREEN, "Keyboard initialised successfully");
                 return;
             }
 
-            MemoryLogError(
-                "[KEYS] Keyboard initialisation failed: " +
-                lastFailure_ +
-                " | Hotkeys disabled");
+            MemoryLogError("[KEYS] Keyboard initialisation failed: " + lastFailure_ + " | Hotkeys disabled");
+            MemoryLogNotice(NoticeColour::RED, "Keyboard initialisation failed, Hotkeys and AIM will not function! Reboot Main PC to resolve!");
         }
 
         void SetFailure(std::string reason)

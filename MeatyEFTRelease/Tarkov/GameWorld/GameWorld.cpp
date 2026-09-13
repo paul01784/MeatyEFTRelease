@@ -222,8 +222,16 @@ bool tryResolveRaidFromBss(std::uint64_t gom, RaidState& raid, std::string& debu
         !mem.TryRead(gameWorldClass + kIl2CppClassStaticFields, staticFields, DmaCacheMode::Uncached) || !Utils::valid_pointer(staticFields) ||
         !mem.TryRead(staticFields + kGameWorldSingletonInstance, localGameWorld, DmaCacheMode::Uncached) || !Utils::valid_pointer(localGameWorld))
     {
+        const std::uint64_t fingerprint = gameAssembly ^
+            (gameWorldClass << 1) ^ (staticFields << 7) ^
+            (localGameWorld << 13);
+        mem.ReportDmaHealthFailure(
+            DmaHealthSource::GameWorldSingleton, fingerprint);
         return false;
     }
+
+    
+    mem.ReportDmaHealthSuccess(DmaHealthSource::GameWorldSingleton);
 
     std::uint64_t localPlayer = 0;
     (void)mem.TryRead(localGameWorld + sdk::ClientLocalGameWorld::MainPlayer, localPlayer, DmaCacheMode::Uncached);
@@ -289,6 +297,18 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     {
         mem.RefreshTarkovPointerSnapshot();
         gom = mem.GetTarkovPointerSnapshot().gameObjectManager;
+
+        if (!Utils::valid_pointer(gom) ||
+            !readGomListPtr(gom, kGomActiveNodes) ||
+            !readGomListPtr(gom, kGomLastActiveNode))
+        {
+            mem.PreloadTarkovPointerSnapshot();
+
+            const TarkovPointerSnapshot recovered =
+                mem.GetTarkovPointerSnapshot();
+            gom = recovered.gameObjectManager;
+
+        }
     }
 
     if (!Utils::valid_pointer(gom))

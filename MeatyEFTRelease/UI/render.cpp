@@ -28,6 +28,7 @@
 #include "Widgets/QuestWidget.h"
 #include "Widgets/FuserWidget.h"
 #include "../Tarkov/Features/Visibility/AtlasVisibility.h"
+#include "../Tarkov/Unity/UnityOffsets.h"
 #include "../Core/KeyManager/KeyManager.h"
 #include "../resource.h"
 
@@ -37,152 +38,245 @@
 
 namespace
 {
-    constexpr int RadarFontFamilyCount = 3;
-    constexpr int RadarFontWeightCount = 2;
-    constexpr float RadarFontSize = 18.0f;
-    constexpr float RadarCounterFontSize = 17.0f;
+constexpr int RadarFontFamilyCount = 3;
+constexpr int RadarFontWeightCount = 2;
+constexpr float RadarFontSize = 18.0f;
+constexpr float RadarCounterFontSize = 17.0f;
+constexpr double RadarNoticeHoldSeconds = 5.0;
+constexpr double RadarNoticeFadeSeconds = 0.75;
 
-    const char* const RadarFontNames[RadarFontFamilyCount] =
+const char* const RadarFontNames[RadarFontFamilyCount] = {"Segoe UI", "Arial", "Tahoma"};
+
+ImFont* radarFonts[RadarFontFamilyCount][RadarFontWeightCount] = {};
+
+ImFont* GetSelectedRadarFont()
+{
+    const int fontIndex = std::clamp(radarGlobals::fontIndex, 0, RadarFontFamilyCount - 1);
+    const int weightIndex = radarGlobals::fontBold ? 1 : 0;
+    return radarFonts[fontIndex][weightIndex];
+}
+
+void ApplyRadarWindowSettings(HWND window)
+{
+    if (window == nullptr)
+        return;
+
+    LONG_PTR style = ::GetWindowLongPtrW(window, GWL_STYLE);
+    style |= WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+    if (globals::appHideTitlebar)
+        style &= ~WS_CAPTION;
+    else
+        style |= WS_CAPTION;
+
+    ::SetWindowLongPtrW(window, GWL_STYLE, style);
+    ::SetWindowPos(window, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    ::ShowWindow(window, globals::appMaximizeWindow ? SW_MAXIMIZE : SW_RESTORE);
+}
+
+std::string fitRadarNoticeLine(ImFont* font, float fontSize, std::string text, float maxWidth, bool addEllipsis)
+{
+    const char* suffix = addEllipsis ? "..." : "";
+    while (!text.empty() && font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, (text + suffix).c_str()).x > maxWidth)
     {
-        "Segoe UI",
-        "Arial",
-        "Tahoma"
-    };
-
-    ImFont* radarFonts[RadarFontFamilyCount][RadarFontWeightCount] = {};
-
-    ImFont* GetSelectedRadarFont()
-    {
-        const int fontIndex = std::clamp(radarGlobals::fontIndex, 0, RadarFontFamilyCount - 1);
-        const int weightIndex = radarGlobals::fontBold ? 1 : 0;
-        return radarFonts[fontIndex][weightIndex];
+        std::size_t eraseAt = text.size() - 1;
+        while (eraseAt > 0 && (static_cast<unsigned char>(text[eraseAt]) & 0xC0) == 0x80)
+            --eraseAt;
+        text.erase(eraseAt);
     }
+    return text + suffix;
+}
 
-    void renderRadarPlayerCounts()
+std::string wrapRadarNotice(ImFont* font, float fontSize, const std::string& text, float maxWidth)
+{
+    std::istringstream words(text);
+    std::vector<std::string> lines(1);
+    std::string word;
+    bool truncated = false;
+
+    while (words >> word)
     {
-        struct PlayerCounts
+        std::string& line = lines.back();
+        const std::string candidate = line.empty() ? word : line + " " + word;
+        if (font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, candidate.c_str()).x <= maxWidth)
         {
-            size_t pmcs{};
-            size_t playerScavs{};
-            size_t scavs{};
-            size_t bosses{};
-            size_t usecs{};
-            size_t blackDivision{};
-        } counts;
-
-        const PlayerSnapshot cacheSnapshot = registeredPlayers.getCacheSnapshot();
-
-        for (const Player& player : *cacheSnapshot)
-        {
-            if (!Utils::valid_pointer(player.instance) ||
-                player.isLocal ||
-                player.isDead ||
-                player.hasExfiled)
-            {
-                continue;
-            }
-
-            if (player.isBlackDivision)
-            {
-                ++counts.blackDivision;
-                continue;
-            }
-
-            if (player.isBoss)
-            {
-                ++counts.bosses;
-                continue;
-            }
-
-            if (player.isPlayerScav)
-            {
-                ++counts.playerScavs;
-                continue;
-            }
-
-            if (player.isAi && player.name == "Usec")
-            {
-                ++counts.usecs;
-                continue;
-            }
-
-            if (player.isAi && !player.isBTR)
-            {
-                ++counts.scavs;
-                continue;
-            }
-
-            if (player.isPlayer && !player.isAi)
-                ++counts.pmcs;
+            line = candidate;
+            continue;
         }
 
-        struct Counter
+        if (line.empty())
         {
-            size_t count{};
-            const char* tooltip{};
-            glm::vec4 colour{};
-        };
+            line = fitRadarNoticeLine(font, fontSize, word, maxWidth, false);
+            truncated = line != word;
+            if (truncated)
+                break;
+            continue;
+        }
 
-        const Counter counters[] =
+        if (lines.size() == 1)
         {
-            { counts.pmcs, "PMC Players", coloursGlobals::playerPMC },
-            { counts.playerScavs, "Player Scav", coloursGlobals::playerScav },
-            { counts.scavs, "Scav", coloursGlobals::playerAI },
-            { counts.bosses, "Boss", coloursGlobals::playerBoss },
-            { counts.usecs, "USEC Raiders", coloursGlobals::playerAI },
-            { counts.blackDivision, "Black Division", coloursGlobals::playerBlackDiv }
-        };
+            lines.emplace_back();
+            lines.back() = fitRadarNoticeLine(font, fontSize, word, maxWidth, false);
+            truncated = lines.back() != word;
+            if (truncated)
+                break;
+            continue;
+        }
 
-        constexpr float boxWidth = 34.0f;
-        constexpr float boxHeight = 28.0f;
-        constexpr float boxSpacing = 2.0f;
-        constexpr float topMargin = 12.0f;
-        constexpr ImU32 boxBackground = IM_COL32(17, 19, 22, 235);
-        constexpr ImU32 boxBorder = IM_COL32(71, 74, 74, 235);
+        truncated = true;
+        break;
+    }
 
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        ImFont* font = ImGui::GetFont();
-        const ImVec2 windowPosition = ImGui::GetWindowPos();
-        const ImVec2 windowSize = ImGui::GetWindowSize();
-        const float totalWidth =
-            (boxWidth * IM_ARRAYSIZE(counters)) +
-            (boxSpacing * (IM_ARRAYSIZE(counters) - 1));
-        const float startX = windowPosition.x + ((windowSize.x - totalWidth) * 0.5f);
-        const float topY = windowPosition.y + topMargin;
+    if (lines.front().empty())
+        return {};
+    if (truncated)
+        lines.back() = fitRadarNoticeLine(font, fontSize, lines.back(), maxWidth, true);
+    return lines.size() == 1 ? lines.front() : lines.front() + "\n" + lines.back();
+}
 
-        for (int index = 0; index < IM_ARRAYSIZE(counters); ++index)
+void renderRadarNotice()
+{
+    const std::optional<RadarNotice> notice = LOGS.getRadarNotice(RadarNoticeHoldSeconds + RadarNoticeFadeSeconds);
+    if (!notice || notice->ageSeconds < 0.0 || notice->ageSeconds >= RadarNoticeHoldSeconds + RadarNoticeFadeSeconds)
+        return;
+
+    ImFont* font = GetSelectedRadarFont();
+    if (font == nullptr)
+        font = ImGui::GetFont();
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float fontSize = font->FontSize;
+    const float maxTextWidth = std::max(40.0f, std::min(760.0f, viewport->WorkSize.x - 64.0f));
+    const std::string displayText = wrapRadarNotice(font, fontSize, notice->text, maxTextWidth);
+    if (displayText.empty())
+        return;
+
+    float opacity = 1.0f;
+    if (notice->ageSeconds > RadarNoticeHoldSeconds)
+        opacity = 1.0f - static_cast<float>((notice->ageSeconds - RadarNoticeHoldSeconds) / RadarNoticeFadeSeconds);
+
+    const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, displayText.c_str());
+    const ImVec2 boxSize(textSize.x + 36.0f, textSize.y + 24.0f);
+    const ImVec2 boxMin(viewport->WorkPos.x + (viewport->WorkSize.x - boxSize.x) * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y - boxSize.y - 10.0f);
+    const ImVec2 boxMax(boxMin.x + boxSize.x, boxMin.y + boxSize.y);
+    const ImVec2 textPos(boxMin.x + 18.0f, boxMin.y + 12.0f);
+    ImDrawList* drawList = ImGui::GetForegroundDrawList(viewport);
+    ImU32 textColour = IM_COL32(255, 255, 255, static_cast<int>(255.0f * opacity));
+
+    if (notice->colour == NoticeColour::RED)
+        textColour = IM_COL32(255, 62, 68, static_cast<int>(255.0f * opacity));
+    else if (notice->colour == NoticeColour::GREEN)
+        textColour = IM_COL32(74, 222, 128, static_cast<int>(255.0f * opacity));
+
+    drawList->AddRectFilled(boxMin, boxMax, IM_COL32(54, 5, 9, static_cast<int>(230.0f * opacity)), 9.0f);
+    drawList->AddRect(boxMin, boxMax, IM_COL32(255, 44, 55, static_cast<int>(255.0f * opacity)), 9.0f, 0, 2.0f);
+    drawList->AddText(font, fontSize, textPos, textColour, displayText.c_str());
+}
+
+void renderRadarPlayerCounts()
+{
+    struct PlayerCounts
+    {
+        size_t pmcs{};
+        size_t playerScavs{};
+        size_t scavs{};
+        size_t bosses{};
+        size_t usecs{};
+        size_t blackDivision{};
+    } counts;
+
+    const PlayerSnapshot cacheSnapshot = registeredPlayers.getCacheSnapshot();
+
+    for (const Player& player : *cacheSnapshot)
+    {
+        if (!Utils::valid_pointer(player.instance) || player.isLocal || player.isDead || player.hasExfiled)
         {
-            const Counter& counter = counters[index];
-            const ImVec2 boxMin(startX + (index * (boxWidth + boxSpacing)), topY);
-            const ImVec2 boxMax(boxMin.x + boxWidth, boxMin.y + boxHeight);
-            const std::string value = std::to_string(counter.count);
-            const ImVec2 textSize = font->CalcTextSizeA(RadarCounterFontSize, FLT_MAX, 0.0f, value.c_str());
-            const ImU32 textColour = ImColor(
-                counter.colour.x,
-                counter.colour.y,
-                counter.colour.z,
-                counter.colour.w);
+            continue;
+        }
 
-            drawList->AddRectFilled(boxMin, boxMax, boxBackground, 3.0f);
-            drawList->AddRect(boxMin, boxMax, boxBorder, 3.0f);
-            drawList->AddText(
-                font,
-                RadarCounterFontSize,
-                ImVec2(
-                    boxMin.x + ((boxWidth - textSize.x) * 0.5f),
-                    boxMin.y + ((boxHeight - textSize.y) * 0.5f)),
-                textColour,
-                value.c_str());
+        if (player.isBlackDivision)
+        {
+            ++counts.blackDivision;
+            continue;
+        }
 
-            if (ImGui::IsMouseHoveringRect(boxMin, boxMax))
-            {
-                ImGui::BeginTooltip();
-                ImGui::TextUnformatted(counter.tooltip);
-                ImGui::EndTooltip();
-            }
+        if (player.isBoss)
+        {
+            ++counts.bosses;
+            continue;
+        }
+
+        if (player.isPlayerScav)
+        {
+            ++counts.playerScavs;
+            continue;
+        }
+
+        if (player.isAi && player.name == "Usec")
+        {
+            ++counts.usecs;
+            continue;
+        }
+
+        if (player.isAi && !player.isBTR)
+        {
+            ++counts.scavs;
+            continue;
+        }
+
+        if (player.isPlayer && !player.isAi)
+            ++counts.pmcs;
+    }
+
+    struct Counter
+    {
+        size_t count{};
+        const char* tooltip{};
+        glm::vec4 colour{};
+    };
+
+    const Counter counters[] = {
+        {counts.pmcs, "PMC Players", coloursGlobals::playerPMC},  {counts.playerScavs, "Player Scav", coloursGlobals::playerScav},
+        {counts.scavs, "Scav", coloursGlobals::playerAI},         {counts.bosses, "Boss", coloursGlobals::playerBoss},
+        {counts.usecs, "USEC Raiders", coloursGlobals::playerAI}, {counts.blackDivision, "Black Division", coloursGlobals::playerBlackDiv}};
+
+    constexpr float boxWidth = 34.0f;
+    constexpr float boxHeight = 28.0f;
+    constexpr float boxSpacing = 2.0f;
+    constexpr float topMargin = 12.0f;
+    constexpr ImU32 boxBackground = IM_COL32(17, 19, 22, 235);
+    constexpr ImU32 boxBorder = IM_COL32(71, 74, 74, 235);
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImFont* font = ImGui::GetFont();
+    const ImVec2 windowPosition = ImGui::GetWindowPos();
+    const ImVec2 windowSize = ImGui::GetWindowSize();
+    const float totalWidth = (boxWidth * IM_ARRAYSIZE(counters)) + (boxSpacing * (IM_ARRAYSIZE(counters) - 1));
+    const float startX = windowPosition.x + ((windowSize.x - totalWidth) * 0.5f);
+    const float topY = windowPosition.y + topMargin;
+
+    for (int index = 0; index < IM_ARRAYSIZE(counters); ++index)
+    {
+        const Counter& counter = counters[index];
+        const ImVec2 boxMin(startX + (index * (boxWidth + boxSpacing)), topY);
+        const ImVec2 boxMax(boxMin.x + boxWidth, boxMin.y + boxHeight);
+        const std::string value = std::to_string(counter.count);
+        const ImVec2 textSize = font->CalcTextSizeA(RadarCounterFontSize, FLT_MAX, 0.0f, value.c_str());
+        const ImU32 textColour = ImColor(counter.colour.x, counter.colour.y, counter.colour.z, counter.colour.w);
+
+        drawList->AddRectFilled(boxMin, boxMax, boxBackground, 3.0f);
+        drawList->AddRect(boxMin, boxMax, boxBorder, 3.0f);
+        drawList->AddText(font, RadarCounterFontSize, ImVec2(boxMin.x + ((boxWidth - textSize.x) * 0.5f), boxMin.y + ((boxHeight - textSize.y) * 0.5f)),
+                          textColour, value.c_str());
+
+        if (ImGui::IsMouseHoveringRect(boxMin, boxMax))
+        {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(counter.tooltip);
+            ImGui::EndTooltip();
         }
     }
 }
+} // namespace
 
 // select what window to not close on run
 // settings,lootfilters,players,fuser
@@ -202,34 +296,48 @@ void closeSettingWindows(std::string dontClose)
         appMenu::appWatchList = false;
 }
 
-boneListIndexes IndexToBoneList(int index) {
-    switch (index) {
-    case 0: return boneListIndexes::Pelvis;
-    case 1: return boneListIndexes::Head;
-    case 2: return boneListIndexes::Neck;
-    case 3: return boneListIndexes::Spine;
-    case 4: return boneListIndexes::LForearm;
-    case 5: return boneListIndexes::LPalm;
-    case 6: return boneListIndexes::RForearm;
-    case 7: return boneListIndexes::RPalm;
-    case 8: return boneListIndexes::LThigh;
-    case 9: return boneListIndexes::LFoot;
-    case 10: return boneListIndexes::RThigh;
-    case 11: return boneListIndexes::RFoot;
+boneListIndexes IndexToBoneList(int index)
+{
+    switch (index)
+    {
+    case 0:
+        return boneListIndexes::Pelvis;
+    case 1:
+        return boneListIndexes::Head;
+    case 2:
+        return boneListIndexes::Neck;
+    case 3:
+        return boneListIndexes::Spine;
+    case 4:
+        return boneListIndexes::LForearm;
+    case 5:
+        return boneListIndexes::LPalm;
+    case 6:
+        return boneListIndexes::RForearm;
+    case 7:
+        return boneListIndexes::RPalm;
+    case 8:
+        return boneListIndexes::LThigh;
+    case 9:
+        return boneListIndexes::LFoot;
+    case 10:
+        return boneListIndexes::RThigh;
+    case 11:
+        return boneListIndexes::RFoot;
     }
 }
 
-
-
 bool showResSelectionBox()
 {
-    if (espGlobals::gameRes.x == 3440 &&
-        espGlobals::gameRes.y == 1440)
+    if (espGlobals::gameRes.x == 3840 && espGlobals::gameRes.y == 2160)
+    {
+        espGlobals::gameResInt = RES_3840X2160;
+    }
+    else if (espGlobals::gameRes.x == 3440 && espGlobals::gameRes.y == 1440)
     {
         espGlobals::gameResInt = RES_3440X1440;
     }
-    else if (espGlobals::gameRes.x == 2560 &&
-        espGlobals::gameRes.y == 1440)
+    else if (espGlobals::gameRes.x == 2560 && espGlobals::gameRes.y == 1440)
     {
         espGlobals::gameResInt = RES_1440P;
     }
@@ -239,38 +347,40 @@ bool showResSelectionBox()
     }
 
     // Resolution options
-    const char* resolutionOptions[] = { "1920x1080", "2560x1440", "3440x1440" };
+    const char* resolutionOptions[] = {"1920x1080", "2560x1440", "3440x1440", "3840x2160"};
 
     const float rowStartX = ImGui::GetCursorPosX();
-    const float controlX = menuLayout::ControlColumnX(
-        rowStartX,
-        ImGui::GetContentRegionAvail().x
-    );
+    const float controlX = menuLayout::ControlColumnX(rowStartX, ImGui::GetContentRegionAvail().x);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Game resolution");
+    ImGui::TextUnformatted("PC Resolution (Game)");
     ImGui::SameLine();
     ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), controlX));
-    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SetNextItemWidth(std::clamp(ImGui::GetContentRegionAvail().x, 120.0f, 220.0f));
 
-    if (ImGui::Combo("##gameResolution", &espGlobals::gameResInt, resolutionOptions, IM_ARRAYSIZE(resolutionOptions))) {
+    if (ImGui::Combo("##gameResolution", &espGlobals::gameResInt, resolutionOptions, IM_ARRAYSIZE(resolutionOptions)))
+    {
         // Update resolution based on selection
         switch (espGlobals::gameResInt)
         {
         case RES_1080P:
-            espGlobals::gameRes = { 1920, 1080 };
+            espGlobals::gameRes = {1920, 1080};
             break;
 
         case RES_1440P:
-            espGlobals::gameRes = { 2560, 1440 };
+            espGlobals::gameRes = {2560, 1440};
             break;
 
         case RES_3440X1440:
-            espGlobals::gameRes = { 3440, 1440 };
+            espGlobals::gameRes = {3440, 1440};
+            break;
+
+        case RES_3840X2160:
+            espGlobals::gameRes = {3840, 2160};
             break;
 
         default:
             espGlobals::gameResInt = RES_1080P;
-            espGlobals::gameRes = { 1920, 1080 };
+            espGlobals::gameRes = {1920, 1080};
             break;
         }
         return true;
@@ -295,7 +405,6 @@ bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, i
     return true;
 }
 
-
 static void renderMenuSettings()
 {
     enum class SettingsPage : int
@@ -315,16 +424,10 @@ static void renderMenuSettings()
     static std::string apiKeyStatus = "Not checked";
     static std::string apiKeyError;
 
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(
-        ImVec2(viewport->Pos.x + 20.0f, viewport->Pos.y + 20.0f),
-        ImGuiCond_FirstUseEver
-    );
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 20.0f, viewport->Pos.y + 20.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(900.0f, 720.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(
-        ImVec2(720.0f, 500.0f),
-        ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
-    );
+    ImGui::SetNextWindowSizeConstraints(ImVec2(720.0f, 500.0f), ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f));
     ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
     if (!ImGui::Begin("Meaty Settings", &appMenu::appSettings, ImGuiWindowFlags_NoCollapse))
@@ -366,7 +469,7 @@ static void renderMenuSettings()
         if (menuLayout::BeginTwoColumns("##appColumns"))
         {
             menuLayout::NextColumn();
-            if (menuLayout::Section("Connection"))
+            if (menuLayout::Section("DMA Connection"))
             {
                 if (working)
                 {
@@ -399,23 +502,44 @@ static void renderMenuSettings()
                 saveIfChanged(menuLayout::ToggleRow("Show connection stats", "showStats", &memoryGlobals::dmaShowStats));
             }
 
-            menuLayout::NextColumn();
-            if (menuLayout::Section("Window & display"))
+            if (menuLayout::Section("Application"))
             {
                 saveIfChanged(menuLayout::SliderFloatRow("Window opacity", "windowAlpha", &globals::appWindowAlpha, 0.25f, 1.0f, "%.2f"));
-                saveIfChanged(menuLayout::SliderFloatRow("Radar maximum FPS", "radarMaxFps", &globals::appRadarMaxFPS, 15.0f, 240.0f, "%.0f FPS"));
-                if (showResSelectionBox())
+
+                bool windowSettingsChanged = false;
+                windowSettingsChanged |= menuLayout::ToggleRow("Maximize window", "maximizeWindow", &globals::appMaximizeWindow);
+                windowSettingsChanged |= menuLayout::ToggleRow("Hide titlebar", "hideTitlebar", &globals::appHideTitlebar);
+                if (windowSettingsChanged)
+                {
+                    ApplyRadarWindowSettings(static_cast<HWND>(viewport->PlatformHandleRaw));
                     configManager.SaveConfig();
+                }
+            }
+
+            menuLayout::NextColumn();
+            if (menuLayout::Section("Radar Window"))
+            {
+                saveIfChanged(menuLayout::SliderFloatRow("Radar max FPS", "radarMaxFps", &globals::appRadarMaxFPS, 15.0f, 240.0f, "%.0f FPS"));
                 saveIfChanged(menuLayout::SliderFloatRow("Radar text scale", "radarText", &radarGlobals::textScale, 0.75f, 2.0f, "%.2fx"));
                 saveIfChanged(menuLayout::SliderFloatRow("Radar marker scale", "radarMarkers", &radarGlobals::markerScale, 0.75f, 2.0f, "%.2fx"));
-                saveIfChanged(menuLayout::ComboRow("Radar font", "radarFont", &radarGlobals::fontIndex, RadarFontNames, IM_ARRAYSIZE(RadarFontNames)));
-                saveIfChanged(menuLayout::ToggleRow("Bold", "radarFontBold", &radarGlobals::fontBold));
+                saveIfChanged(menuLayout::ComboToggleRow("Radar font", "radarFont", &radarGlobals::fontIndex, RadarFontNames, IM_ARRAYSIZE(RadarFontNames), "Bold",
+                                                          &radarGlobals::fontBold));
+            }
+
+            if (menuLayout::Section("Game Settings"))
+            {
+                if (showResSelectionBox())
+                    configManager.SaveConfig();
             }
             menuLayout::EndTwoColumns();
         }
 
         if (menuLayout::Section("Dogtag Cloud API"))
         {
+            ImGui::PushStyleColor(ImGuiCol_TextLink, ImVec4(0.30f, 0.68f, 1.00f, 1.00f));
+            ImGui::TextLinkOpenURL("Get API access key from here", "https://apicloud.meatyradar.co.uk/");
+            ImGui::PopStyleColor();
+
             if (!apiKeyLoaded)
             {
                 strncpy_s(apiKeyBuffer, globals::dogTagAPIKey.c_str(), sizeof(apiKeyBuffer) - 1);
@@ -450,9 +574,7 @@ static void renderMenuSettings()
                 else
                 {
                     apiKeyStatus = "Invalid, disabled or unavailable";
-                    apiKeyError = status && !status->error.empty()
-                        ? status->error
-                        : "Could not verify the API key.";
+                    apiKeyError = status && !status->error.empty() ? status->error : "Could not verify the API key.";
                 }
             }
             if (!globals::dogTagAPIKey.empty())
@@ -470,11 +592,9 @@ static void renderMenuSettings()
                 }
             }
 
-            const ImVec4 statusColour = !apiKeyChecked
-                ? ImVec4(1.0f, 0.75f, 0.2f, 1.0f)
-                : apiKeyValid
-                    ? ImVec4(0.2f, 1.0f, 0.35f, 1.0f)
-                    : ImVec4(1.0f, 0.25f, 0.25f, 1.0f);
+            const ImVec4 statusColour = !apiKeyChecked ? ImVec4(1.0f, 0.75f, 0.2f, 1.0f)
+                                        : apiKeyValid  ? ImVec4(0.2f, 1.0f, 0.35f, 1.0f)
+                                                       : ImVec4(1.0f, 0.25f, 0.25f, 1.0f);
             ImGui::TextColored(statusColour, "Status: %s", apiKeyStatus.c_str());
             if (!apiKeyError.empty())
                 ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "%s", apiKeyError.c_str());
@@ -489,17 +609,12 @@ static void renderMenuSettings()
             if (menuLayout::Section("Radar Draw"))
             {
                 saveIfChanged(menuLayout::ToggleRow("Grenades", "radarGrenades", &radarGlobals::drawGrenades));
-                saveIfChanged(menuLayout::AlignedTogglePairRow(
-                    "Tripwires", "radarTripwires", &radarGlobals::drawTripwires,
-                    "Tripwire lines", "radarTripwireLines", &radarGlobals::drawTripwireLine,
-                    true,
-                    radarGlobals::drawTripwires));
+                saveIfChanged(menuLayout::AlignedTogglePairRow("Tripwires", "radarTripwires", &radarGlobals::drawTripwires, "Tripwire lines",
+                                                               "radarTripwireLines", &radarGlobals::drawTripwireLine, true, radarGlobals::drawTripwires));
                 saveIfChanged(menuLayout::ToggleRow("Loot", "radarLoot", &radarGlobals::drawLoot));
                 saveIfChanged(menuLayout::ToggleRow("Quest helper", "radarQuest", &radarGlobals::drawQuestHelper));
-                saveIfChanged(menuLayout::AlignedTogglePairRow(
-                    "Player Equip", "radarPlayerEquip", &radarGlobals::drawPlayerEquip,
-                    "Hand Item", "radarHandItem", &radarGlobals::drawHandItem,
-                    radarGlobals::getPlayerEquip));
+                saveIfChanged(menuLayout::AlignedTogglePairRow("Player Equip", "radarPlayerEquip", &radarGlobals::drawPlayerEquip, "Hand Item", "radarHandItem",
+                                                               &radarGlobals::drawHandItem, radarGlobals::getPlayerEquip));
                 saveIfChanged(menuLayout::ToggleRow("Aim view", "aimView", &aimviewConfig.enabled));
                 saveIfChanged(menuLayout::ToggleRow("Radar min view", "radarMinView", &radarGlobals::minimalView));
             }
@@ -508,33 +623,16 @@ static void renderMenuSettings()
                 saveIfChanged(menuLayout::SliderIntRow("Local length", "localAimLine", &radarGlobals::localAimLine, 4, 500, "%d px"));
                 saveIfChanged(menuLayout::SliderIntRow("Friends length", "friendAimLine", &radarGlobals::friendAimLine, 4, 500, "%d px"));
                 saveIfChanged(menuLayout::SliderIntRow("Enemies length", "enemyAimLine", &radarGlobals::enemyAimLine, 4, 500, "%d px"));
-                saveIfChanged(menuLayout::ToggleFloatSliderRow(
-                    "Extend aimlines",
-                    "aimLineTargets",
-                    &radarGlobals::drawAimLineTargets,
-                    "Target angle",
-                    &radarGlobals::aimLineTargetAngle,
-                    1.0f,
-                    20.0f,
-                    "%.1f°",
-                    true));
+                saveIfChanged(menuLayout::ToggleFloatSliderRow("Extend aimlines", "aimLineTargets", &radarGlobals::drawAimLineTargets, "Target angle",
+                                                               &radarGlobals::aimLineTargetAngle, 1.0f, 20.0f, "%.1f°", true));
 
                 ImGui::BeginDisabled(!radarGlobals::drawAimLineTargets);
                 saveIfChanged(menuLayout::SliderIntRow("Looking at you range", "aimTargetRange", &radarGlobals::aimLineTargetMaxDistance, 10, 2000, "%d m"));
 
-                static const char* const aimOverlayAlertOptions[] =
-                {
-                    "Off",
-                    "All",
-                    "Players"
-                };
+                static const char* const aimOverlayAlertOptions[] = {"Off", "All", "Players"};
 
-                saveIfChanged(menuLayout::ComboRow(
-                    "Fuser edge alert",
-                    "aimOverlayAlert",
-                    &espGlobals::aimOverlayAlert,
-                    aimOverlayAlertOptions,
-                    IM_ARRAYSIZE(aimOverlayAlertOptions)));
+                saveIfChanged(menuLayout::ComboRow("Fuser edge alert", "aimOverlayAlert", &espGlobals::aimOverlayAlert, aimOverlayAlertOptions,
+                                                   IM_ARRAYSIZE(aimOverlayAlertOptions)));
                 ImGui::EndDisabled();
             }
 
@@ -549,38 +647,22 @@ static void renderMenuSettings()
                     radarGlobals::drawSecretExfils = false;
                     radarGlobals::drawTransitExfils = false;
                 }
-                radarExfilOptionsChanged |= menuLayout::AlignedTogglePairRow(
-                    "Secret extracts", "radarSecretExtracts", &radarGlobals::drawSecretExfils,
-                    "Transits", "radarTransits", &radarGlobals::drawTransitExfils,
-                    radarGlobals::drawExfils,
-                    radarGlobals::drawExfils);
+                radarExfilOptionsChanged |=
+                    menuLayout::AlignedTogglePairRow("Secret extracts", "radarSecretExtracts", &radarGlobals::drawSecretExfils, "Transits", "radarTransits",
+                                                     &radarGlobals::drawTransitExfils, radarGlobals::drawExfils, radarGlobals::drawExfils);
                 saveIfChanged(radarExfilOptionsChanged);
             }
 
             if (menuLayout::Section("Player data"))
             {
-                static const char* const tarkovDevDataModes[] =
-                {
-                    "PVP",
-                    "PVP-SEASONAL"
-                };
+                static const char* const tarkovDevDataModes[] = {"PVP", "PVP-SEASONAL"};
 
-                bool changed = menuLayout::ToggleRow(
-                    "Read Player Equipment",
-                    "readPlayerEquipment",
-                    &radarGlobals::getPlayerEquip);
-                changed |= menuLayout::InlineToggle(
-                    "Use Tarkov.dev Data",
-                    "tarkovDevInfo",
-                    &radarGlobals::getPlayerStats);
+                bool changed = menuLayout::ToggleRow("Read Player Equipment", "readPlayerEquipment", &radarGlobals::getPlayerEquip);
+                changed |= menuLayout::InlineToggle("Use Tarkov.dev Data", "tarkovDevInfo", &radarGlobals::getPlayerStats);
                 ImGui::BeginDisabled(!radarGlobals::getPlayerStats);
                 ImGui::SameLine(0.0f, 12.0f);
                 ImGui::SetNextItemWidth(145.0f);
-                changed |= ImGui::Combo(
-                    "##tarkovDevDataMode",
-                    &radarGlobals::tarkovDevDataMode,
-                    tarkovDevDataModes,
-                    IM_ARRAYSIZE(tarkovDevDataModes));
+                changed |= ImGui::Combo("##tarkovDevDataMode", &radarGlobals::tarkovDevDataMode, tarkovDevDataModes, IM_ARRAYSIZE(tarkovDevDataModes));
                 ImGui::EndDisabled();
                 saveIfChanged(changed);
             }
@@ -588,28 +670,30 @@ static void renderMenuSettings()
             menuLayout::NextColumn();
             if (menuLayout::Section("ESP Draw & Distances"))
             {
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Grenades", "espGrenades", &espGlobals::drawGrenades, "Range", &espGlobals::drawGrenadesDist, 10, 400, "%d m", true));
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Tripwires", "espTripwires", &espGlobals::drawTripwires, "Range", &espGlobals::drawTripwiresDist, 10, 400, "%d m", true));
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Loot", "espLoot", &espGlobals::drawLoot, "Loose", &espGlobals::drawLootDist, 5, 400, "%d m", true));
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Grenades", "espGrenades", &espGlobals::drawGrenades, "Range", &espGlobals::drawGrenadesDist, 10,
+                                                             400, "%d m", true));
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Tripwires", "espTripwires", &espGlobals::drawTripwires, "Range", &espGlobals::drawTripwiresDist,
+                                                             10, 400, "%d m", true));
+                saveIfChanged(
+                    menuLayout::ToggleIntSliderRow("Loot", "espLoot", &espGlobals::drawLoot, "Loose", &espGlobals::drawLootDist, 5, 400, "%d m", true));
                 ImGui::BeginDisabled(!espGlobals::drawLoot);
                 saveIfChanged(menuLayout::RightIntSliderRow("Containers", "espContainersDist", &espGlobals::drawContainerDist, 5, 1000, "%d m"));
                 saveIfChanged(menuLayout::RightIntSliderRow("Quest", "espQuestLootDist", &espGlobals::drawQuestLootDist, 5, 1000, "%d m"));
                 saveIfChanged(menuLayout::RightIntSliderRow("Wishlist", "espWishlistLootDist", &espGlobals::drawWishlistLootDist, 5, 1000, "%d m"));
                 saveIfChanged(menuLayout::RightIntSliderRow("Value", "espValueLootDist", &espGlobals::drawValueLootDist, 5, 1000, "%d m"));
                 ImGui::EndDisabled();
-                saveIfChanged(menuLayout::ToggleIntSliderRow("Corpses", "espCorpses", &espGlobals::drawCorpse, "Range", &espGlobals::drawCorpseDist, 5, 400, "%d m", true));
+                saveIfChanged(menuLayout::ToggleIntSliderRow("Corpses", "espCorpses", &espGlobals::drawCorpse, "Range", &espGlobals::drawCorpseDist, 5, 400,
+                                                             "%d m", true));
                 saveIfChanged(menuLayout::ToggleRow("Quest helper", "espQuest", &espGlobals::drawQuestHelper));
             }
             if (menuLayout::Section("ESP Players Draw & Distances"))
             {
-                saveIfChanged(menuLayout::AlignedTogglePairRow(
-                    "Player Equip", "espPlayerEquip", &espGlobals::drawPlayerEquip,
-                    "Hand Item", "espHandItem", &espGlobals::drawHandItem,
-                    radarGlobals::getPlayerEquip));
-                saveIfChanged(menuLayout::AlignedTogglePairRow(
-                    "Boxes", "espBoxes", &espGlobals::drawBoxPlayers,
-                    "Skeleton", "espSkeleton", &espGlobals::drawSkeletons));
-                saveIfChanged(menuLayout::ToggleFloatSliderRow("Head dot", "espHeadDot", &espGlobals::drawHeadDot, "Size", &espGlobals::headDotSize, 0.5f, 10.0f, "%.1f", true, true));
+                saveIfChanged(menuLayout::AlignedTogglePairRow("Player Equip", "espPlayerEquip", &espGlobals::drawPlayerEquip, "Hand Item", "espHandItem",
+                                                               &espGlobals::drawHandItem, radarGlobals::getPlayerEquip));
+                saveIfChanged(
+                    menuLayout::AlignedTogglePairRow("Boxes", "espBoxes", &espGlobals::drawBoxPlayers, "Skeleton", "espSkeleton", &espGlobals::drawSkeletons));
+                saveIfChanged(menuLayout::ToggleFloatSliderRow("Head dot", "espHeadDot", &espGlobals::drawHeadDot, "Size", &espGlobals::headDotSize, 0.5f,
+                                                               10.0f, "%.1f", true, true));
                 saveIfChanged(menuLayout::LeftLabelRightIntSliderRow("Players Distances", "PMC", "espPmcDist", &espGlobals::drawPmcDist, 10, 1000, "%d m"));
                 saveIfChanged(menuLayout::RightIntSliderRow("PScav", "espPScavDist", &espGlobals::drawPScavDist, 10, 1000, "%d m", true));
                 saveIfChanged(menuLayout::RightIntSliderRow("Scav", "espScavDist", &espGlobals::drawScavDist, 10, 1000, "%d m", true));
@@ -618,31 +702,12 @@ static void renderMenuSettings()
             }
             if (menuLayout::Section("ESP Local"))
             {
-                static const char* const crosshairTypeOptions[] =
-                {
-                    "Circle",
-                    "Cross"
-                };
+                static const char* const crosshairTypeOptions[] = {"Circle", "Cross"};
 
-                saveIfChanged(menuLayout::ToggleComboIntSliderRow(
-                    "Crosshair",
-                    "espCrosshair",
-                    &espGlobals::drawCrosshair,
-                    "Type",
-                    &espGlobals::crosshairType,
-                    crosshairTypeOptions,
-                    IM_ARRAYSIZE(crosshairTypeOptions),
-                    "Size",
-                    &espGlobals::crosshairSize,
-                    1,
-                    20,
-                    "%d",
-                    true));
-                saveIfChanged(menuLayout::ToggleRow(
-                    "Draw Fireport Line",
-                    "drawFireportLine",
-                    &espGlobals::drawFireportLine));
-
+                saveIfChanged(menuLayout::ToggleComboIntSliderRow("Crosshair", "espCrosshair", &espGlobals::drawCrosshair, "Type", &espGlobals::crosshairType,
+                                                                  crosshairTypeOptions, IM_ARRAYSIZE(crosshairTypeOptions), "Size", &espGlobals::crosshairSize,
+                                                                  1, 20, "%d", true));
+                saveIfChanged(menuLayout::ToggleRow("Draw Fireport Line", "drawFireportLine", &espGlobals::drawFireportLine));
             }
 
             if (menuLayout::Section("ESP Exfils"))
@@ -656,20 +721,11 @@ static void renderMenuSettings()
                     espGlobals::drawSecretExfils = false;
                     espGlobals::drawTransitExfils = false;
                 }
-                espExfilOptionsChanged |= menuLayout::AlignedTogglePairRow(
-                    "Secret extracts", "espSecretExtracts", &espGlobals::drawSecretExfils,
-                    "Transits", "espTransits", &espGlobals::drawTransitExfils,
-                    espGlobals::drawExfil,
-                    espGlobals::drawExfil);
+                espExfilOptionsChanged |=
+                    menuLayout::AlignedTogglePairRow("Secret extracts", "espSecretExtracts", &espGlobals::drawSecretExfils, "Transits", "espTransits",
+                                                     &espGlobals::drawTransitExfils, espGlobals::drawExfil, espGlobals::drawExfil);
                 saveIfChanged(espExfilOptionsChanged);
-                saveIfChanged(menuLayout::SliderIntRow(
-                    "Extract range",
-                    "espExtractRange",
-                    &espGlobals::drawExfilDist,
-                    5,
-                    1000,
-                    "%d m",
-                    espGlobals::drawExfil));
+                saveIfChanged(menuLayout::SliderIntRow("Extract range", "espExtractRange", &espGlobals::drawExfilDist, 5, 1000, "%d m", espGlobals::drawExfil));
             }
             menuLayout::EndTwoColumns();
         }
@@ -689,6 +745,19 @@ static void renderMenuSettings()
                 saveIfChanged(menuLayout::ColourRow("Local player", "localColour", (float*)&coloursGlobals::playerLocal));
                 saveIfChanged(menuLayout::ColourRow("Friendly", "friendlyColour", (float*)&coloursGlobals::playerFriendly));
                 saveIfChanged(menuLayout::ColourRow("Watched", "watchedColour", (float*)&coloursGlobals::playerWatched));
+            }
+            if (menuLayout::Section("Fuser distance fading"))
+            {
+                bool fadeChanged = menuLayout::ToggleRow("Enable fading", "fuserDistanceFadeEnabled", &espGlobals::fuserDistanceFadeEnabled);
+                fadeChanged |= menuLayout::SliderIntRow("Fade starts", "fuserFadeStartDistance", &espGlobals::fuserFadeStartDistance, 0, 999, "%d m", espGlobals::fuserDistanceFadeEnabled);
+                fadeChanged |= menuLayout::SliderIntRow("Fade reaches minimum", "fuserFadeEndDistance", &espGlobals::fuserFadeEndDistance, 1, 1000, "%d m", espGlobals::fuserDistanceFadeEnabled);
+                fadeChanged |= menuLayout::SliderIntRow("Minimum opacity", "fuserFadeMinimumOpacity", &espGlobals::fuserFadeMinimumOpacity, 0, 100, "%d%%", espGlobals::fuserDistanceFadeEnabled);
+
+                espGlobals::fuserFadeStartDistance = std::clamp(espGlobals::fuserFadeStartDistance, 0, 999);
+                espGlobals::fuserFadeEndDistance = std::clamp(espGlobals::fuserFadeEndDistance, espGlobals::fuserFadeStartDistance + 1, 1000);
+                espGlobals::fuserFadeMinimumOpacity = std::clamp(espGlobals::fuserFadeMinimumOpacity, 0, 100);
+                saveIfChanged(fadeChanged);
+                ImGui::TextDisabled("Players, loot, quests, tripwires and extracts only.");
             }
             menuLayout::NextColumn();
             if (menuLayout::Section("World"))
@@ -725,19 +794,10 @@ static void renderMenuSettings()
         if (menuLayout::Section("Static visibility (Factory)"))
         {
             bool changed = false;
-            changed |= menuLayout::ToggleRow(
-                "Enable collision visibility",
-                "atlasVisibilityEnabled",
-                &atlasVisibilityGlobals::enabled);
+            changed |= menuLayout::ToggleRow("Enable collision visibility", "atlasVisibilityEnabled", &atlasVisibilityGlobals::enabled);
 
             ImGui::BeginDisabled(!atlasVisibilityGlobals::enabled);
-            changed |= menuLayout::SliderIntRow(
-                "Maximum range",
-                "atlasVisibilityRange",
-                &atlasVisibilityGlobals::maxDistance,
-                10,
-                500,
-                "%d m");
+            changed |= menuLayout::SliderIntRow("Maximum range", "atlasVisibilityRange", &atlasVisibilityGlobals::maxDistance, 10, 500, "%d m");
             ImGui::EndDisabled();
 
             ImGui::TextDisabled("%s", atlasVisibility.getStatusText().c_str());
@@ -750,22 +810,27 @@ static void renderMenuSettings()
             {
                 const double before = value;
                 ImGui::SetNextItemWidth(240.0f);
-                ImGui::DragScalar(label, ImGuiDataType_Double, &value, static_cast<float>(speed), &minValue, &maxValue, "%.0f ms", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::DragScalar(label, ImGuiDataType_Double, &value, static_cast<float>(speed), &minValue, &maxValue, "%.0f ms",
+                                  ImGuiSliderFlags_AlwaysClamp);
                 return before != value;
             };
-            bool changed = false;
-            changed |= timing("Camera", globals::taskCamera, 1.0, 100.0, 0.5);
-            changed |= timing("Players", globals::taskPlayers, 5.0, 500.0, 1.0);
-            changed |= timing("Player bone update", globals::taskPlayerPositions, 5.0, 100.0, 0.5);
-            changed |= timing("Static visibility", globals::taskStaticVisibility, 50.0, 1000.0, 25.0);
-            changed |= timing("Fireport", globals::taskFireport, 5.0, 100.0, 1.0);
-            changed |= timing("Full skeleton", globals::taskPlayersBones, 5.0, 500.0, 1.0);
-            changed |= timing("Loot", globals::taskLoot, 100.0, 30000.0, 100.0);
-            changed |= timing("Equipment", globals::taskPlayersEquipment, 100.0, 30000.0, 100.0);
-            changed |= timing("Player metadata", globals::taskPlayerMetadata, 50.0, 5000.0, 25.0);
-            changed |= timing("Grenades", globals::taskGrenades, 10.0, 5000.0, 10.0);
-            changed |= timing("Tripwires", globals::taskTripWire, 10.0, 5000.0, 10.0);
-            saveIfChanged(changed);
+            (void)timing("Camera", globals::taskCamera, 1.0, 100.0, 0.5);
+            (void)timing("Players", globals::taskPlayers, 5.0, 500.0, 1.0);
+            (void)timing("Player bone update", globals::taskPlayerPositions, 5.0, 100.0, 0.5);
+            (void)timing("Static visibility", globals::taskStaticVisibility, 50.0, 1000.0, 25.0);
+            (void)timing("Fireport", globals::taskFireport, 5.0, 100.0, 1.0);
+            (void)timing("Full skeleton", globals::taskPlayersBones, 5.0, 500.0, 1.0);
+            (void)timing("Loot", globals::taskLoot, 100.0, 30000.0, 100.0);
+            (void)timing("Equipment", globals::taskPlayersEquipment, 100.0, 30000.0, 100.0);
+            (void)timing("Player metadata", globals::taskPlayerMetadata, 50.0, 5000.0, 25.0);
+            (void)timing("Grenades", globals::taskGrenades, 10.0, 5000.0, 10.0);
+            (void)timing("Tripwires", globals::taskTripWire, 10.0, 5000.0, 10.0);
+
+            ImGui::Spacing();
+            if (ImGui::Button("Reset task intervals to defaults"))
+                globals::resetTaskIntervals();
+            ImGui::SameLine();
+            ImGui::TextDisabled("Session only; these values are not saved.");
         }
     }
 
@@ -774,12 +839,14 @@ static void renderMenuSettings()
     ImGui::End();
 }
 
-std::string formatDataRate(size_t bytes) {
-    const char* suffix[] = { "B/s", "KB/s", "MB/s", "GB/s", "TB/s" };
+std::string formatDataRate(size_t bytes)
+{
+    const char* suffix[] = {"B/s", "KB/s", "MB/s", "GB/s", "TB/s"};
     size_t i = 0;
     double dblBytes = static_cast<double>(bytes);
 
-    while (dblBytes >= 1024 && i < 4) {
+    while (dblBytes >= 1024 && i < 4)
+    {
         dblBytes /= 1024;
         i++;
     }
@@ -802,16 +869,19 @@ static void renderBottomInfo()
     // Data
     if (memoryGlobals::dmaShowStats)
     {
-            ImGui::SetCursorPos(ImVec2(viewport->Size.x - viewport->Size.x + 20, viewport->Size.y - 30));
-            ImGui::Text(mem.GetTrafficStatsString().c_str());
+        ImGui::SetCursorPos(ImVec2(viewport->Size.x - viewport->Size.x + 20, viewport->Size.y - 30));
+        ImGui::Text(mem.GetTrafficStatsString().c_str());
     }
-
 }
 // Helper function to convert MessageLevel to string
-std::string messageLevelToString(MessageLevel level) {
-    switch (level) {
+std::string messageLevelToString(MessageLevel level)
+{
+    switch (level)
+    {
     case MessageLevel::INFO:
         return "INFO";
+    case MessageLevel::NOTICE:
+        return "NOTICE";
     case MessageLevel::WARN:
         return "WARN";
     case MessageLevel::ERR:
@@ -821,10 +891,13 @@ std::string messageLevelToString(MessageLevel level) {
     }
 }
 
-int CountNonZeroEntries(const uint64_t* buffer, int size) {
+int CountNonZeroEntries(const uint64_t* buffer, int size)
+{
     int count = 0;
-    for (int i = 0; i < size; ++i) {
-        if (buffer[i] != 0) {
+    for (int i = 0; i < size; ++i)
+    {
+        if (buffer[i] != 0)
+        {
             ++count;
         }
     }
@@ -832,10 +905,12 @@ int CountNonZeroEntries(const uint64_t* buffer, int size) {
 }
 
 // Function to convert glm::mat4 to string
-std::string Mat4ToString(const glm::highp_mat4& mat) {
+std::string Mat4ToString(const glm::highp_mat4& mat)
+{
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(2);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; ++i)
+    {
         const glm::vec4& row = glm::row(mat, i);
         oss << "[" << row.x << ", " << row.y << ", " << row.z << ", " << row.w << "]\n";
     }
@@ -843,8 +918,10 @@ std::string Mat4ToString(const glm::highp_mat4& mat) {
 }
 
 // Function to display matrix as tooltip in ImGui
-void ShowMatrixTooltip(const glm::highp_mat4& mat) {
-    if (ImGui::IsItemHovered()) {
+void ShowMatrixTooltip(const glm::highp_mat4& mat)
+{
+    if (ImGui::IsItemHovered())
+    {
         ImGui::BeginTooltip();
         ImGui::TextUnformatted(Mat4ToString(mat).c_str());
         ImGui::EndTooltip();
@@ -866,11 +943,7 @@ static void DebugTextPtr(const char* label, uint64_t ptr)
 {
     const bool valid = Utils::valid_pointer(ptr);
 
-    ImGui::Text("%s: 0x%llX  [%s]",
-        label,
-        static_cast<unsigned long long>(ptr),
-        valid ? "VALID" : "INVALID"
-    );
+    ImGui::Text("%s: 0x%llX  [%s]", label, static_cast<unsigned long long>(ptr), valid ? "VALID" : "INVALID");
 }
 
 static bool DebugMatrixLooksValid(const glm::highp_mat4& m)
@@ -903,7 +976,7 @@ static bool DebugMatrixLooksValid(const glm::highp_mat4& m)
     }
 
     return std::all_of(populatedColumns.begin(), populatedColumns.end(), [](bool populated) { return populated; }) &&
-        std::all_of(populatedRows.begin(), populatedRows.end(), [](bool populated) { return populated; });
+           std::all_of(populatedRows.begin(), populatedRows.end(), [](bool populated) { return populated; });
 }
 
 static void DebugMatrixSummary(const char* label, const glm::highp_mat4& m)
@@ -918,7 +991,13 @@ static void DebugMatrixSummary(const char* label, const glm::highp_mat4& m)
 
 static void renderDebugWindow()
 {
-    enum class DebugPage : int { Console, Performance, Memory, Map };
+    enum class DebugPage : int
+    {
+        Console,
+        Performance,
+        Memory,
+        Map
+    };
     static DebugPage activePage = DebugPage::Console;
     std::string windowNameMain = "Debug";
     static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse;
@@ -926,10 +1005,7 @@ static void renderDebugWindow()
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 40.0f, viewport->Pos.y + 40.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(980.0f, 680.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(
-        ImVec2(720.0f, 480.0f),
-        ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
-    );
+    ImGui::SetNextWindowSizeConstraints(ImVec2(720.0f, 480.0f), ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f));
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetDebug, flagss))
     {
@@ -949,3169 +1025,2092 @@ static void renderDebugWindow()
         menuLayout::PushContentInset();
         if (activePage == DebugPage::Console)
         {
-                static bool showInfo = true;
-                static bool showWarn = true;
-                static bool showError = true;
-                static bool pauseConsole = false;
-                static bool autoScroll = true;
-                static ImGuiTextFilter consoleFilter;
-                static std::vector<Message> displayMessages;
+            static bool showInfo = true;
+            static bool showNotice = true;
+            static bool showWarn = true;
+            static bool showError = true;
+            static bool pauseConsole = false;
+            static bool autoScroll = true;
+            static ImGuiTextFilter consoleFilter;
+            static std::vector<Message> displayMessages;
 
-                if (!pauseConsole || displayMessages.empty())
-                    displayMessages = LOGS.getMessages();
+            if (!pauseConsole || displayMessages.empty())
+                displayMessages = LOGS.getMessages();
 
-                std::size_t infoCount = 0;
-                std::size_t warnCount = 0;
-                std::size_t errorCount = 0;
+            std::size_t infoCount = 0;
+            std::size_t noticeCount = 0;
+            std::size_t warnCount = 0;
+            std::size_t errorCount = 0;
+
+            for (const Message& message : displayMessages)
+            {
+                switch (message.level)
+                {
+                case MessageLevel::INFO:
+                    ++infoCount;
+                    break;
+                case MessageLevel::NOTICE:
+                    ++noticeCount;
+                    break;
+                case MessageLevel::WARN:
+                    ++warnCount;
+                    break;
+                case MessageLevel::ERR:
+                    ++errorCount;
+                    break;
+                }
+            }
+
+            ImGui::Checkbox("Info", &showInfo);
+            ImGui::SameLine();
+            ImGui::Checkbox("Notices", &showNotice);
+            ImGui::SameLine();
+            ImGui::Checkbox("Warnings", &showWarn);
+            ImGui::SameLine();
+            ImGui::Checkbox("Errors", &showError);
+            ImGui::SameLine();
+            ImGui::Checkbox("Pause", &pauseConsole);
+            ImGui::SameLine();
+            ImGui::Checkbox("Auto-scroll", &autoScroll);
+
+            consoleFilter.Draw("Filter", 260.0f);
+            ImGui::SameLine();
+
+            if (ImGui::Button("Clear Console"))
+            {
+                LOGS.clearLog();
+                displayMessages.clear();
+            }
+
+            ImGui::Text("%zu info  |  %zu notices  |  %zu warnings  |  %zu errors  |  %zu retained", infoCount, noticeCount, warnCount, errorCount,
+                        displayMessages.size());
+
+            const std::string logPath = LOGS.getErrorLogPath().string();
+            ImGui::TextDisabled("Saved automatically: %s", logPath.empty() ? "<log path unavailable>" : logPath.c_str());
+
+            ImGui::Separator();
+
+            if (ImGui::BeginTable("DebugTable", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV, ImVec2(0.0f, 0.0f)))
+            {
+                ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
 
                 for (const Message& message : displayMessages)
                 {
+                    bool visible = false;
+                    ImVec4 colour{};
+
                     switch (message.level)
                     {
                     case MessageLevel::INFO:
-                        ++infoCount;
+                        visible = showInfo;
+                        colour = ImVec4(0.88f, 0.90f, 0.94f, 1.0f);
+                        break;
+                    case MessageLevel::NOTICE:
+                        visible = showNotice;
+                        if (message.noticeColour == NoticeColour::RED)
+                            colour = ImVec4(1.0f, 0.22f, 0.26f, 1.0f);
+                        else if (message.noticeColour == NoticeColour::GREEN)
+                            colour = ImVec4(0.29f, 0.87f, 0.50f, 1.0f);
+                        else
+                            colour = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
                         break;
                     case MessageLevel::WARN:
-                        ++warnCount;
+                        visible = showWarn;
+                        colour = ImVec4(1.0f, 0.75f, 0.20f, 1.0f);
                         break;
                     case MessageLevel::ERR:
-                        ++errorCount;
+                        visible = showError;
+                        colour = ImVec4(1.0f, 0.32f, 0.32f, 1.0f);
                         break;
                     }
+
+                    if (!visible || !consoleFilter.PassFilter(message.text.c_str()))
+                        continue;
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Text("%.2fs", message.timestamp);
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextColored(colour, "%s", messageLevelToString(message.level).c_str());
+
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextColored(colour, "%s", message.text.c_str());
                 }
 
-                ImGui::Checkbox("Info", &showInfo);
-                ImGui::SameLine();
-                ImGui::Checkbox("Warnings", &showWarn);
-                ImGui::SameLine();
-                ImGui::Checkbox("Errors", &showError);
-                ImGui::SameLine();
-                ImGui::Checkbox("Pause", &pauseConsole);
-                ImGui::SameLine();
-                ImGui::Checkbox("Auto-scroll", &autoScroll);
+                if (autoScroll && !pauseConsole)
+                    ImGui::SetScrollHereY(1.0f);
 
-                consoleFilter.Draw("Filter", 260.0f);
-                ImGui::SameLine();
-
-                if (ImGui::Button("Clear Console"))
-                {
-                    LOGS.clearLog();
-                    displayMessages.clear();
-                }
-
-                ImGui::Text(
-                    "%zu info  |  %zu warnings  |  %zu errors  |  %zu retained",
-                    infoCount,
-                    warnCount,
-                    errorCount,
-                    displayMessages.size());
-
-                const std::string logPath = LOGS.getErrorLogPath().string();
-                ImGui::TextDisabled(
-                    "Saved automatically: %s",
-                    logPath.empty() ? "<log path unavailable>" : logPath.c_str());
-
-                ImGui::Separator();
-
-                if (ImGui::BeginTable(
-                    "DebugTable",
-                    3,
-                    ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_ScrollY |
-                    ImGuiTableFlags_BordersInnerV,
-                    ImVec2(0.0f, 0.0f)))
-                {
-                    ImGui::TableSetupColumn(
-                        "Time",
-                        ImGuiTableColumnFlags_WidthFixed,
-                        70.0f);
-                    ImGui::TableSetupColumn(
-                        "Level",
-                        ImGuiTableColumnFlags_WidthFixed,
-                        70.0f);
-                    ImGui::TableSetupColumn(
-                        "Message",
-                        ImGuiTableColumnFlags_WidthStretch);
-                    ImGui::TableHeadersRow();
-
-                    for (const Message& message : displayMessages)
-                    {
-                        bool visible = false;
-                        ImVec4 colour{};
-
-                        switch (message.level)
-                        {
-                        case MessageLevel::INFO:
-                            visible = showInfo;
-                            colour = ImVec4(0.88f, 0.90f, 0.94f, 1.0f);
-                            break;
-                        case MessageLevel::WARN:
-                            visible = showWarn;
-                            colour = ImVec4(1.0f, 0.75f, 0.20f, 1.0f);
-                            break;
-                        case MessageLevel::ERR:
-                            visible = showError;
-                            colour = ImVec4(1.0f, 0.32f, 0.32f, 1.0f);
-                            break;
-                        }
-
-                        if (!visible || !consoleFilter.PassFilter(message.text.c_str()))
-                            continue;
-
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::Text("%.2fs", message.timestamp);
-
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::TextColored(
-                            colour,
-                            "%s",
-                            messageLevelToString(message.level).c_str());
-
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::TextColored(
-                            colour,
-                            "%s",
-                            message.text.c_str());
-                    }
-
-                    if (autoScroll && !pauseConsole)
-                        ImGui::SetScrollHereY(1.0f);
-
-                    ImGui::EndTable();
-                }
-
+                ImGui::EndTable();
+            }
         }
         if (activePage == DebugPage::Performance)
         {
-                static bool freezeRecent = false;
-                static bool newestFirst = true;
-                static std::vector<PerfSample> recentSamples;
-                static std::vector<PerfMetricSnapshot> topTasks;
-                static std::vector<PerfMetricSnapshot> topDma;
-                static MemoryTrafficStats traffic{};
-                static DxFuserPerformanceSnapshot fuserPerformance{};
-                static PlayerSnapshotTelemetry playerTelemetry{};
-                static CameraManagerSnapshot cameraProjection;
-                static double cameraAgeMs = -1.0;
-                static auto lastRefresh =
-                    std::chrono::steady_clock::time_point{};
+            static bool freezeRecent = false;
+            static bool newestFirst = true;
+            static std::vector<PerfSample> recentSamples;
+            static std::vector<PerfMetricSnapshot> topTasks;
+            static std::vector<PerfMetricSnapshot> topDma;
+            static MemoryTrafficStats traffic{};
+            static DxFuserPerformanceSnapshot fuserPerformance{};
+            static PlayerSnapshotTelemetry playerTelemetry{};
+            static CameraManagerSnapshot cameraProjection;
+            static double cameraAgeMs = -1.0;
+            static auto lastRefresh = std::chrono::steady_clock::time_point{};
 
-                const auto now = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
 
-                if (lastRefresh == std::chrono::steady_clock::time_point{} ||
-                    now - lastRefresh >= std::chrono::milliseconds(250))
+            if (lastRefresh == std::chrono::steady_clock::time_point{} || now - lastRefresh >= std::chrono::milliseconds(250))
+            {
+                topTasks = PerfMonitor::Instance().GetTopMetrics("task.", 5);
+                topDma = PerfMonitor::Instance().GetTopMetrics("dma.", 5);
+                traffic = mem.GetTrafficStats();
+                fuserPerformance = g_DxWindow.GetPerformanceSnapshot();
+                playerTelemetry = registeredPlayers.getSnapshotTelemetry();
+                cameraProjection = cameraManagerTest.snapshot();
+
+                cameraAgeMs = -1.0;
+                if (cameraProjection && cameraProjection->publishedAt != std::chrono::steady_clock::time_point{})
                 {
-                    topTasks =
-                        PerfMonitor::Instance().GetTopMetrics("task.", 5);
-                    topDma =
-                        PerfMonitor::Instance().GetTopMetrics("dma.", 5);
-                    traffic = mem.GetTrafficStats();
-                    fuserPerformance =
-                        g_DxWindow.GetPerformanceSnapshot();
-                    playerTelemetry = registeredPlayers.getSnapshotTelemetry();
-                    cameraProjection = cameraManagerTest.snapshot();
+                    cameraAgeMs = std::chrono::duration<double, std::milli>(now - cameraProjection->publishedAt).count();
+                }
 
-                    cameraAgeMs = -1.0;
-                    if (cameraProjection &&
-                        cameraProjection->publishedAt !=
-                        std::chrono::steady_clock::time_point{})
+                if (!freezeRecent)
+                    recentSamples = PerfMonitor::Instance().GetRecent();
+
+                lastRefresh = now;
+            }
+
+            const bool schedulerRunning = appGlobals::runThreads.load(std::memory_order_acquire);
+            const bool dmaReady = mem.IsDmaOperational();
+            const double peakMs = PerfMonitor::Instance().GetPeakMs();
+            const std::string peakName = PerfMonitor::Instance().GetPeakName();
+            const std::string peakDetail = PerfMonitor::Instance().GetPeakDetail();
+
+            ImGui::TextColored(schedulerRunning ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.55f, 0.25f, 1.0f), "Scheduler: %s",
+                               schedulerRunning ? "RUNNING" : "IDLE");
+
+            ImGui::SameLine();
+            ImGui::TextColored(dmaReady ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "DMA: %s", dmaReady ? "READY" : "NOT READY");
+
+            ImGui::SameLine();
+            ImGui::Text("Read %.0f ops/s | %.0f requests/s | %s", traffic.readOperationsPerSecond, traffic.readRequestsPerSecond,
+                        formatDataRate(static_cast<std::size_t>(traffic.readBytesRequestedPerSecond)).c_str());
+
+            ImGui::Text("Peak: %.1f ms%s%s", peakMs, peakName.empty() ? "" : " | ", peakName.empty() ? "" : peakName.c_str());
+
+            if (!peakDetail.empty())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%s)", peakDetail.c_str());
+            }
+
+            if (ImGui::Button("Reset performance history"))
+            {
+                PerfMonitor::Instance().ResetStatistics();
+                g_DxWindow.ResetPerformanceStatistics();
+                topTasks.clear();
+                topDma.clear();
+                recentSamples.clear();
+            }
+
+            ImGui::SameLine();
+
+            if (ImGui::Button("Reset DMA counters"))
+            {
+                mem.ResetTrafficStats();
+                traffic = {};
+            }
+
+            auto taskBudget = [](std::string_view name) -> double
+            {
+                if (name == "task.cameraTask")
+                    return globals::taskCamera;
+                if (name == "task.fireportTask")
+                    return globals::taskFireport;
+                if (name == "task.readOnlyAim")
+                    return globals::taskAim;
+                if (name == "task.keyManager")
+                    return globals::taskKeyManager;
+                if (name == "task.playersTask")
+                    return globals::taskPlayers;
+                if (name == "task.playerBoneTask")
+                    return globals::taskPlayerPositions;
+                if (name == "task.raidMonitor")
+                    return globals::taskRaidMonitor;
+                if (name == "task.ExplosiveManagerTask")
+                    return globals::taskGrenades;
+                if (name == "task.TripwireManagerTask")
+                    return globals::taskTripWire;
+                if (name == "task.exfilTask")
+                    return globals::taskExfil;
+                if (name == "task.lootTask")
+                    return globals::taskLoot;
+                if (name == "task.PlayerEquipmentTask")
+                    return globals::taskPlayersEquipment;
+                if (name == "task.PlayerMetadataTask")
+                    return globals::taskPlayerMetadata;
+                if (name == "task.questTask")
+                    return globals::taskQuest;
+                if (name == "task.wishManagerTask")
+                    return globals::taskWishManager;
+
+                return 0.0;
+            };
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Fuser Frame Pipeline");
+
+            ImGui::Text("Fuser: %s | %.1f FPS | %zu commands | %llu dropped", g_DxWindow.IsRunning() ? "RUNNING" : "STOPPED", fuserPerformance.presentedFPS,
+                        fuserPerformance.commandCount, static_cast<unsigned long long>(fuserPerformance.droppedCommandCount));
+
+            if (ImGui::BeginTable("FuserPipelineTimings", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableSetupColumn("Stage");
+                ImGui::TableSetupColumn("Last", 0, 0.7f);
+                ImGui::TableSetupColumn("Rolling", 0, 0.7f);
+                ImGui::TableSetupColumn("Peak", 0, 0.7f);
+                ImGui::TableHeadersRow();
+
+                const auto drawTimingRow = [](const char* label, const DxTimingSnapshot& timing)
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(label);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.2f ms", timing.lastMs);
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.2f ms", timing.averageMs);
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%.2f ms", timing.peakMs);
+                };
+
+                drawTimingRow("Frame interval", fuserPerformance.frameInterval);
+                drawTimingRow("Build snapshots", fuserPerformance.build);
+                drawTimingRow("Direct2D draw", fuserPerformance.draw);
+                drawTimingRow("Swap-chain present", fuserPerformance.present);
+
+                ImGui::EndTable();
+            }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Fuser Data Freshness");
+
+            const auto freshnessColour = [](double ageMs, double targetMs)
+            {
+                if (ageMs < 0.0)
+                    return ImVec4(0.60f, 0.62f, 0.68f, 1.0f);
+                if (ageMs <= targetMs * 2.0)
+                    return ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+                if (ageMs <= targetMs * 4.0)
+                    return ImVec4(1.0f, 0.72f, 0.20f, 1.0f);
+                return ImVec4(1.0f, 0.30f, 0.30f, 1.0f);
+            };
+
+            ImGui::TextColored(cameraProjection && cameraProjection->valid ? freshnessColour(cameraAgeMs, globals::taskCamera)
+                                                                           : ImVec4(1.0f, 0.30f, 0.30f, 1.0f),
+                               "Camera (%s): %.1f ms old | v%llu | busy skips %llu", cameraProjection && cameraProjection->valid ? "VALID" : "INVALID",
+                               cameraAgeMs, static_cast<unsigned long long>(cameraProjection ? cameraProjection->version : 0),
+                               static_cast<unsigned long long>(cameraProjection ? cameraProjection->busyReadSkips : 0));
+
+            ImGui::TextColored(freshnessColour(playerTelemetry.motionAgeMs, globals::taskPlayerPositions),
+                               "Player motion: %.1f ms old | rolling %.1f ms | v%llu | %zu players", playerTelemetry.motionAgeMs,
+                               playerTelemetry.averageMotionIntervalMs, static_cast<unsigned long long>(playerTelemetry.motionVersion),
+                               playerTelemetry.playerCount);
+
+            ImGui::TextDisabled("Smooth test scene + stale motion means the data feed is limiting; a high Present time usually means VSync/refresh pacing.");
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Top 5 Scheduled Tasks");
+
+            if (topTasks.empty())
+            {
+                ImGui::TextDisabled("No task samples yet. Enter a raid to populate timings.");
+            }
+            else if (ImGui::BeginTable("TopTaskTimings", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableSetupColumn("Task");
+                ImGui::TableSetupColumn("Last", 0, 0.7f);
+                ImGui::TableSetupColumn("Rolling", 0, 0.7f);
+                ImGui::TableSetupColumn("Peak", 0, 0.7f);
+                ImGui::TableSetupColumn("Budget", 0, 0.7f);
+                ImGui::TableSetupColumn("Load", 0, 0.7f);
+                ImGui::TableHeadersRow();
+
+                for (const PerfMetricSnapshot& metric : topTasks)
+                {
+                    std::string_view displayName(metric.name);
+
+                    if (displayName.starts_with("task."))
+                        displayName.remove_prefix(5);
+
+                    const double budget = taskBudget(metric.name);
+                    const double loadPercent = budget > 0.0 ? (metric.averageMs / budget) * 100.0 : 0.0;
+
+                    ImVec4 loadColour(0.35f, 0.90f, 0.45f, 1.0f);
+
+                    if (loadPercent >= 100.0)
+                        loadColour = ImVec4(1.0f, 0.30f, 0.30f, 1.0f);
+                    else if (loadPercent >= 60.0)
+                        loadColour = ImVec4(1.0f, 0.72f, 0.20f, 1.0f);
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(displayName.data(), displayName.data() + displayName.size());
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.2f ms", metric.lastMs);
+
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.2f ms", metric.averageMs);
+
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%.2f ms", metric.peakMs);
+
+                    ImGui::TableSetColumnIndex(4);
+                    ImGui::Text(budget > 0.0 ? "%.1f ms" : "-", budget);
+
+                    ImGui::TableSetColumnIndex(5);
+                    ImGui::TextColored(loadColour, budget > 0.0 ? "%.0f%%" : "-", loadPercent);
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::TextDisabled("Rolling is an exponential average. Load compares task runtime with its configured interval.");
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("DMA Contention and Execution");
+
+            if (topDma.empty())
+            {
+                ImGui::TextDisabled("No DMA timing samples yet.");
+            }
+            else if (ImGui::BeginTable("TopDmaTimings", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableSetupColumn("Operation");
+                ImGui::TableSetupColumn("Last", 0, 0.7f);
+                ImGui::TableSetupColumn("Rolling", 0, 0.7f);
+                ImGui::TableSetupColumn("Peak", 0, 0.7f);
+                ImGui::TableHeadersRow();
+
+                for (const PerfMetricSnapshot& metric : topDma)
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(metric.name.c_str());
+
+                    if (!metric.detail.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                     {
-                        cameraAgeMs =
-                            std::chrono::duration<double, std::milli>(
-                                now - cameraProjection->publishedAt).count();
+                        ImGui::SetTooltip("%s", metric.detail.c_str());
                     }
 
-                    if (!freezeRecent)
-                        recentSamples = PerfMonitor::Instance().GetRecent();
-
-                    lastRefresh = now;
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.2f ms", metric.lastMs);
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.2f ms", metric.averageMs);
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%.2f ms", metric.peakMs);
                 }
 
-                const bool schedulerRunning =
-                    appGlobals::runThreads.load(std::memory_order_acquire);
-                const bool dmaReady = mem.IsDmaOperational();
-                const double peakMs = PerfMonitor::Instance().GetPeakMs();
-                const std::string peakName =
-                    PerfMonitor::Instance().GetPeakName();
-                const std::string peakDetail =
-                    PerfMonitor::Instance().GetPeakDetail();
+                ImGui::EndTable();
+            }
 
-                ImGui::TextColored(
-                    schedulerRunning
-                    ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                    : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
-                    "Scheduler: %s",
-                    schedulerRunning ? "RUNNING" : "IDLE");
+            ImGui::TextDisabled("dma.lock_wait is scheduler contention; dma.execute is device/VMM time.");
 
+            if (ImGui::CollapsingHeader("Recent timing events"))
+            {
+                ImGui::Checkbox("Freeze", &freezeRecent);
                 ImGui::SameLine();
-                ImGui::TextColored(
-                    dmaReady
-                    ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                    : ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
-                    "DMA: %s",
-                    dmaReady ? "READY" : "NOT READY");
+                ImGui::Checkbox("Newest first", &newestFirst);
 
-                ImGui::SameLine();
-                ImGui::Text(
-                    "Read %.0f ops/s | %.0f requests/s | %s",
-                    traffic.readOperationsPerSecond,
-                    traffic.readRequestsPerSecond,
-                    formatDataRate(static_cast<std::size_t>(
-                        traffic.readBytesRequestedPerSecond)).c_str());
-
-                ImGui::Text(
-                    "Peak: %.1f ms%s%s",
-                    peakMs,
-                    peakName.empty() ? "" : " | ",
-                    peakName.empty() ? "" : peakName.c_str());
-
-                if (!peakDetail.empty())
+                if (ImGui::BeginTable("RecentPerfEvents", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV,
+                                      ImVec2(0.0f, 220.0f)))
                 {
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(%s)", peakDetail.c_str());
-                }
-
-                if (ImGui::Button("Reset performance history"))
-                {
-                    PerfMonitor::Instance().ResetStatistics();
-                    g_DxWindow.ResetPerformanceStatistics();
-                    topTasks.clear();
-                    topDma.clear();
-                    recentSamples.clear();
-                }
-
-                ImGui::SameLine();
-
-                if (ImGui::Button("Reset DMA counters"))
-                {
-                    mem.ResetTrafficStats();
-                    traffic = {};
-                }
-
-                auto taskBudget = [](std::string_view name) -> double
-                    {
-                        if (name == "task.cameraTask")
-                            return globals::taskCamera;
-                        if (name == "task.fireportTask")
-                            return globals::taskFireport;
-                        if (name == "task.readOnlyAim")
-                            return globals::taskAim;
-                        if (name == "task.keyManager")
-                            return globals::taskKeyManager;
-                        if (name == "task.playersTask")
-                            return globals::taskPlayers;
-                        if (name == "task.playerBoneTask")
-                            return globals::taskPlayerPositions;
-                        if (name == "task.raidMonitor")
-                            return globals::taskRaidMonitor;
-                        if (name == "task.ExplosiveManagerTask")
-                            return globals::taskGrenades;
-                        if (name == "task.TripwireManagerTask")
-                            return globals::taskTripWire;
-                        if (name == "task.exfilTask")
-                            return globals::taskExfil;
-                        if (name == "task.lootTask")
-                            return globals::taskLoot;
-                        if (name == "task.PlayerEquipmentTask")
-                            return globals::taskPlayersEquipment;
-                        if (name == "task.PlayerMetadataTask")
-                            return globals::taskPlayerMetadata;
-                        if (name == "task.questTask")
-                            return globals::taskQuest;
-                        if (name == "task.wishManagerTask")
-                            return globals::taskWishManager;
-
-                        return 0.0;
-                    };
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Fuser Frame Pipeline");
-
-                ImGui::Text(
-                    "Fuser: %s | %.1f FPS | %zu commands | %llu dropped",
-                    g_DxWindow.IsRunning() ? "RUNNING" : "STOPPED",
-                    fuserPerformance.presentedFPS,
-                    fuserPerformance.commandCount,
-                    static_cast<unsigned long long>(
-                        fuserPerformance.droppedCommandCount));
-
-                if (ImGui::BeginTable(
-                    "FuserPipelineTimings",
-                    4,
-                    ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_BordersInnerV |
-                    ImGuiTableFlags_SizingStretchProp))
-                {
-                    ImGui::TableSetupColumn("Stage");
-                    ImGui::TableSetupColumn("Last", 0, 0.7f);
-                    ImGui::TableSetupColumn("Rolling", 0, 0.7f);
-                    ImGui::TableSetupColumn("Peak", 0, 0.7f);
+                    ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                    ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, 65.0f);
+                    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+                    ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch);
                     ImGui::TableHeadersRow();
 
-                    const auto drawTimingRow = [](
-                        const char* label,
-                        const DxTimingSnapshot& timing)
-                        {
-                            ImGui::TableNextRow();
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted(label);
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::Text("%.2f ms", timing.lastMs);
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::Text("%.2f ms", timing.averageMs);
-                            ImGui::TableSetColumnIndex(3);
-                            ImGui::Text("%.2f ms", timing.peakMs);
-                        };
-
-                    drawTimingRow(
-                        "Frame interval",
-                        fuserPerformance.frameInterval);
-                    drawTimingRow("Build snapshots", fuserPerformance.build);
-                    drawTimingRow("Direct2D draw", fuserPerformance.draw);
-                    drawTimingRow("Swap-chain present", fuserPerformance.present);
-
-                    ImGui::EndTable();
-                }
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Fuser Data Freshness");
-
-                const auto freshnessColour = [](
-                    double ageMs,
-                    double targetMs)
+                    auto drawSample = [](const PerfSample& sample)
                     {
-                        if (ageMs < 0.0)
-                            return ImVec4(0.60f, 0.62f, 0.68f, 1.0f);
-                        if (ageMs <= targetMs * 2.0)
-                            return ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
-                        if (ageMs <= targetMs * 4.0)
-                            return ImVec4(1.0f, 0.72f, 0.20f, 1.0f);
-                        return ImVec4(1.0f, 0.30f, 0.30f, 1.0f);
-                    };
-
-                ImGui::TextColored(
-                    cameraProjection && cameraProjection->valid
-                    ? freshnessColour(cameraAgeMs, globals::taskCamera)
-                    : ImVec4(1.0f, 0.30f, 0.30f, 1.0f),
-                    "Camera (%s): %.1f ms old | v%llu | busy skips %llu",
-                    cameraProjection && cameraProjection->valid
-                    ? "VALID"
-                    : "INVALID",
-                    cameraAgeMs,
-                    static_cast<unsigned long long>(
-                        cameraProjection ? cameraProjection->version : 0),
-                    static_cast<unsigned long long>(
-                        cameraProjection
-                        ? cameraProjection->busyReadSkips
-                        : 0));
-
-                ImGui::TextColored(
-                    freshnessColour(
-                        playerTelemetry.motionAgeMs,
-                        globals::taskPlayerPositions),
-                    "Player motion: %.1f ms old | rolling %.1f ms | v%llu | %zu players",
-                    playerTelemetry.motionAgeMs,
-                    playerTelemetry.averageMotionIntervalMs,
-                    static_cast<unsigned long long>(
-                        playerTelemetry.motionVersion),
-                    playerTelemetry.playerCount);
-
-                ImGui::TextDisabled(
-                    "Smooth test scene + stale motion means the data feed is limiting; a high Present time usually means VSync/refresh pacing.");
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("Top 5 Scheduled Tasks");
-
-                if (topTasks.empty())
-                {
-                    ImGui::TextDisabled(
-                        "No task samples yet. Enter a raid to populate timings.");
-                }
-                else if (ImGui::BeginTable(
-                    "TopTaskTimings",
-                    6,
-                    ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_BordersInnerV |
-                    ImGuiTableFlags_SizingStretchProp))
-                {
-                    ImGui::TableSetupColumn("Task");
-                    ImGui::TableSetupColumn("Last", 0, 0.7f);
-                    ImGui::TableSetupColumn("Rolling", 0, 0.7f);
-                    ImGui::TableSetupColumn("Peak", 0, 0.7f);
-                    ImGui::TableSetupColumn("Budget", 0, 0.7f);
-                    ImGui::TableSetupColumn("Load", 0, 0.7f);
-                    ImGui::TableHeadersRow();
-
-                    for (const PerfMetricSnapshot& metric : topTasks)
-                    {
-                        std::string_view displayName(metric.name);
-
-                        if (displayName.starts_with("task."))
-                            displayName.remove_prefix(5);
-
-                        const double budget = taskBudget(metric.name);
-                        const double loadPercent = budget > 0.0
-                            ? (metric.averageMs / budget) * 100.0
-                            : 0.0;
-
-                        ImVec4 loadColour(0.35f, 0.90f, 0.45f, 1.0f);
-
-                        if (loadPercent >= 100.0)
-                            loadColour = ImVec4(1.0f, 0.30f, 0.30f, 1.0f);
-                        else if (loadPercent >= 60.0)
-                            loadColour = ImVec4(1.0f, 0.72f, 0.20f, 1.0f);
-
                         ImGui::TableNextRow();
                         ImGui::TableSetColumnIndex(0);
-                        ImGui::TextUnformatted(displayName.data(), displayName.data() + displayName.size());
-
+                        ImGui::Text("%.1fs", sample.timestampSec);
                         ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%.2f ms", metric.lastMs);
-
+                        ImGui::Text("%.2f", sample.durationMs);
                         ImGui::TableSetColumnIndex(2);
-                        ImGui::Text("%.2f ms", metric.averageMs);
-
+                        ImGui::TextUnformatted(sample.name.c_str());
                         ImGui::TableSetColumnIndex(3);
-                        ImGui::Text("%.2f ms", metric.peakMs);
+                        ImGui::TextUnformatted(sample.detail.c_str());
+                    };
 
-                        ImGui::TableSetColumnIndex(4);
-                        ImGui::Text(budget > 0.0 ? "%.1f ms" : "-", budget);
-
-                        ImGui::TableSetColumnIndex(5);
-                        ImGui::TextColored(loadColour, budget > 0.0 ? "%.0f%%" : "-", loadPercent);
+                    if (newestFirst)
+                    {
+                        for (auto sample = recentSamples.rbegin(); sample != recentSamples.rend(); ++sample)
+                        {
+                            drawSample(*sample);
+                        }
+                    }
+                    else
+                    {
+                        for (const PerfSample& sample : recentSamples)
+                            drawSample(sample);
                     }
 
                     ImGui::EndTable();
                 }
-
-                ImGui::TextDisabled("Rolling is an exponential average. Load compares task runtime with its configured interval.");
-
-                ImGui::Spacing();
-                ImGui::SeparatorText("DMA Contention and Execution");
-
-                if (topDma.empty())
+            }
+        }
+        if (activePage == DebugPage::Memory)
+        {
+            if (ImGui::BeginTabBar("##Tabsmemory", ImGuiTabBarFlags_FittingPolicyResizeDown))
+            {
+                if (ImGui::BeginTabItem("Overview"))
                 {
-                    ImGui::TextDisabled("No DMA timing samples yet.");
-                }
-                else if (ImGui::BeginTable(
-                    "TopDmaTimings",
-                    4,
-                    ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_BordersInnerV |
-                    ImGuiTableFlags_SizingStretchProp))
-                {
-                    ImGui::TableSetupColumn("Operation");
-                    ImGui::TableSetupColumn("Last", 0, 0.7f);
-                    ImGui::TableSetupColumn("Rolling", 0, 0.7f);
-                    ImGui::TableSetupColumn("Peak", 0, 0.7f);
-                    ImGui::TableHeadersRow();
+                    static MemoryConnectionStats connection{};
+                    static MemoryTrafficStats traffic{};
+                    static TarkovPointerSnapshot tarkovPointers{};
+                    static auto lastStatsRefresh = std::chrono::steady_clock::time_point{};
 
-                    for (const PerfMetricSnapshot& metric : topDma)
+                    const auto now = std::chrono::steady_clock::now();
+
+                    if (lastStatsRefresh == std::chrono::steady_clock::time_point{} || now - lastStatsRefresh >= std::chrono::milliseconds(500))
                     {
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::TextUnformatted(metric.name.c_str());
+                        connection = mem.GetConnectionStats();
+                        traffic = mem.GetTrafficStats();
+                        mem.RefreshTarkovPointerSnapshot();
+                        tarkovPointers = mem.GetTarkovPointerSnapshot();
+                        lastStatsRefresh = now;
+                    }
 
-                        if (!metric.detail.empty() &&
-                            ImGui::IsItemHovered(
-                                ImGuiHoveredFlags_DelayShort))
+                    const bool dmaReady = mem.IsDmaOperational();
+                    const bool worldReady = Utils::valid_pointer(mainGame.gameWorld) && Utils::valid_pointer(mainGame.localGameWorld);
+                    const bool localReady = Utils::valid_pointer(mainGame.localPlayerPtr);
+                    const bool schedulerRunning = appGlobals::runThreads.load(std::memory_order_acquire);
+                    const PlayerSnapshot playerSnapshot = registeredPlayers.getCacheSnapshot();
+
+                    ImGui::SeparatorText("Health");
+
+                    ImGui::TextColored(dmaReady ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "DMA %s",
+                                       dmaReady ? "READY" : "NOT READY");
+
+                    ImGui::SameLine();
+                    ImGui::TextColored(worldReady ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.55f, 0.25f, 1.0f), "| World %s",
+                                       worldReady ? "READY" : "WAITING");
+
+                    ImGui::SameLine();
+                    ImGui::TextColored(localReady ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.55f, 0.25f, 1.0f), "| Local %s",
+                                       localReady ? "READY" : "WAITING");
+
+                    ImGui::SameLine();
+                    ImGui::TextColored(schedulerRunning ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.70f, 0.70f, 0.70f, 1.0f), "| Workers %s",
+                                       schedulerRunning ? "RUNNING" : "IDLE");
+
+                    ImGui::SeparatorText("Target");
+
+                    ImGui::Text("%s | PID %u | Base 0x%016llX | %s", connection.processName.empty() ? "<no process>" : connection.processName.c_str(),
+                                connection.processId, static_cast<unsigned long long>(connection.targetBaseAddress),
+                                mainGame.selectedLocation.empty() ? "no map" : mainGame.selectedLocation.c_str());
+
+                    ImGui::Text("Registered: %d | Buffered: %d | Cached: %zu", mainGame.registeredPlayersCount,
+                                CountNonZeroEntries(mainGame.player_buffer, static_cast<int>(std::size(mainGame.player_buffer))), playerSnapshot->size());
+
+                    if (ImGui::CollapsingHeader("Preloaded module and Unity pointers"))
+                    {
+                        DebugTextPtr("UnityPlayer.dll base", tarkovPointers.unityPlayerBase);
+                        DebugTextPtr("GameAssembly.dll base", tarkovPointers.gameAssemblyBase);
+                        DebugTextPtr("GameObjectManager slot", tarkovPointers.gameObjectManagerSlot);
+                        ImGui::Text("GameObjectManager offset: 0x%llX",
+                                    static_cast<unsigned long long>(tarkovPointers.gameObjectManagerSlot >= tarkovPointers.unityPlayerBase
+                                                                        ? tarkovPointers.gameObjectManagerSlot - tarkovPointers.unityPlayerBase
+                                                                        : 0));
+                        DebugTextPtr("GameObjectManager", tarkovPointers.gameObjectManager);
+                        ImGui::Text("GOM resolution: %s", tarkovPointers.gameObjectManagerResolvedBySignature  ? "connection signature fallback"
+                                                          : tarkovPointers.gameObjectManagerSignatureAttempted ? "fixed offset; fallback did not resolve"
+                                                                                                               : "fixed UnityPlayer offset");
+
+                        if (ImGui::Button("Refresh GameObjectManager"))
                         {
-                            ImGui::SetTooltip("%s", metric.detail.c_str());
+                            mem.RefreshTarkovPointerSnapshot();
+                            tarkovPointers = mem.GetTarkovPointerSnapshot();
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Rescan GOM slot"))
+                        {
+                            mem.PreloadTarkovPointerSnapshot();
+                            tarkovPointers = mem.GetTarkovPointerSnapshot();
                         }
 
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%.2f ms", metric.lastMs);
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::Text("%.2f ms", metric.averageMs);
-                        ImGui::TableSetColumnIndex(3);
-                        ImGui::Text("%.2f ms", metric.peakMs);
+                        ImGui::TextDisabled("Module bases are captured at target attach; "
+                                            "the GOM value is reread from its cached "
+                                            "UnityPlayer slot.");
                     }
 
-                    ImGui::EndTable();
-                }
+                    ImGui::SeparatorText("DMA Traffic");
 
-                ImGui::TextDisabled("dma.lock_wait is scheduler contention; dma.execute is device/VMM time.");
+                    ImGui::Text("Reads: %.0f ops/s | %.0f requests/s | %s", traffic.readOperationsPerSecond, traffic.readRequestsPerSecond,
+                                formatDataRate(static_cast<std::size_t>(traffic.readBytesRequestedPerSecond)).c_str());
 
-                if (ImGui::CollapsingHeader("Recent timing events"))
-                {
-                    ImGui::Checkbox("Freeze", &freezeRecent);
-                    ImGui::SameLine();
-                    ImGui::Checkbox("Newest first", &newestFirst);
+                    ImGui::Text("Writes: %.0f ops/s | %.0f requests/s | %s", traffic.writeOperationsPerSecond, traffic.writeRequestsPerSecond,
+                                formatDataRate(static_cast<std::size_t>(traffic.writeBytesRequestedPerSecond)).c_str());
 
-                    if (ImGui::BeginTable(
-                        "RecentPerfEvents",
-                        4,
-                        ImGuiTableFlags_RowBg |
-                        ImGuiTableFlags_ScrollY |
-                        ImGuiTableFlags_BordersInnerV,
-                        ImVec2(0.0f, 220.0f)))
+                    ImGui::Text("Failures: %llu read | %llu write | %llu scatter clear", static_cast<unsigned long long>(traffic.readFailures),
+                                static_cast<unsigned long long>(traffic.writeFailures), static_cast<unsigned long long>(traffic.scatterClearFailures));
+
+                    if (ImGui::Button("Reset DMA counters"))
                     {
-                        ImGui::TableSetupColumn(
-                            "Time",
-                            ImGuiTableColumnFlags_WidthFixed,
-                            70.0f);
-                        ImGui::TableSetupColumn(
-                            "ms",
-                            ImGuiTableColumnFlags_WidthFixed,
-                            65.0f);
-                        ImGui::TableSetupColumn(
-                            "Name",
-                            ImGuiTableColumnFlags_WidthFixed,
-                            190.0f);
-                        ImGui::TableSetupColumn(
-                            "Detail",
-                            ImGuiTableColumnFlags_WidthStretch);
-                        ImGui::TableHeadersRow();
+                        mem.ResetTrafficStats();
+                        traffic = {};
+                    }
 
-                        auto drawSample = [](const PerfSample& sample)
-                            {
-                                ImGui::TableNextRow();
-                                ImGui::TableSetColumnIndex(0);
-                                ImGui::Text("%.1fs", sample.timestampSec);
-                                ImGui::TableSetColumnIndex(1);
-                                ImGui::Text("%.2f", sample.durationMs);
-                                ImGui::TableSetColumnIndex(2);
-                                ImGui::TextUnformatted(sample.name.c_str());
-                                ImGui::TableSetColumnIndex(3);
-                                ImGui::TextUnformatted(sample.detail.c_str());
-                            };
+                    if (ImGui::CollapsingHeader("World pointers and state"))
+                    {
+                        DebugTextPtr("Game Object Manager", mainGame.gameObjectManager);
+                        DebugTextPtr("Game World", mainGame.gameWorld);
+                        DebugTextPtr("Local Game World", mainGame.localGameWorld);
+                        DebugTextPtr("Registered Players", mainGame.registeredPlayers);
+                        DebugTextPtr("Registered Player List", mainGame.registeredPlayersList);
 
-                        if (newestFirst)
+                        ImGui::Text("Online raid: %s | Radar: %s | Tasks: %s", mainGame.onlineRaid ? "YES" : "NO",
+                                    appGlobals::runRadar.load(std::memory_order_acquire) ? "RUNNING" : "STOPPED", schedulerRunning ? "RUNNING" : "STOPPED");
+                    }
+
+                    if (ImGui::CollapsingHeader("Connection and hardware details"))
+                    {
+                        ImGui::Text("VMM handle: 0x%016llX | %s", static_cast<unsigned long long>(connection.vmmHandleAddress),
+                                    connection.vmmHandleValid ? "VALID" : "INVALID");
+
+                        ImGui::Text("Libraries: VMM %s | LeechCore %s | FTD3XX %s", connection.vmmLibraryLoaded ? "OK" : "MISSING",
+                                    connection.leechCoreLibraryLoaded ? "OK" : "MISSING", connection.ftd3xxLibraryLoaded ? "OK" : "MISSING");
+
+                        ImGui::Text("Target size: %llu bytes", static_cast<unsigned long long>(connection.targetBaseSize));
+
+                        if (connection.fpgaInfoAvailable)
                         {
-                            for (auto sample = recentSamples.rbegin();
-                                sample != recentSamples.rend();
-                                ++sample)
-                            {
-                                drawSample(*sample);
-                            }
+                            ImGui::Text("FPGA 0x%llX | Device 0x%llX | Firmware %llu.%llu", static_cast<unsigned long long>(connection.fpgaId),
+                                        static_cast<unsigned long long>(connection.deviceId), static_cast<unsigned long long>(connection.firmwareMajor),
+                                        static_cast<unsigned long long>(connection.firmwareMinor));
                         }
                         else
                         {
-                            for (const PerfSample& sample : recentSamples)
-                                drawSample(sample);
+                            ImGui::TextDisabled("FPGA details unavailable.");
+                        }
+
+                        if (connection.cacheInfoAvailable)
+                        {
+                            ImGui::Text("Cache ticks: process %llu/%llu | read %llu | TLB %llu",
+                                        static_cast<unsigned long long>(connection.processCachePartialTicks),
+                                        static_cast<unsigned long long>(connection.processCacheTotalTicks),
+                                        static_cast<unsigned long long>(connection.readCacheTicks), static_cast<unsigned long long>(connection.tlbCacheTicks));
+                        }
+                    }
+
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Local"))
+                {
+                    const PlayerSnapshot snapshot = registeredPlayers.getCacheSnapshot();
+                    const Player* localPlayer = nullptr;
+
+                    for (const Player& player : *snapshot)
+                    {
+                        if (player.isLocal || (Utils::valid_pointer(mainGame.localPlayerPtr) && player.instance == mainGame.localPlayerPtr))
+                        {
+                            localPlayer = &player;
+                            break;
+                        }
+                    }
+
+                    const bool localPointerReady = Utils::valid_pointer(mainGame.localPlayerPtr);
+                    const bool handsReady = Utils::valid_pointer(mainGame.localPlayerHands);
+
+                    ImGui::SeparatorText("Status");
+
+                    ImGui::TextColored(localPointerReady ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Player pointer: %s",
+                                       localPointerReady ? "READY" : "MISSING");
+
+                    ImGui::SameLine();
+                    ImGui::TextColored(handsReady ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.55f, 0.25f, 1.0f), "| Hands: %s",
+                                       handsReady ? "READY" : "WAITING");
+
+                    ImGui::SameLine();
+                    ImGui::Text("| Scoped: %s", mainGame.localIsScoped ? "YES" : "NO");
+
+                    if (localPlayer)
+                    {
+                        ImGui::SeparatorText("Published Player State");
+
+                        ImGui::Text("%s | %s | Group %s", localPlayer->name.empty() ? "Local Player" : localPlayer->name.c_str(),
+                                    localPlayer->side.empty() ? "unknown side" : localPlayer->side.c_str(),
+                                    localPlayer->groupId.empty() ? "-" : localPlayer->groupId.c_str());
+
+                        ImGui::Text("Position: %.2f, %.2f, %.2f", localPlayer->location.x, localPlayer->location.y, localPlayer->location.z);
+
+                        ImGui::Text("Rotation: %.2f, %.2f | Health tag: %d", localPlayer->rotation.x, localPlayer->rotation.y, localPlayer->healthETAG);
+
+                        ImGui::Text("Hands: %s | Ammo: %s (%d/%d)",
+                                    localPlayer->observedHandsInfo.itemName.empty() ? "-" : localPlayer->observedHandsInfo.itemName.c_str(),
+                                    localPlayer->observedHandsInfo.ammoName.empty() ? "-" : localPlayer->observedHandsInfo.ammoName.c_str(),
+                                    localPlayer->observedHandsInfo.chamberCount, localPlayer->observedHandsInfo.magazineCount);
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("The local player has not been published to the player snapshot yet.");
+                    }
+
+                    if (ImGui::CollapsingHeader("MainGame local values", ImGuiTreeNodeFlags_DefaultOpen))
+                    {
+                        ImGui::Text("Position: %.3f, %.3f, %.3f", mainGame.localLocation.x, mainGame.localLocation.y, mainGame.localLocation.z);
+
+                        ImGui::Text("Rotation: %.3f, %.3f", mainGame.localRotation.x, mainGame.localRotation.y);
+
+                        ImGui::Text("Group: %s | Savage: %s | Scoped: %s", mainGame.localGroupId.empty() ? "-" : mainGame.localGroupId.c_str(),
+                                    mainGame.localIsSavage ? "YES" : "NO", mainGame.localIsScoped ? "YES" : "NO");
+                    }
+
+                    if (ImGui::CollapsingHeader("Pointers"))
+                    {
+                        DebugTextPtr("Local Player", mainGame.localPlayerPtr);
+                        DebugTextPtr("Local Hands", mainGame.localPlayerHands);
+                        DebugTextPtr("Local PWA", mainGame.localPlayerPWA);
+                        DebugTextPtr("Local Profile", mainGame.localplayerProfile);
+
+                        if (localPlayer)
+                        {
+                            ImGui::Separator();
+                            DebugTextPtr("Movement Context", localPlayer->P_MovementContext);
+                            DebugTextPtr("Rotation Address", localPlayer->P_RotationAddress);
+                            DebugTextPtr("Hands Controller Address", localPlayer->P_HandsControllerAddr);
+                            DebugTextPtr("Bone Matrix", localPlayer->playerBoneMatrixPtr);
+                        }
+                    }
+
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Players"))
+                {
+                    const PlayerSnapshot cacheSnapshot = registeredPlayers.getCacheSnapshot();
+                    const PlayerCollection& cache = *cacheSnapshot;
+
+                    static ImGuiTextFilter playerFilter;
+                    static bool showDead = true;
+                    static bool showAi = true;
+                    static bool showPlayers = true;
+                    static bool showBtr = true;
+                    static bool onlyMissingBones = false;
+                    static uint64_t selectedInstance = 0;
+
+                    auto IsValidPtr = [](uint64_t value) -> bool { return Utils::valid_pointer(value); };
+
+                    auto GetPlayerType = [](const Player& player) -> const char*
+                    {
+                        if (player.isBTR)
+                            return "BTR";
+
+                        if (player.isLocal)
+                            return "LOCAL";
+
+                        if (player.isBoss)
+                            return "BOSS";
+
+                        if (player.isPlayerScav)
+                            return "P-SCAV";
+
+                        if (player.isAi)
+                            return "AI";
+
+                        if (player.isPlayer)
+                            return "PMC";
+
+                        return "UNKNOWN";
+                    };
+
+                    auto GetStateText = [](const Player& player) -> const char*
+                    {
+                        if (!Utils::valid_pointer(player.instance))
+                            return "INVALID";
+
+                        if (player.hasExfiled)
+                            return "EXFIL";
+
+                        if (player.isDead)
+                            return "DEAD";
+
+                        return "LIVE";
+                    };
+
+                    auto GetStateColour = [](const Player& player) -> ImVec4
+                    {
+                        if (!Utils::valid_pointer(player.instance))
+                            return ImVec4(0.85f, 0.25f, 0.25f, 1.0f);
+
+                        if (player.hasExfiled)
+                            return ImVec4(0.85f, 0.65f, 0.20f, 1.0f);
+
+                        if (player.isDead)
+                            return ImVec4(0.75f, 0.30f, 0.30f, 1.0f);
+
+                        if (player.isLocal)
+                            return ImVec4(0.25f, 0.75f, 1.0f, 1.0f);
+
+                        if (player.isBTR)
+                            return ImVec4(1.0f, 0.55f, 0.15f, 1.0f);
+
+                        return ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+                    };
+
+                    auto BonePtrAt = [&](const Player& player, boneListIndexes index) -> uint64_t
+                    {
+                        const size_t slot = static_cast<size_t>(index);
+
+                        if (slot >= player.bonePtrs.size())
+                            return 0;
+
+                        return player.bonePtrs[slot];
+                    };
+
+                    auto BonePositionAt = [&](const Player& player, boneListIndexes index) -> glm::vec3
+                    {
+                        const size_t slot = static_cast<size_t>(index);
+
+                        if (slot >= player.bonePositions.size())
+                            return glm::vec3(0.0f);
+
+                        return player.bonePositions[slot];
+                    };
+
+                    auto CountValidBonePtrs = [&](const Player& player) -> size_t
+                    {
+                        size_t count = 0;
+
+                        for (const uint64_t ptr : player.bonePtrs)
+                        {
+                            if (IsValidPtr(ptr))
+                                ++count;
+                        }
+
+                        return count;
+                    };
+
+                    auto HasMinimalBones = [&](const Player& player) -> bool
+                    {
+                        return IsValidPtr(BonePtrAt(player, boneListIndexes::Base)) && IsValidPtr(BonePtrAt(player, boneListIndexes::LFoot)) &&
+                               IsValidPtr(BonePtrAt(player, boneListIndexes::RFoot));
+                    };
+
+                    auto DrawPointerLine = [&](const char* label, uint64_t pointer)
+                    {
+                        const bool valid = IsValidPtr(pointer);
+
+                        ImGui::TextUnformatted(label);
+                        ImGui::SameLine(210.0f);
+
+                        ImGui::TextColored(valid ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.30f, 0.30f, 1.0f), "0x%016llX",
+                                           static_cast<unsigned long long>(pointer));
+                    };
+
+                    auto DrawPlayerTooltip = [&](const Player& player)
+                    {
+                        ImGui::BeginTooltip();
+
+                        ImGui::Text("%s | %s", player.name.empty() ? "Unnamed" : player.name.c_str(), GetPlayerType(player));
+
+                        ImGui::Separator();
+
+                        ImGui::Text("Instance: 0x%016llX", static_cast<unsigned long long>(player.instance));
+
+                        ImGui::Text("Distance: %dm", player.distance);
+
+                        ImGui::Text("Location: %.2f, %.2f, %.2f", player.location.x, player.location.y, player.location.z);
+
+                        ImGui::Text("Rotation Raw: %.2f, %.2f", player.rotationRAW.x, player.rotationRAW.y);
+
+                        ImGui::Text("Rotation Fixed: %.2f, %.2f", player.rotation.x, player.rotation.y);
+
+                        ImGui::Separator();
+                        ImGui::TextUnformatted("Pointers");
+
+                        DrawPointerLine("Bone Matrix", player.playerBoneMatrixPtr);
+
+                        DrawPointerLine("Observed Controller", player.P_ObservedPlayerController);
+
+                        DrawPointerLine("Observed Health", player.P_ObservedHealthController);
+
+                        DrawPointerLine("Movement Context", player.P_MovementContext);
+
+                        DrawPointerLine("Rotation Address", player.P_RotationAddress);
+
+                        DrawPointerLine("Inventory Controller Addr", player.P_InventoryControllerAddr);
+
+                        DrawPointerLine("Hands Controller Addr", player.P_HandsControllerAddr);
+
+                        DrawPointerLine("Hands Controller", player.P_HandsController);
+
+                        DrawPointerLine("Profile", player.P_Profile);
+
+                        DrawPointerLine("PWA", player.P_PWA);
+
+                        DrawPointerLine("Corpse Address", player.P_CorpseAddr);
+
+                        DrawPointerLine("Corpse Class", player.P_CorpseClass);
+
+                        ImGui::Separator();
+                        ImGui::TextUnformatted("Bone Cache");
+
+                        ImGui::Text("Pointers: %zu / %zu", CountValidBonePtrs(player), player.bonePtrs.size());
+
+                        ImGui::Text("Need Resolve: %s", player.bonePointersNeedResolve ? "YES" : "NO");
+
+                        ImGui::Text("Minimal Bones: %s", HasMinimalBones(player) ? "READY" : "MISSING");
+
+                        DrawPointerLine("Base", BonePtrAt(player, boneListIndexes::Base));
+
+                        DrawPointerLine("LFoot", BonePtrAt(player, boneListIndexes::LFoot));
+
+                        DrawPointerLine("RFoot", BonePtrAt(player, boneListIndexes::RFoot));
+
+                        ImGui::EndTooltip();
+                    };
+
+                    size_t localCount = 0;
+                    size_t pmcCount = 0;
+                    size_t aiCount = 0;
+                    size_t bossCount = 0;
+                    size_t scavCount = 0;
+                    size_t deadCount = 0;
+                    size_t btrCount = 0;
+                    size_t missingBonesCount = 0;
+                    size_t equipmentReadyCount = 0;
+
+                    for (const Player& player : cache)
+                    {
+                        if (player.isLocal)
+                            ++localCount;
+
+                        if (player.isPlayer && !player.isPlayerScav && !player.isAi)
+                        {
+                            ++pmcCount;
+                        }
+
+                        if (player.isAi)
+                            ++aiCount;
+
+                        if (player.isBoss)
+                            ++bossCount;
+
+                        if (player.isPlayerScav)
+                            ++scavCount;
+
+                        if (player.isDead)
+                            ++deadCount;
+
+                        if (player.isBTR)
+                            ++btrCount;
+
+                        if (!player.isBTR && !HasMinimalBones(player))
+                        {
+                            ++missingBonesCount;
+                        }
+
+                        if (player.equipInited)
+                            ++equipmentReadyCount;
+                    }
+
+                    ImGui::Text("Cached Players: %zu", cache.size());
+
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("|");
+
+                    ImGui::SameLine();
+                    ImGui::Text("Local: %zu", localCount);
+
+                    ImGui::SameLine();
+                    ImGui::Text("PMC: %zu", pmcCount);
+
+                    ImGui::SameLine();
+                    ImGui::Text("AI: %zu", aiCount);
+
+                    ImGui::SameLine();
+                    ImGui::Text("Boss: %zu", bossCount);
+
+                    ImGui::SameLine();
+                    ImGui::Text("PScav: %zu", scavCount);
+
+                    ImGui::SameLine();
+                    ImGui::Text("Dead: %zu", deadCount);
+
+                    ImGui::SameLine();
+                    ImGui::Text("BTR: %zu", btrCount);
+
+                    ImGui::Separator();
+
+                    playerFilter.Draw("Search", 260.0f);
+
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Show Dead", &showDead);
+
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Show AI", &showAi);
+
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Show PMC/PScav", &showPlayers);
+
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Show BTR", &showBtr);
+
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Only Missing Bones", &onlyMissingBones);
+
+                    ImGui::TextDisabled("Equipment Ready: %zu | Missing Base/LFoot/RFoot: %zu", equipmentReadyCount, missingBonesCount);
+
+                    ImGui::Separator();
+
+                    const ImGuiTableFlags tableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable |
+                                                       ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable | ImGuiTableFlags_ScrollY |
+                                                       ImGuiTableFlags_SizingStretchProp;
+
+                    if (ImGui::BeginTable("##PlayerTable", 10, tableFlags, ImVec2(0.0f, 390.0f)))
+                    {
+                        ImGui::TableSetupScrollFreeze(0, 1);
+
+                        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+
+                        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+
+                        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.40f);
+
+                        ImGui::TableSetupColumn("Distance", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+
+                        ImGui::TableSetupColumn("Position", ImGuiTableColumnFlags_WidthStretch, 1.20f);
+
+                        ImGui::TableSetupColumn("Rotation", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+
+                        ImGui::TableSetupColumn("Health", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+
+                        ImGui::TableSetupColumn("Equipment", ImGuiTableColumnFlags_WidthStretch, 1.00f);
+
+                        ImGui::TableSetupColumn("Bones", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+
+                        ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthStretch, 0.90f);
+
+                        ImGui::TableHeadersRow();
+
+                        ImGuiListClipper clipper;
+                        clipper.Begin(static_cast<int>(cache.size()));
+
+                        while (clipper.Step())
+                        {
+                            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+                            {
+                                const Player& player = cache[static_cast<size_t>(i)];
+
+                                if (!showDead && (player.isDead || player.hasExfiled))
+                                {
+                                    continue;
+                                }
+
+                                if (!showAi && player.isAi && !player.isBTR)
+                                {
+                                    continue;
+                                }
+
+                                if (!showPlayers && (player.isPlayer || player.isPlayerScav || player.isLocal))
+                                {
+                                    continue;
+                                }
+
+                                if (!showBtr && player.isBTR)
+                                    continue;
+
+                                if (onlyMissingBones && HasMinimalBones(player))
+                                {
+                                    continue;
+                                }
+
+                                std::string searchText;
+
+                                searchText.reserve(player.name.size() + player.className.size() + player.groupId.size() + 64);
+
+                                searchText += player.name;
+                                searchText += " ";
+                                searchText += player.className;
+                                searchText += " ";
+                                searchText += player.groupId;
+                                searchText += " ";
+                                searchText += GetPlayerType(player);
+
+                                if (!playerFilter.PassFilter(searchText.c_str()))
+                                {
+                                    continue;
+                                }
+
+                                ImGui::PushID(static_cast<int>(player.instance & 0x7FFFFFFF));
+
+                                ImGui::TableNextRow(ImGuiTableRowFlags_None, 24.0f);
+
+                                ImGui::TableSetColumnIndex(0);
+
+                                const bool isSelected = selectedInstance == player.instance;
+
+                                ImGui::PushStyleColor(ImGuiCol_Text, GetStateColour(player));
+
+                                if (ImGui::Selectable(GetStateText(player), isSelected, ImGuiSelectableFlags_None, ImVec2(0.0f, 0.0f)))
+                                {
+                                    selectedInstance = player.instance;
+                                }
+
+                                ImGui::PopStyleColor();
+
+                                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                                {
+                                    DrawPlayerTooltip(player);
+                                }
+
+                                ImGui::TableSetColumnIndex(1);
+
+                                ImGui::TextUnformatted(GetPlayerType(player));
+
+                                ImGui::TableSetColumnIndex(2);
+
+                                const char* displayName = player.name.empty() ? "<unnamed>" : player.name.c_str();
+
+                                ImGui::TextUnformatted(displayName);
+
+                                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                                {
+                                    DrawPlayerTooltip(player);
+                                }
+
+                                ImGui::TableSetColumnIndex(3);
+
+                                ImGui::Text("%dm", player.distance);
+
+                                ImGui::TableSetColumnIndex(4);
+
+                                ImGui::Text("%.1f / %.1f / %.1f", player.location.x, player.location.y, player.location.z);
+
+                                ImGui::TableSetColumnIndex(5);
+
+                                ImGui::Text("%.1f / %.1f", player.rotation.x, player.rotation.y);
+
+                                ImGui::TableSetColumnIndex(6);
+
+                                ImGui::Text("%d", player.healthETAG);
+
+                                ImGui::TableSetColumnIndex(7);
+
+                                if (!player.equipInited)
+                                {
+                                    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.20f, 1.0f), "INIT");
+                                }
+                                else
+                                {
+                                    ImGui::Text("%zu slots | %d", player._slots.size(), player.playerValue);
+                                }
+
+                                ImGui::TableSetColumnIndex(8);
+
+                                const size_t validBones = CountValidBonePtrs(player);
+
+                                const bool minimalBones = HasMinimalBones(player);
+
+                                ImGui::TextColored(minimalBones ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "%zu/%zu%s",
+                                                   validBones, player.bonePtrs.size(), player.bonePointersNeedResolve ? " *" : "");
+
+                                ImGui::TableSetColumnIndex(9);
+
+                                if (player.groupId.empty())
+                                {
+                                    ImGui::TextDisabled("-");
+                                }
+                                else
+                                {
+                                    ImGui::TextUnformatted(player.groupId.c_str());
+                                }
+
+                                ImGui::PopID();
+                            }
                         }
 
                         ImGui::EndTable();
                     }
-                }
 
-        }
-        if (activePage == DebugPage::Memory)
-        {
-                if (ImGui::BeginTabBar("##Tabsmemory", ImGuiTabBarFlags_FittingPolicyResizeDown))
-                {
-                    if (ImGui::BeginTabItem("Overview"))
+                    const Player* selectedPlayer = nullptr;
+
+                    for (const Player& player : cache)
                     {
-                        static MemoryConnectionStats connection{};
-                        static MemoryTrafficStats traffic{};
-                        static TarkovPointerSnapshot tarkovPointers{};
-                        static auto lastStatsRefresh =
-                            std::chrono::steady_clock::time_point{};
-
-                        const auto now = std::chrono::steady_clock::now();
-
-                        if (lastStatsRefresh ==
-                                std::chrono::steady_clock::time_point{} ||
-                            now - lastStatsRefresh >=
-                                std::chrono::milliseconds(500))
+                        if (player.instance == selectedInstance)
                         {
-                            connection = mem.GetConnectionStats();
-                            traffic = mem.GetTrafficStats();
-                            mem.RefreshTarkovPointerSnapshot();
-                            tarkovPointers =
-                                mem.GetTarkovPointerSnapshot();
-                            lastStatsRefresh = now;
+                            selectedPlayer = &player;
+                            break;
                         }
-
-                        const bool dmaReady = mem.IsDmaOperational();
-                        const bool worldReady =
-                            Utils::valid_pointer(mainGame.gameWorld) &&
-                            Utils::valid_pointer(mainGame.localGameWorld);
-                        const bool localReady =
-                            Utils::valid_pointer(mainGame.localPlayerPtr);
-                        const bool schedulerRunning =
-                            appGlobals::runThreads.load(
-                                std::memory_order_acquire);
-                        const PlayerSnapshot playerSnapshot =
-                            registeredPlayers.getCacheSnapshot();
-
-                        ImGui::SeparatorText("Health");
-
-                        ImGui::TextColored(
-                            dmaReady
-                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                            : ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
-                            "DMA %s",
-                            dmaReady ? "READY" : "NOT READY");
-
-                        ImGui::SameLine();
-                        ImGui::TextColored(
-                            worldReady
-                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                            : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
-                            "| World %s",
-                            worldReady ? "READY" : "WAITING");
-
-                        ImGui::SameLine();
-                        ImGui::TextColored(
-                            localReady
-                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                            : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
-                            "| Local %s",
-                            localReady ? "READY" : "WAITING");
-
-                        ImGui::SameLine();
-                        ImGui::TextColored(
-                            schedulerRunning
-                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                            : ImVec4(0.70f, 0.70f, 0.70f, 1.0f),
-                            "| Workers %s",
-                            schedulerRunning ? "RUNNING" : "IDLE");
-
-                        ImGui::SeparatorText("Target");
-
-                        ImGui::Text(
-                            "%s | PID %u | Base 0x%016llX | %s",
-                            connection.processName.empty()
-                            ? "<no process>"
-                            : connection.processName.c_str(),
-                            connection.processId,
-                            static_cast<unsigned long long>(
-                                connection.targetBaseAddress),
-                            mainGame.selectedLocation.empty()
-                            ? "no map"
-                            : mainGame.selectedLocation.c_str());
-
-                        ImGui::Text(
-                            "Registered: %d | Buffered: %d | Cached: %zu",
-                            mainGame.registeredPlayersCount,
-                            CountNonZeroEntries(
-                                mainGame.player_buffer,
-                                static_cast<int>(
-                                    std::size(mainGame.player_buffer))),
-                            playerSnapshot->size());
-
-                        if (ImGui::CollapsingHeader(
-                            "Preloaded module and Unity pointers"))
-                        {
-                            DebugTextPtr(
-                                "UnityPlayer.dll base",
-                                tarkovPointers.unityPlayerBase);
-                            DebugTextPtr(
-                                "GameAssembly.dll base",
-                                tarkovPointers.gameAssemblyBase);
-                            DebugTextPtr(
-                                "GameObjectManager slot",
-                                tarkovPointers.gameObjectManagerSlot);
-                            ImGui::Text(
-                                "GameObjectManager offset: 0x%llX",
-                                static_cast<unsigned long long>(
-                                    tarkovPointers.gameObjectManagerSlot >=
-                                            tarkovPointers.unityPlayerBase
-                                    ? tarkovPointers.gameObjectManagerSlot -
-                                        tarkovPointers.unityPlayerBase
-                                    : 0));
-                            DebugTextPtr(
-                                "GameObjectManager",
-                                tarkovPointers.gameObjectManager);
-                            ImGui::Text(
-                                "GOM resolution: %s",
-                                tarkovPointers.gameObjectManagerResolvedBySignature
-                                ? "connection signature fallback"
-                                : tarkovPointers.gameObjectManagerSignatureAttempted
-                                ? "fixed offset; fallback did not resolve"
-                                : "fixed UnityPlayer offset");
-
-                            if (ImGui::Button("Refresh GameObjectManager"))
-                            {
-                                mem.RefreshTarkovPointerSnapshot();
-                                tarkovPointers =
-                                    mem.GetTarkovPointerSnapshot();
-                            }
-                            ImGui::SameLine();
-                            if (ImGui::Button("Rescan GOM slot"))
-                            {
-                                mem.PreloadTarkovPointerSnapshot();
-                                tarkovPointers =
-                                    mem.GetTarkovPointerSnapshot();
-                            }
-
-                            ImGui::TextDisabled(
-                                "Module bases are captured at target attach; "
-                                "the GOM value is reread from its cached "
-                                "UnityPlayer slot.");
-                        }
-
-                        ImGui::SeparatorText("DMA Traffic");
-
-                        ImGui::Text(
-                            "Reads: %.0f ops/s | %.0f requests/s | %s",
-                            traffic.readOperationsPerSecond,
-                            traffic.readRequestsPerSecond,
-                            formatDataRate(static_cast<std::size_t>(
-                                traffic.readBytesRequestedPerSecond)).c_str());
-
-                        ImGui::Text(
-                            "Writes: %.0f ops/s | %.0f requests/s | %s",
-                            traffic.writeOperationsPerSecond,
-                            traffic.writeRequestsPerSecond,
-                            formatDataRate(static_cast<std::size_t>(
-                                traffic.writeBytesRequestedPerSecond)).c_str());
-
-                        ImGui::Text(
-                            "Failures: %llu read | %llu write | %llu scatter clear",
-                            static_cast<unsigned long long>(
-                                traffic.readFailures),
-                            static_cast<unsigned long long>(
-                                traffic.writeFailures),
-                            static_cast<unsigned long long>(
-                                traffic.scatterClearFailures));
-
-                        if (ImGui::Button("Reset DMA counters"))
-                        {
-                            mem.ResetTrafficStats();
-                            traffic = {};
-                        }
-
-                        if (ImGui::CollapsingHeader(
-                            "World pointers and state"))
-                        {
-                            DebugTextPtr(
-                                "Game Object Manager",
-                                mainGame.gameObjectManager);
-                            DebugTextPtr("Game World", mainGame.gameWorld);
-                            DebugTextPtr(
-                                "Local Game World",
-                                mainGame.localGameWorld);
-                            DebugTextPtr(
-                                "Registered Players",
-                                mainGame.registeredPlayers);
-                            DebugTextPtr(
-                                "Registered Player List",
-                                mainGame.registeredPlayersList);
-
-                            ImGui::Text(
-                                "Online raid: %s | Radar: %s | Tasks: %s",
-                                mainGame.onlineRaid ? "YES" : "NO",
-                                appGlobals::runRadar.load(
-                                    std::memory_order_acquire)
-                                ? "RUNNING"
-                                : "STOPPED",
-                                schedulerRunning ? "RUNNING" : "STOPPED");
-                        }
-
-                        if (ImGui::CollapsingHeader(
-                            "Connection and hardware details"))
-                        {
-                            ImGui::Text(
-                                "VMM handle: 0x%016llX | %s",
-                                static_cast<unsigned long long>(
-                                    connection.vmmHandleAddress),
-                                connection.vmmHandleValid
-                                ? "VALID"
-                                : "INVALID");
-
-                            ImGui::Text(
-                                "Libraries: VMM %s | LeechCore %s | FTD3XX %s",
-                                connection.vmmLibraryLoaded ? "OK" : "MISSING",
-                                connection.leechCoreLibraryLoaded
-                                ? "OK"
-                                : "MISSING",
-                                connection.ftd3xxLibraryLoaded
-                                ? "OK"
-                                : "MISSING");
-
-                            ImGui::Text(
-                                "Target size: %llu bytes",
-                                static_cast<unsigned long long>(
-                                    connection.targetBaseSize));
-
-                            if (connection.fpgaInfoAvailable)
-                            {
-                                ImGui::Text(
-                                    "FPGA 0x%llX | Device 0x%llX | Firmware %llu.%llu",
-                                    static_cast<unsigned long long>(
-                                        connection.fpgaId),
-                                    static_cast<unsigned long long>(
-                                        connection.deviceId),
-                                    static_cast<unsigned long long>(
-                                        connection.firmwareMajor),
-                                    static_cast<unsigned long long>(
-                                        connection.firmwareMinor));
-                            }
-                            else
-                            {
-                                ImGui::TextDisabled(
-                                    "FPGA details unavailable.");
-                            }
-
-                            if (connection.cacheInfoAvailable)
-                            {
-                                ImGui::Text(
-                                    "Cache ticks: process %llu/%llu | read %llu | TLB %llu",
-                                    static_cast<unsigned long long>(
-                                        connection.processCachePartialTicks),
-                                    static_cast<unsigned long long>(
-                                        connection.processCacheTotalTicks),
-                                    static_cast<unsigned long long>(
-                                        connection.readCacheTicks),
-                                    static_cast<unsigned long long>(
-                                        connection.tlbCacheTicks));
-                            }
-                        }
-
-                        ImGui::EndTabItem();
                     }
-                    if (ImGui::BeginTabItem("Local"))
+
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("Selected Player Inspector");
+
+                    ImGui::BeginChild("##PlayerInspector", ImVec2(0.0f, 220.0f), true);
+
+                    if (!selectedPlayer)
                     {
-                        const PlayerSnapshot snapshot =
-                            registeredPlayers.getCacheSnapshot();
-                        const Player* localPlayer = nullptr;
+                        ImGui::TextDisabled("Select a player row to inspect its cached state.");
+                    }
+                    else
+                    {
+                        const Player& player = *selectedPlayer;
 
-                        for (const Player& player : *snapshot)
+                        ImGui::TextColored(GetStateColour(player), "%s | %s | %s", player.name.empty() ? "<unnamed>" : player.name.c_str(),
+                                           GetPlayerType(player), GetStateText(player));
+
+                        ImGui::Text("Class: %s", player.className.c_str());
+
+                        ImGui::Text("Instance: 0x%016llX", static_cast<unsigned long long>(player.instance));
+
+                        ImGui::Separator();
+
+                        if (ImGui::CollapsingHeader("Runtime Cache", ImGuiTreeNodeFlags_DefaultOpen))
                         {
-                            if (player.isLocal ||
-                                (Utils::valid_pointer(
-                                    mainGame.localPlayerPtr) &&
-                                    player.instance ==
-                                        mainGame.localPlayerPtr))
+                            ImGui::Text("Location: %.3f, %.3f, %.3f", player.location.x, player.location.y, player.location.z);
+
+                            ImGui::Text("Distance: %dm", player.distance);
+
+                            ImGui::Text("Rotation Raw: %.3f, %.3f", player.rotationRAW.x, player.rotationRAW.y);
+
+                            ImGui::Text("Rotation Corrected: %.3f, %.3f", player.rotation.x, player.rotation.y);
+
+                            ImGui::Text("Health ETag: %d", player.healthETAG);
+
+                            ImGui::Text("Aiming: %s", player.isAiming ? "YES" : "NO");
+
+                            ImGui::Text("Dead: %s | Exfil: %s", player.isDead ? "YES" : "NO", player.hasExfiled ? "YES" : "NO");
+                        }
+
+                        if (ImGui::CollapsingHeader("Equipment Cache"))
+                        {
+                            ImGui::Text("Initialised: %s", player.equipInited ? "YES" : "NO");
+
+                            ImGui::Text("Slot Count: %zu", player._slots.size());
+
+                            ImGui::Text("Value: %d", player.playerValue);
+
+                            ImGui::Text("Item In Hand: %s", player.itemInHand.empty() ? "-" : player.itemInHand.c_str());
+
+                            ImGui::Text("Hands Controller: 0x%016llX", static_cast<unsigned long long>(player.P_HandsController));
+
+                            if (!player._slots.empty() && ImGui::TreeNode("Cached Slots"))
                             {
-                                localPlayer = &player;
-                                break;
+                                for (const auto& slot : player._slots)
+                                {
+                                    ImGui::BulletText("%s | %s | %d | %s", slot.name.c_str(), slot.equipName.empty() ? "-" : slot.equipName.c_str(), slot.price,
+                                                      slot.wanted ? "WANTED" : "");
+                                }
+
+                                ImGui::TreePop();
                             }
-                        }
-
-                        const bool localPointerReady =
-                            Utils::valid_pointer(mainGame.localPlayerPtr);
-                        const bool handsReady =
-                            Utils::valid_pointer(mainGame.localPlayerHands);
-
-                        ImGui::SeparatorText("Status");
-
-                        ImGui::TextColored(
-                            localPointerReady
-                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                            : ImVec4(0.95f, 0.35f, 0.35f, 1.0f),
-                            "Player pointer: %s",
-                            localPointerReady ? "READY" : "MISSING");
-
-                        ImGui::SameLine();
-                        ImGui::TextColored(
-                            handsReady
-                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                            : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
-                            "| Hands: %s",
-                            handsReady ? "READY" : "WAITING");
-
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "| Scoped: %s",
-                            mainGame.localIsScoped ? "YES" : "NO");
-
-                        if (localPlayer)
-                        {
-                            ImGui::SeparatorText("Published Player State");
-
-                            ImGui::Text(
-                                "%s | %s | Group %s",
-                                localPlayer->name.empty()
-                                ? "Local Player"
-                                : localPlayer->name.c_str(),
-                                localPlayer->side.empty()
-                                ? "unknown side"
-                                : localPlayer->side.c_str(),
-                                localPlayer->groupId.empty()
-                                ? "-"
-                                : localPlayer->groupId.c_str());
-
-                            ImGui::Text(
-                                "Position: %.2f, %.2f, %.2f",
-                                localPlayer->location.x,
-                                localPlayer->location.y,
-                                localPlayer->location.z);
-
-                            ImGui::Text(
-                                "Rotation: %.2f, %.2f | Health tag: %d",
-                                localPlayer->rotation.x,
-                                localPlayer->rotation.y,
-                                localPlayer->healthETAG);
-
-                            ImGui::Text(
-                                "Hands: %s | Ammo: %s (%d/%d)",
-                                localPlayer->observedHandsInfo.itemName.empty()
-                                ? "-"
-                                : localPlayer->observedHandsInfo.itemName.c_str(),
-                                localPlayer->observedHandsInfo.ammoName.empty()
-                                ? "-"
-                                : localPlayer->observedHandsInfo.ammoName.c_str(),
-                                localPlayer->observedHandsInfo.chamberCount,
-                                localPlayer->observedHandsInfo.magazineCount);
-                        }
-                        else
-                        {
-                            ImGui::TextDisabled(
-                                "The local player has not been published to the player snapshot yet.");
-                        }
-
-                        if (ImGui::CollapsingHeader(
-                            "MainGame local values",
-                            ImGuiTreeNodeFlags_DefaultOpen))
-                        {
-                            ImGui::Text(
-                                "Position: %.3f, %.3f, %.3f",
-                                mainGame.localLocation.x,
-                                mainGame.localLocation.y,
-                                mainGame.localLocation.z);
-
-                            ImGui::Text(
-                                "Rotation: %.3f, %.3f",
-                                mainGame.localRotation.x,
-                                mainGame.localRotation.y);
-
-                            ImGui::Text(
-                                "Group: %s | Savage: %s | Scoped: %s",
-                                mainGame.localGroupId.empty()
-                                ? "-"
-                                : mainGame.localGroupId.c_str(),
-                                mainGame.localIsSavage ? "YES" : "NO",
-                                mainGame.localIsScoped ? "YES" : "NO");
                         }
 
                         if (ImGui::CollapsingHeader("Pointers"))
                         {
-                            DebugTextPtr(
-                                "Local Player",
-                                mainGame.localPlayerPtr);
-                            DebugTextPtr(
-                                "Local Hands",
-                                mainGame.localPlayerHands);
-                            DebugTextPtr(
-                                "Local PWA",
-                                mainGame.localPlayerPWA);
-                            DebugTextPtr(
-                                "Local Profile",
-                                mainGame.localplayerProfile);
+                            DrawPointerLine("Bone Matrix", player.playerBoneMatrixPtr);
 
-                            if (localPlayer)
-                            {
-                                ImGui::Separator();
-                                DebugTextPtr(
-                                    "Movement Context",
-                                    localPlayer->P_MovementContext);
-                                DebugTextPtr(
-                                    "Rotation Address",
-                                    localPlayer->P_RotationAddress);
-                                DebugTextPtr(
-                                    "Hands Controller Address",
-                                    localPlayer->P_HandsControllerAddr);
-                                DebugTextPtr(
-                                    "Bone Matrix",
-                                    localPlayer->playerBoneMatrixPtr);
-                            }
+                            DrawPointerLine("Observed Controller", player.P_ObservedPlayerController);
+
+                            DrawPointerLine("Observed Health", player.P_ObservedHealthController);
+
+                            DrawPointerLine("Movement Context", player.P_MovementContext);
+
+                            DrawPointerLine("Rotation Address", player.P_RotationAddress);
+
+                            DrawPointerLine("Inventory Controller Address", player.P_InventoryControllerAddr);
+
+                            DrawPointerLine("Hands Controller Address", player.P_HandsControllerAddr);
+
+                            DrawPointerLine("Hands Controller", player.P_HandsController);
+
+                            DrawPointerLine("Profile", player.P_Profile);
+
+                            DrawPointerLine("Profile Info", player.P_Info);
+
+                            DrawPointerLine("Player Body", player.P_Body);
+
+                            DrawPointerLine("PWA", player.P_PWA);
+
+                            DrawPointerLine("Corpse Address", player.P_CorpseAddr);
+
+                            DrawPointerLine("Corpse Class", player.P_CorpseClass);
                         }
 
-                        ImGui::EndTabItem();
-                    }
-                    if (ImGui::BeginTabItem("Players"))
-                    {
-                        const PlayerSnapshot cacheSnapshot =
-                            registeredPlayers.getCacheSnapshot();
-                        const PlayerCollection& cache = *cacheSnapshot;
-
-                        static ImGuiTextFilter playerFilter;
-                        static bool showDead = true;
-                        static bool showAi = true;
-                        static bool showPlayers = true;
-                        static bool showBtr = true;
-                        static bool onlyMissingBones = false;
-                        static uint64_t selectedInstance = 0;
-
-                        auto IsValidPtr = [](uint64_t value) -> bool
-                            {
-                                return Utils::valid_pointer(value);
-                            };
-
-                        auto GetPlayerType = [](const Player& player) -> const char*
-                            {
-                                if (player.isBTR)
-                                    return "BTR";
-
-                                if (player.isLocal)
-                                    return "LOCAL";
-
-                                if (player.isBoss)
-                                    return "BOSS";
-
-                                if (player.isPlayerScav)
-                                    return "P-SCAV";
-
-                                if (player.isAi)
-                                    return "AI";
-
-                                if (player.isPlayer)
-                                    return "PMC";
-
-                                return "UNKNOWN";
-                            };
-
-                        auto GetStateText = [](const Player& player) -> const char*
-                            {
-                                if (!Utils::valid_pointer(player.instance))
-                                    return "INVALID";
-
-                                if (player.hasExfiled)
-                                    return "EXFIL";
-
-                                if (player.isDead)
-                                    return "DEAD";
-
-                                return "LIVE";
-                            };
-
-                        auto GetStateColour = [](const Player& player) -> ImVec4
-                            {
-                                if (!Utils::valid_pointer(player.instance))
-                                    return ImVec4(0.85f, 0.25f, 0.25f, 1.0f);
-
-                                if (player.hasExfiled)
-                                    return ImVec4(0.85f, 0.65f, 0.20f, 1.0f);
-
-                                if (player.isDead)
-                                    return ImVec4(0.75f, 0.30f, 0.30f, 1.0f);
-
-                                if (player.isLocal)
-                                    return ImVec4(0.25f, 0.75f, 1.0f, 1.0f);
-
-                                if (player.isBTR)
-                                    return ImVec4(1.0f, 0.55f, 0.15f, 1.0f);
-
-                                return ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
-                            };
-
-                        auto BonePtrAt = [&](const Player& player,
-                            boneListIndexes index) -> uint64_t
-                            {
-                                const size_t slot =
-                                    static_cast<size_t>(index);
-
-                                if (slot >= player.bonePtrs.size())
-                                    return 0;
-
-                                return player.bonePtrs[slot];
-                            };
-
-                        auto BonePositionAt = [&](const Player& player,
-                            boneListIndexes index) -> glm::vec3
-                            {
-                                const size_t slot =
-                                    static_cast<size_t>(index);
-
-                                if (slot >= player.bonePositions.size())
-                                    return glm::vec3(0.0f);
-
-                                return player.bonePositions[slot];
-                            };
-
-                        auto CountValidBonePtrs = [&](const Player& player) -> size_t
-                            {
-                                size_t count = 0;
-
-                                for (const uint64_t ptr : player.bonePtrs)
-                                {
-                                    if (IsValidPtr(ptr))
-                                        ++count;
-                                }
-
-                                return count;
-                            };
-
-                        auto HasMinimalBones = [&](const Player& player) -> bool
-                            {
-                                return IsValidPtr(
-                                    BonePtrAt(player, boneListIndexes::Base)
-                                ) &&
-                                    IsValidPtr(
-                                        BonePtrAt(player, boneListIndexes::LFoot)
-                                    ) &&
-                                    IsValidPtr(
-                                        BonePtrAt(player, boneListIndexes::RFoot)
-                                    );
-                            };
-
-                        auto DrawPointerLine = [&](const char* label,
-                            uint64_t pointer)
-                            {
-                                const bool valid = IsValidPtr(pointer);
-
-                                ImGui::TextUnformatted(label);
-                                ImGui::SameLine(210.0f);
-
-                                ImGui::TextColored(
-                                    valid
-                                    ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                                    : ImVec4(0.95f, 0.30f, 0.30f, 1.0f),
-                                    "0x%016llX",
-                                    static_cast<unsigned long long>(pointer)
-                                );
-                            };
-
-                        auto DrawPlayerTooltip = [&](const Player& player)
-                            {
-                                ImGui::BeginTooltip();
-
-                                ImGui::Text(
-                                    "%s | %s",
-                                    player.name.empty()
-                                    ? "Unnamed"
-                                    : player.name.c_str(),
-                                    GetPlayerType(player)
-                                );
-
-                                ImGui::Separator();
-
-                                ImGui::Text(
-                                    "Instance: 0x%016llX",
-                                    static_cast<unsigned long long>(
-                                        player.instance
-                                        )
-                                );
-
-                                ImGui::Text(
-                                    "Distance: %dm",
-                                    player.distance
-                                );
-
-                                ImGui::Text(
-                                    "Location: %.2f, %.2f, %.2f",
-                                    player.location.x,
-                                    player.location.y,
-                                    player.location.z
-                                );
-
-                                ImGui::Text(
-                                    "Rotation Raw: %.2f, %.2f",
-                                    player.rotationRAW.x,
-                                    player.rotationRAW.y
-                                );
-
-                                ImGui::Text(
-                                    "Rotation Fixed: %.2f, %.2f",
-                                    player.rotation.x,
-                                    player.rotation.y
-                                );
-
-                                ImGui::Separator();
-                                ImGui::TextUnformatted("Pointers");
-
-                                DrawPointerLine(
-                                    "Bone Matrix",
-                                    player.playerBoneMatrixPtr
-                                );
-
-                                DrawPointerLine(
-                                    "Observed Controller",
-                                    player.P_ObservedPlayerController
-                                );
-
-                                DrawPointerLine(
-                                    "Observed Health",
-                                    player.P_ObservedHealthController
-                                );
-
-                                DrawPointerLine(
-                                    "Movement Context",
-                                    player.P_MovementContext
-                                );
-
-                                DrawPointerLine(
-                                    "Rotation Address",
-                                    player.P_RotationAddress
-                                );
-
-                                DrawPointerLine(
-                                    "Inventory Controller Addr",
-                                    player.P_InventoryControllerAddr
-                                );
-
-                                DrawPointerLine(
-                                    "Hands Controller Addr",
-                                    player.P_HandsControllerAddr
-                                );
-
-                                DrawPointerLine(
-                                    "Hands Controller",
-                                    player.P_HandsController
-                                );
-
-                                DrawPointerLine(
-                                    "Profile",
-                                    player.P_Profile
-                                );
-
-                                DrawPointerLine(
-                                    "PWA",
-                                    player.P_PWA
-                                );
-
-                                DrawPointerLine(
-                                    "Corpse Address",
-                                    player.P_CorpseAddr
-                                );
-
-                                DrawPointerLine(
-                                    "Corpse Class",
-                                    player.P_CorpseClass
-                                );
-
-                                ImGui::Separator();
-                                ImGui::TextUnformatted("Bone Cache");
-
-                                ImGui::Text(
-                                    "Pointers: %zu / %zu",
-                                    CountValidBonePtrs(player),
-                                    player.bonePtrs.size()
-                                );
-
-                                ImGui::Text(
-                                    "Need Resolve: %s",
-                                    player.bonePointersNeedResolve
-                                    ? "YES"
-                                    : "NO"
-                                );
-
-                                ImGui::Text(
-                                    "Minimal Bones: %s",
-                                    HasMinimalBones(player)
-                                    ? "READY"
-                                    : "MISSING"
-                                );
-
-                                DrawPointerLine(
-                                    "Base",
-                                    BonePtrAt(
-                                        player,
-                                        boneListIndexes::Base
-                                    )
-                                );
-
-                                DrawPointerLine(
-                                    "LFoot",
-                                    BonePtrAt(
-                                        player,
-                                        boneListIndexes::LFoot
-                                    )
-                                );
-
-                                DrawPointerLine(
-                                    "RFoot",
-                                    BonePtrAt(
-                                        player,
-                                        boneListIndexes::RFoot
-                                    )
-                                );
-
-                                ImGui::EndTooltip();
-                            };
-
-                        size_t localCount = 0;
-                        size_t pmcCount = 0;
-                        size_t aiCount = 0;
-                        size_t bossCount = 0;
-                        size_t scavCount = 0;
-                        size_t deadCount = 0;
-                        size_t btrCount = 0;
-                        size_t missingBonesCount = 0;
-                        size_t equipmentReadyCount = 0;
-
-                        for (const Player& player : cache)
+                        if (ImGui::CollapsingHeader("Bones"))
                         {
-                            if (player.isLocal)
-                                ++localCount;
+                            ImGui::Text("Bone Pointers: %zu / %zu", CountValidBonePtrs(player), player.bonePtrs.size());
 
-                            if (player.isPlayer &&
-                                !player.isPlayerScav &&
-                                !player.isAi)
+                            ImGui::Text("Need Pointer Resolve: %s", player.bonePointersNeedResolve ? "YES" : "NO");
+
+                            ImGui::Text("Base/LFoot/RFoot Ready: %s", HasMinimalBones(player) ? "YES" : "NO");
+
+                            const glm::vec3 base = BonePositionAt(player, boneListIndexes::Base);
+
+                            const glm::vec3 lFoot = BonePositionAt(player, boneListIndexes::LFoot);
+
+                            const glm::vec3 rFoot = BonePositionAt(player, boneListIndexes::RFoot);
+
+                            ImGui::Text("Base:  %.2f, %.2f, %.2f", base.x, base.y, base.z);
+
+                            ImGui::Text("LFoot: %.2f, %.2f, %.2f", lFoot.x, lFoot.y, lFoot.z);
+
+                            ImGui::Text("RFoot: %.2f, %.2f, %.2f", rFoot.x, rFoot.y, rFoot.z);
+
+                            if (ImGui::TreeNode("All Bone Pointers"))
                             {
-                                ++pmcCount;
-                            }
-
-                            if (player.isAi)
-                                ++aiCount;
-
-                            if (player.isBoss)
-                                ++bossCount;
-
-                            if (player.isPlayerScav)
-                                ++scavCount;
-
-                            if (player.isDead)
-                                ++deadCount;
-
-                            if (player.isBTR)
-                                ++btrCount;
-
-                            if (!player.isBTR &&
-                                !HasMinimalBones(player))
-                            {
-                                ++missingBonesCount;
-                            }
-
-                            if (player.equipInited)
-                                ++equipmentReadyCount;
-                        }
-
-                        ImGui::Text(
-                            "Cached Players: %zu",
-                            cache.size()
-                        );
-
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("|");
-
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "Local: %zu",
-                            localCount
-                        );
-
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "PMC: %zu",
-                            pmcCount
-                        );
-
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "AI: %zu",
-                            aiCount
-                        );
-
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "Boss: %zu",
-                            bossCount
-                        );
-
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "PScav: %zu",
-                            scavCount
-                        );
-
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "Dead: %zu",
-                            deadCount
-                        );
-
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "BTR: %zu",
-                            btrCount
-                        );
-
-                        ImGui::Separator();
-
-                        playerFilter.Draw("Search", 260.0f);
-
-                        ImGui::SameLine();
-                        ImGui::Checkbox("Show Dead", &showDead);
-
-                        ImGui::SameLine();
-                        ImGui::Checkbox("Show AI", &showAi);
-
-                        ImGui::SameLine();
-                        ImGui::Checkbox("Show PMC/PScav", &showPlayers);
-
-                        ImGui::SameLine();
-                        ImGui::Checkbox("Show BTR", &showBtr);
-
-                        ImGui::SameLine();
-                        ImGui::Checkbox(
-                            "Only Missing Bones",
-                            &onlyMissingBones
-                        );
-
-                        ImGui::TextDisabled(
-                            "Equipment Ready: %zu | Missing Base/LFoot/RFoot: %zu",
-                            equipmentReadyCount,
-                            missingBonesCount
-                        );
-
-                        ImGui::Separator();
-
-                        const ImGuiTableFlags tableFlags =
-                            ImGuiTableFlags_RowBg |
-                            ImGuiTableFlags_Borders |
-                            ImGuiTableFlags_Resizable |
-                            ImGuiTableFlags_Reorderable |
-                            ImGuiTableFlags_Hideable |
-                            ImGuiTableFlags_ScrollY |
-                            ImGuiTableFlags_SizingStretchProp;
-
-                        if (ImGui::BeginTable(
-                            "##PlayerTable",
-                            10,
-                            tableFlags,
-                            ImVec2(0.0f, 390.0f)))
-                        {
-                            ImGui::TableSetupScrollFreeze(0, 1);
-
-                            ImGui::TableSetupColumn(
-                                "State",
-                                ImGuiTableColumnFlags_WidthFixed,
-                                70.0f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Type",
-                                ImGuiTableColumnFlags_WidthFixed,
-                                62.0f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Name",
-                                ImGuiTableColumnFlags_WidthStretch,
-                                1.40f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Distance",
-                                ImGuiTableColumnFlags_WidthFixed,
-                                70.0f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Position",
-                                ImGuiTableColumnFlags_WidthStretch,
-                                1.20f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Rotation",
-                                ImGuiTableColumnFlags_WidthFixed,
-                                95.0f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Health",
-                                ImGuiTableColumnFlags_WidthFixed,
-                                62.0f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Equipment",
-                                ImGuiTableColumnFlags_WidthStretch,
-                                1.00f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Bones",
-                                ImGuiTableColumnFlags_WidthFixed,
-                                88.0f
-                            );
-
-                            ImGui::TableSetupColumn(
-                                "Group",
-                                ImGuiTableColumnFlags_WidthStretch,
-                                0.90f
-                            );
-
-                            ImGui::TableHeadersRow();
-
-                            ImGuiListClipper clipper;
-                            clipper.Begin(
-                                static_cast<int>(cache.size())
-                            );
-
-                            while (clipper.Step())
-                            {
-                                for (int i = clipper.DisplayStart;
-                                    i < clipper.DisplayEnd;
-                                    ++i)
+                                for (size_t i = 0; i < player.bonePtrs.size(); ++i)
                                 {
-                                    const Player& player =
-                                        cache[static_cast<size_t>(i)];
+                                    const uint64_t ptr = player.bonePtrs[i];
 
-                                    if (!showDead &&
-                                        (player.isDead || player.hasExfiled))
-                                    {
-                                        continue;
-                                    }
-
-                                    if (!showAi &&
-                                        player.isAi &&
-                                        !player.isBTR)
-                                    {
-                                        continue;
-                                    }
-
-                                    if (!showPlayers &&
-                                        (player.isPlayer ||
-                                            player.isPlayerScav ||
-                                            player.isLocal))
-                                    {
-                                        continue;
-                                    }
-
-                                    if (!showBtr && player.isBTR)
-                                        continue;
-
-                                    if (onlyMissingBones &&
-                                        HasMinimalBones(player))
-                                    {
-                                        continue;
-                                    }
-
-                                    std::string searchText;
-
-                                    searchText.reserve(
-                                        player.name.size() +
-                                        player.className.size() +
-                                        player.groupId.size() +
-                                        64
-                                    );
-
-                                    searchText += player.name;
-                                    searchText += " ";
-                                    searchText += player.className;
-                                    searchText += " ";
-                                    searchText += player.groupId;
-                                    searchText += " ";
-                                    searchText += GetPlayerType(player);
-
-                                    if (!playerFilter.PassFilter(
-                                        searchText.c_str()))
-                                    {
-                                        continue;
-                                    }
-
-                                    ImGui::PushID(
-                                        static_cast<int>(
-                                            player.instance & 0x7FFFFFFF
-                                            )
-                                    );
-
-                                    ImGui::TableNextRow(
-                                        ImGuiTableRowFlags_None,
-                                        24.0f
-                                    );
-
-                                    ImGui::TableSetColumnIndex(0);
-
-                                    const bool isSelected =
-                                        selectedInstance ==
-                                        player.instance;
-
-                                    ImGui::PushStyleColor(
-                                        ImGuiCol_Text,
-                                        GetStateColour(player)
-                                    );
-
-                                    if (ImGui::Selectable(
-                                        GetStateText(player),
-                                        isSelected,
-                                        ImGuiSelectableFlags_None,
-                                        ImVec2(0.0f, 0.0f)))
-                                    {
-                                        selectedInstance =
-                                            player.instance;
-                                    }
-
-                                    ImGui::PopStyleColor();
-
-                                    if (ImGui::IsItemHovered(
-                                        ImGuiHoveredFlags_DelayShort))
-                                    {
-                                        DrawPlayerTooltip(player);
-                                    }
-
-                                    ImGui::TableSetColumnIndex(1);
-
-                                    ImGui::TextUnformatted(
-                                        GetPlayerType(player)
-                                    );
-
-                                    ImGui::TableSetColumnIndex(2);
-
-                                    const char* displayName =
-                                        player.name.empty()
-                                        ? "<unnamed>"
-                                        : player.name.c_str();
-
-                                    ImGui::TextUnformatted(displayName);
-
-                                    if (ImGui::IsItemHovered(
-                                        ImGuiHoveredFlags_DelayShort))
-                                    {
-                                        DrawPlayerTooltip(player);
-                                    }
-
-                                    ImGui::TableSetColumnIndex(3);
-
-                                    ImGui::Text(
-                                        "%dm",
-                                        player.distance
-                                    );
-
-                                    ImGui::TableSetColumnIndex(4);
-
-                                    ImGui::Text(
-                                        "%.1f / %.1f / %.1f",
-                                        player.location.x,
-                                        player.location.y,
-                                        player.location.z
-                                    );
-
-                                    ImGui::TableSetColumnIndex(5);
-
-                                    ImGui::Text(
-                                        "%.1f / %.1f",
-                                        player.rotation.x,
-                                        player.rotation.y
-                                    );
-
-                                    ImGui::TableSetColumnIndex(6);
-
-                                    ImGui::Text(
-                                        "%d",
-                                        player.healthETAG
-                                    );
-
-                                    ImGui::TableSetColumnIndex(7);
-
-                                    if (!player.equipInited)
-                                    {
-                                        ImGui::TextColored(
-                                            ImVec4(
-                                                1.0f,
-                                                0.75f,
-                                                0.20f,
-                                                1.0f
-                                            ),
-                                            "INIT"
-                                        );
-                                    }
-                                    else
-                                    {
-                                        ImGui::Text(
-                                            "%zu slots | %d",
-                                            player._slots.size(),
-                                            player.playerValue
-                                        );
-                                    }
-
-                                    ImGui::TableSetColumnIndex(8);
-
-                                    const size_t validBones =
-                                        CountValidBonePtrs(player);
-
-                                    const bool minimalBones =
-                                        HasMinimalBones(player);
+                                    const bool valid = IsValidPtr(ptr);
 
                                     ImGui::TextColored(
-                                        minimalBones
-                                        ? ImVec4(
-                                            0.35f,
-                                            0.90f,
-                                            0.45f,
-                                            1.0f
-                                        )
-                                        : ImVec4(
-                                            0.95f,
-                                            0.35f,
-                                            0.35f,
-                                            1.0f
-                                        ),
-                                        "%zu/%zu%s",
-                                        validBones,
-                                        player.bonePtrs.size(),
-                                        player.bonePointersNeedResolve
-                                        ? " *"
-                                        : ""
-                                    );
-
-                                    ImGui::TableSetColumnIndex(9);
-
-                                    if (player.groupId.empty())
-                                    {
-                                        ImGui::TextDisabled("-");
-                                    }
-                                    else
-                                    {
-                                        ImGui::TextUnformatted(
-                                            player.groupId.c_str()
-                                        );
-                                    }
-
-                                    ImGui::PopID();
+                                        valid ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.30f, 0.30f, 1.0f), "[%02zu] BoneId %d | 0x%016llX", i,
+                                        i < player.boneList.size() ? static_cast<int>(player.boneList[i]) : -1, static_cast<unsigned long long>(ptr));
                                 }
-                            }
 
-                            ImGui::EndTable();
+                                ImGui::TreePop();
+                            }
+                        }
+                    }
+
+                    ImGui::EndChild();
+
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Camera"))
+                {
+                    const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
+                    const CameraManagerState& cameraState = *cameraSnapshot;
+                    const bool fpsReady = Utils::valid_pointer(cameraState.fpsCamera);
+                    const bool opticReady = Utils::valid_pointer(cameraState.opticCamera);
+                    const bool properOpticReady = cameraState.opticProjection.valid;
+                    const bool cameraHealthy = cameraState.valid && fpsReady && (!cameraState.usingOptic || (opticReady && properOpticReady));
+
+                    ImGui::SeparatorText("Status");
+                    ImGui::TextColored(cameraHealthy ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.55f, 0.25f, 1.0f), "Camera %s",
+                                       cameraHealthy ? "READY" : "NEEDS ATTENTION");
+                    ImGui::SameLine();
+                    ImGui::Text("| Active %s | Lens projection: %s", cameraState.usingOptic ? "OPTIC" : "FPS", properOpticReady ? "READY" : "FALLBACK");
+                    ImGui::Text("FPS path: %s | Optic path: %s | ADS: %s | Scoped: %s", fpsReady ? "READY" : "MISSING", opticReady ? "READY" : "MISSING",
+                                cameraState.ads ? "YES" : "NO", cameraState.scoped ? "YES" : "NO");
+                    ImGui::Text("Zoom %.2fx | Sight %d/%zu | Stacked match: %s", cameraState.magnification, cameraState.activeSightVectorIndex,
+                                cameraState.sights.size(), cameraState.stackedSightResolved ? "YES" : "NO");
+
+                    if (cameraState.scoped && !opticReady)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.20f, 1.0f), "Warning: scoped, but the optic camera path is unavailable.");
+                    }
+                    if (!cameraState.valid)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Warning: the active view matrix is invalid.");
+                        if (!cameraState.cameraSampleFailure.empty())
+                        {
+                            ImGui::TextWrapped("Camera rejected at: %s", cameraState.cameraSampleFailure.c_str());
+                        }
+                    }
+                    if (cameraState.usingOptic && !properOpticReady)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Warning: proper lens projection is unavailable; using the main-camera fallback.");
+                        if (!cameraState.opticProjectionFailure.empty())
+                        {
+                            ImGui::TextWrapped("Rejected at: %s", cameraState.opticProjectionFailure.c_str());
+                        }
+                    }
+                    if (ImGui::CollapsingHeader("Optic selection details"))
+                    {
+                        DebugTextBool("ADS", cameraState.ads);
+                        DebugTextBool("Magnified scope", cameraState.scoped);
+                        DebugTextBool("Using optic camera", cameraState.usingOptic);
+                        DebugTextBool("Proper optic projection", properOpticReady);
+                        DebugTextBool("Stacked sight resolved", cameraState.stackedSightResolved);
+
+                        for (const CameraSightState& sight : cameraState.sights)
+                        {
+                            ImGui::Text("[%d] scope %d mode %d | %.2fx | %s%s", sight.opticsListIndex, sight.selectedScope, sight.selectedMode,
+                                        sight.resolvedZoom, sight.valid ? "VALID" : "INVALID", sight.selectedByCurrentOptic ? " | CURRENT" : "");
+                        }
+                    }
+
+                    if (ImGui::CollapsingHeader("Pointer details"))
+                    {
+                        DebugTextPtr("FPS camera", cameraState.fpsCamera);
+                        DebugTextPtr("Optic camera", cameraState.opticCamera);
+                        DebugTextPtr("Active camera", cameraState.activeCamera);
+                        DebugTextPtr("Active matrix address", cameraState.activeViewMatrixAddress);
+                        DebugTextPtr("AllCameras global", cameraState.allCamerasGlobal);
+                        DebugTextPtr("EFT camera manager", cameraState.eftCameraManager);
+                        DebugTextPtr("Optic camera manager", cameraState.opticCameraManager);
+                        DebugTextPtr("Current optic sight", cameraState.currentOpticSight);
+                        DebugTextPtr("Current scope transform", cameraState.currentOpticScopeTransform);
+                        DebugTextPtr("Lens renderer", cameraState.opticProjection.lensRenderer);
+                        DebugTextPtr("Lens mesh", cameraState.opticProjection.mesh);
+                        DebugTextPtr("Lens material", cameraState.opticProjection.material);
+                        ImGui::Text("Camera matrix offsets: view 0x%X | projection 0x%X", cameraState.viewMatrixOffset,
+                                    static_cast<unsigned int>(UnityOffsets::Camera_ProjectionMatrixOffset));
+                        ImGui::Text("AllCameras offset path: %s | busy skips: %llu", cameraState.usedAllCamerasOffset ? "YES" : "NO",
+                                    static_cast<unsigned long long>(cameraState.busyReadSkips));
+                    }
+
+                    if (ImGui::CollapsingHeader("Matrix validation"))
+                    {
+                        DebugMatrixSummary("Selected camera VP", cameraState.rawViewMatrix);
+                        DebugMatrixSummary("Published projection", cameraState.viewMatrix);
+                    }
+
+                    if (ImGui::CollapsingHeader("Lens stability diagnostics", ImGuiTreeNodeFlags_DefaultOpen))
+                    {
+                        bool showOverlay = cameraDebugGlobals::lensStabilityOverlay.load(std::memory_order_acquire);
+                        if (ImGui::Checkbox("Show lens diagnostic overlay on fuser", &showOverlay))
+                        {
+                            cameraDebugGlobals::lensStabilityOverlay.store(showOverlay, std::memory_order_release);
                         }
 
-                        const Player* selectedPlayer = nullptr;
-
-                        for (const Player& player : cache)
+                        const auto now = std::chrono::steady_clock::now();
+                        const auto ageMs = [&](const auto time)
                         {
-                            if (player.instance == selectedInstance)
+                            if (time == decltype(time){} || now < time)
+                                return -1.0;
+                            return std::chrono::duration<double, std::milli>(now - time).count();
+                        };
+                        const double packetAgeMs = ageMs(cameraState.publishedAt);
+                        const double lensAgeMs = ageMs(cameraState.opticProjection.sampledAt);
+                        const FireportPoseSnapshot fireport = g_fireport.getSnapshot();
+                        const double fireportAgeMs = fireport ? ageMs(fireport->publishedAt) : -1.0;
+                        const PlayerSnapshotTelemetry players = registeredPlayers.getSnapshotTelemetry();
+                        const CameraProjectionDiagnostics diagnostics = cameraManagerTest.diagnostics();
+
+                        static std::uint64_t trackedSight = 0;
+                        static std::uint64_t trackedSample = 0;
+                        static glm::vec2 previousCenter{};
+                        static glm::vec3 previousLens{};
+                        static glm::vec3 previousHands{};
+                        static float centerDeltaPx = 0.0f;
+                        static float lensDeltaMm = 0.0f;
+                        static float handsDeltaMm = 0.0f;
+                        static std::uint64_t lastRejectedCount = 0;
+                        static std::string lastRejectedReason = "none";
+                        static std::uint64_t lastRootResetSample = 0;
+                        static float lastRootResetErrorMm = 0.0f;
+                        static bool lastRootResetWindowExpired = false;
+
+                        const OpticProjectionState& optic = cameraState.opticProjection;
+                        const glm::vec2 centerPixels{(optic.imageCenterNdc.x + 1.0f) * espGlobals::gameRes.x * 0.5f,
+                                                     (1.0f - optic.imageCenterNdc.y) * espGlobals::gameRes.y * 0.5f};
+                        if (optic.valid && (trackedSight != optic.opticSight || trackedSample != optic.sampleSequence))
+                        {
+                            if (trackedSight == optic.opticSight && trackedSample != 0)
                             {
-                                selectedPlayer = &player;
-                                break;
+                                centerDeltaPx = glm::length(centerPixels - previousCenter);
+                                lensDeltaMm = glm::length(optic.mainCameraRelativeLens - previousLens) * 1000.0f;
+                                handsDeltaMm = glm::length(optic.mainCameraRelativeHands - previousHands) * 1000.0f;
                             }
+                            else
+                            {
+                                centerDeltaPx = 0.0f;
+                                lensDeltaMm = 0.0f;
+                                handsDeltaMm = 0.0f;
+                            }
+                            trackedSight = optic.opticSight;
+                            trackedSample = optic.sampleSequence;
+                            previousCenter = centerPixels;
+                            previousLens = optic.mainCameraRelativeLens;
+                            previousHands = optic.mainCameraRelativeHands;
                         }
 
-                        ImGui::Spacing();
-                        ImGui::Separator();
-                        ImGui::TextUnformatted("Selected Player Inspector");
-
-                        ImGui::BeginChild(
-                            "##PlayerInspector",
-                            ImVec2(0.0f, 220.0f),
-                            true
-                        );
-
-                        if (!selectedPlayer)
+                        if (diagnostics.rejected != lastRejectedCount)
                         {
-                            ImGui::TextDisabled(
-                                "Select a player row to inspect its cached state."
-                            );
+                            lastRejectedCount = diagnostics.rejected;
+                            if (!cameraState.opticProjectionFailure.empty())
+                            {
+                                lastRejectedReason = cameraState.opticProjectionFailure;
+                            }
+                        }
+                        if (optic.valid && optic.rootHistoryReset && lastRootResetSample != optic.sampleSequence)
+                        {
+                            lastRootResetSample = optic.sampleSequence;
+                            lastRootResetErrorMm = optic.rootPredictionErrorMm;
+                            lastRootResetWindowExpired = optic.rootCorrectionWindowExpired;
+                        }
+
+                        ImGui::Text("Packet %llu | Sample %llu | %s", static_cast<unsigned long long>(cameraState.version),
+                                    static_cast<unsigned long long>(optic.sampleSequence),
+                                    diagnostics.lastOutcome == OpticPacketOutcome::Retained   ? "RETAINED"
+                                    : diagnostics.lastOutcome == OpticPacketOutcome::Accepted ? "ACCEPTED"
+                                    : diagnostics.lastOutcome == OpticPacketOutcome::Rejected ? "REJECTED"
+                                                                                              : "IDLE");
+                        ImGui::Text("Attempts %llu | accepted %llu | rejected %llu | retained %llu", static_cast<unsigned long long>(diagnostics.attempts),
+                                    static_cast<unsigned long long>(diagnostics.accepted), static_cast<unsigned long long>(diagnostics.rejected),
+                                    static_cast<unsigned long long>(diagnostics.retained));
+                        ImGui::Text("DMA recovery epoch: %llu", static_cast<unsigned long long>(mem.GetDmaRecoveryEpoch()));
+                        ImGui::Text("Ages: camera %.1f ms | lens %.1f ms | player motion %.1f ms | fireport %.1f ms", packetAgeMs, lensAgeMs,
+                                    players.motionAgeMs, fireportAgeMs);
+                        ImGui::Text("Image centre: %.1f, %.1f px | accepted delta %.2f px", centerPixels.x, centerPixels.y, centerDeltaPx);
+                        ImGui::Text("Camera-relative delta: lens %.3f mm | hands root %.3f mm", lensDeltaMm, handsDeltaMm);
+                        ImGui::Text("Material scale %.6f | shift %.6f | intended FOV scale %.6f", optic.materialScale, optic.materialShift,
+                                    optic.intendedFovScale);
+                        ImGui::Text("Hands-root correction: %s | applied %.3f mm | residual %.3f mm", optic.rootTranslationCorrected ? "ACTIVE" : "NONE",
+                                    optic.rootCorrectionMm, optic.rootPredictionErrorMm);
+                        ImGui::Text("Latched root event: %s at sample %llu | %.3f mm",
+                                    lastRootResetSample == 0     ? "none"
+                                    : lastRootResetWindowExpired ? "WINDOW EXPIRED"
+                                                                 : "HISTORY RESET",
+                                    static_cast<unsigned long long>(lastRootResetSample), lastRootResetErrorMm);
+                        ImGui::TextWrapped("Latched projection rejection #%llu: %s", static_cast<unsigned long long>(lastRejectedCount),
+                                           lastRejectedReason.c_str());
+                        ImGui::Text("FOV node raw Z scales:");
+                        ImGui::SameLine();
+                        if (optic.fovNodeCount == 0)
+                        {
+                            ImGui::TextDisabled("none");
                         }
                         else
                         {
-                            const Player& player =
-                                *selectedPlayer;
-
-                            ImGui::TextColored(
-                                GetStateColour(player),
-                                "%s | %s | %s",
-                                player.name.empty()
-                                ? "<unnamed>"
-                                : player.name.c_str(),
-                                GetPlayerType(player),
-                                GetStateText(player)
-                            );
-
-                            ImGui::Text(
-                                "Class: %s",
-                                player.className.c_str()
-                            );
-
-                            ImGui::Text(
-                                "Instance: 0x%016llX",
-                                static_cast<unsigned long long>(
-                                    player.instance
-                                    )
-                            );
-
-                            ImGui::Separator();
-
-                            if (ImGui::CollapsingHeader(
-                                "Runtime Cache",
-                                ImGuiTreeNodeFlags_DefaultOpen))
+                            for (std::uint32_t index = 0; index < optic.fovNodeCount; ++index)
                             {
-                                ImGui::Text(
-                                    "Location: %.3f, %.3f, %.3f",
-                                    player.location.x,
-                                    player.location.y,
-                                    player.location.z
-                                );
-
-                                ImGui::Text(
-                                    "Distance: %dm",
-                                    player.distance
-                                );
-
-                                ImGui::Text(
-                                    "Rotation Raw: %.3f, %.3f",
-                                    player.rotationRAW.x,
-                                    player.rotationRAW.y
-                                );
-
-                                ImGui::Text(
-                                    "Rotation Corrected: %.3f, %.3f",
-                                    player.rotation.x,
-                                    player.rotation.y
-                                );
-
-                                ImGui::Text(
-                                    "Health ETag: %d",
-                                    player.healthETAG
-                                );
-
-                                ImGui::Text(
-                                    "Aiming: %s",
-                                    player.isAiming ? "YES" : "NO"
-                                );
-
-                                ImGui::Text(
-                                    "Dead: %s | Exfil: %s",
-                                    player.isDead ? "YES" : "NO",
-                                    player.hasExfiled ? "YES" : "NO"
-                                );
-                            }
-
-                            if (ImGui::CollapsingHeader(
-                                "Equipment Cache"))
-                            {
-                                ImGui::Text(
-                                    "Initialised: %s",
-                                    player.equipInited ? "YES" : "NO"
-                                );
-
-                                ImGui::Text(
-                                    "Slot Count: %zu",
-                                    player._slots.size()
-                                );
-
-                                ImGui::Text(
-                                    "Value: %d",
-                                    player.playerValue
-                                );
-
-                                ImGui::Text(
-                                    "Item In Hand: %s",
-                                    player.itemInHand.empty()
-                                    ? "-"
-                                    : player.itemInHand.c_str()
-                                );
-
-                                ImGui::Text(
-                                    "Hands Controller: 0x%016llX",
-                                    static_cast<unsigned long long>(
-                                        player.P_HandsController
-                                        )
-                                );
-
-                                if (!player._slots.empty() &&
-                                    ImGui::TreeNode("Cached Slots"))
-                                {
-                                    for (const auto& slot : player._slots)
-                                    {
-                                        ImGui::BulletText(
-                                            "%s | %s | %d | %s",
-                                            slot.name.c_str(),
-                                            slot.equipName.empty()
-                                            ? "-"
-                                            : slot.equipName.c_str(),
-                                            slot.price,
-                                            slot.wanted
-                                            ? "WANTED"
-                                            : ""
-                                        );
-                                    }
-
-                                    ImGui::TreePop();
-                                }
-                            }
-
-                            if (ImGui::CollapsingHeader(
-                                "Pointers"))
-                            {
-                                DrawPointerLine(
-                                    "Bone Matrix",
-                                    player.playerBoneMatrixPtr
-                                );
-
-                                DrawPointerLine(
-                                    "Observed Controller",
-                                    player.P_ObservedPlayerController
-                                );
-
-                                DrawPointerLine(
-                                    "Observed Health",
-                                    player.P_ObservedHealthController
-                                );
-
-                                DrawPointerLine(
-                                    "Movement Context",
-                                    player.P_MovementContext
-                                );
-
-                                DrawPointerLine(
-                                    "Rotation Address",
-                                    player.P_RotationAddress
-                                );
-
-                                DrawPointerLine(
-                                    "Inventory Controller Address",
-                                    player.P_InventoryControllerAddr
-                                );
-
-                                DrawPointerLine(
-                                    "Hands Controller Address",
-                                    player.P_HandsControllerAddr
-                                );
-
-                                DrawPointerLine(
-                                    "Hands Controller",
-                                    player.P_HandsController
-                                );
-
-                                DrawPointerLine(
-                                    "Profile",
-                                    player.P_Profile
-                                );
-
-                                DrawPointerLine(
-                                    "Profile Info",
-                                    player.P_Info
-                                );
-
-                                DrawPointerLine(
-                                    "Player Body",
-                                    player.P_Body
-                                );
-
-                                DrawPointerLine(
-                                    "PWA",
-                                    player.P_PWA
-                                );
-
-                                DrawPointerLine(
-                                    "Corpse Address",
-                                    player.P_CorpseAddr
-                                );
-
-                                DrawPointerLine(
-                                    "Corpse Class",
-                                    player.P_CorpseClass
-                                );
-                            }
-
-                            if (ImGui::CollapsingHeader(
-                                "Bones"))
-                            {
-                                ImGui::Text(
-                                    "Bone Pointers: %zu / %zu",
-                                    CountValidBonePtrs(player),
-                                    player.bonePtrs.size()
-                                );
-
-                                ImGui::Text(
-                                    "Need Pointer Resolve: %s",
-                                    player.bonePointersNeedResolve
-                                    ? "YES"
-                                    : "NO"
-                                );
-
-                                ImGui::Text(
-                                    "Base/LFoot/RFoot Ready: %s",
-                                    HasMinimalBones(player)
-                                    ? "YES"
-                                    : "NO"
-                                );
-
-                                const glm::vec3 base =
-                                    BonePositionAt(
-                                        player,
-                                        boneListIndexes::Base
-                                    );
-
-                                const glm::vec3 lFoot =
-                                    BonePositionAt(
-                                        player,
-                                        boneListIndexes::LFoot
-                                    );
-
-                                const glm::vec3 rFoot =
-                                    BonePositionAt(
-                                        player,
-                                        boneListIndexes::RFoot
-                                    );
-
-                                ImGui::Text(
-                                    "Base:  %.2f, %.2f, %.2f",
-                                    base.x,
-                                    base.y,
-                                    base.z
-                                );
-
-                                ImGui::Text(
-                                    "LFoot: %.2f, %.2f, %.2f",
-                                    lFoot.x,
-                                    lFoot.y,
-                                    lFoot.z
-                                );
-
-                                ImGui::Text(
-                                    "RFoot: %.2f, %.2f, %.2f",
-                                    rFoot.x,
-                                    rFoot.y,
-                                    rFoot.z
-                                );
-
-                                if (ImGui::TreeNode("All Bone Pointers"))
-                                {
-                                    for (size_t i = 0;
-                                        i < player.bonePtrs.size();
-                                        ++i)
-                                    {
-                                        const uint64_t ptr =
-                                            player.bonePtrs[i];
-
-                                        const bool valid =
-                                            IsValidPtr(ptr);
-
-                                        ImGui::TextColored(
-                                            valid
-                                            ? ImVec4(
-                                                0.35f,
-                                                0.90f,
-                                                0.45f,
-                                                1.0f
-                                            )
-                                            : ImVec4(
-                                                0.95f,
-                                                0.30f,
-                                                0.30f,
-                                                1.0f
-                                            ),
-                                            "[%02zu] BoneId %d | 0x%016llX",
-                                            i,
-                                            i < player.boneList.size()
-                                            ? static_cast<int>(
-                                                player.boneList[i]
-                                                )
-                                            : -1,
-                                            static_cast<unsigned long long>(
-                                                ptr
-                                                )
-                                        );
-                                    }
-
-                                    ImGui::TreePop();
-                                }
+                                if (index != 0)
+                                    ImGui::SameLine();
+                                ImGui::Text("[%u] %.6f", index, optic.fovNodeScaleZ[index]);
                             }
                         }
-
-                        ImGui::EndChild();
-
-                        ImGui::EndTabItem();
-                    }
-                    if (ImGui::BeginTabItem("Camera"))
-                    {
-                        const CameraManagerSnapshot cameraSnapshot =
-                            cameraManagerTest.snapshot();
-                        const CameraManagerState& cameraState =
-                            *cameraSnapshot;
-                        const bool fpsReady =
-                            Utils::valid_pointer(cameraState.fpsCamera);
-                        const bool opticReady =
-                            Utils::valid_pointer(cameraState.opticCamera);
-                        const bool fovValid =
-                            std::isfinite(cameraState.fov) &&
-                            cameraState.fov > 1.0f &&
-                            cameraState.fov < 180.0f;
-                        const bool aspectValid =
-                            std::isfinite(cameraState.aspect) &&
-                            cameraState.aspect > 0.1f &&
-                            cameraState.aspect < 10.0f;
-                        const bool cameraHealthy =
-                            cameraState.valid && fpsReady &&
-                            (!cameraState.usingOptic ||
-                                (opticReady && fovValid && aspectValid));
-
-                        ImGui::SeparatorText("Status");
-                        ImGui::TextColored(
-                            cameraHealthy
-                            ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
-                            : ImVec4(0.95f, 0.55f, 0.25f, 1.0f),
-                            "Camera %s",
-                            cameraHealthy ? "READY" : "NEEDS ATTENTION");
-                        ImGui::SameLine();
-                        ImGui::Text(
-                            "| Active %s | FOV %.2f | Aspect %.3f",
-                            cameraState.usingOptic ? "OPTIC" : "FPS",
-                            cameraState.fov,
-                            cameraState.aspect);
-                        ImGui::Text(
-                            "FPS path: %s | Optic path: %s | ADS: %s | Scoped: %s",
-                            fpsReady ? "READY" : "MISSING",
-                            opticReady ? "READY" : "MISSING",
-                            cameraState.ads ? "YES" : "NO",
-                            cameraState.scoped ? "YES" : "NO");
-                        ImGui::Text(
-                            "Zoom %.2fx | Sight %d/%zu | Stacked match: %s",
-                            cameraState.magnification,
-                            cameraState.activeSightVectorIndex,
-                            cameraState.sights.size(),
-                            cameraState.stackedSightResolved ? "YES" : "NO");
-
-                        if (cameraState.scoped && !opticReady)
-                        {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.65f, 0.20f, 1.0f),
-                                "Warning: scoped, but the optic camera path is unavailable.");
-                        }
-                        if (!cameraState.valid)
-                        {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                                "Warning: the active view matrix is invalid.");
-                        }
-                        if (cameraState.usingOptic &&
-                            (!fovValid || !aspectValid))
-                        {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                                "Warning: lens values are outside their expected range.");
-                        }
-                        if (ImGui::CollapsingHeader("Optic selection details"))
-                        {
-                            DebugTextBool("ADS", cameraState.ads);
-                            DebugTextBool("Magnified scope", cameraState.scoped);
-                            DebugTextBool("Using optic camera", cameraState.usingOptic);
-                            DebugTextBool("Stacked sight resolved", cameraState.stackedSightResolved);
-
-                            for (const CameraSightState& sight : cameraState.sights)
-                            {
-                                ImGui::Text(
-                                    "[%d] scope %d mode %d | %.2fx | %s%s",
-                                    sight.opticsListIndex,
-                                    sight.selectedScope,
-                                    sight.selectedMode,
-                                    sight.resolvedZoom,
-                                    sight.valid ? "VALID" : "INVALID",
-                                    sight.selectedByCurrentOptic
-                                        ? " | CURRENT"
-                                        : "");
-                            }
-                        }
-
-                        if (ImGui::CollapsingHeader("Pointer details"))
-                        {
-                            DebugTextPtr("FPS camera", cameraState.fpsCamera);
-                            DebugTextPtr("Optic camera", cameraState.opticCamera);
-                            DebugTextPtr("Active camera", cameraState.activeCamera);
-                            DebugTextPtr(
-                                "Active matrix address",
-                                cameraState.activeViewMatrixAddress);
-                            DebugTextPtr(
-                                "AllCameras global",
-                                cameraState.allCamerasGlobal);
-                            DebugTextPtr(
-                                "EFT camera manager",
-                                cameraState.eftCameraManager);
-                            DebugTextPtr(
-                                "Optic camera manager",
-                                cameraState.opticCameraManager);
-                            DebugTextPtr(
-                                "Current optic sight",
-                                cameraState.currentOpticSight);
-                            DebugTextPtr(
-                                "Current scope transform",
-                                cameraState.currentOpticScopeTransform);
-                            ImGui::Text(
-                                "Offsets: matrix 0x%X | FOV 0x%X | aspect 0x%X",
-                                cameraState.viewMatrixOffset,
-                                cameraState.fovOffset,
-                                cameraState.aspectOffset);
-                            ImGui::Text(
-                                "AllCameras offset path: %s | busy skips: %llu",
-                                cameraState.usedAllCamerasOffset
-                                    ? "YES"
-                                    : "NO",
-                                static_cast<unsigned long long>(
-                                    cameraState.busyReadSkips));
-                        }
-
-                        if (ImGui::CollapsingHeader("Matrix validation"))
-                        {
-                            DebugMatrixSummary("Active raw", cameraState.rawViewMatrix);
-                            DebugMatrixSummary("Active transposed", cameraState.viewMatrix);
-                        }
-
-                        ImGui::EndTabItem();
-                    }
-                    if (ImGui::BeginTabItem("Aim"))
-                    {
-                        const std::optional<TargetResult> liveTarget =
-                            readOnlyAim.getLiveTarget();
-                        const std::optional<TargetResult> activeTarget =
-                            readOnlyAim.getActiveTarget();
-                        const AimReferencePoint aimReference =
-                            readOnlyAim.resolveAimReference();
-                        const CameraManagerSnapshot aimCameraSnapshot =
-                            cameraManagerTest.snapshot();
-                        const bool cameraReady =
-                            aimCameraSnapshot && aimCameraSnapshot->valid;
-                        const bool deviceReady = makcu.IsConnected();
-                        const bool referenceReady = aimReference.valid;
-
-                        ImGui::SeparatorText("Pipeline");
-                        ImGui::Text(
-                            "Enabled: %s | Worker: %s | Camera: %s | Device: %s",
-                            aimGlobals::aimEnabled ? "YES" : "NO",
-                            appGlobals::runThreads.load(
-                                std::memory_order_acquire)
-                            ? "RUNNING"
-                            : "IDLE",
-                            cameraReady ? "READY" : "MISSING",
-                            deviceReady ? "CONNECTED" : "DISCONNECTED");
-                        ImGui::Text(
-                            "Reference: FIREPORT at %.1f, %.1f | %s",
-                            aimReference.pos.x,
-                            aimReference.pos.y,
-                            referenceReady ? "VALID" : "INVALID");
-
-                        if (aimGlobals::aimEnabled && !referenceReady)
-                        {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.70f, 0.25f, 1.0f),
-                                "Fireport unavailable for this weapon; target movement is paused.");
-                        }
-
-                        if (aimGlobals::aimEnabled &&
-                            (!cameraReady ||
-                                !deviceReady ||
-                                !referenceReady))
-                        {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.55f, 0.20f, 1.0f),
-                                "Aim is enabled, but its input pipeline is not ready.");
-                        }
-
-                        ImGui::SeparatorText("Selection");
-                        ImGui::Text(
-                            "Mode: %s | Lock: %s | FOV: %.0f px | Range: %d m",
-                            aimGlobals::targetMode == TargetMode::CQB
-                            ? "CQB"
-                            : "FOV",
-                            aimGlobals::targetLock ? "ON" : "OFF",
-                            aimGlobals::aimFOV,
-                            aimGlobals::aimDistance);
-                        ImGui::Text(
-                            "Smoothing: %.2f | Bone mode: %s",
-                            aimGlobals::aimSmooth,
-                            aimGlobals::aimClosestBoneToFireport
-                            ? "Closest Bone"
-                            : "Selected Bones");
-                        ImGui::Text(
-                            "Speed: %.0f px/s | Deadzone: %.1f px | Offset: %.1f, %.1f",
-                            aimGlobals::aimSpeedPixelsPerSecond,
-                            aimGlobals::aimDeadzonePixels,
-                            aimGlobals::aimOffsetX,
-                            aimGlobals::aimOffsetY);
-
-                        auto drawTarget = [&](const char* label,
-                            const std::optional<TargetResult>& target)
-                            {
-                                ImGui::SeparatorText(label);
-                                if (!target)
-                                {
-                                    ImGui::TextDisabled("No valid target");
-                                    return;
-                                }
-
-                                const float errorX =
-                                    target->screenPos.x - aimReference.pos.x;
-                                const float errorY =
-                                    target->screenPos.y - aimReference.pos.y;
-                                ImGui::Text(
-                                    "%s | %s | %.1f m | %.1f px",
-                                    target->player.name.empty()
-                                    ? "<unnamed>"
-                                    : target->player.name.c_str(),
-                                    target->player.isAi ? "AI" : "PLAYER",
-                                    std::sqrt(target->worldDistanceSq),
-                                    std::sqrt(target->screenDistanceSq));
-                                ImGui::Text(
-                                    "Bone %d | Screen %.1f, %.1f | Error %.1f, %.1f px",
-                                    static_cast<int>(target->selectedBone),
-                                    target->screenPos.x,
-                                    target->screenPos.y,
-                                    errorX,
-                                    errorY);
-
-                                ImGui::PushID(label);
-                                if (ImGui::CollapsingHeader("Details"))
-                                {
-                                    ImGui::Text(
-                                        "Instance: 0x%016llX",
-                                        static_cast<unsigned long long>(
-                                            target->player.instance));
-                                    ImGui::Text(
-                                        "World bone: %.2f, %.2f, %.2f",
-                                        target->boneWorldPos.x,
-                                        target->boneWorldPos.y,
-                                        target->boneWorldPos.z);
-                                }
-                                ImGui::PopID();
-                            };
-
-                        drawTarget("Best candidate", liveTarget);
-                        drawTarget("Locked / active target", activeTarget);
-                        ImGui::TextDisabled(
-                            "Configure aim in the MAKCU Aim tab; this page is runtime diagnostics.");
-
-                        ImGui::EndTabItem();
-                    }
-                    if (ImGui::BeginTabItem("Features"))
-                    {
-                        const PlayerSnapshot featurePlayers =
-                            registeredPlayers.getCacheSnapshot();
-                        const std::vector<LootEntity> lootCache =
-                            Loot.getCacheLoot();
-                        const std::size_t grenadeCount =
-                            explosiveManager.getGrenadeCount();
-                        const std::vector<QuestData> activeQuests =
-                            GetQuestDataActiveSnapshot();
-                        const std::size_t equipmentReady =
-                            static_cast<std::size_t>(std::count_if(
-                                featurePlayers->begin(),
-                                featurePlayers->end(),
-                                [](const Player& player)
-                                {
-                                    return player.equipInited;
-                                }));
-
-                        ImGui::SeparatorText("Cache overview");
-                        if (ImGui::BeginTable(
-                            "FeatureCacheOverview",
-                            5,
-                            ImGuiTableFlags_RowBg |
-                            ImGuiTableFlags_BordersInnerV |
-                            ImGuiTableFlags_SizingStretchProp))
-                        {
-                            ImGui::TableSetupColumn("Feature");
-                            ImGui::TableSetupColumn("Requested");
-                            ImGui::TableSetupColumn("Cached");
-                            ImGui::TableSetupColumn("Interval");
-                            ImGui::TableSetupColumn("Lane");
-                            ImGui::TableHeadersRow();
-
-                            auto drawFeatureRow = [](
-                                const char* name,
-                                const char* requested,
-                                std::size_t cached,
-                                double intervalMs,
-                                const char* lane)
-                                {
-                                    ImGui::TableNextRow();
-                                    ImGui::TableSetColumnIndex(0);
-                                    ImGui::TextUnformatted(name);
-                                    ImGui::TableSetColumnIndex(1);
-                                    ImGui::TextUnformatted(requested);
-                                    ImGui::TableSetColumnIndex(2);
-                                    ImGui::Text("%zu", cached);
-                                    ImGui::TableSetColumnIndex(3);
-                                    ImGui::Text("%.0f ms", intervalMs);
-                                    ImGui::TableSetColumnIndex(4);
-                                    ImGui::TextUnformatted(lane);
-                                };
-
-                            drawFeatureRow(
-                                "Equipment",
-                                radarGlobals::getPlayerEquip ? "RADAR" : "OFF",
-                                equipmentReady,
-                                globals::taskPlayersEquipment,
-                                "BACKGROUND");
-                            drawFeatureRow(
-                                "Loot",
-                                radarGlobals::drawLoot && espGlobals::drawLoot
-                                ? "RADAR + ESP"
-                                : radarGlobals::drawLoot
-                                ? "RADAR"
-                                : espGlobals::drawLoot ? "ESP" : "OFF",
-                                lootCache.size(),
-                                globals::taskLoot,
-                                "BACKGROUND");
-                            drawFeatureRow(
-                                "Grenades",
-                                radarGlobals::drawGrenades &&
-                                    espGlobals::drawGrenades
-                                ? "RADAR + ESP"
-                                : radarGlobals::drawGrenades
-                                ? "RADAR"
-                                : espGlobals::drawGrenades ? "ESP" : "OFF",
-                                grenadeCount,
-                                globals::taskGrenades,
-                                "HIGH");
-                            drawFeatureRow(
-                                "Quests",
-                                radarGlobals::drawQuestHelper &&
-                                    espGlobals::drawQuestHelper
-                                ? "RADAR + ESP"
-                                : radarGlobals::drawQuestHelper
-                                ? "RADAR"
-                                : espGlobals::drawQuestHelper ? "ESP" : "OFF",
-                                activeQuests.size(),
-                                globals::taskQuest,
-                                "BACKGROUND");
-                            drawFeatureRow(
-                                "Exfils",
-                                radarGlobals::drawExfils &&
-                                    espGlobals::drawExfil
-                                ? "RADAR + ESP"
-                                : radarGlobals::drawExfils
-                                ? "RADAR"
-                                : espGlobals::drawExfil ? "ESP" : "OFF",
-                                0,
-                                globals::taskExfil,
-                                "NORMAL");
-                            ImGui::EndTable();
-                        }
-
-                        ImGui::TextDisabled(
-                            "Exfil count is omitted until its legacy cache exposes a safe snapshot.");
-
-                        if (ImGui::CollapsingHeader("Feature switches"))
-                        {
-                            ImGui::Text(
-                                "Radar: players %s | loot %s | grenades %s | quests %s | exfils %s",
-                                "ON",
-                                radarGlobals::drawLoot ? "ON" : "OFF",
-                                radarGlobals::drawGrenades ? "ON" : "OFF",
-                                radarGlobals::drawQuestHelper ? "ON" : "OFF",
-                                radarGlobals::drawExfils ? "ON" : "OFF");
-                            ImGui::Text(
-                                "ESP: %s | players %s | loot %s | grenades %s | quests %s | exfils %s",
-                                espGlobals::espEnabled ? "ON" : "OFF",
-                                "ON",
-                                espGlobals::drawLoot ? "ON" : "OFF",
-                                espGlobals::drawGrenades ? "ON" : "OFF",
-                                espGlobals::drawQuestHelper ? "ON" : "OFF",
-                                espGlobals::drawExfil ? "ON" : "OFF");
-                        }
-
-                        if (ImGui::CollapsingHeader("Grenade source details"))
-                        {
-                            DebugTextPtr(
-                                "Local game world",
-                                explosiveManager.getLocalGameWorld());
-                            DebugTextPtr(
-                                "Controller",
-                                explosiveManager.getGrenadesController());
-                            DebugTextPtr(
-                                "Unity list",
-                                explosiveManager.getGrenadesListPointer());
-                            ImGui::Text(
-                                "Last list count: %zu | Read: %s",
-                                explosiveManager.getLastUnityListCount(),
-                                explosiveManager.lastUnityListReadSucceeded()
-                                ? "OK"
-                                : "FAILED / NOT RUN");
-                        }
-
-                        ImGui::EndTabItem();
-                    }
-                    if (ImGui::BeginTabItem("Loot"))
-                    {
-                        const std::vector<LootEntity> cacheLoot = Loot.getCacheLoot();
-
-                        size_t pendingCount = 0;
-                        size_t failedCount = 0;
-                        size_t successfulCount = 0;
-
-                        size_t validPositionCount = 0;
-                        size_t invalidPositionCount = 0;
-
-                        size_t itemCount = 0;
-                        size_t questItemCount = 0;
-                        size_t containerCount = 0;
-                        size_t corpseCount = 0;
-                        size_t airdropCount = 0;
-                        size_t wantedCount = 0;
-
-                        for (const auto& item : cacheLoot)
-                        {
-                            if (item.pendingResolve)
-                            {
-                                ++pendingCount;
-                                continue;
-                            }
-
-                            if (item.failed)
-                            {
-                                ++failedCount;
-                                continue;
-                            }
-
-                            ++successfulCount;
-
-                            if (item.hasValidPosition)
-                                ++validPositionCount;
-                            else
-                                ++invalidPositionCount;
-
-                            if (item.isItem())
-                                ++itemCount;
-
-                            if (item.isQuestItem())
-                                ++questItemCount;
-
-                            if (item.isContainer())
-                                ++containerCount;
-
-                            if (item.isCorpse())
-                                ++corpseCount;
-
-                            if (item.isAirdrop())
-                                ++airdropCount;
-
-                            if (item.wanted)
-                                ++wantedCount;
-                        }
-
-                        const bool lootListPValid =
-                            Utils::valid_pointer(Loot.lootListP);
-
-                        const bool lootListPtrValid =
-                            Utils::valid_pointer(Loot.lootListPtr);
-
-                        const ImVec4 goodColour{
-                            0.25f,
-                            0.90f,
-                            0.25f,
-                            1.00f
-                        };
-
-                        const ImVec4 badColour{
-                            0.95f,
-                            0.25f,
-                            0.25f,
-                            1.00f
-                        };
-
-                        const ImVec4 warningColour{
-                            0.95f,
-                            0.75f,
-                            0.20f,
-                            1.00f
-                        };
-
-                        // pointers
-
-                        ImGui::SeparatorText("Main Pointers");
-
-                        if (ImGui::BeginTable(
-                            "##loot_main_pointers",
-                            3,
-                            ImGuiTableFlags_Borders |
-                            ImGuiTableFlags_RowBg |
-                            ImGuiTableFlags_SizingStretchProp))
-                        {
-                            ImGui::TableSetupColumn("Pointer");
-                            ImGui::TableSetupColumn("Address");
-                            ImGui::TableSetupColumn("State");
-                            ImGui::TableHeadersRow();
-
-                            ImGui::TableNextRow();
-
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted("lootListP");
-
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::Text(
-                                "0x%llX",
-                                static_cast<unsigned long long>(Loot.lootListP)
-                            );
-
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::TextColored(
-                                lootListPValid ? goodColour : badColour,
-                                lootListPValid ? "Valid" : "Invalid"
-                            );
-
-                            ImGui::TableNextRow();
-
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted("lootListPtr");
-
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::Text(
-                                "0x%llX",
-                                static_cast<unsigned long long>(Loot.lootListPtr)
-                            );
-
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::TextColored(
-                                lootListPtrValid ? goodColour : badColour,
-                                lootListPtrValid ? "Valid" : "Invalid"
-                            );
-
-                            ImGui::EndTable();
-                        }
-
-                        // cache summary
-
-                        ImGui::Spacing();
-                        ImGui::SeparatorText("Cache Summary");
-
-                        if (ImGui::BeginTable(
-                            "##loot_cache_summary",
-                            5,
-                            ImGuiTableFlags_Borders |
-                            ImGuiTableFlags_RowBg |
-                            ImGuiTableFlags_SizingStretchSame))
-                        {
-                            ImGui::TableSetupColumn("Live Count");
-                            ImGui::TableSetupColumn("Cached");
-                            ImGui::TableSetupColumn("Pending");
-                            ImGui::TableSetupColumn("Successful");
-                            ImGui::TableSetupColumn("Failed");
-                            ImGui::TableHeadersRow();
-
-                            ImGui::TableNextRow();
-
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::Text("%ld", Loot.lootCount);
-
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::Text("%zu", cacheLoot.size());
-
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::TextColored(
-                                pendingCount == 0 ? goodColour : warningColour,
-                                "%zu",
-                                pendingCount
-                            );
-
-                            ImGui::TableSetColumnIndex(3);
-                            ImGui::TextColored(
-                                goodColour,
-                                "%zu",
-                                successfulCount
-                            );
-
-                            ImGui::TableSetColumnIndex(4);
-                            ImGui::TextColored(
-                                failedCount == 0 ? goodColour : badColour,
-                                "%zu",
-                                failedCount
-                            );
-
-                            ImGui::EndTable();
-                        }
-
-                        if (Loot.lootCount > 0)
-                        {
-                            const float cacheRatio = std::clamp(
-                                static_cast<float>(cacheLoot.size()) /
-                                static_cast<float>(Loot.lootCount),
-                                0.0f,
-                                1.0f
-                            );
-
-                            char overlay[64]{};
-
-                            std::snprintf(
-                                overlay,
-                                sizeof(overlay),
-                                "%zu / %ld cached",
-                                cacheLoot.size(),
-                                Loot.lootCount
-                            );
-
-                            ImGui::ProgressBar(
-                                cacheRatio,
-                                ImVec2(-FLT_MIN, 0.0f),
-                                overlay
-                            );
-                        }
-
-                        // resolved summary
-
-                        ImGui::Spacing();
-                        ImGui::SeparatorText("Resolved Types");
-
-                        if (ImGui::BeginTable(
-                            "##loot_type_summary",
-                            4,
-                            ImGuiTableFlags_Borders |
-                            ImGuiTableFlags_RowBg |
-                            ImGuiTableFlags_SizingStretchSame))
-                        {
-                            ImGui::TableSetupColumn("Type");
-                            ImGui::TableSetupColumn("Count");
-                            ImGui::TableSetupColumn("Type");
-                            ImGui::TableSetupColumn("Count");
-
-                            ImGui::TableNextRow();
-
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted("Loose Items");
-
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::Text("%zu", itemCount);
-
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::TextUnformatted("Quest Items");
-
-                            ImGui::TableSetColumnIndex(3);
-                            ImGui::Text("%zu", questItemCount);
-
-                            ImGui::TableNextRow();
-
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted("Containers");
-
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::Text("%zu", containerCount);
-
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::TextUnformatted("Corpses");
-
-                            ImGui::TableSetColumnIndex(3);
-                            ImGui::Text("%zu", corpseCount);
-
-                            ImGui::TableNextRow();
-
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted("Airdrops");
-
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::Text("%zu", airdropCount);
-
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::TextUnformatted("Wanted");
-
-                            ImGui::TableSetColumnIndex(3);
-                            ImGui::Text("%zu", wantedCount);
-
-                            ImGui::TableNextRow();
-
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted("Valid Positions");
-
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::TextColored(
-                                goodColour,
-                                "%zu",
-                                validPositionCount
-                            );
-
-                            ImGui::TableSetColumnIndex(2);
-                            ImGui::TextUnformatted("Invalid Positions");
-
-                            ImGui::TableSetColumnIndex(3);
-                            ImGui::TextColored(
-                                invalidPositionCount == 0
-                                ? goodColour
-                                : warningColour,
-                                "%zu",
-                                invalidPositionCount
-                            );
-
-                            ImGui::EndTable();
-                        }
-
-                        ImGui::Spacing();
-
-                        // Pending entries
-
-                        if (ImGui::CollapsingHeader(
-                            "Pending Cache Entries",
-                            pendingCount > 0
-                            ? ImGuiTreeNodeFlags_DefaultOpen
-                            : 0))
-                        {
-                            if (pendingCount == 0)
-                            {
-                                ImGui::TextColored(
-                                    goodColour,
-                                    "No pending loot entries."
-                                );
-                            }
-                            else if (ImGui::BeginTable(
-                                "##pending_loot_entries",
-                                6,
-                                ImGuiTableFlags_Borders |
-                                ImGuiTableFlags_RowBg |
-                                ImGuiTableFlags_Resizable |
-                                ImGuiTableFlags_ScrollY |
-                                ImGuiTableFlags_SizingStretchProp,
-                                ImVec2(0.0f, 260.0f)))
-                            {
-                                ImGui::TableSetupScrollFreeze(0, 1);
-
-                                ImGui::TableSetupColumn(
-                                    "Instance",
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    125.0f
-                                );
-
-                                ImGui::TableSetupColumn("Class");
-                                ImGui::TableSetupColumn("Object Name");
-
-                                ImGui::TableSetupColumn(
-                                    "Attempt",
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    75.0f
-                                );
-
-                                ImGui::TableSetupColumn(
-                                    "Position",
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    80.0f
-                                );
-
-                                ImGui::TableSetupColumn(
-                                    "Last Failure",
-                                    ImGuiTableColumnFlags_WidthStretch,
-                                    2.0f
-                                );
-
-                                ImGui::TableHeadersRow();
-
-                                for (const auto& item : cacheLoot)
-                                {
-                                    if (!item.pendingResolve)
-                                        continue;
-
-                                    ImGui::PushID(
-                                        reinterpret_cast<const void*>(
-                                            static_cast<uintptr_t>(item.instance)
-                                            )
-                                    );
-
-                                    ImGui::TableNextRow();
-
-                                    ImGui::TableSetColumnIndex(0);
-                                    ImGui::Text(
-                                        "0x%llX",
-                                        static_cast<unsigned long long>(item.instance)
-                                    );
-
-                                    ImGui::TableSetColumnIndex(1);
-                                    ImGui::TextUnformatted(
-                                        item.m_objectClassName.empty()
-                                        ? "<unknown>"
-                                        : item.m_objectClassName.c_str()
-                                    );
-
-                                    ImGui::TableSetColumnIndex(2);
-                                    ImGui::TextUnformatted(
-                                        item.gameObjectName.empty()
-                                        ? "<unknown>"
-                                        : item.gameObjectName.c_str()
-                                    );
-
-                                    ImGui::TableSetColumnIndex(3);
-                                    ImGui::Text(
-                                        "%u / 20",
-                                        static_cast<unsigned>(item.resolveAttempts)
-                                    );
-
-                                    ImGui::TableSetColumnIndex(4);
-                                    ImGui::TextColored(
-                                        item.hasValidPosition
-                                        ? goodColour
-                                        : warningColour,
-                                        item.hasValidPosition
-                                        ? "Valid"
-                                        : "Invalid"
-                                    );
-
-                                    ImGui::TableSetColumnIndex(5);
-                                    ImGui::TextWrapped(
-                                        item.failureReason.empty()
-                                        ? "<no reason>"
-                                        : item.failureReason.c_str()
-                                    );
-
-                                    ImGui::PopID();
-                                }
-
-                                ImGui::EndTable();
-                            }
-                        }
-
-                        // failed entries
-
-                        if (ImGui::CollapsingHeader(
-                            "Failed Cache Entries",
-                            failedCount > 0
-                            ? ImGuiTreeNodeFlags_DefaultOpen
-                            : 0))
-                        {
-                            if (failedCount == 0)
-                            {
-                                ImGui::TextColored(
-                                    goodColour,
-                                    "No failed loot entries."
-                                );
-                            }
-                            else if (ImGui::BeginTable(
-                                "##failed_loot_entries",
-                                6,
-                                ImGuiTableFlags_Borders |
-                                ImGuiTableFlags_RowBg |
-                                ImGuiTableFlags_Resizable |
-                                ImGuiTableFlags_ScrollY |
-                                ImGuiTableFlags_SizingStretchProp,
-                                ImVec2(0.0f, 260.0f)))
-                            {
-                                ImGui::TableSetupScrollFreeze(0, 1);
-
-                                ImGui::TableSetupColumn(
-                                    "Instance",
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    125.0f
-                                );
-
-                                ImGui::TableSetupColumn("Class");
-                                ImGui::TableSetupColumn("Object Name");
-
-                                ImGui::TableSetupColumn(
-                                    "Attempts",
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    75.0f
-                                );
-
-                                ImGui::TableSetupColumn(
-                                    "Position",
-                                    ImGuiTableColumnFlags_WidthFixed,
-                                    80.0f
-                                );
-
-                                ImGui::TableSetupColumn(
-                                    "Failure Reason",
-                                    ImGuiTableColumnFlags_WidthStretch,
-                                    2.0f
-                                );
-
-                                ImGui::TableHeadersRow();
-
-                                for (const auto& item : cacheLoot)
-                                {
-                                    if (!item.failed)
-                                        continue;
-
-                                    ImGui::PushID(
-                                        reinterpret_cast<const void*>(
-                                            static_cast<uintptr_t>(item.instance)
-                                            )
-                                    );
-
-                                    ImGui::TableNextRow();
-
-                                    ImGui::TableSetColumnIndex(0);
-                                    ImGui::Text(
-                                        "0x%llX",
-                                        static_cast<unsigned long long>(item.instance)
-                                    );
-
-                                    ImGui::TableSetColumnIndex(1);
-                                    ImGui::TextUnformatted(
-                                        item.m_objectClassName.empty()
-                                        ? "<unknown>"
-                                        : item.m_objectClassName.c_str()
-                                    );
-
-                                    ImGui::TableSetColumnIndex(2);
-                                    ImGui::TextUnformatted(
-                                        item.gameObjectName.empty()
-                                        ? "<unknown>"
-                                        : item.gameObjectName.c_str()
-                                    );
-
-                                    ImGui::TableSetColumnIndex(3);
-                                    ImGui::Text(
-                                        "%u",
-                                        static_cast<unsigned>(item.resolveAttempts)
-                                    );
-
-                                    ImGui::TableSetColumnIndex(4);
-                                    ImGui::TextColored(
-                                        item.hasValidPosition
-                                        ? goodColour
-                                        : badColour,
-                                        item.hasValidPosition
-                                        ? "Valid"
-                                        : "Invalid"
-                                    );
-
-                                    ImGui::TableSetColumnIndex(5);
-                                    ImGui::TextWrapped(
-                                        item.failureReason.empty()
-                                        ? "<no reason>"
-                                        : item.failureReason.c_str()
-                                    );
-
-                                    ImGui::PopID();
-                                }
-
-                                ImGui::EndTable();
-                            }
-                        }
-
-                        // airdrop
-
-                        if (ImGui::CollapsingHeader("Airdrop Entries"))
-                        {
-                            if (airdropCount == 0)
-                            {
-                                ImGui::TextUnformatted(
-                                    "No successfully resolved airdrops currently cached."
-                                );
-                            }
-                            else if (ImGui::BeginTable(
-                                "##airdrop_entries",
-                                6,
-                                ImGuiTableFlags_Borders |
-                                ImGuiTableFlags_RowBg |
-                                ImGuiTableFlags_Resizable |
-                                ImGuiTableFlags_SizingStretchProp))
-                            {
-                                ImGui::TableSetupColumn("Instance");
-                                ImGui::TableSetupColumn("Position State");
-                                ImGui::TableSetupColumn("Distance");
-                                ImGui::TableSetupColumn("X");
-                                ImGui::TableSetupColumn("Y");
-                                ImGui::TableSetupColumn("Z");
-                                ImGui::TableHeadersRow();
-
-                                for (const auto& item : cacheLoot)
-                                {
-                                    if (item.pendingResolve || item.failed)
-                                        continue;
-
-                                    if (!item.isAirdrop())
-                                        continue;
-
-                                    ImGui::TableNextRow();
-
-                                    ImGui::TableSetColumnIndex(0);
-                                    ImGui::Text(
-                                        "0x%llX",
-                                        static_cast<unsigned long long>(item.instance)
-                                    );
-
-                                    ImGui::TableSetColumnIndex(1);
-                                    ImGui::TextColored(
-                                        item.hasValidPosition
-                                        ? goodColour
-                                        : warningColour,
-                                        item.hasValidPosition
-                                        ? "Valid"
-                                        : "Awaiting Update"
-                                    );
-
-                                    ImGui::TableSetColumnIndex(2);
-                                    ImGui::Text("%d", item.distance);
-
-                                    ImGui::TableSetColumnIndex(3);
-                                    ImGui::Text("%.2f", item.worldLocation.x);
-
-                                    ImGui::TableSetColumnIndex(4);
-                                    ImGui::Text("%.2f", item.worldLocation.y);
-
-                                    ImGui::TableSetColumnIndex(5);
-                                    ImGui::Text("%.2f", item.worldLocation.z);
-                                }
-
-                                ImGui::EndTable();
-                            }
-                        }
-
-                        ImGui::EndTabItem();
+                        ImGui::TextWrapped("Overlay colours: yellow image quad, pink visible mask, orange lens centre, green main-camera fireport point, cyan "
+                                           "optic/lens fireport point");
                     }
 
-                    ImGui::EndTabBar();
+                    ImGui::EndTabItem();
                 }
+                if (ImGui::BeginTabItem("Aim"))
+                {
+                    const std::optional<TargetResult> liveTarget = readOnlyAim.getLiveTarget();
+                    const std::optional<TargetResult> activeTarget = readOnlyAim.getActiveTarget();
+                    const AimReferencePoint aimReference = readOnlyAim.resolveAimReference();
+                    const CameraManagerSnapshot aimCameraSnapshot = cameraManagerTest.snapshot();
+                    const bool cameraReady = aimCameraSnapshot && aimCameraSnapshot->valid;
+                    const bool deviceReady = makcu.IsConnected();
+                    const bool referenceReady = aimReference.valid;
+
+                    ImGui::SeparatorText("Pipeline");
+                    ImGui::Text("Enabled: %s | Worker: %s | Camera: %s | Device: %s", aimGlobals::aimEnabled ? "YES" : "NO",
+                                appGlobals::runThreads.load(std::memory_order_acquire) ? "RUNNING" : "IDLE", cameraReady ? "READY" : "MISSING",
+                                deviceReady ? "CONNECTED" : "DISCONNECTED");
+                    ImGui::Text("Reference: FIREPORT at %.1f, %.1f | %s", aimReference.pos.x, aimReference.pos.y, referenceReady ? "VALID" : "INVALID");
+
+                    if (aimGlobals::aimEnabled && !referenceReady)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.70f, 0.25f, 1.0f), "Fireport unavailable for this weapon; target movement is paused.");
+                    }
+
+                    if (aimGlobals::aimEnabled && (!cameraReady || !deviceReady || !referenceReady))
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.20f, 1.0f), "Aim is enabled, but its input pipeline is not ready.");
+                    }
+
+                    ImGui::SeparatorText("Selection");
+                    ImGui::Text("Mode: %s | Lock: %s | FOV: %.0f px | Range: %d m", aimGlobals::targetMode == TargetMode::CQB ? "CQB" : "FOV",
+                                aimGlobals::targetLock ? "ON" : "OFF", aimGlobals::aimFOV, aimGlobals::aimDistance);
+                    ImGui::Text("Smoothing: %.2f | Bone mode: %s", aimGlobals::aimSmooth,
+                                aimGlobals::aimClosestBoneToFireport ? "Closest Bone" : "Selected Bones");
+                    ImGui::Text("Speed: %.0f px/s | Deadzone: %.1f px | Offset: %.1f, %.1f", aimGlobals::aimSpeedPixelsPerSecond, aimGlobals::aimDeadzonePixels,
+                                aimGlobals::aimOffsetX, aimGlobals::aimOffsetY);
+
+                    auto drawTarget = [&](const char* label, const std::optional<TargetResult>& target)
+                    {
+                        ImGui::SeparatorText(label);
+                        if (!target)
+                        {
+                            ImGui::TextDisabled("No valid target");
+                            return;
+                        }
+
+                        const float errorX = target->screenPos.x - aimReference.pos.x;
+                        const float errorY = target->screenPos.y - aimReference.pos.y;
+                        ImGui::Text("%s | %s | %.1f m | %.1f px", target->player.name.empty() ? "<unnamed>" : target->player.name.c_str(),
+                                    target->player.isAi ? "AI" : "PLAYER", std::sqrt(target->worldDistanceSq), std::sqrt(target->screenDistanceSq));
+                        ImGui::Text("Bone %d | Screen %.1f, %.1f | Error %.1f, %.1f px", static_cast<int>(target->selectedBone), target->screenPos.x,
+                                    target->screenPos.y, errorX, errorY);
+
+                        ImGui::PushID(label);
+                        if (ImGui::CollapsingHeader("Details"))
+                        {
+                            ImGui::Text("Instance: 0x%016llX", static_cast<unsigned long long>(target->player.instance));
+                            ImGui::Text("World bone: %.2f, %.2f, %.2f", target->boneWorldPos.x, target->boneWorldPos.y, target->boneWorldPos.z);
+                        }
+                        ImGui::PopID();
+                    };
+
+                    drawTarget("Best candidate", liveTarget);
+                    drawTarget("Locked / active target", activeTarget);
+                    ImGui::TextDisabled("Configure aim in the MAKCU Aim tab; this page is runtime diagnostics.");
+
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Features"))
+                {
+                    const PlayerSnapshot featurePlayers = registeredPlayers.getCacheSnapshot();
+                    const std::vector<LootEntity> lootCache = Loot.getCacheLoot();
+                    const std::size_t grenadeCount = explosiveManager.getGrenadeCount();
+                    const std::vector<QuestData> activeQuests = GetQuestDataActiveSnapshot();
+                    const std::size_t equipmentReady = static_cast<std::size_t>(
+                        std::count_if(featurePlayers->begin(), featurePlayers->end(), [](const Player& player) { return player.equipInited; }));
+
+                    ImGui::SeparatorText("Cache overview");
+                    if (ImGui::BeginTable("FeatureCacheOverview", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn("Feature");
+                        ImGui::TableSetupColumn("Requested");
+                        ImGui::TableSetupColumn("Cached");
+                        ImGui::TableSetupColumn("Interval");
+                        ImGui::TableSetupColumn("Lane");
+                        ImGui::TableHeadersRow();
+
+                        auto drawFeatureRow = [](const char* name, const char* requested, std::size_t cached, double intervalMs, const char* lane)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted(name);
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::TextUnformatted(requested);
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::Text("%zu", cached);
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%.0f ms", intervalMs);
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::TextUnformatted(lane);
+                        };
+
+                        drawFeatureRow("Equipment", radarGlobals::getPlayerEquip ? "RADAR" : "OFF", equipmentReady, globals::taskPlayersEquipment,
+                                       "BACKGROUND");
+                        drawFeatureRow("Loot",
+                                       radarGlobals::drawLoot && espGlobals::drawLoot ? "RADAR + ESP"
+                                       : radarGlobals::drawLoot                       ? "RADAR"
+                                       : espGlobals::drawLoot                         ? "ESP"
+                                                                                      : "OFF",
+                                       lootCache.size(), globals::taskLoot, "BACKGROUND");
+                        drawFeatureRow("Grenades",
+                                       radarGlobals::drawGrenades && espGlobals::drawGrenades ? "RADAR + ESP"
+                                       : radarGlobals::drawGrenades                           ? "RADAR"
+                                       : espGlobals::drawGrenades                             ? "ESP"
+                                                                                              : "OFF",
+                                       grenadeCount, globals::taskGrenades, "HIGH");
+                        drawFeatureRow("Quests",
+                                       radarGlobals::drawQuestHelper && espGlobals::drawQuestHelper ? "RADAR + ESP"
+                                       : radarGlobals::drawQuestHelper                              ? "RADAR"
+                                       : espGlobals::drawQuestHelper                                ? "ESP"
+                                                                                                    : "OFF",
+                                       activeQuests.size(), globals::taskQuest, "BACKGROUND");
+                        drawFeatureRow("Exfils",
+                                       radarGlobals::drawExfils && espGlobals::drawExfil ? "RADAR + ESP"
+                                       : radarGlobals::drawExfils                        ? "RADAR"
+                                       : espGlobals::drawExfil                           ? "ESP"
+                                                                                         : "OFF",
+                                       0, globals::taskExfil, "NORMAL");
+                        ImGui::EndTable();
+                    }
+
+                    ImGui::TextDisabled("Exfil count is omitted until its legacy cache exposes a safe snapshot.");
+
+                    if (ImGui::CollapsingHeader("Feature switches"))
+                    {
+                        ImGui::Text("Radar: players %s | loot %s | grenades %s | quests %s | exfils %s", "ON", radarGlobals::drawLoot ? "ON" : "OFF",
+                                    radarGlobals::drawGrenades ? "ON" : "OFF", radarGlobals::drawQuestHelper ? "ON" : "OFF",
+                                    radarGlobals::drawExfils ? "ON" : "OFF");
+                        ImGui::Text("ESP: %s | players %s | loot %s | grenades %s | quests %s | exfils %s", espGlobals::espEnabled ? "ON" : "OFF", "ON",
+                                    espGlobals::drawLoot ? "ON" : "OFF", espGlobals::drawGrenades ? "ON" : "OFF", espGlobals::drawQuestHelper ? "ON" : "OFF",
+                                    espGlobals::drawExfil ? "ON" : "OFF");
+                    }
+
+                    if (ImGui::CollapsingHeader("Grenade source details"))
+                    {
+                        DebugTextPtr("Local game world", explosiveManager.getLocalGameWorld());
+                        DebugTextPtr("Controller", explosiveManager.getGrenadesController());
+                        DebugTextPtr("Unity list", explosiveManager.getGrenadesListPointer());
+                        ImGui::Text("Last list count: %zu | Read: %s", explosiveManager.getLastUnityListCount(),
+                                    explosiveManager.lastUnityListReadSucceeded() ? "OK" : "FAILED / NOT RUN");
+                    }
+
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Loot"))
+                {
+                    const std::vector<LootEntity> cacheLoot = Loot.getCacheLoot();
+
+                    size_t pendingCount = 0;
+                    size_t failedCount = 0;
+                    size_t successfulCount = 0;
+
+                    size_t validPositionCount = 0;
+                    size_t invalidPositionCount = 0;
+
+                    size_t itemCount = 0;
+                    size_t questItemCount = 0;
+                    size_t containerCount = 0;
+                    size_t corpseCount = 0;
+                    size_t airdropCount = 0;
+                    size_t wantedCount = 0;
+
+                    for (const auto& item : cacheLoot)
+                    {
+                        if (item.pendingResolve)
+                        {
+                            ++pendingCount;
+                            continue;
+                        }
+
+                        if (item.failed)
+                        {
+                            ++failedCount;
+                            continue;
+                        }
+
+                        ++successfulCount;
+
+                        if (item.hasValidPosition)
+                            ++validPositionCount;
+                        else
+                            ++invalidPositionCount;
+
+                        if (item.isItem())
+                            ++itemCount;
+
+                        if (item.isQuestItem())
+                            ++questItemCount;
+
+                        if (item.isContainer())
+                            ++containerCount;
+
+                        if (item.isCorpse())
+                            ++corpseCount;
+
+                        if (item.isAirdrop())
+                            ++airdropCount;
+
+                        if (item.wanted)
+                            ++wantedCount;
+                    }
+
+                    const bool lootListPValid = Utils::valid_pointer(Loot.lootListP);
+
+                    const bool lootListPtrValid = Utils::valid_pointer(Loot.lootListPtr);
+
+                    const ImVec4 goodColour{0.25f, 0.90f, 0.25f, 1.00f};
+
+                    const ImVec4 badColour{0.95f, 0.25f, 0.25f, 1.00f};
+
+                    const ImVec4 warningColour{0.95f, 0.75f, 0.20f, 1.00f};
+
+                    // pointers
+
+                    ImGui::SeparatorText("Main Pointers");
+
+                    if (ImGui::BeginTable("##loot_main_pointers", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn("Pointer");
+                        ImGui::TableSetupColumn("Address");
+                        ImGui::TableSetupColumn("State");
+                        ImGui::TableHeadersRow();
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted("lootListP");
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("0x%llX", static_cast<unsigned long long>(Loot.lootListP));
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextColored(lootListPValid ? goodColour : badColour, lootListPValid ? "Valid" : "Invalid");
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted("lootListPtr");
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("0x%llX", static_cast<unsigned long long>(Loot.lootListPtr));
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextColored(lootListPtrValid ? goodColour : badColour, lootListPtrValid ? "Valid" : "Invalid");
+
+                        ImGui::EndTable();
+                    }
+
+                    // cache summary
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Cache Summary");
+
+                    if (ImGui::BeginTable("##loot_cache_summary", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchSame))
+                    {
+                        ImGui::TableSetupColumn("Live Count");
+                        ImGui::TableSetupColumn("Cached");
+                        ImGui::TableSetupColumn("Pending");
+                        ImGui::TableSetupColumn("Successful");
+                        ImGui::TableSetupColumn("Failed");
+                        ImGui::TableHeadersRow();
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("%ld", Loot.lootCount);
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%zu", cacheLoot.size());
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextColored(pendingCount == 0 ? goodColour : warningColour, "%zu", pendingCount);
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextColored(goodColour, "%zu", successfulCount);
+
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::TextColored(failedCount == 0 ? goodColour : badColour, "%zu", failedCount);
+
+                        ImGui::EndTable();
+                    }
+
+                    if (Loot.lootCount > 0)
+                    {
+                        const float cacheRatio = std::clamp(static_cast<float>(cacheLoot.size()) / static_cast<float>(Loot.lootCount), 0.0f, 1.0f);
+
+                        char overlay[64]{};
+
+                        std::snprintf(overlay, sizeof(overlay), "%zu / %ld cached", cacheLoot.size(), Loot.lootCount);
+
+                        ImGui::ProgressBar(cacheRatio, ImVec2(-FLT_MIN, 0.0f), overlay);
+                    }
+
+                    // resolved summary
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Resolved Types");
+
+                    if (ImGui::BeginTable("##loot_type_summary", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchSame))
+                    {
+                        ImGui::TableSetupColumn("Type");
+                        ImGui::TableSetupColumn("Count");
+                        ImGui::TableSetupColumn("Type");
+                        ImGui::TableSetupColumn("Count");
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted("Loose Items");
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%zu", itemCount);
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted("Quest Items");
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%zu", questItemCount);
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted("Containers");
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%zu", containerCount);
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted("Corpses");
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%zu", corpseCount);
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted("Airdrops");
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%zu", airdropCount);
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted("Wanted");
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%zu", wantedCount);
+
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted("Valid Positions");
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextColored(goodColour, "%zu", validPositionCount);
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted("Invalid Positions");
+
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextColored(invalidPositionCount == 0 ? goodColour : warningColour, "%zu", invalidPositionCount);
+
+                        ImGui::EndTable();
+                    }
+
+                    ImGui::Spacing();
+
+                    // Pending entries
+
+                    if (ImGui::CollapsingHeader("Pending Cache Entries", pendingCount > 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0))
+                    {
+                        if (pendingCount == 0)
+                        {
+                            ImGui::TextColored(goodColour, "No pending loot entries.");
+                        }
+                        else if (ImGui::BeginTable("##pending_loot_entries", 6,
+                                                   ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
+                                                       ImGuiTableFlags_SizingStretchProp,
+                                                   ImVec2(0.0f, 260.0f)))
+                        {
+                            ImGui::TableSetupScrollFreeze(0, 1);
+
+                            ImGui::TableSetupColumn("Instance", ImGuiTableColumnFlags_WidthFixed, 125.0f);
+
+                            ImGui::TableSetupColumn("Class");
+                            ImGui::TableSetupColumn("Object Name");
+
+                            ImGui::TableSetupColumn("Attempt", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+
+                            ImGui::TableSetupColumn("Position", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+
+                            ImGui::TableSetupColumn("Last Failure", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+
+                            ImGui::TableHeadersRow();
+
+                            for (const auto& item : cacheLoot)
+                            {
+                                if (!item.pendingResolve)
+                                    continue;
+
+                                ImGui::PushID(reinterpret_cast<const void*>(static_cast<uintptr_t>(item.instance)));
+
+                                ImGui::TableNextRow();
+
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::Text("0x%llX", static_cast<unsigned long long>(item.instance));
+
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::TextUnformatted(item.m_objectClassName.empty() ? "<unknown>" : item.m_objectClassName.c_str());
+
+                                ImGui::TableSetColumnIndex(2);
+                                ImGui::TextUnformatted(item.gameObjectName.empty() ? "<unknown>" : item.gameObjectName.c_str());
+
+                                ImGui::TableSetColumnIndex(3);
+                                ImGui::Text("%u / 20", static_cast<unsigned>(item.resolveAttempts));
+
+                                ImGui::TableSetColumnIndex(4);
+                                ImGui::TextColored(item.hasValidPosition ? goodColour : warningColour, item.hasValidPosition ? "Valid" : "Invalid");
+
+                                ImGui::TableSetColumnIndex(5);
+                                ImGui::TextWrapped(item.failureReason.empty() ? "<no reason>" : item.failureReason.c_str());
+
+                                ImGui::PopID();
+                            }
+
+                            ImGui::EndTable();
+                        }
+                    }
+
+                    // failed entries
+
+                    if (ImGui::CollapsingHeader("Failed Cache Entries", failedCount > 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0))
+                    {
+                        if (failedCount == 0)
+                        {
+                            ImGui::TextColored(goodColour, "No failed loot entries.");
+                        }
+                        else if (ImGui::BeginTable("##failed_loot_entries", 6,
+                                                   ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
+                                                       ImGuiTableFlags_SizingStretchProp,
+                                                   ImVec2(0.0f, 260.0f)))
+                        {
+                            ImGui::TableSetupScrollFreeze(0, 1);
+
+                            ImGui::TableSetupColumn("Instance", ImGuiTableColumnFlags_WidthFixed, 125.0f);
+
+                            ImGui::TableSetupColumn("Class");
+                            ImGui::TableSetupColumn("Object Name");
+
+                            ImGui::TableSetupColumn("Attempts", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+
+                            ImGui::TableSetupColumn("Position", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+
+                            ImGui::TableSetupColumn("Failure Reason", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+
+                            ImGui::TableHeadersRow();
+
+                            for (const auto& item : cacheLoot)
+                            {
+                                if (!item.failed)
+                                    continue;
+
+                                ImGui::PushID(reinterpret_cast<const void*>(static_cast<uintptr_t>(item.instance)));
+
+                                ImGui::TableNextRow();
+
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::Text("0x%llX", static_cast<unsigned long long>(item.instance));
+
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::TextUnformatted(item.m_objectClassName.empty() ? "<unknown>" : item.m_objectClassName.c_str());
+
+                                ImGui::TableSetColumnIndex(2);
+                                ImGui::TextUnformatted(item.gameObjectName.empty() ? "<unknown>" : item.gameObjectName.c_str());
+
+                                ImGui::TableSetColumnIndex(3);
+                                ImGui::Text("%u", static_cast<unsigned>(item.resolveAttempts));
+
+                                ImGui::TableSetColumnIndex(4);
+                                ImGui::TextColored(item.hasValidPosition ? goodColour : badColour, item.hasValidPosition ? "Valid" : "Invalid");
+
+                                ImGui::TableSetColumnIndex(5);
+                                ImGui::TextWrapped(item.failureReason.empty() ? "<no reason>" : item.failureReason.c_str());
+
+                                ImGui::PopID();
+                            }
+
+                            ImGui::EndTable();
+                        }
+                    }
+
+                    // airdrop
+
+                    if (ImGui::CollapsingHeader("Airdrop Entries"))
+                    {
+                        if (airdropCount == 0)
+                        {
+                            ImGui::TextUnformatted("No successfully resolved airdrops currently cached.");
+                        }
+                        else if (ImGui::BeginTable("##airdrop_entries", 6,
+                                                   ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
+                                                       ImGuiTableFlags_SizingStretchProp))
+                        {
+                            ImGui::TableSetupColumn("Instance");
+                            ImGui::TableSetupColumn("Position State");
+                            ImGui::TableSetupColumn("Distance");
+                            ImGui::TableSetupColumn("X");
+                            ImGui::TableSetupColumn("Y");
+                            ImGui::TableSetupColumn("Z");
+                            ImGui::TableHeadersRow();
+
+                            for (const auto& item : cacheLoot)
+                            {
+                                if (item.pendingResolve || item.failed)
+                                    continue;
+
+                                if (!item.isAirdrop())
+                                    continue;
+
+                                ImGui::TableNextRow();
+
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::Text("0x%llX", static_cast<unsigned long long>(item.instance));
+
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::TextColored(item.hasValidPosition ? goodColour : warningColour, item.hasValidPosition ? "Valid" : "Awaiting Update");
+
+                                ImGui::TableSetColumnIndex(2);
+                                ImGui::Text("%d", item.distance);
+
+                                ImGui::TableSetColumnIndex(3);
+                                ImGui::Text("%.2f", item.worldLocation.x);
+
+                                ImGui::TableSetColumnIndex(4);
+                                ImGui::Text("%.2f", item.worldLocation.y);
+
+                                ImGui::TableSetColumnIndex(5);
+                                ImGui::Text("%.2f", item.worldLocation.z);
+                            }
+
+                            ImGui::EndTable();
+                        }
+                    }
+
+                    ImGui::EndTabItem();
+                }
+
+                ImGui::EndTabBar();
+            }
         }
         if (activePage == DebugPage::Map)
         {
-               if (!mainGame.selectedLocation.empty())
-               {
-                   ImGui::TextUnformatted("The below information is for debug / map position corrections, they don't stick!");
-                   ImGui::Separator();
+            if (!mainGame.selectedLocation.empty())
+            {
+                ImGui::TextUnformatted("The below information is for debug / map position corrections, they don't stick!");
+                ImGui::Separator();
 
-                   ImGui::TextUnformatted("Local Player World Position");
+                ImGui::TextUnformatted("Local Player World Position");
 
-                   ImGui::Text(
-                       "x: %.2f  y: %.2f  z: %.2f",
-                       mainGame.localLocation.x,
-                       mainGame.localLocation.y,
-                       mainGame.localLocation.z
-                   );
+                ImGui::Text("x: %.2f  y: %.2f  z: %.2f", mainGame.localLocation.x, mainGame.localLocation.y, mainGame.localLocation.z);
 
-                   ImGui::Separator();
+                ImGui::Separator();
 
-                   ImGui::Text("Selected map: %s", mainGame.selectedLocation.c_str());
+                ImGui::Text("Selected map: %s", mainGame.selectedLocation.c_str());
 
-                   ImGui::Spacing();
+                ImGui::Spacing();
 
-                   ImGui::TextUnformatted("Map Position Correction");
-                   ImGui::SameLine();
+                ImGui::TextUnformatted("Map Position Correction");
+                ImGui::SameLine();
 
-                   ImGui::TextDisabled("(?)");
-                   if (ImGui::IsItemHovered())
-                   {
-                       ImGui::BeginTooltip();
-                       ImGui::TextUnformatted("Step controls:");
-                       ImGui::BulletText("Click +/- to change by 0.1");
-                       ImGui::BulletText("Hold Ctrl and click +/- to change by 1.0");
-                       ImGui::EndTooltip();
-                   }
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted("Step controls:");
+                    ImGui::BulletText("Click +/- to change by 0.1");
+                    ImGui::BulletText("Hold Ctrl and click +/- to change by 1.0");
+                    ImGui::EndTooltip();
+                }
 
-                   ImGui::PushItemWidth(120.0f);
+                ImGui::PushItemWidth(120.0f);
 
-                   ImGui::InputFloat(
-                       "Config X",
-                       &currentMap::configX,
-                       0.1f,
-                       1.0f,
-                       "%.2f"
-                   );
+                ImGui::InputFloat("Config X", &currentMap::configX, 0.1f, 1.0f, "%.2f");
 
-                   ImGui::InputFloat(
-                       "Config Y",
-                       &currentMap::configY,
-                       0.1f,
-                       1.0f,
-                       "%.2f"
-                   );
+                ImGui::InputFloat("Config Y", &currentMap::configY, 0.1f, 1.0f, "%.2f");
 
-                   ImGui::InputFloat(
-                       "Config Scale",
-                       &currentMap::configScale,
-                       0.1f,
-                       1.0f,
-                       "%.2f"
-                   );
+                ImGui::InputFloat("Config Scale", &currentMap::configScale, 0.1f, 1.0f, "%.2f");
 
-                   //prevent scale going to 0 or negative
-                   if (currentMap::configScale < 0.1f)
-                       currentMap::configScale = 0.1f;
+                // prevent scale going to 0 or negative
+                if (currentMap::configScale < 0.1f)
+                    currentMap::configScale = 0.1f;
 
-                   ImGui::PopItemWidth();
+                ImGui::PopItemWidth();
 
-                   ImGui::Separator();
+                ImGui::Separator();
 
-                   ImGui::Text(
-                       "Current config: X %.2f | Y %.2f | Scale %.2f",
-                       currentMap::configX,
-                       currentMap::configY,
-                       currentMap::configScale
-                   );
+                ImGui::Text("Current config: X %.2f | Y %.2f | Scale %.2f", currentMap::configX, currentMap::configY, currentMap::configScale);
 
-                   ImGui::Text(
-                       "Current Loaded Map : %s (X %.2f | Y %.2f)",
-                       currentMap::mapPathName.c_str(),
-                       currentMap::mapSizeX,
-                       currentMap::mapSizeY
-                   );
-               }
-               else
-               {
-                   ImGui::TextUnformatted("NOTE : Only visible when in raid");
-               }
-
+                ImGui::Text("Current Loaded Map : %s (X %.2f | Y %.2f)", currentMap::mapPathName.c_str(), currentMap::mapSizeX, currentMap::mapSizeY);
+            }
+            else
+            {
+                ImGui::TextUnformatted("NOTE : Only visible when in raid");
+            }
         }
         menuLayout::PopContentInset();
         ImGui::EndChild();
     }
     ImGui::End();
-
 }
 
 static void renderLeftIcons()
 {
+    if (!appGlobals::runRadar.load(std::memory_order_acquire) || !appGlobals::runThreads.load(std::memory_order_acquire))
+        return;
+
     constexpr float buttonSize = menuLayout::WidgetToolbarButtonSize;
     constexpr float buttonSpacing = menuLayout::WidgetToolbarGap;
     constexpr float leftMargin = menuLayout::WidgetToolbarX;
@@ -4119,13 +3118,8 @@ static void renderLeftIcons()
 
     const auto leftButton = [&](const char* icon, int index)
     {
-        ImGui::SetCursorPos(ImVec2(
-            leftMargin + (index * (buttonSize + buttonSpacing)),
-            topMargin));
-        return ImGui::ButtonMenu(
-            icon,
-            ImVec2(buttonSize, buttonSize),
-            ImVec2(0.0f, 2.5f));
+        ImGui::SetCursorPos(ImVec2(leftMargin + (index * (buttonSize + buttonSpacing)), topMargin));
+        return ImGui::ButtonMenu(icon, ImVec2(buttonSize, buttonSize), ImVec2(0.0f, 2.5f));
     };
 
     const auto showTooltip = [](const char* tooltip)
@@ -4151,7 +3145,7 @@ static void renderLeftIcons()
     if (leftButton(ICON_FK_STREET_VIEW, 0))
     {
         mapGlobals::followLocal = !mapGlobals::followLocal;
-        mapGlobals::focusPoint = { 0.f, 0.f, 0.f };
+        mapGlobals::focusPoint = {0.f, 0.f, 0.f};
     }
     showTooltip("Follow local");
 
@@ -4171,9 +3165,6 @@ static void renderLeftIcons()
         toggleWidget(appMenu::widgetPlayers);
     showTooltip("Active players");
 
-    if (!appGlobals::runRadar.load(std::memory_order_acquire))
-        return;
-
     bool hasBlackDivision = false;
     bool hasCultist = false;
     bool hasBoss = false;
@@ -4181,9 +3172,7 @@ static void renderLeftIcons()
 
     for (const Player& player : *playerSnapshot)
     {
-        if (!Utils::valid_pointer(player.instance) ||
-            player.isDead ||
-            player.hasExfiled)
+        if (!Utils::valid_pointer(player.instance) || player.isDead || player.hasExfiled)
         {
             continue;
         }
@@ -4213,33 +3202,16 @@ static void renderLeftIcons()
     {
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImFont* font = ImGui::GetFont();
-        const ImVec2 textSize = font->CalcTextSizeA(
-            noticeFontSize,
-            std::numeric_limits<float>::max(),
-            0.0f,
-            label);
+        const ImVec2 textSize = font->CalcTextSizeA(noticeFontSize, std::numeric_limits<float>::max(), 0.0f, label);
         const ImVec2 windowPosition = ImGui::GetWindowPos();
-        const ImVec2 position(
-            windowPosition.x + noticeX,
-            windowPosition.y + noticeY);
+        const ImVec2 position(windowPosition.x + noticeX, windowPosition.y + noticeY);
         const ImVec2 size(textSize.x + 12.0f, noticeHeight);
-        const ImVec2 bottomRight(
-            position.x + size.x,
-            position.y + size.y);
-        const ImVec2 textPosition(
-            position.x + 6.0f,
-            position.y + ((noticeHeight - textSize.y) * 0.5f));
-        const ImU32 textColour = IM_COL32(
-            static_cast<int>(colour.r * 255.0f),
-            static_cast<int>(colour.g * 255.0f),
-            static_cast<int>(colour.b * 255.0f),
-            static_cast<int>(colour.a * 255.0f));
+        const ImVec2 bottomRight(position.x + size.x, position.y + size.y);
+        const ImVec2 textPosition(position.x + 6.0f, position.y + ((noticeHeight - textSize.y) * 0.5f));
+        const ImU32 textColour = IM_COL32(static_cast<int>(colour.r * 255.0f), static_cast<int>(colour.g * 255.0f), static_cast<int>(colour.b * 255.0f),
+                                          static_cast<int>(colour.a * 255.0f));
 
-        drawList->AddRectFilled(
-            position,
-            bottomRight,
-            IM_COL32(35, 37, 40, 245),
-            2.0f);
+        drawList->AddRectFilled(position, bottomRight, IM_COL32(35, 37, 40, 245), 2.0f);
         drawList->AddRect(position, bottomRight, textColour, 2.0f);
         drawList->AddText(font, noticeFontSize, textPosition, textColour, label);
 
@@ -4270,6 +3242,7 @@ static void renderMenuIcons()
     std::string questsIcon = ICON_FK_FILES_O;
     std::string watchlistIcon = ICON_FK_USER;
     std::string widgetDebugIcon = ICON_FK_STETHOSCOPE;
+    std::string shutdownIcon = ICON_FK_TIMES;
 
     // view port
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -4284,10 +3257,7 @@ static void renderMenuIcons()
     {
         ImGui::SetCursorPos(ImVec2(sidebarX, y));
         ImGui::PushStyleColor(ImGuiCol_Text, sidebarIconColour);
-        const bool pressed = ImGui::ButtonMenu(
-            icon,
-            ImVec2(sidebarButtonSize, sidebarButtonSize),
-            ImVec2(0.0f, 0.0f));
+        const bool pressed = ImGui::ButtonMenu(icon, ImVec2(sidebarButtonSize, sidebarButtonSize), ImVec2(0.0f, 0.0f));
         ImGui::PopStyleColor();
         return pressed;
     };
@@ -4296,10 +3266,7 @@ static void renderMenuIcons()
     {
         ImGui::SetCursorPos(ImVec2(x, sidebarTop));
         ImGui::PushStyleColor(ImGuiCol_Text, sidebarIconColour);
-        const bool pressed = ImGui::ButtonMenu(
-            icon,
-            ImVec2(sidebarButtonSize, sidebarButtonSize),
-            ImVec2(0.0f, 0.0f));
+        const bool pressed = ImGui::ButtonMenu(icon, ImVec2(sidebarButtonSize, sidebarButtonSize), ImVec2(0.0f, 0.0f));
         ImGui::PopStyleColor();
         return pressed;
     };
@@ -4320,7 +3287,8 @@ static void renderMenuIcons()
         }
     }
 
-    if (sidebarButton(fuserIcon.c_str(), sidebarTop + sidebarStep)) {
+    if (sidebarButton(fuserIcon.c_str(), sidebarTop + sidebarStep))
+    {
         appMenu::appFuser = !appMenu::appFuser;
         closeSettingWindows("fuser");
     }
@@ -4334,8 +3302,8 @@ static void renderMenuIcons()
         }
     }
 
-
-    if (sidebarButton(makcuIcon.c_str(), sidebarTop + (sidebarStep * 2.0f))) {
+    if (sidebarButton(makcuIcon.c_str(), sidebarTop + (sidebarStep * 2.0f)))
+    {
         appMenu::appMakcu = !appMenu::appMakcu;
         closeSettingWindows("makcu");
     }
@@ -4349,7 +3317,8 @@ static void renderMenuIcons()
         }
     }
 
-    if (sidebarButton(filterIcon.c_str(), sidebarTop + (sidebarStep * 3.0f))) {
+    if (sidebarButton(filterIcon.c_str(), sidebarTop + (sidebarStep * 3.0f)))
+    {
         appMenu::appLootFilters = !appMenu::appLootFilters;
         closeSettingWindows("lootfilters");
     }
@@ -4363,7 +3332,8 @@ static void renderMenuIcons()
         }
     }
 
-    if (sidebarButton(questsIcon.c_str(), sidebarTop + (sidebarStep * 4.0f))) {
+    if (sidebarButton(questsIcon.c_str(), sidebarTop + (sidebarStep * 4.0f)))
+    {
         appMenu::appQuests = !appMenu::appQuests;
         closeSettingWindows("quests");
     }
@@ -4377,7 +3347,8 @@ static void renderMenuIcons()
         }
     }
 
-    if (sidebarButton(watchlistIcon.c_str(), sidebarTop + (sidebarStep * 5.0f))) {
+    if (sidebarButton(watchlistIcon.c_str(), sidebarTop + (sidebarStep * 5.0f)))
+    {
         appMenu::appWatchList = !appMenu::appWatchList;
         closeSettingWindows("watchlist");
     }
@@ -4402,12 +3373,28 @@ static void renderMenuIcons()
         ImGui::EndTooltip();
     }
 
+    if (topMenuButton(shutdownIcon.c_str(), sidebarX - (sidebarStep * 2.0f)))
+    {
+        appGlobals::runThreads.store(false, std::memory_order_release);
+        appGlobals::runRadar.store(false, std::memory_order_release);
+
+        void* platformWindow = viewport->PlatformHandleRaw != nullptr ? viewport->PlatformHandleRaw : viewport->PlatformHandle;
+        if (HWND window = static_cast<HWND>(platformWindow); window != nullptr)
+            ::PostMessageW(window, WM_CLOSE, 0, 0);
+    }
+    else if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
+    {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted("Close connection and exit");
+        ImGui::EndTooltip();
+    }
+
     if (appMenu::appSettings)
         renderMenuSettings(); // display settings menu screen
     if (appMenu::appLootFilters)
         uiWidgets::renderLootFiltersMenu(); // display loot filters screen
 
-    if (appMenu::widgetLoot)
+    if (appGlobals::runRadar.load(std::memory_order_acquire) && appGlobals::runThreads.load(std::memory_order_acquire) && appMenu::widgetLoot)
         uiWidgets::renderRaidLootWidget();
 
     if (appMenu::widgetDebug)
@@ -4424,29 +3411,18 @@ static void renderMenuIcons()
 
     if (appMenu::appMakcu)
     {
-        RenderMakcuWindow(
-            &appMenu::appMakcu,
-            globals::appWindowAlpha,
-            []()
-            {
-                configManager.SaveConfig();
-            }
-        );
+        RenderMakcuWindow(&appMenu::appMakcu, globals::appWindowAlpha, []() { configManager.SaveConfig(); });
     }
-
-
-
 }
 
-
-
-//This is where we render certain screens depending on conditions and selections/inputs
+// This is where we render certain screens depending on conditions and selections/inputs
 static void renderMainScreen()
 {
 
-
     // Viewport Info
-    static ImGuiWindowFlags flags = ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDecoration;
+    static ImGuiWindowFlags flags = ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize |
+                                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+                                    ImGuiWindowFlags_NoDecoration;
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y));
@@ -4456,13 +3432,9 @@ static void renderMainScreen()
     {
         const char* Text = "";
 
-        const bool dmaConnected = memoryGlobals::dmaConnected.load(
-            std::memory_order_acquire
-        );
+        const bool dmaConnected = memoryGlobals::dmaConnected.load(std::memory_order_acquire);
 
-        const bool processFound = memoryGlobals::processFound.load(
-            std::memory_order_acquire
-        );
+        const bool processFound = memoryGlobals::processFound.load(std::memory_order_acquire);
 
         const bool working = mem.IsInitRunning();
         const bool stopping = mem.IsDisconnectRequested();
@@ -4492,8 +3464,7 @@ static void renderMainScreen()
             Text = "Connected";
         }
 
-
-        //display text if not in raid or runRadar is not set true
+        // display text if not in raid or runRadar is not set true
         if (!appGlobals::runRadar.load(std::memory_order_acquire))
         {
             ImVec2 centerScreen = viewport->GetWorkCenter();
@@ -4502,35 +3473,22 @@ static void renderMainScreen()
             if (radarFont != nullptr)
                 ImGui::PushFont(radarFont);
 
-            DrawRadarMainText(centerScreen.x, centerScreen.y, { 1,0,0,1 }, Text);
+            DrawRadarMainText(centerScreen.x, centerScreen.y, {1, 0, 0, 1}, Text);
 
-            const bool showDmaConnectionHint =
-                !dmaConnected && !working && !stopping;
-            const float statusTextY = showDmaConnectionHint
-                ? centerScreen.y + 72.0f
-                : centerScreen.y + 45.0f;
+            const bool showDmaConnectionHint = !dmaConnected && !working && !stopping;
+            const float statusTextY = showDmaConnectionHint ? centerScreen.y + 72.0f : centerScreen.y + 45.0f;
 
             if (showDmaConnectionHint)
             {
-                DrawRadarSubText(
-                    centerScreen.x,
-                    centerScreen.y + 42.0f,
-                    { 1,1,1,1 },
-                    "Connect from Settings menu -->");
+                DrawRadarSubText(centerScreen.x, centerScreen.y + 42.0f, {1, 1, 1, 1}, "Connect from Settings menu -->");
             }
 
-            DrawRadarSubText(
-                centerScreen.x,
-                statusTextY,
-                { 1,1,1,1 },
-                globals::radarSubText.c_str());
+            DrawRadarSubText(centerScreen.x, statusTextY, {1, 1, 1, 1}, globals::radarSubText.c_str());
 
             setCurrentMapSpecs = false;
 
             if (radarFont != nullptr)
                 ImGui::PopFont();
-
-
         }
         else
         {
@@ -4542,7 +3500,7 @@ static void renderMainScreen()
             if (radarFont != nullptr)
                 ImGui::PushFont(radarFont);
 
-            //render what we want on map as runRadar is true
+            // render what we want on map as runRadar is true
             drawExfils();
             drawGrenades();
             drawTripwires();
@@ -4560,20 +3518,22 @@ static void renderMainScreen()
 
             if (!radarGlobals::minimalView)
                 g_AimViewWidget.Render((ImVec2&)espGlobals::gameRes);
-
-
         }
 
-        drawWidgetPlayers();
-        drawWidgetExfils();
-        drawWidgetTopLoot();
+        const bool raidWidgetsAvailable = appGlobals::runRadar.load(std::memory_order_acquire) && appGlobals::runThreads.load(std::memory_order_acquire);
+        if (raidWidgetsAvailable)
+        {
+            drawWidgetPlayers();
+            drawWidgetExfils();
+            drawWidgetTopLoot();
+            renderLeftIcons();
+        }
 
-        renderLeftIcons();
         renderMenuIcons();
         renderBottomInfo();
+        renderRadarNotice();
     }
     ImGui::End();
-
 }
 
 static void renderVersionMismatchNotice()
@@ -4583,39 +3543,23 @@ static void renderVersionMismatchNotice()
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(
-        viewport->GetCenter(),
-        ImGuiCond_Appearing,
-        ImVec2(0.5f, 0.5f)
-    );
-    ImGui::SetNextWindowSize(
-        ImVec2(460.0f, 0.0f),
-        ImGuiCond_Appearing
-    );
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
 
-    const ImGuiWindowFlags flags =
-        ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoDocking |
-        ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoSavedSettings;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
 
     if (ImGui::Begin("Version notice###VersionMismatchNotice", &globals::showVersionMismatchWarning, flags))
     {
         if (ImGui::IsWindowAppearing())
             ImGui::SetWindowFocus();
 
-        ImGui::TextWrapped(
-            "Application version outdated"
-        );
+        ImGui::TextWrapped("Application version outdated");
         ImGui::Spacing();
         ImGui::Text("Installed version: %s", globals::appVersion.c_str());
         ImGui::Text("Latest version:  %s", globals::latestAppVersion.c_str());
         ImGui::Spacing();
-        ImGui::TextWrapped(
-            "You can continue using this version. Updating is recommended."
-        );
+        ImGui::TextWrapped("You can continue using this version. Updating is recommended.");
         ImGui::Spacing();
 
         if (ImGui::Button("Continue", ImVec2(120.0f, 0.0f)))
@@ -4699,19 +3643,20 @@ static void load_styles()
     }
 }
 
-
 bool renderThread()
 {
     bool done = false;
     bool doOnce = false;
 
     // Create application window
-    //ImGui_ImplWin32_EnableDpiAwareness();
+    // ImGui_ImplWin32_EnableDpiAwareness();
     std::wstring windowTitle = L"MeatyEFT - " + std::wstring(globals::appVersion.begin(), globals::appVersion.end());
 
-    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, windowTitle.c_str(), nullptr };
-    wc.hIcon = static_cast<HICON>(::LoadImageW(wc.hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, ::GetSystemMetrics(SM_CXICON), ::GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR | LR_SHARED));
-    wc.hIconSm = static_cast<HICON>(::LoadImageW(wc.hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, ::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR | LR_SHARED));
+    WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, windowTitle.c_str(), nullptr};
+    wc.hIcon = static_cast<HICON>(::LoadImageW(wc.hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, ::GetSystemMetrics(SM_CXICON),
+                                               ::GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR | LR_SHARED));
+    wc.hIconSm = static_cast<HICON>(::LoadImageW(wc.hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, ::GetSystemMetrics(SM_CXSMICON),
+                                                 ::GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR | LR_SHARED));
     ::RegisterClassExW(&wc);
     HWND hwnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
 
@@ -4723,28 +3668,27 @@ bool renderThread()
         return 1;
     }
 
-
-
     // Show the window
-    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ApplyRadarWindowSettings(hwnd);
     ::UpdateWindow(hwnd);
 
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-    //io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
-    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows
-    //io.ConfigViewportsNoAutoMerge = true;
-    //io.ConfigViewportsNoTaskBarIcon = true;
+    ImGuiIO& io = ImGui::GetIO();
+    (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
+    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    // io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable; // Enable Multi-Viewport / Platform Windows
+    // io.ConfigViewportsNoAutoMerge = true;
+    // io.ConfigViewportsNoTaskBarIcon = true;
 
     io.IniFilename = "INImeatyEFT.ini";
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
-    //ImGui::StyleColorsLight();
+    // ImGui::StyleColorsLight();
 
     // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
     ImGuiStyle& style = ImGui::GetStyle();
@@ -4767,64 +3711,49 @@ bool renderThread()
     // Load Fonts
     // - If no fonts are loaded, dear imgui will use the default font. You can also load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
     // - AddFontFromFileTTF() will return the ImFont* so you can store it if you need to select the font among multiple.
-    // - If the file cannot be loaded, the function will return a nullptr. Please handle those errors in your application (e.g. use an assertion, or display an error and quit).
-    // - The fonts will be rasterized at a given size (w/ oversampling) and stored into a texture when calling ImFontAtlas::Build()/GetTexDataAsXXXX(), which ImGui_ImplXXXX_NewFrame below will call.
+    // - If the file cannot be loaded, the function will return a nullptr. Please handle those errors in your application (e.g. use an assertion, or display an
+    // error and quit).
+    // - The fonts will be rasterized at a given size (w/ oversampling) and stored into a texture when calling ImFontAtlas::Build()/GetTexDataAsXXXX(), which
+    // ImGui_ImplXXXX_NewFrame below will call.
     // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use Freetype for higher quality font rendering.
     // - Read 'docs/FONTS.md' for more instructions and details.
     // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
-    //io.Fonts->AddFontDefault();
-    //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf", 16.0f);
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf", 16.0f);
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf", 15.0f);
-    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, nullptr, io.Fonts->GetGlyphRangesJapanese());
-    //IM_ASSERT(font != nullptr);
+    // io.Fonts->AddFontDefault();
+    // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
+    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf", 16.0f);
+    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf", 16.0f);
+    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf", 15.0f);
+    // ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, nullptr, io.Fonts->GetGlyphRangesJapanese());
+    // IM_ASSERT(font != nullptr);
 
-    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\Calibri.ttf", 12.0f, NULL, io.Fonts->GetGlyphRangesDefault());
+    // ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\Calibri.ttf", 12.0f, NULL, io.Fonts->GetGlyphRangesDefault());
 
     // Other Fonts
-    //io.Fonts->AddFontFromMemoryTTF((void*)Font, sizeof(Font), 16.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
+    // io.Fonts->AddFontFromMemoryTTF((void*)Font, sizeof(Font), 16.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
     io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f, NULL, io.Fonts->GetGlyphRangesCyrillic());
 
     // Font Awesome 7 Free (solid). Legacy ICON_FK_* names are mapped in
     // IconsFontAwesomeCompat.h so radar markers retain their established glyphs.
     float iconFontSize = 17.f;
-    static const ImWchar icons_ranges[] = {
-        ICON_MIN_FA,
-        ICON_MAX_16_FA,
-        0
-    };
+    static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
     ImFontConfig icons_config;
     icons_config.MergeMode = true;
     icons_config.PixelSnapH = true;
-    if (!io.Fonts->AddFontFromFileTTF(
-        FONT_ICON_FILE_NAME_FAS,
-        iconFontSize,
-        &icons_config,
-        icons_ranges))
+    if (!io.Fonts->AddFontFromFileTTF(FONT_ICON_FILE_NAME_FAS, iconFontSize, &icons_config, icons_ranges))
     {
-        LOGS.logError(
-            "Unable to load Font Awesome 7 from "
-            FONT_ICON_FILE_NAME_FAS);
+        LOGS.logError("Unable to load Font Awesome 7 from " FONT_ICON_FILE_NAME_FAS);
     }
 
-    const char* const radarFontPaths[RadarFontFamilyCount][RadarFontWeightCount] =
-    {
-        { "C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\segoeuib.ttf" },
-        { "C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\arialbd.ttf" },
-        { "C:\\Windows\\Fonts\\tahoma.ttf", "C:\\Windows\\Fonts\\tahomabd.ttf" }
-    };
+    const char* const radarFontPaths[RadarFontFamilyCount][RadarFontWeightCount] = {{"C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\segoeuib.ttf"},
+                                                                                    {"C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\arialbd.ttf"},
+                                                                                    {"C:\\Windows\\Fonts\\tahoma.ttf", "C:\\Windows\\Fonts\\tahomabd.ttf"}};
 
     for (int familyIndex = 0; familyIndex < RadarFontFamilyCount; ++familyIndex)
     {
         for (int weightIndex = 0; weightIndex < RadarFontWeightCount; ++weightIndex)
         {
-            ImFont* const radarFont = io.Fonts->AddFontFromFileTTF(
-                radarFontPaths[familyIndex][weightIndex],
-                RadarFontSize,
-                NULL,
-                io.Fonts->GetGlyphRangesCyrillic()
-            );
+            ImFont* const radarFont =
+                io.Fonts->AddFontFromFileTTF(radarFontPaths[familyIndex][weightIndex], RadarFontSize, NULL, io.Fonts->GetGlyphRangesCyrillic());
             radarFonts[familyIndex][weightIndex] = radarFont;
 
             if (radarFont == nullptr)
@@ -4837,21 +3766,14 @@ bool renderThread()
             radarIconsConfig.MergeMode = true;
             radarIconsConfig.PixelSnapH = true;
             radarIconsConfig.DstFont = radarFont;
-            if (!io.Fonts->AddFontFromFileTTF(
-                FONT_ICON_FILE_NAME_FAS,
-                RadarFontSize,
-                &radarIconsConfig,
-                icons_ranges))
+            if (!io.Fonts->AddFontFromFileTTF(FONT_ICON_FILE_NAME_FAS, RadarFontSize, &radarIconsConfig, icons_ranges))
             {
                 LOGS.logError("Unable to merge Font Awesome 7 into radar font " + std::string(RadarFontNames[familyIndex]));
             }
         }
     }
 
-
-
-
-    //IM_ASSERT(font != nullptr);
+    // IM_ASSERT(font != nullptr);
 
     // Our state
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
@@ -4860,8 +3782,7 @@ bool renderThread()
 
     while (!done)
     {
-        const auto radarFrameStart =
-            std::chrono::steady_clock::now();
+        const auto radarFrameStart = std::chrono::steady_clock::now();
 
         // Poll and handle messages (inputs, window resize, etc.)
         // See the WndProc() function below for our to dispatch events to the Win32 backend.
@@ -4899,10 +3820,6 @@ bool renderThread()
             ResetDevice();
         }
 
-        
-
-
-
         // Start the Dear ImGui frame
         ImGui_ImplDX9_NewFrame();
         ImGui_ImplWin32_NewFrame();
@@ -4917,12 +3834,12 @@ bool renderThread()
 
         ImGui::GetIO().FontGlobalScale = globals::appTextScale;
 
-
         g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
         g_pd3dDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
         g_pd3dDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
         g_pd3dDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-        D3DCOLOR clear_col_dx = D3DCOLOR_RGBA((int)(clear_color.x * clear_color.w * 255.0f), (int)(clear_color.y * clear_color.w * 255.0f), (int)(clear_color.z * clear_color.w * 255.0f), (int)(clear_color.w * 255.0f));
+        D3DCOLOR clear_col_dx = D3DCOLOR_RGBA((int)(clear_color.x * clear_color.w * 255.0f), (int)(clear_color.y * clear_color.w * 255.0f),
+                                              (int)(clear_color.z * clear_color.w * 255.0f), (int)(clear_color.w * 255.0f));
         g_pd3dDevice->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, clear_col_dx, 1.0f, 0);
         if (g_pd3dDevice->BeginScene() >= 0)
         {
@@ -4944,18 +3861,10 @@ bool renderThread()
         if (result == D3DERR_DEVICELOST)
             g_DeviceLost = true;
 
-        const double radarFpsLimit = std::clamp(
-            static_cast<double>(globals::appRadarMaxFPS),
-            15.0,
-            240.0);
-        const auto radarFrameDuration =
-            std::chrono::duration<double>(1.0 / radarFpsLimit);
+        const double radarFpsLimit = std::clamp(static_cast<double>(globals::appRadarMaxFPS), 15.0, 240.0);
+        const auto radarFrameDuration = std::chrono::duration<double>(1.0 / radarFpsLimit);
 
-        std::this_thread::sleep_until(
-            radarFrameStart +
-            std::chrono::duration_cast<
-                std::chrono::steady_clock::duration>(
-                    radarFrameDuration));
+        std::this_thread::sleep_until(radarFrameStart + std::chrono::duration_cast<std::chrono::steady_clock::duration>(radarFrameDuration));
     }
 
     // Cleanup
@@ -4983,9 +3892,10 @@ bool CreateDeviceD3D(HWND hWnd)
     g_d3dpp.BackBufferFormat = D3DFMT_UNKNOWN; // Need to use an explicit format with alpha if needing per-pixel alpha composition.
     g_d3dpp.EnableAutoDepthStencil = TRUE;
     g_d3dpp.AutoDepthStencilFormat = D3DFMT_D16;
-    g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_ONE;           // Present with vsync
-    //g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;   // Present without vsync, maximum unthrottled framerate
-    if (g_pD3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hWnd, D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_MULTITHREADED, &g_d3dpp, &g_pd3dDevice) < 0)
+    g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_ONE; // Present with vsync
+    // g_d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;   // Present without vsync, maximum unthrottled framerate
+    if (g_pD3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hWnd, D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_MULTITHREADED, &g_d3dpp, &g_pd3dDevice) <
+        0)
         return false;
 
     return true;
@@ -4993,8 +3903,16 @@ bool CreateDeviceD3D(HWND hWnd)
 
 void CleanupDeviceD3D()
 {
-    if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
-    if (g_pD3D) { g_pD3D->Release(); g_pD3D = nullptr; }
+    if (g_pd3dDevice)
+    {
+        g_pd3dDevice->Release();
+        g_pd3dDevice = nullptr;
+    }
+    if (g_pD3D)
+    {
+        g_pD3D->Release();
+        g_pD3D = nullptr;
+    }
 }
 
 void ResetDevice()
@@ -5041,10 +3959,11 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DPICHANGED:
         if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DpiEnableScaleViewports)
         {
-            //const int dpi = HIWORD(wParam);
-            //printf("WM_DPICHANGED to %d (%.0f%%)\n", dpi, (float)dpi / 96.0f * 100.0f);
+            // const int dpi = HIWORD(wParam);
+            // printf("WM_DPICHANGED to %d (%.0f%%)\n", dpi, (float)dpi / 96.0f * 100.0f);
             const RECT* suggested_rect = (RECT*)lParam;
-            ::SetWindowPos(hWnd, nullptr, suggested_rect->left, suggested_rect->top, suggested_rect->right - suggested_rect->left, suggested_rect->bottom - suggested_rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
+            ::SetWindowPos(hWnd, nullptr, suggested_rect->left, suggested_rect->top, suggested_rect->right - suggested_rect->left,
+                           suggested_rect->bottom - suggested_rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
         }
         break;
     }

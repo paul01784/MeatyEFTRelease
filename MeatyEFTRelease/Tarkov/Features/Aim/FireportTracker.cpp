@@ -83,6 +83,8 @@ void FireportTracker::clear() noexcept
 
 void FireportTracker::publish(FireportPose pose)
 {
+    pose.version = publishedVersion_.fetch_add(1, std::memory_order_relaxed) + 1;
+    pose.publishedAt = std::chrono::steady_clock::now();
     publishedPose_.store(std::make_shared<const FireportPose>(std::move(pose)), std::memory_order_release);
 }
 
@@ -214,9 +216,8 @@ bool FireportTracker::refreshMuzzleTransform(uint64_t localPlayer, uint64_t hand
 void FireportTracker::update(uint64_t localPlayer)
 {
     FireportPose pose{};
-    const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
 
-    if (!Utils::valid_pointer(localPlayer) || !cameraSnapshot || !cameraSnapshot->valid) {
+    if (!Utils::valid_pointer(localPlayer)) {
         clearCachedMuzzle();
         cachedLocalPlayer_ = 0;
         cachedHandsController_ = 0;
@@ -273,6 +274,14 @@ void FireportTracker::update(uint64_t localPlayer)
     pose.valid = true;
 
     if (pose.valid) {
+        const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
+        if (!cameraSnapshot || !cameraSnapshot->valid)
+        {
+            publish(std::move(pose));
+            return;
+        }
+
+        pose.cameraVersion = cameraSnapshot->version;
         const glm::vec3 endWorld = pose.worldOrigin + pose.worldForward * kFireportProjectionDistanceM;
         pose.screenStartOk = CameraManager::worldToScreen(*cameraSnapshot, pose.worldOrigin, pose.screenStart, espGlobals::gameRes.x, espGlobals::gameRes.y);
         pose.screenEndOk = CameraManager::worldToScreen(*cameraSnapshot, endWorld, pose.screenEnd, espGlobals::gameRes.x, espGlobals::gameRes.y);

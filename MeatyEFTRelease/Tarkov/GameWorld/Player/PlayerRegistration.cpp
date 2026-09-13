@@ -49,6 +49,15 @@ void RegisteredPlayers::playersTask()
         {
             std::lock_guard<std::mutex> lock(playerMutex);
             registeredPlayerScratch = std::move(uniqueAddresses);
+
+            if (Utils::valid_pointer(mainGame.localPlayerPtr) && registeredPlayerScratch.contains(mainGame.localPlayerPtr))
+            {
+                std::erase_if(playerCache, [](const Player& player)
+                    {
+                        return player.isLocal && player.instance != mainGame.localPlayerPtr;
+                    });
+            }
+
             rebuildPlayerCacheIndexLocked();
         }
 

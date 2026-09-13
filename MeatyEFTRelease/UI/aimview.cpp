@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 #include "../Tarkov/GameWorld/RegisteredPlayers.h"
 #include "../Tarkov/GameWorld/Loot/Loot.h"
+#include "../Tarkov/Unity/cameraManager.h"
 
 AimViewWidget g_AimViewWidget;
 
@@ -861,8 +862,8 @@ bool AimViewWidget::DrawPlayerSkeleton(ImDrawList* drawList, const Player& playe
 
     constexpr float lineThickness = 1.0f;
 
-    const auto DrawBoneLine = [&](const ImVec2& start, const ImVec2& end) {
-            
+    const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
+    const auto DrawPixels = [&](const ImVec2& start, const ImVec2& end) {
             drawList->AddLine(
                 start,
                 end,
@@ -878,49 +879,77 @@ bool AimViewWidget::DrawPlayerSkeleton(ImDrawList* drawList, const Player& playe
             );
         };
 
+    const auto DrawBoneLine = [&](int firstIndex, int secondIndex,
+        const ImVec2& fallbackStart, const ImVec2& fallbackEnd) {
+            const size_t first = static_cast<size_t>(firstIndex);
+            const size_t second = static_cast<size_t>(secondIndex);
+            if (cameraSnapshot && first < player.bonePositions.size() &&
+                second < player.bonePositions.size())
+            {
+                std::vector<CameraScreenSegment> segments;
+                if (CameraManager::worldSegmentToScreen(
+                    *cameraSnapshot,
+                    player.bonePositions[first],
+                    player.bonePositions[second],
+                    sourceResolution_.x,
+                    sourceResolution_.y,
+                    segments))
+                {
+                    for (const CameraScreenSegment& segment : segments)
+                    {
+                        ImVec2 mappedStart{};
+                        ImVec2 mappedEnd{};
+                        (void)MapScreenPoint(
+                            ImVec2(segment.start.x, segment.start.y),
+                            mappedStart,
+                            100000.0f);
+                        (void)MapScreenPoint(
+                            ImVec2(segment.end.x, segment.end.y),
+                            mappedEnd,
+                            100000.0f);
+                        DrawPixels(mappedStart, mappedEnd);
+                    }
+                    return;
+                }
+            }
+
+            DrawPixels(fallbackStart, fallbackEnd);
+        };
+
     DrawBoneLine(
-        head,
-        pelvis
+        boneListIndexes::Head, boneListIndexes::Pelvis, head, pelvis
     );
 
     DrawBoneLine(
-        head,
-        leftForearm
+        boneListIndexes::Head, boneListIndexes::LForearm, head, leftForearm
     );
 
     DrawBoneLine(
-        leftForearm,
-        leftPalm
+        boneListIndexes::LForearm, boneListIndexes::LPalm, leftForearm, leftPalm
     );
 
     DrawBoneLine(
-        head,
-        rightForearm
+        boneListIndexes::Head, boneListIndexes::RForearm, head, rightForearm
     );
 
     DrawBoneLine(
-        rightForearm,
-        rightPalm
+        boneListIndexes::RForearm, boneListIndexes::RPalm, rightForearm, rightPalm
     );
 
     DrawBoneLine(
-        pelvis,
-        leftThigh
+        boneListIndexes::Pelvis, boneListIndexes::LThigh, pelvis, leftThigh
     );
 
     DrawBoneLine(
-        leftThigh,
-        leftFoot
+        boneListIndexes::LThigh, boneListIndexes::LFoot, leftThigh, leftFoot
     );
 
     DrawBoneLine(
-        pelvis,
-        rightThigh
+        boneListIndexes::Pelvis, boneListIndexes::RThigh, pelvis, rightThigh
     );
 
     DrawBoneLine(
-        rightThigh,
-        rightFoot
+        boneListIndexes::RThigh, boneListIndexes::RFoot, rightThigh, rightFoot
     );
 
     outHeadPosition = head;

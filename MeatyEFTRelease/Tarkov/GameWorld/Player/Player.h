@@ -281,6 +281,10 @@ public:
 	// Bone related stuff
 
 	uint64_t playerBoneMatrixPtr;
+	uint64_t internalTransformPtr{ 0 };
+	glm::vec3 internalTransformPosition{};
+	bool internalTransformPositionValid{ false };
+	bool usingInternalTransformFallback{ false };
 
 	std::vector<allPlayerBones> boneList = {
 		allPlayerBones::HumanPelvis, allPlayerBones::HumanHead, allPlayerBones::HumanNeck, allPlayerBones::HumanSpine1, allPlayerBones::HumanLForearm2,

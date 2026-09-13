@@ -537,48 +537,31 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
 
     globals::radarSubText = "Looking for a raid...";
 
-    int waitAttempts = 0;
     int pendingAttempts = 0;
-    bool refreshFailureLogged = false;
 
     std::uint64_t pending_local_gw = 0;
     std::uint64_t pending_gw_object = 0;
+    std::uint64_t observedRecoveryEpoch = mem.GetDmaRecoveryEpoch();
+
+    const auto bssOnlyStartedAt = std::chrono::steady_clock::now();
+    auto lastGomFallbackAt = std::chrono::steady_clock::time_point{};
 
     constexpr int kMaxPendingPromoteAttempts = 6;
-    constexpr int kRefreshEveryAttempts = 2;
-
-    constexpr int kGomFallbackEveryAttempts = 8;
+    constexpr auto kBssOnlyDuration = std::chrono::seconds(6);
+    constexpr auto kGomFallbackInterval = std::chrono::seconds(20);
     constexpr DWORD kRetryDelayMs = 2500;
 
     while (!stopToken.stop_requested())
     {
         try
         {
-            ++waitAttempts;
-
-            const bool refreshBeforeLookup = waitAttempts == 1 || ((waitAttempts - 1) % kRefreshEveryAttempts) == 0;
-
-            if (refreshBeforeLookup)
+            const std::uint64_t recoveryEpoch = mem.GetDmaRecoveryEpoch();
+            if (recoveryEpoch != observedRecoveryEpoch)
             {
-                const ScopedDmaPriority refreshPriority(DmaPriority::High);
-
-                if (!mem.RefreshProcessInformationNow())
-                {
-                    if (!refreshFailureLogged)
-                    {
-                        LOGS.logWarn(
-                            "[GameWorld] DMA process/TLB refresh failed; "
-                            "continuing with uncached lookup"
-                        );
-                        refreshFailureLogged = true;
-                    }
-                }
-                else if (refreshFailureLogged)
-                {
-                    LOGS.logInfo(
-                        "[GameWorld] DMA process/TLB refresh recovered");
-                    refreshFailureLogged = false;
-                }
+                observedRecoveryEpoch = recoveryEpoch;
+                pending_local_gw = 0;
+                pending_gw_object = 0;
+                pendingAttempts = 0;
             }
 
             
@@ -612,7 +595,19 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
             {
                 RaidPendingState pending{};
 
-                const bool allowGomFallback = waitAttempts == 1 || (waitAttempts % kGomFallbackEveryAttempts) == 0;
+                const auto lookupNow = std::chrono::steady_clock::now();
+                const bool bssOnlyPeriodComplete =
+                    (lookupNow - bssOnlyStartedAt) >= kBssOnlyDuration;
+                const bool gomRetryDue =
+                    lastGomFallbackAt ==
+                        std::chrono::steady_clock::time_point{} ||
+                    (lookupNow - lastGomFallbackAt) >=
+                        kGomFallbackInterval;
+                const bool allowGomFallback =
+                    bssOnlyPeriodComplete && gomRetryDue;
+
+                if (allowGomFallback)
+                    lastGomFallbackAt = lookupNow;
 
                 resolved = tryResolveRaid(this->gameObjectManager, raid, probe, &pending, allowGomFallback);
 
@@ -640,6 +635,8 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
                 Utils::valid_pointer(pending_local_gw)
                 ? "Raid found. Waiting to start..."
                 : "Looking for a raid...";
+
+            mem.RunCacheMaintenance();
         }
         catch (const std::exception& e)
         {
@@ -722,7 +719,9 @@ void MainGame::mainThread(std::stop_token stopToken)
                         [](const Player& player) { return player.isLocal; });
                     (void)cameraManagerTest.updateWithAds(
                         local != players->end() ? local->P_PWA : 0,
-                        local != players->end() && local->isAiming);
+                        local != players->end() && local->isAiming,
+                        0,
+                        local != players->end() ? local->instance : 0);
 
                 }
                 catch (const std::exception& exception)
@@ -888,6 +887,8 @@ void MainGame::mainThread(std::stop_token stopToken)
                 backgroundWorker.run(workerStop);
             });
 
+        LOGS.logNotice(NoticeColour::GREEN, "Raid started, loading radar");
+
         while (!stopToken.stop_requested() &&
             appGlobals::runThreads.load(std::memory_order_acquire))
         {
@@ -895,6 +896,7 @@ void MainGame::mainThread(std::stop_token stopToken)
                 break;
         }
 
+        LOGS.logNotice(NoticeColour::GREEN, "Raid ended, stopping and clearing caches");
         appGlobals::runThreads.store(false, std::memory_order_release);
 
         fastWorkerThread.request_stop();

@@ -85,6 +85,7 @@ namespace sdk
 		constexpr uint64_t _handsController = 0xA40; // EFT.PlayerHands update
 		constexpr uint64_t _playerLookRaycastTransform = 0xAD8; // UnityEngine.Transform
 		constexpr uint64_t PlayerBones = 0xB40; // EFT.PlayerBones
+		constexpr uint64_t RibcageScaleCurrent = 0x150; // float
 	}
 
 	namespace SimpleCharacterController
@@ -111,7 +112,19 @@ namespace sdk
 
 	namespace PlayerBones
 	{
+		constexpr uint64_t WeaponRootThird = 0x40; // UnityEngine.Transform
+		constexpr uint64_t Ribcage = 0x148; // EFT.BifacialTransform
 		constexpr uint64_t Fireport = 0x1D0;
+	}
+
+	namespace ItemHandsController
+	{
+		constexpr uint64_t HandsHierarchy = 0x68; // TransformLinks
+	}
+
+	namespace TransformLinks
+	{
+		constexpr uint64_t Self = 0x28; // UnityEngine.Transform
 	}
 
 	namespace PlayerSpring
@@ -308,6 +321,11 @@ namespace sdk
 		inline constexpr std::uint64_t ScopeSelectedModes = 0x30; // system.int32[]
 		inline constexpr std::uint64_t SelectedScope = 0x38; // int32
 		inline constexpr std::uint64_t ScopeZoomValue = 0x3C; // single
+	}
+	namespace OpticSight
+	{
+		constexpr uint64_t LensRenderer = 0x30; // UnityEngine.Renderer
+		constexpr uint64_t ScopeTransform = 0x40; // UnityEngine.Transform
 	}
 	namespace SightInterface
 	{

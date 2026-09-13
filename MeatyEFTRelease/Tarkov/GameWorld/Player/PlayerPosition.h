@@ -52,6 +52,9 @@ namespace PlayerPosition
         if (isUsablePosition(rightFoot))
             return rightFoot;
 
+        if (player.isLocal && player.internalTransformPositionValid && isUsablePosition(player.internalTransformPosition))
+            return player.internalTransformPosition;
+
         return isUsablePosition(player.location) ? player.location : glm::vec3(0.0f);
     }
 }
