@@ -2,6 +2,7 @@
 #include "Utilities.h"
 #include "../memory/Memory.h"
 #include "../memory/ScatterReadBatch.h"
+#include "../Tarkov/Unity/UnityOffsets.h"
 
 #include <array>
 
@@ -173,8 +174,8 @@ glm::vec3 get_transform_position1(ULONG64 pMatrix, ULONG64 index)
 		"Transform metadata"
 	);
 
-	if (!metadataBatch.Add(pMatrix + 0x40, matrix_list_base) ||
-		!metadataBatch.Add(pMatrix + 0x68, dependency_index_table_base) ||
+	if (!metadataBatch.Add(pMatrix + UnityOffsets::Hierarchy_VerticesOffset, matrix_list_base) ||
+		!metadataBatch.Add(pMatrix + UnityOffsets::Hierarchy_IndicesOffset, dependency_index_table_base) ||
 		!metadataBatch.Execute())
 	{
 		return {};
@@ -304,21 +305,21 @@ glm::vec3 Utils::transform::position::getPositionFromTransform(uint64_t transfor
 	if (transform == 0 || transform == NULL)
 		return  glm::vec3();
 
-	uint64_t transform_internal = mem.Read<uint64_t>(transform + 0x10);
+	uint64_t transform_internal = mem.Read<uint64_t>(transform + UnityOffsets::ManagedObject_NativePointerOffset);
 	if (transform_internal == 0)
 	{
 		std::cout << "Error in transform_internal read" << std::endl;
 		return  glm::vec3();
 	}
 
-	uint64_t matrices = mem.Read<uint64_t>(transform_internal + 0x70);
+	uint64_t matrices = mem.Read<uint64_t>(transform_internal + UnityOffsets::TransformAccess_HierarchyOffset);
 	if (matrices == 0)
 	{
 		std::cout << "Error in matrices read" << std::endl;
 		return glm::vec3();
 	}
 
-	uint32_t index = mem.Read<uint32_t>(transform_internal + 0x78);
+	uint32_t index = mem.Read<uint32_t>(transform_internal + UnityOffsets::TransformAccess_IndexOffset);
 	if (!matrices || index < 0)
 	{
 		std::cout << "Error in index read" << std::endl;

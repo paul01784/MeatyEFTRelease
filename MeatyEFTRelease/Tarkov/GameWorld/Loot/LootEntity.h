@@ -21,6 +21,7 @@ enum class LootEntityKind : uint8_t
 enum class LootFilterMatch : uint8_t
 {
     None = 0,
+    Hideout,
     Quest,
     Wishlist,
     Other,

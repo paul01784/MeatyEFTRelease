@@ -14,6 +14,11 @@ namespace {
 
 constexpr int kMaxParentDepth = 512;
 constexpr int kMaxTransformIndex = 1'000'000;
+constexpr std::uint64_t kMaxGameObjectComponents = 256;
+
+constexpr std::uint64_t kEftBehaviourGameObjectOffset = 0x58;
+constexpr std::uint64_t kEftFirstComponentOffset = 0x8;
+constexpr std::uint64_t kEftComponentObjectClassOffset = 0x20;
 
 DmaCacheMode ToCacheMode(bool useCache)
 {
@@ -36,6 +41,48 @@ bool ValidateIndices(const std::vector<int>& indices, int count)
     }
 
     return true;
+}
+
+bool IsNativeTransform(uint64_t candidate, bool useCache)
+{
+    if (!Memory::IsValidPointer(candidate))
+        return false;
+
+    const uint64_t hierarchy = mem.Read<uint64_t>(candidate + UnityOffsets::TransformAccess_HierarchyOffset, ToCacheMode(useCache));
+    const int index = mem.Read<int>(candidate + UnityOffsets::TransformAccess_IndexOffset, ToCacheMode(useCache));
+    if (!Memory::IsValidPointer(hierarchy) || index < 0 || index >= kMaxTransformIndex)
+        return false;
+
+    const uint64_t vertices = mem.Read<uint64_t>(hierarchy + UnityOffsets::Hierarchy_VerticesOffset, ToCacheMode(useCache));
+    const uint64_t indices = mem.Read<uint64_t>(hierarchy + UnityOffsets::Hierarchy_IndicesOffset, ToCacheMode(useCache));
+    return Memory::IsValidPointer(vertices) && Memory::IsValidPointer(indices);
+}
+
+bool ReadGameObjectComponents(uint64_t gameObject, uint64_t& components, uint64_t& count, bool useCache)
+{
+    components = 0;
+    count = 0;
+
+    if (!Memory::IsValidPointer(gameObject) ||
+        !mem.TryRead(gameObject + UnityOffsets::GameObject_ComponentsOffset, components, ToCacheMode(useCache)) ||
+        !Memory::IsValidPointer(components) ||
+        !mem.TryRead(gameObject + UnityOffsets::GameObject_ComponentsOffset + UnityOffsets::ComponentArray_SizeOffset, count, ToCacheMode(useCache)))
+    {
+        return false;
+    }
+
+    return count > 0 && count <= kMaxGameObjectComponents;
+}
+
+bool IsGameObject(uint64_t candidate, bool useCache)
+{
+    uint64_t namePointer = 0;
+    uint64_t components = 0;
+    uint64_t count = 0;
+    return Memory::IsValidPointer(candidate) &&
+        mem.TryRead(candidate + UnityOffsets::GameObject_NameOffset, namePointer, ToCacheMode(useCache)) &&
+        Memory::IsValidPointer(namePointer) &&
+        ReadGameObjectComponents(candidate, components, count, useCache);
 }
 
 void LogTransformIssueThrottled(const char* key, const std::string& message)
@@ -72,44 +119,103 @@ bool UnityTransform::TryResolveNative(
     if (!Memory::IsValidPointer(transformObject))
         return false;
 
-    const auto isNativeTransform = [useCache](uint64_t candidate)
-    {
-        if (!Memory::IsValidPointer(candidate))
-            return false;
-
-        const uint64_t hierarchy = mem.Read<uint64_t>(
-            candidate + UnityOffsets::TransformAccess_HierarchyOffset,
-            ToCacheMode(useCache)
-        );
-
-        const int index = mem.Read<int>(
-            candidate + UnityOffsets::TransformAccess_IndexOffset,
-            ToCacheMode(useCache)
-        );
-
-        return Memory::IsValidPointer(hierarchy) &&
-            index >= 0 &&
-            index < kMaxTransformIndex;
-    };
-
-    constexpr uint64_t kManagedNativePointerOffset = 0x10;
     const uint64_t candidate = mem.Read<uint64_t>(
-        transformObject + kManagedNativePointerOffset,
+        transformObject + UnityOffsets::ManagedObject_NativePointerOffset,
         ToCacheMode(useCache)
     );
 
-    if (isNativeTransform(candidate))
+    if (IsNativeTransform(candidate, useCache))
     {
         nativeTransform = candidate;
         return true;
     }
 
     // Some callers already hold the native TransformAccess pointer
-    if (!isNativeTransform(transformObject))
+    if (!IsNativeTransform(transformObject, useCache))
         return false;
 
     nativeTransform = transformObject;
     return true;
+}
+
+bool UnityTransform::TryResolveGameObject(uint64_t componentObject, uint64_t& gameObject, bool useCache)
+{
+    gameObject = 0;
+    if (!Memory::IsValidPointer(componentObject))
+        return false;
+
+    uint64_t nativeComponent = 0;
+    if (!mem.TryRead(componentObject + UnityOffsets::ManagedObject_NativePointerOffset, nativeComponent, ToCacheMode(useCache)) ||
+        !Memory::IsValidPointer(nativeComponent))
+    {
+        return false;
+    }
+
+    const auto tryGameObjectOffset = [&](uint64_t offset)
+    {
+        uint64_t candidate = 0;
+        if (!mem.TryRead(nativeComponent + offset, candidate, ToCacheMode(useCache)) ||
+            !IsGameObject(candidate, useCache))
+        {
+            return false;
+        }
+
+        gameObject = candidate;
+        return true;
+    };
+
+    return tryGameObjectOffset(kEftBehaviourGameObjectOffset) || tryGameObjectOffset(UnityOffsets::Component_GameObjectOffset);
+}
+
+bool UnityTransform::TryResolveFromGameObject(uint64_t gameObject, uint64_t& nativeTransform, bool useCache)
+{
+    nativeTransform = 0;
+    uint64_t components = 0;
+    uint64_t count = 0;
+    if (!ReadGameObjectComponents(gameObject, components, count, useCache))
+        return false;
+
+    uint64_t component = 0;
+    uint64_t objectClass = 0;
+    uint64_t transformInternal = 0;
+    if (mem.TryRead(components + kEftFirstComponentOffset, component, ToCacheMode(useCache)) &&
+        Memory::IsValidPointer(component) &&
+        mem.TryRead(component + kEftComponentObjectClassOffset, objectClass, ToCacheMode(useCache)) &&
+        Memory::IsValidPointer(objectClass) &&
+        mem.TryRead(objectClass + UnityOffsets::ObjectClass_TransformInternalOffset, transformInternal, ToCacheMode(useCache)) &&
+        IsNativeTransform(transformInternal, useCache))
+    {
+        nativeTransform = transformInternal;
+        return true;
+    }
+
+    for (uint64_t index = 0; index < count; ++index)
+    {
+        component = 0;
+        objectClass = 0;
+        transformInternal = 0;
+        const uint64_t entry = components + index * UnityOffsets::ComponentArray_EntryStride + UnityOffsets::ComponentArray_EntryComponentOffset;
+        if (!mem.TryRead(entry, component, ToCacheMode(useCache)) ||
+            !Memory::IsValidPointer(component) ||
+            !mem.TryRead(component + UnityOffsets::Component_ObjectClassOffset, objectClass, ToCacheMode(useCache)) ||
+            !Memory::IsValidPointer(objectClass) ||
+            !mem.TryRead(objectClass + UnityOffsets::ObjectClass_TransformInternalOffset, transformInternal, ToCacheMode(useCache)) ||
+            !IsNativeTransform(transformInternal, useCache))
+        {
+            continue;
+        }
+
+        nativeTransform = transformInternal;
+        return true;
+    }
+
+    return false;
+}
+
+bool UnityTransform::TryResolveFromComponent(uint64_t componentObject, uint64_t& nativeTransform, bool useCache)
+{
+    uint64_t gameObject = 0;
+    return TryResolveGameObject(componentObject, gameObject, useCache) && TryResolveFromGameObject(gameObject, nativeTransform, useCache);
 }
 
 UnityTransform::UnityTransform(

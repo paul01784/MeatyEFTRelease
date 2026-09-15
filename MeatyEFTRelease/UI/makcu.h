@@ -86,6 +86,8 @@ public:
 
     bool ButtonForceRelease(MakcuMouseButton button, std::uint32_t timeoutMs = 100);
 
+    bool Click(MakcuMouseButton button, std::uint32_t holdMs = 8, std::uint32_t timeoutMs = 100);
+
 private:
     bool OpenPortLocked(const char* comPort, std::uint32_t baudRate);
 

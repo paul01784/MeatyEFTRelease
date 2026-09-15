@@ -28,13 +28,15 @@
 #include "Widgets/QuestWidget.h"
 #include "Widgets/FuserWidget.h"
 #include "../Tarkov/Features/Visibility/AtlasVisibility.h"
-#include "../Tarkov/Unity/UnityOffsets.h"
+#include "../Tarkov/Features/Hideout/HideoutOverview.h"
+#include "../Tarkov/Features/Hideout/Gym.h"
 #include "../Core/KeyManager/KeyManager.h"
 #include "../resource.h"
 
 #include <cctype>
 #include <chrono>
 #include <limits>
+#include <sstream>
 
 namespace
 {
@@ -48,6 +50,248 @@ constexpr double RadarNoticeFadeSeconds = 0.75;
 const char* const RadarFontNames[RadarFontFamilyCount] = {"Segoe UI", "Arial", "Tahoma"};
 
 ImFont* radarFonts[RadarFontFamilyCount][RadarFontWeightCount] = {};
+
+bool IsRaidActiveForGym()
+{
+    return appGlobals::runThreads.load(std::memory_order_acquire);
+}
+
+void UpdateGymDiagnostics()
+{
+    static bool wasEnabled = false;
+    static bool wasInRaid = false;
+    static GymSnapshot previousState{};
+
+    const bool inRaid = IsRaidActiveForGym();
+    const bool dmaReady = memoryGlobals::dmaConnected.load(std::memory_order_acquire) &&
+                          memoryGlobals::processFound.load(std::memory_order_acquire) && !mem.IsInitRunning();
+    const bool makcuReady = makcu.IsConnected();
+
+    if (hideoutGlobals::gymAutoClick && !makcuReady)
+        hideoutGlobals::gymAutoClick = false;
+
+    hideoutGlobals::gymEnabled = hideoutGlobals::gymAutoClick;
+    const bool enabled = hideoutGlobals::gymEnabled;
+
+    HIDEOUT_OVERVIEW.Configure(inRaid, dmaReady);
+    GYM.Configure(enabled, enabled && makcuReady, inRaid, dmaReady);
+    const GymSnapshot state = GYM.GetSnapshot();
+
+    if (!enabled)
+    {
+        if (wasEnabled)
+            LOGS.logInfo("[Gym] Disabled");
+        wasEnabled = false;
+        wasInRaid = inRaid;
+        previousState = {};
+        return;
+    }
+
+    if (!wasEnabled)
+        LOGS.logInfo("[Gym] Enabled");
+    wasEnabled = true;
+
+    if (inRaid)
+    {
+        if (!wasInRaid)
+            LOGS.logInfo("[Gym] Suspended because raid became active");
+        wasInRaid = true;
+        previousState = {};
+        return;
+    }
+
+    wasInRaid = false;
+
+    if (!dmaReady)
+    {
+        previousState = {};
+        return;
+    }
+
+    if (!previousState.hideoutAreaValid && state.hideoutAreaValid)
+        LOGS.logInfo("[Gym] Hideout marker found: ", state.hideoutClassName);
+    if (!previousState.controllerValid && state.controllerValid)
+        LOGS.logInfo("[Gym] QTEController found");
+    if (!previousState.shrinkingCircleValid && state.shrinkingCircleValid)
+        LOGS.logInfo("[Gym] ShrinkingCircleQTE found via ", state.circleResolver);
+    if (!previousState.directObjectScanAttempted && state.directObjectScanAttempted)
+        LOGS.logInfo("[Gym] Static QTE path unavailable; enabled Unity active-object fallback");
+    if (previousState.shrinkingCircleValid && !state.shrinkingCircleValid)
+        LOGS.logInfo("[Gym] QTE ended");
+    if (state.controllerValid && !state.spawnedListValid && (!previousState.controllerValid || previousState.spawnedListValid))
+        LOGS.logWarn("[Gym] Resolver failed at spawnedQtes");
+
+    previousState = state;
+}
+
+void GymValueLabel(const char* label)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextUnformatted(label);
+    ImGui::TableSetColumnIndex(1);
+}
+
+void GymAddressRow(const char* label, std::uint64_t address)
+{
+    GymValueLabel(label);
+    ImGui::Text("0x%016llX", static_cast<unsigned long long>(address));
+}
+
+void GymBoolRow(const char* label, bool value)
+{
+    GymValueLabel(label);
+    ImGui::TextUnformatted(value ? "Yes" : "No");
+}
+
+void GymStageRow(const char* label, bool valid, bool waiting)
+{
+    GymValueLabel(label);
+    const ImVec4 colour = valid ? ImVec4(0.20f, 1.00f, 0.35f, 1.00f)
+                         : waiting ? ImVec4(1.00f, 0.75f, 0.20f, 1.00f)
+                                   : ImVec4(1.00f, 0.25f, 0.25f, 1.00f);
+    ImGui::TextColored(colour, "%s", valid ? "OK" : waiting ? "WAITING" : "FAIL");
+}
+
+ImVec4 HideoutStatusColour(std::int32_t status)
+{
+    if (status == 9)
+        return ImVec4(0.35f, 0.82f, 1.00f, 1.00f);
+    if (status == 2 || status == 4 || status == 6 || status == 8)
+        return ImVec4(0.20f, 1.00f, 0.35f, 1.00f);
+    if (status == 3 || status == 7 || status == 10)
+        return ImVec4(0.98f, 0.72f, 0.22f, 1.00f);
+    return ImVec4(0.72f, 0.72f, 0.70f, 1.00f);
+}
+
+ImVec4 HideoutScanColour(HideoutScanState state)
+{
+    switch (state)
+    {
+    case HideoutScanState::Complete: return ImVec4(0.20f, 1.00f, 0.35f, 1.00f);
+    case HideoutScanState::Queued:
+    case HideoutScanState::Scanning: return ImVec4(1.00f, 0.75f, 0.20f, 1.00f);
+    case HideoutScanState::Failed:
+    case HideoutScanState::Unavailable: return ImVec4(1.00f, 0.30f, 0.28f, 1.00f);
+    default: return ImVec4(0.62f, 0.62f, 0.60f, 1.00f);
+    }
+}
+
+std::string HideoutNumber(std::int64_t value)
+{
+    std::string text = std::to_string(value);
+    const std::size_t start = !text.empty() && text.front() == '-' ? 1 : 0;
+    for (std::ptrdiff_t position = static_cast<std::ptrdiff_t>(text.size()) - 3; position > static_cast<std::ptrdiff_t>(start); position -= 3)
+        text.insert(static_cast<std::size_t>(position), 1, ',');
+    return text;
+}
+
+std::string HideoutJoinZones(const std::vector<std::string>& zones)
+{
+    std::string result;
+    for (const std::string& zone : zones)
+    {
+        if (!result.empty())
+            result += ", ";
+        result += zone;
+    }
+    return result;
+}
+
+std::string HideoutRequirementDescription(const HideoutRequirementInfo& requirement)
+{
+    std::ostringstream text;
+    switch (requirement.kind)
+    {
+    case HideoutRequirementKind::Item:
+    case HideoutRequirementKind::Tool:
+        text << requirement.itemName;
+        break;
+    case HideoutRequirementKind::Area:
+        text << HideoutAreaName(requirement.requiredArea) << " level " << requirement.requiredLevel;
+        break;
+    case HideoutRequirementKind::Skill:
+        text << (requirement.skillName.empty() ? "Skill" : requirement.skillName) << " level " << requirement.skillLevel;
+        break;
+    case HideoutRequirementKind::TraderLoyalty:
+        text << (requirement.traderId.empty() ? "Trader" : requirement.traderId) << " loyalty " << requirement.loyaltyLevel;
+        break;
+    case HideoutRequirementKind::TraderUnlock:
+        text << (requirement.traderId.empty() ? "Trader unlocked" : requirement.traderId);
+        break;
+    default:
+        text << (requirement.runtimeClass.empty() ? HideoutRequirementKindName(requirement.kind) : requirement.runtimeClass);
+        break;
+    }
+    return text.str();
+}
+
+void HideoutMetricCard(const char* id, const char* label, const std::string& value, const ImVec4& accent, float width)
+{
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(accent.x * 0.12f, accent.y * 0.12f, accent.z * 0.12f, 0.82f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(accent.x, accent.y, accent.z, 0.45f));
+    ImGui::BeginChild(id, ImVec2(width, 66.0f), true);
+    ImGui::TextDisabled("%s", label);
+    ImGui::TextColored(accent, "%s", value.c_str());
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
+}
+
+void DrawHideoutRequirements(const HideoutZoneInfo& zone)
+{
+    if (zone.maxLevel)
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.82f, 1.00f, 1.00f), "This zone is at maximum level.");
+        return;
+    }
+    if (!zone.nextStageValid)
+    {
+        ImGui::TextDisabled("No readable next-stage data was found for this zone.");
+        return;
+    }
+    if (zone.requirements.empty())
+    {
+        ImGui::TextDisabled("The next stage has no listed requirements.");
+        return;
+    }
+
+    if (ImGui::BeginTable("##zoneRequirements", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp |
+                                                    ImGuiTableFlags_ScrollY, ImVec2(0.0f, 300.0f)))
+    {
+        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+        ImGui::TableSetupColumn("Requirement", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Owned", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+        ImGui::TableSetupColumn("Required", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableHeadersRow();
+        for (const HideoutRequirementInfo& requirement : zone.requirements)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextColored(requirement.fulfilled ? ImVec4(0.20f, 1.00f, 0.35f, 1.00f) : ImVec4(1.00f, 0.48f, 0.25f, 1.00f),
+                               "%s", requirement.fulfilled ? "READY" : "NEEDED");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(HideoutRequirementKindName(requirement.kind));
+            ImGui::TableSetColumnIndex(2);
+            const std::string description = HideoutRequirementDescription(requirement);
+            ImGui::TextUnformatted(description.c_str());
+            if (!requirement.itemTemplateId.empty() && ImGui::IsItemHovered())
+                ImGui::SetTooltip("Template: %s\nRuntime: %s\nAddress: 0x%016llX", requirement.itemTemplateId.c_str(), requirement.runtimeClass.c_str(),
+                                  static_cast<unsigned long long>(requirement.address));
+            ImGui::TableSetColumnIndex(3);
+            if (requirement.kind == HideoutRequirementKind::Item || requirement.kind == HideoutRequirementKind::Tool)
+                ImGui::Text("%d", requirement.currentCount);
+            else
+                ImGui::TextUnformatted("-");
+            ImGui::TableSetColumnIndex(4);
+            if (requirement.kind == HideoutRequirementKind::Item || requirement.kind == HideoutRequirementKind::Tool)
+                ImGui::Text("%d", requirement.requiredCount);
+            else
+                ImGui::TextUnformatted("-");
+        }
+        ImGui::EndTable();
+    }
+}
 
 ImFont* GetSelectedRadarFont()
 {
@@ -411,6 +655,7 @@ static void renderMenuSettings()
     {
         App,
         Settings,
+        Hideout,
         Appearance,
         Keybinds,
         Advanced
@@ -453,6 +698,7 @@ static void renderMenuSettings()
 
     navigationItem(ICON_FA_DISPLAY, "App", SettingsPage::App);
     navigationItem(ICON_FA_GEARS, "Settings", SettingsPage::Settings);
+    navigationItem(ICON_FA_DUMBBELL, "Hideout", SettingsPage::Hideout);
     navigationItem(ICON_FA_PALETTE, "Appearance", SettingsPage::Appearance);
     navigationItem(ICON_FA_KEY, "Keybinds", SettingsPage::Keybinds);
     navigationItem(ICON_FA_SLIDERS, "Advanced", SettingsPage::Advanced);
@@ -728,6 +974,455 @@ static void renderMenuSettings()
                 saveIfChanged(menuLayout::SliderIntRow("Extract range", "espExtractRange", &espGlobals::drawExfilDist, 5, 1000, "%d m", espGlobals::drawExfil));
             }
             menuLayout::EndTwoColumns();
+        }
+    }
+    else if (activePage == SettingsPage::Hideout)
+    {
+        const bool inRaid = IsRaidActiveForGym();
+        const bool dmaReady = memoryGlobals::dmaConnected.load(std::memory_order_acquire) &&
+                              memoryGlobals::processFound.load(std::memory_order_acquire) && !mem.IsInitRunning();
+        const GymSnapshot state = GYM.GetSnapshot();
+        const HideoutOverviewSnapshot overview = HIDEOUT_OVERVIEW.GetSnapshot();
+        const bool inHideout = state.hideoutAreaValid || Utils::valid_pointer(overview.hideoutController);
+        const bool makcuReady = makcu.IsConnected();
+        const bool resolverReady = state.hideoutAreaValid && state.typeInfoValid && state.overlayClassValid && state.qteControllerClassValid &&
+                                   state.shrinkingCircleClassValid && state.staticFieldsValid && state.controllerValid;
+        const bool diagnosticEligible = hideoutGlobals::gymEnabled && !inRaid && dmaReady;
+        const bool canEnableAutoPress = dmaReady && makcuReady && !inRaid;
+
+        std::string status = "Visit the Hideout, then enable Gym AutoPress";
+        ImVec4 statusColour(0.48f, 0.48f, 0.46f, 1.0f);
+        if (!dmaReady)
+        {
+            status = "Connect DMA and start Escape from Tarkov";
+            statusColour = ImVec4(1.00f, 0.75f, 0.20f, 1.00f);
+        }
+        else if (!makcuReady)
+        {
+            status = "Connect MAKCU before enabling Gym AutoPress";
+            statusColour = ImVec4(1.00f, 0.75f, 0.20f, 1.00f);
+        }
+        else if (inRaid)
+        {
+            status = "Leave the raid and visit the Hideout";
+            statusColour = ImVec4(1.00f, 0.25f, 0.25f, 1.00f);
+        }
+        else if (hideoutGlobals::gymAutoClick && !inHideout)
+        {
+            status = "Waiting for the Hideout to resolve";
+            statusColour = ImVec4(1.00f, 0.75f, 0.20f, 1.00f);
+        }
+        else if (hideoutGlobals::gymAutoClick && !resolverReady)
+        {
+            status = "Hideout found - resolving Gym AutoPress";
+            statusColour = ImVec4(1.00f, 0.75f, 0.20f, 1.00f);
+        }
+        else if (hideoutGlobals::gymAutoClick && state.shrinkingCircleValid)
+        {
+            status = state.autoClickStatus.empty() ? "Gym game active - waiting for success window" : state.autoClickStatus;
+            statusColour = state.predictedSuccess ? ImVec4(0.20f, 1.00f, 0.35f, 1.00f) : ImVec4(0.35f, 0.82f, 1.00f, 1.00f);
+        }
+        else if (hideoutGlobals::gymAutoClick)
+        {
+            status = "Ready - start the gym game";
+            statusColour = ImVec4(0.20f, 1.00f, 0.35f, 1.00f);
+        }
+
+        const auto drawStatus = [&]()
+        {
+            ImGui::TextUnformatted("Status:");
+            ImGui::SameLine();
+            ImGui::TextColored(statusColour, "%s", status.c_str());
+        };
+
+        if (ImGui::BeginTabBar("##hideoutTabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+        {
+            if (ImGui::BeginTabItem("Overview"))
+            {
+                if (menuLayout::Section("Hideout Scanner"))
+                {
+                    const bool scanning = overview.state == HideoutScanState::Queued || overview.state == HideoutScanState::Scanning;
+                    ImGui::BeginDisabled(inRaid || !dmaReady || scanning);
+                    if (ImGui::Button(scanning ? "Scanning..." : "Scan Hideout", ImVec2(150.0f, 0.0f)))
+                        HIDEOUT_OVERVIEW.RequestScan();
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::TextColored(HideoutScanColour(overview.state), "%s", overview.message.c_str());
+                    if (inRaid)
+                        ImGui::TextDisabled("Leave the raid and enter the Hideout before scanning.");
+                    else if (!dmaReady)
+                        ImGui::TextDisabled("Waiting for DMA and the Escape from Tarkov process.");
+                    else
+                        ImGui::TextDisabled("One-shot scan: reads every Hideout zone and the requirements for its next upgrade level.");
+                }
+
+                if (overview.state == HideoutScanState::Complete && !overview.zones.empty())
+                {
+                    const float cardSpacing = ImGui::GetStyle().ItemSpacing.x;
+                    const float cardWidth = (ImGui::GetContentRegionAvail().x - cardSpacing * 3.0f) * 0.25f;
+                    HideoutMetricCard("##zonesCard", "ZONES FOUND", HideoutNumber(overview.zones.size()), ImVec4(0.35f, 0.82f, 1.00f, 1.00f), cardWidth);
+                    ImGui::SameLine();
+                    HideoutMetricCard("##readyCard", "READY / MAX", HideoutNumber(overview.readyZones) + " / " + HideoutNumber(overview.maxLevelZones),
+                                      ImVec4(0.20f, 1.00f, 0.35f, 1.00f), cardWidth);
+                    ImGui::SameLine();
+                    HideoutMetricCard("##missingCard", "MISSING ITEMS", HideoutNumber(overview.missingItemCount), ImVec4(1.00f, 0.56f, 0.22f, 1.00f), cardWidth);
+                    ImGui::SameLine();
+                    HideoutMetricCard("##valueCard", "EST. FLEA VALUE", HideoutNumber(overview.estimatedMissingValue) + " RUB", ImVec4(0.92f, 0.72f, 0.22f, 1.00f), cardWidth);
+
+                    const float requirementProgress = overview.totalRequirements > 0
+                        ? static_cast<float>(overview.fulfilledRequirements) / static_cast<float>(overview.totalRequirements)
+                        : 1.0f;
+                    const std::string progressText = std::to_string(overview.fulfilledRequirements) + " / " + std::to_string(overview.totalRequirements) + " next-level requirements ready";
+                    ImGui::ProgressBar(requirementProgress, ImVec2(-FLT_MIN, 0.0f), progressText.c_str());
+                    ImGui::TextDisabled("Scanned %d Unity objects and %d area entries in %.1f ms.", overview.objectsScanned, overview.dictionaryCount, overview.scanMilliseconds);
+
+                    if (ImGui::BeginTabBar("##hideoutOverviewZoneTabs", ImGuiTabBarFlags_FittingPolicyScroll))
+                    {
+                        if (ImGui::BeginTabItem("Summary"))
+                        {
+                            if (ImGui::BeginTable("##hideoutZones", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp |
+                                                                          ImGuiTableFlags_ScrollY, ImVec2(0.0f, 340.0f)))
+                            {
+                                ImGui::TableSetupColumn("Zone", ImGuiTableColumnFlags_WidthStretch);
+                                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 54.0f);
+                                ImGui::TableSetupColumn("Next", ImGuiTableColumnFlags_WidthFixed, 54.0f);
+                                ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch);
+                                ImGui::TableSetupColumn("Requirements", ImGuiTableColumnFlags_WidthFixed, 104.0f);
+                                ImGui::TableSetupColumn("Next stage", ImGuiTableColumnFlags_WidthFixed, 76.0f);
+                                ImGui::TableHeadersRow();
+                                for (const HideoutZoneInfo& zone : overview.zones)
+                                {
+                                    const int fulfilled = static_cast<int>(std::count_if(zone.requirements.begin(), zone.requirements.end(),
+                                        [](const HideoutRequirementInfo& requirement) { return requirement.fulfilled; }));
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::TextUnformatted(HideoutAreaName(zone.areaType));
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::Text("%d", zone.currentLevel);
+                                    ImGui::TableSetColumnIndex(2);
+                                    if (zone.maxLevel) ImGui::TextUnformatted("-"); else ImGui::Text("%d", zone.currentLevel + 1);
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::TextColored(HideoutStatusColour(zone.status), "%s", HideoutAreaStatusName(zone.status));
+                                    ImGui::TableSetColumnIndex(4);
+                                    if (zone.maxLevel) ImGui::TextUnformatted("Complete");
+                                    else ImGui::Text("%d / %d", fulfilled, static_cast<int>(zone.requirements.size()));
+                                    ImGui::TableSetColumnIndex(5);
+                                    ImGui::TextColored(zone.nextStageValid || zone.maxLevel ? ImVec4(0.20f, 1.00f, 0.35f, 1.00f) : ImVec4(1.00f, 0.48f, 0.25f, 1.00f),
+                                                       "%s", zone.maxLevel ? "MAX" : zone.nextStageValid ? "OK" : "NO DATA");
+                                }
+                                ImGui::EndTable();
+                            }
+
+                            if (ImGui::TreeNode("Resolver details"))
+                            {
+                                if (ImGui::BeginTable("##hideoutResolverDetails", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                                {
+                                    GymAddressRow("GameObjectManager", overview.gameObjectManager);
+                                    GymAddressRow("HideoutArea", overview.hideoutArea);
+                                    GymAddressRow("HideoutController", overview.hideoutController);
+                                    GymAddressRow("Area dictionary", overview.areasDictionary);
+                                    GymValueLabel("Objects scanned");
+                                    ImGui::Text("%d", overview.objectsScanned);
+                                    GymValueLabel("Area entries");
+                                    ImGui::Text("%d", overview.dictionaryCount);
+                                    ImGui::EndTable();
+                                }
+                                ImGui::TreePop();
+                            }
+                            ImGui::EndTabItem();
+                        }
+
+                        if (ImGui::BeginTabItem("Needed Items"))
+                        {
+                            if (menuLayout::Section("Loot Scan Filter"))
+                            {
+                                bool filterChanged = menuLayout::ToggleRow("Mark needed items as wanted", "hideoutNeededLootFilter", &hideoutGlobals::neededLootFilterEnabled);
+                                filterChanged |= menuLayout::ColourRow("Wanted colour", "hideoutNeededLootColour", (float*)&hideoutGlobals::neededLootFilterColour);
+                                if (filterChanged)
+                                    configManager.SaveConfig();
+
+                                ImGui::TextDisabled("Uses %zu item types from the latest completed Hideout scan.", overview.neededItems.size());
+                                if (overview.neededItems.empty())
+                                    ImGui::TextDisabled("Run Scan Hideout to populate this filter.");
+                            }
+
+                            ImGui::TextDisabled("Shared stash counts are de-duplicated by item ID. Need uses the largest shortage across zone upgrades, matching the game's reusable inventory view.");
+                            if (overview.neededItems.empty())
+                            {
+                                ImGui::TextColored(ImVec4(0.20f, 1.00f, 0.35f, 1.00f), "No missing item or tool requirements were found for the next zone levels.");
+                            }
+                            else if (ImGui::BeginTable("##hideoutNeededItems", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                                                                   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY, ImVec2(0.0f, 360.0f)))
+                            {
+                                ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+                                ImGui::TableSetupColumn("Have", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+                                ImGui::TableSetupColumn("Required", ImGuiTableColumnFlags_WidthFixed, 68.0f);
+                                ImGui::TableSetupColumn("Need", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+                                ImGui::TableSetupColumn("Flea each", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+                                ImGui::TableSetupColumn("Est. total", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+                                ImGui::TableSetupColumn("Used by", ImGuiTableColumnFlags_WidthStretch);
+                                ImGui::TableHeadersRow();
+                                for (const HideoutNeededItem& item : overview.neededItems)
+                                {
+                                    const std::int64_t total = static_cast<std::int64_t>(item.stillNeeded) * item.marketPrice;
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::TextUnformatted(item.itemName.c_str());
+                                    if (ImGui::IsItemHovered())
+                                        ImGui::SetTooltip("Template ID: %s", item.itemTemplateId.c_str());
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::Text("%d", item.currentCount);
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::Text("%d", item.requiredCount);
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::TextColored(ImVec4(1.00f, 0.48f, 0.25f, 1.00f), "%d", item.stillNeeded);
+                                    ImGui::TableSetColumnIndex(4);
+                                    ImGui::Text("%s", item.marketPrice > 0 ? HideoutNumber(item.marketPrice).c_str() : "-");
+                                    ImGui::TableSetColumnIndex(5);
+                                    ImGui::Text("%s", total > 0 ? HideoutNumber(total).c_str() : "-");
+                                    ImGui::TableSetColumnIndex(6);
+                                    const std::string zones = HideoutJoinZones(item.zones);
+                                    ImGui::TextWrapped("%s", zones.c_str());
+                                }
+                                ImGui::EndTable();
+                            }
+                            ImGui::EndTabItem();
+                        }
+
+                        for (const HideoutZoneInfo& zone : overview.zones)
+                        {
+                            const std::string tabLabel = std::string(HideoutAreaName(zone.areaType)) + "##zone" + std::to_string(zone.areaType);
+                            if (!ImGui::BeginTabItem(tabLabel.c_str()))
+                                continue;
+                            ImGui::PushID(zone.areaType);
+                            ImGui::TextColored(HideoutStatusColour(zone.status), "%s", HideoutAreaStatusName(zone.status));
+                            ImGui::SameLine();
+                            if (zone.maxLevel)
+                                ImGui::Text("| Level %d | Complete", zone.currentLevel);
+                            else
+                                ImGui::Text("| Level %d -> %d", zone.currentLevel, zone.currentLevel + 1);
+
+                            const int fulfilled = static_cast<int>(std::count_if(zone.requirements.begin(), zone.requirements.end(),
+                                [](const HideoutRequirementInfo& requirement) { return requirement.fulfilled; }));
+                            const float zoneProgress = zone.requirements.empty() ? (zone.maxLevel ? 1.0f : 0.0f)
+                                : static_cast<float>(fulfilled) / static_cast<float>(zone.requirements.size());
+                            const std::string zoneProgressText = zone.maxLevel ? "Maximum level" : std::to_string(fulfilled) + " / " +
+                                std::to_string(zone.requirements.size()) + " requirements ready";
+                            ImGui::ProgressBar(zoneProgress, ImVec2(-FLT_MIN, 0.0f), zoneProgressText.c_str());
+
+                            DrawHideoutRequirements(zone);
+
+                            if (ImGui::TreeNode("Memory details"))
+                            {
+                                if (ImGui::BeginTable("##zoneMemory", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                                {
+                                    GymAddressRow("Area", zone.area);
+                                    GymAddressRow("Data", zone.data);
+                                    GymAddressRow("Levels", zone.levels);
+                                    GymAddressRow("Next level", zone.nextLevel);
+                                    GymAddressRow("Stage", zone.stage);
+                                    GymValueLabel("Area enum");
+                                    ImGui::Text("%d", zone.areaType);
+                                    GymValueLabel("Status enum");
+                                    ImGui::Text("%d", zone.status);
+                                    ImGui::EndTable();
+                                }
+                                ImGui::TreePop();
+                            }
+                            ImGui::PopID();
+                            ImGui::EndTabItem();
+                        }
+                        ImGui::EndTabBar();
+                    }
+                }
+                else if (overview.state == HideoutScanState::Idle)
+                {
+                    if (menuLayout::Section("What the scan collects"))
+                    {
+                        ImGui::BulletText("All Hideout zones, current levels and construction / upgrade states");
+                        ImGui::BulletText("The next level for every zone and all readable requirements");
+                        ImGui::BulletText("Owned versus required item counts, with item names and flea estimates");
+                        ImGui::BulletText("A combined shopping list shared across every zone upgrade");
+                    }
+                }
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Gym"))
+            {
+                if (ImGui::BeginTabBar("##gymTabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+                {
+                    if (ImGui::BeginTabItem("AutoPress"))
+                    {
+                        if (menuLayout::Section("Gym AutoPress"))
+                        {
+                            ImGui::BeginDisabled(!hideoutGlobals::gymAutoClick && !canEnableAutoPress);
+                            const bool changed = menuLayout::ToggleRow("Enable Gym AutoPress", "gymAutoPressEnabled", &hideoutGlobals::gymAutoClick);
+                            ImGui::EndDisabled();
+
+                            if (changed)
+                            {
+                                hideoutGlobals::gymEnabled = hideoutGlobals::gymAutoClick;
+                                GYM.Configure(hideoutGlobals::gymEnabled, hideoutGlobals::gymAutoClick && makcuReady, inRaid, dmaReady);
+                            }
+
+                            ImGui::TextDisabled("Session only. Sends one MAKCU left click when the circle enters the calculated success window.");
+                        }
+
+                        if (menuLayout::Section("Status"))
+                        {
+                            drawStatus();
+                            if (ImGui::BeginTable("##gymReadiness", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                            {
+                                GymStageRow("DMA / game process", dmaReady, true);
+                                GymStageRow("MAKCU", makcuReady, dmaReady);
+                                GymStageRow("Hideout", inHideout, hideoutGlobals::gymAutoClick && dmaReady && makcuReady);
+                                GymStageRow("Gym resolver", resolverReady, hideoutGlobals::gymAutoClick && inHideout);
+                                ImGui::EndTable();
+                            }
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("Debug"))
+                    {
+                        drawStatus();
+                        if (menuLayout::BeginTwoColumns("##gymColumns"))
+                        {
+                    menuLayout::NextColumn();
+                    if (menuLayout::Section("Runtime"))
+                    {
+                        if (ImGui::BeginTable("##gymRuntime", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                        {
+                            GymBoolRow("In Raid", inRaid);
+                            GymBoolRow("DMA / process ready", dmaReady);
+                            GymBoolRow("In Hideout", inHideout);
+                            GymBoolRow("Gym QTE Active", state.shrinkingCircleValid);
+                            GymBoolRow("Auto Click Enabled", state.autoClickEnabled);
+                            GymBoolRow("MAKCU Connected", state.makcuConnected);
+                            GymValueLabel("Successful Auto Clicks");
+                            ImGui::Text("%llu", static_cast<unsigned long long>(state.autoClickCount));
+                            GymBoolRow("Last Auto Click", state.lastAutoClickSucceeded);
+                            GymValueLabel("Auto Click Status");
+                            ImGui::TextWrapped("%s", state.autoClickStatus.c_str());
+                            GymValueLabel("Last Click Event");
+                            ImGui::TextWrapped("%s", state.lastAutoClickEvent.empty() ? "-" : state.lastAutoClickEvent.c_str());
+                            ImGui::EndTable();
+                        }
+                    }
+
+                    if (menuLayout::Section("Resolver"))
+                    {
+                        if (ImGui::BeginTable("##gymResolver", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                        {
+                            GymStageRow("GameObjectManager", state.gameObjectManagerValid, !hideoutGlobals::gymEnabled || !dmaReady);
+                            GymStageRow("Object crawl", state.hideoutScanAttempted, !state.gameObjectManagerValid);
+                            GymStageRow("Active object list", state.objectListValid, !state.gameObjectManagerValid);
+                            GymStageRow("Hideout marker", state.hideoutAreaValid, !state.objectListValid);
+                            GymStageRow("TypeInfoTable", state.typeInfoValid, !diagnosticEligible);
+                            GymStageRow("Overlay class", state.overlayClassValid, !diagnosticEligible || !state.typeInfoValid);
+                            GymStageRow("QTEController class", state.qteControllerClassValid, !diagnosticEligible || !state.typeInfoValid);
+                            GymStageRow("ShrinkingCircle class", state.shrinkingCircleClassValid, !diagnosticEligible || !state.typeInfoValid);
+                            GymStageRow("static_fields", state.staticFieldsValid, !diagnosticEligible || !state.overlayClassValid);
+                            GymStageRow("QTEController", state.controllerValid,
+                                        !diagnosticEligible || !state.staticFieldsValid || !Utils::valid_pointer(state.qteController));
+                            GymStageRow("spawnedQtes", state.spawnedListValid, !diagnosticEligible || !state.controllerValid);
+                            GymStageRow("Live object fallback", state.circleResolvedByObjectScan, !state.directObjectScanAttempted);
+                            GymStageRow("ShrinkingCircle", state.shrinkingCircleValid, true);
+                            GymStageRow("Circle scale", state.circleScaleValid, !state.shrinkingCircleValid);
+                            ImGui::EndTable();
+                        }
+                    }
+
+                    menuLayout::NextColumn();
+                    if (menuLayout::Section("Gym QTE Debug"))
+                    {
+                        if (ImGui::BeginTable("##gymPointers", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                        {
+                            GymAddressRow("TypeInfoTable", state.typeInfoTable);
+                            GymAddressRow("Overlay class", state.overlayClass);
+                            GymAddressRow("QTEController class", state.qteControllerClass);
+                            GymAddressRow("ShrinkingCircle class", state.shrinkingCircleClass);
+                            GymAddressRow("static_fields", state.staticFields);
+                            GymAddressRow("static_fields offset", state.staticFieldsOffset);
+                            GymAddressRow("QTEController", state.qteController);
+                            GymAddressRow("_spawnedQtes", state.spawnedQtes);
+                            GymValueLabel("Spawned count");
+                            ImGui::Text("%d", state.spawnedCount);
+                            GymValueLabel("Spawned runtime types");
+                            ImGui::TextWrapped("%s", state.spawnedClassNames.empty() ? "-" : state.spawnedClassNames.c_str());
+                            GymValueLabel("Direct objects checked");
+                            ImGui::Text("%d", state.directObjectScanCount);
+                            GymAddressRow("ShrinkingCircleQTE", state.shrinkingCircle);
+                            GymValueLabel("Circle resolver");
+                            ImGui::TextUnformatted(state.circleResolver.empty() ? "-" : state.circleResolver.c_str());
+                            ImGui::EndTable();
+                        }
+                    }
+
+                    if (menuLayout::Section("Circle"))
+                    {
+                        if (ImGui::BeginTable("##gymCircle", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                        {
+                            GymValueLabel("Speed");
+                            ImGui::Text("%.6f", state.speed);
+                            GymValueLabel("SuccessRange X");
+                            ImGui::Text("%.6f", state.successRange.x);
+                            GymValueLabel("SuccessRange Y");
+                            ImGui::Text("%.6f", state.successRange.y);
+                            GymValueLabel("Current Scale X");
+                            ImGui::Text("%.6f", state.circleScale.x);
+                            GymValueLabel("Current Scale Y");
+                            ImGui::Text("%.6f", state.circleScale.y);
+                            GymValueLabel("Current Scale Z");
+                            ImGui::Text("%.6f", state.circleScale.z);
+                            GymBoolRow("Scale Valid", state.circleScaleValid);
+                            GymBoolRow("Predicted Success", state.predictedSuccess);
+                            GymValueLabel("Active Window Min");
+                            ImGui::Text("%.6f", state.successWindowMinimum);
+                            GymValueLabel("Active Window Max");
+                            ImGui::Text("%.6f", state.successWindowMaximum);
+                            GymBoolRow("Using Calculated Window", state.calculatedSuccessWindow);
+                            GymValueLabel("Min Scale");
+                            ImGui::Text("%.6f", state.minScale);
+                            GymValueLabel("Success Start Scale");
+                            ImGui::Text("%.6f", state.successStartScale);
+                            GymValueLabel("Success End Scale");
+                            ImGui::Text("%.6f", state.successEndScale);
+                            GymValueLabel("Target Input");
+                            ImGui::Text("%d", state.targetInput);
+                            GymBoolRow("Game Is Success", state.isSuccess);
+                            ImGui::EndTable();
+                        }
+                    }
+
+                    if (menuLayout::Section("Unity"))
+                    {
+                        if (ImGui::BeginTable("##gymUnity", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+                        {
+                            GymAddressRow("Dynamic Circle Image", state.dynamicCircleImage);
+                            GymAddressRow("Dynamic Circle Transform", state.dynamicCircleTransform);
+                            GymAddressRow("Dynamic Inner Border", state.dynamicCircleInnerBorder);
+                            GymValueLabel("Scale resolver");
+                            ImGui::TextUnformatted(state.scaleResolver.empty() ? "-" : state.scaleResolver.c_str());
+                            GymAddressRow("Transform data", state.transformData);
+                            GymAddressRow("Transform vertices", state.transformVertices);
+                            GymValueLabel("Transform index");
+                            ImGui::Text("%d", state.transformIndex);
+                            GymBoolRow("Transform access valid", state.transformAccessValid);
+                            ImGui::EndTable();
+                        }
+                    }
+                            menuLayout::EndTwoColumns();
+                        }
+                        ImGui::EndTabItem();
+                    }
+                    ImGui::EndTabBar();
+                }
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
         }
     }
     else if (activePage == SettingsPage::Appearance)
@@ -2356,8 +3051,7 @@ static void renderDebugWindow()
                         DebugTextPtr("Lens renderer", cameraState.opticProjection.lensRenderer);
                         DebugTextPtr("Lens mesh", cameraState.opticProjection.mesh);
                         DebugTextPtr("Lens material", cameraState.opticProjection.material);
-                        ImGui::Text("Camera matrix offsets: view 0x%X | projection 0x%X", cameraState.viewMatrixOffset,
-                                    static_cast<unsigned int>(UnityOffsets::Camera_ProjectionMatrixOffset));
+                        ImGui::Text("Camera view-matrix offset: 0x%X", cameraState.viewMatrixOffset);
                         ImGui::Text("AllCameras offset path: %s | busy skips: %llu", cameraState.usedAllCamerasOffset ? "YES" : "NO",
                                     static_cast<unsigned long long>(cameraState.busyReadSkips));
                     }
@@ -3825,6 +4519,8 @@ bool renderThread()
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
+        UpdateGymDiagnostics();
+
         // Our app function for rendering whats on screen
         renderMainScreen();
         renderVersionMismatchNotice();
@@ -3866,6 +4562,8 @@ bool renderThread()
 
         std::this_thread::sleep_until(radarFrameStart + std::chrono::duration_cast<std::chrono::steady_clock::duration>(radarFrameDuration));
     }
+
+    GYM.Stop();
 
     // Cleanup
     ImGui_ImplDX9_Shutdown();

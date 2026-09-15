@@ -408,12 +408,8 @@ void ExplosiveManager::refreshGrenadesUnlocked()
         if (isDestroyed)
             continue;
 
-        const std::uint64_t transformInternal =
-            mem.ReadChain(
-                grenadeAddress,
-                TransformChain);
-
-        if (!Utils::valid_pointer(transformInternal))
+        std::uint64_t transformInternal = 0;
+        if (!UnityTransform::TryResolveFromComponent(grenadeAddress, transformInternal, false))
             continue;
 
         GrenadeList grenade{};
@@ -496,10 +492,7 @@ void ExplosiveManager::refreshGrenadesUnlocked()
         // Retry transform resolution when it has not yetresolved or has become invalid.
         if (!Utils::valid_pointer(grenade.transformInternal))
         {
-            grenade.transformInternal =
-                mem.ReadChain(
-                    grenade.instance,
-                    TransformChain);
+            (void)UnityTransform::TryResolveFromComponent(grenade.instance, grenade.transformInternal, false);
         }
 
         if (!Utils::valid_pointer(grenade.transformInternal))

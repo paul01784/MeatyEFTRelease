@@ -37,6 +37,9 @@
     <Filter Include="Tarkov\Features\Visibility">
       <UniqueIdentifier>{0426BE76-25E0-40FB-A23A-BD4F7489E9E5}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Tarkov\Features\Hideout">
+      <UniqueIdentifier>{A6FD9CE3-A2B1-4F5E-902D-C7B8CD1A0C18}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Tarkov\QuestPlanner">
       <UniqueIdentifier>{25BAE156-ED4F-4A8C-A74C-B7935E1E2539}</UniqueIdentifier>
     </Filter>
@@ -956,10 +959,22 @@
     <ClInclude Include="Tarkov\Features\Visibility\AtlasVisibility.h">
       <Filter>Tarkov\Features\Visibility</Filter>
     </ClInclude>
+    <ClInclude Include="Tarkov\Features\Hideout\HideoutOverview.h">
+      <Filter>Tarkov\Features\Hideout</Filter>
+    </ClInclude>
+    <ClInclude Include="Tarkov\Features\Hideout\Gym.h">
+      <Filter>Tarkov\Features\Hideout</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Tarkov\Features\Visibility\AtlasVisibility.cpp">
       <Filter>Tarkov\Features\Visibility</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\Features\Hideout\HideoutOverview.cpp">
+      <Filter>Tarkov\Features\Hideout</Filter>
+    </ClCompile>
+    <ClCompile Include="Tarkov\Features\Hideout\Gym.cpp">
+      <Filter>Tarkov\Features\Hideout</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

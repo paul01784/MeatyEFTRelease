@@ -63,6 +63,7 @@ public:
 private:
     struct WantedLookup
     {
+        std::unordered_set<std::string> hideoutIds;
         std::unordered_set<std::string> questIds;
         std::unordered_set<std::string> wishlistIds;
         std::unordered_map<std::string, glm::vec4> activeFilterItems;

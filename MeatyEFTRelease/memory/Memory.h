@@ -558,6 +558,29 @@ public:
         return out;
     }
 
+    template <size_t N>
+    [[nodiscard]] bool ReadChain(
+        uint64_t base,
+        const uint64_t (&offsets)[N],
+        uint64_t& out,
+        DmaCacheMode cacheMode = DmaCacheMode::Cached
+    ) const
+    {
+        return ReadChain(base, std::vector<uint64_t>(offsets, offsets + N), out, cacheMode);
+    }
+
+    template <size_t N>
+    [[nodiscard]] uint64_t ReadChain(
+        uint64_t base,
+        const uint64_t (&offsets)[N],
+        DmaCacheMode cacheMode = DmaCacheMode::Cached
+    ) const
+    {
+        uint64_t out = 0;
+        ReadChain(base, offsets, out, cacheMode);
+        return out;
+    }
+
     std::string readUnityString(uintptr_t address, SIZE_T maxChars = 128, DmaCacheMode cacheMode = DmaCacheMode::Cached);
     std::string readUnityStringField(uintptr_t fieldAddress, SIZE_T maxChars = 128, DmaCacheMode cacheMode = DmaCacheMode::Cached);
     std::string readUTF8String(uint64_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Cached);

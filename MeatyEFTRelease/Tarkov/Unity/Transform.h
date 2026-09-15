@@ -34,6 +34,24 @@ public:
         bool useCache = false
     );
 
+    static bool TryResolveGameObject(
+        uint64_t componentObject,
+        uint64_t& gameObject,
+        bool useCache = false
+    );
+
+    static bool TryResolveFromGameObject(
+        uint64_t gameObject,
+        uint64_t& nativeTransform,
+        bool useCache = false
+    );
+
+    static bool TryResolveFromComponent(
+        uint64_t componentObject,
+        uint64_t& nativeTransform,
+        bool useCache = false
+    );
+
     const glm::vec3& Position() const;
 
 

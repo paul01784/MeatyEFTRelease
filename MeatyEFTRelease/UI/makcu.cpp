@@ -611,6 +611,22 @@ bool MakcuController::ButtonForceRelease(MakcuMouseButton button, std::uint32_t 
     return SendButtonLocked(button, 2, timeoutMs);
 }
 
+bool MakcuController::Click(MakcuMouseButton button, std::uint32_t holdMs, std::uint32_t timeoutMs)
+{
+    std::scoped_lock lock(mutex_);
+
+    if (!SendButtonLocked(button, 1, timeoutMs))
+        return false;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::clamp(holdMs, 1u, 1000u)));
+
+    if (SendButtonLocked(button, 0, timeoutMs))
+        return true;
+
+    (void)SendButtonLocked(button, 2, timeoutMs);
+    return false;
+}
+
 bool MakcuController::OpenPortLocked(const char* comPort, std::uint32_t baudRate)
 {
     ClosePortLocked();

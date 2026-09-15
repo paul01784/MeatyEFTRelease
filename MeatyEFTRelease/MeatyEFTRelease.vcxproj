@@ -158,6 +158,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="UI\Widgets\QuestWidget.h" />
     <ClInclude Include="UI\Widgets\FuserWidget.h" />
     <ClInclude Include="Core\KeyManager\KeyManager.h" />
+    <ClInclude Include="Tarkov\Features\Hideout\HideoutOverview.h" />
+    <ClInclude Include="Tarkov\Features\Hideout\Gym.h" />
     <ClInclude Include="UI\config.h" />
     <ClInclude Include="UI\debug.h" />
     <ClInclude Include="Web\MeatyAPI\DogTagAPI.h" />
@@ -599,6 +601,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="UI\aimview.cpp" />
     <ClCompile Include="UI\config.cpp" />
     <ClCompile Include="UI\debug.cpp" />
+    <ClCompile Include="Tarkov\Features\Hideout\HideoutOverview.cpp" />
+    <ClCompile Include="Tarkov\Features\Hideout\Gym.cpp" />
     <ClCompile Include="Web\MeatyAPI\DogTagAPI.cpp" />
     <ClCompile Include="UI\DxRenderWindow.cpp" />
     <ClCompile Include="external\glm\detail\glm.cpp" />

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -29,18 +30,17 @@ std::uint64_t g_last_disposed_game_world{};
 
 #pragma pack(push, 8)
 struct LinkedListObject {
-    std::uint64_t previous{};
     std::uint64_t next{};
+    std::uint64_t previous{};
     std::uint64_t this_object{};
 };
 #pragma pack(pop)
 
-constexpr std::uint64_t kGomLastActiveNode = 0x20;
-constexpr std::uint64_t kGomActiveNodes = 0x28;
+static_assert(offsetof(LinkedListObject, previous) == UnityOffsets::LinkedList_PreviousOffset);
+static_assert(offsetof(LinkedListObject, next) == UnityOffsets::LinkedList_NextOffset);
+static_assert(offsetof(LinkedListObject, this_object) == UnityOffsets::LinkedList_ThisObjectOffset);
 
-constexpr std::uint64_t kGameWorldSingletonClassBss = 0x5D71168;
 constexpr std::uint64_t kIl2CppClassStaticFields = 0xB8;
-constexpr std::uint64_t kGameWorldSingletonInstance = 0x10;
 
 bool plausibleGameObjectName(const std::string& name)
 {
@@ -213,17 +213,22 @@ bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::
 bool tryResolveRaidFromBss(std::uint64_t gom, RaidState& raid, std::string& debug_out, RaidPendingState* pending_out)
 {
     const std::uint64_t gameAssembly = mem.GetTarkovPointerSnapshot().gameAssemblyBase;
-    std::uint64_t gameWorldClass = 0;
+    std::uint64_t typeInfoTable = 0;
+    std::uint64_t gamePlayerOwnerClass = 0;
     std::uint64_t staticFields = 0;
+    std::uint64_t localPlayer = 0;
     std::uint64_t localGameWorld = 0;
 
     if (!Utils::valid_pointer(gameAssembly) ||
-        !mem.TryRead(gameAssembly + kGameWorldSingletonClassBss, gameWorldClass, DmaCacheMode::Uncached) || !Utils::valid_pointer(gameWorldClass) ||
-        !mem.TryRead(gameWorldClass + kIl2CppClassStaticFields, staticFields, DmaCacheMode::Uncached) || !Utils::valid_pointer(staticFields) ||
-        !mem.TryRead(staticFields + kGameWorldSingletonInstance, localGameWorld, DmaCacheMode::Uncached) || !Utils::valid_pointer(localGameWorld))
+        !mem.TryRead(gameAssembly + UnityOffsets::GameWorld, typeInfoTable, DmaCacheMode::Uncached) || !Utils::valid_pointer(typeInfoTable) ||
+        !mem.TryRead(typeInfoTable + static_cast<std::uint64_t>(sdk::GamePlayerOwner::TypeIndex) * sizeof(std::uint64_t), gamePlayerOwnerClass, DmaCacheMode::Uncached) || !Utils::valid_pointer(gamePlayerOwnerClass) ||
+        !mem.TryRead(gamePlayerOwnerClass + kIl2CppClassStaticFields, staticFields, DmaCacheMode::Uncached) || !Utils::valid_pointer(staticFields) ||
+        !mem.TryRead(staticFields + sdk::GamePlayerOwner::MyPlayer, localPlayer, DmaCacheMode::Uncached) || !Utils::valid_pointer(localPlayer) ||
+        !mem.TryRead(localPlayer + sdk::Player::GameWorld, localGameWorld, DmaCacheMode::Uncached) || !Utils::valid_pointer(localGameWorld))
     {
         const std::uint64_t fingerprint = gameAssembly ^
-            (gameWorldClass << 1) ^ (staticFields << 7) ^
+            (typeInfoTable << 1) ^ (gamePlayerOwnerClass << 4) ^
+            (staticFields << 7) ^ (localPlayer << 10) ^
             (localGameWorld << 13);
         mem.ReportDmaHealthFailure(
             DmaHealthSource::GameWorldSingleton, fingerprint);
@@ -232,9 +237,6 @@ bool tryResolveRaidFromBss(std::uint64_t gom, RaidState& raid, std::string& debu
 
     
     mem.ReportDmaHealthSuccess(DmaHealthSource::GameWorldSingleton);
-
-    std::uint64_t localPlayer = 0;
-    (void)mem.TryRead(localGameWorld + sdk::ClientLocalGameWorld::MainPlayer, localPlayer, DmaCacheMode::Uncached);
 
     if (fillRaidFromLocalGameWorld(gom, localGameWorld, localPlayer, localGameWorld, raid, debug_out, pending_out))
     {
@@ -293,14 +295,15 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     object_dump << "Game World object scan\n";
 
     
-    if (!Utils::valid_pointer(gom) || !readGomListPtr(gom, kGomActiveNodes) || !readGomListPtr(gom, kGomLastActiveNode))
+    if (!Utils::valid_pointer(gom) || !readGomListPtr(gom, UnityOffsets::GameObjectManager_ActiveNodesOffset) ||
+        !readGomListPtr(gom, UnityOffsets::GameObjectManager_LastActiveNodeOffset))
     {
         mem.RefreshTarkovPointerSnapshot();
         gom = mem.GetTarkovPointerSnapshot().gameObjectManager;
 
         if (!Utils::valid_pointer(gom) ||
-            !readGomListPtr(gom, kGomActiveNodes) ||
-            !readGomListPtr(gom, kGomLastActiveNode))
+            !readGomListPtr(gom, UnityOffsets::GameObjectManager_ActiveNodesOffset) ||
+            !readGomListPtr(gom, UnityOffsets::GameObjectManager_LastActiveNodeOffset))
         {
             mem.PreloadTarkovPointerSnapshot();
 
@@ -322,10 +325,10 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     }
 
     const std::uint64_t active_list_ptr =
-        readGomListPtr(gom, kGomActiveNodes);
+        readGomListPtr(gom, UnityOffsets::GameObjectManager_ActiveNodesOffset);
 
     const std::uint64_t last_list_ptr =
-        readGomListPtr(gom, kGomLastActiveNode);
+        readGomListPtr(gom, UnityOffsets::GameObjectManager_LastActiveNodeOffset);
 
     if (!Utils::valid_pointer(active_list_ptr) ||
         !Utils::valid_pointer(last_list_ptr))
@@ -635,7 +638,7 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
             nodes[i].this_object,
             {
                 UnityOffsets::GameObject_ComponentsOffset,
-                0x18,
+                UnityOffsets::ComponentArray_EntryStride + UnityOffsets::ComponentArray_EntryComponentOffset,
                 UnityOffsets::Component_ObjectClassOffset
             }
         );

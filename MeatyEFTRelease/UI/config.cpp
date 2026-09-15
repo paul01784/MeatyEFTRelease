@@ -587,6 +587,22 @@ void from_json(const nlohmann::json& j, atlasVisibilityGlobals& v)
         500);
 }
 
+void to_json(nlohmann::json& j, const hideoutGlobals& h)
+{
+    j = nlohmann::json{
+        { "neededLootFilterEnabled", h.neededLootFilterEnabled },
+        { "neededLootFilterColour", h.neededLootFilterColour }
+    };
+}
+
+void from_json(const nlohmann::json& j, hideoutGlobals& h)
+{
+    h.gymEnabled = false;
+    h.gymAutoClick = false;
+    h.neededLootFilterEnabled = j.value("neededLootFilterEnabled", h.neededLootFilterEnabled);
+    h.neededLootFilterColour = get_vec4_or_default(j, "neededLootFilterColour", h.neededLootFilterColour);
+}
+
 // Custom serialization for aimGlobals
 void to_json(nlohmann::json& j, const aimGlobals& a) {
     j = nlohmann::json{
@@ -934,6 +950,12 @@ bool ConfigManager::LoadConfig()
                 j.at("atlasVisibilityGlobals").get<atlasVisibilityGlobals>();
         }
 
+        if (j.contains("hideoutGlobals") &&
+            j["hideoutGlobals"].is_object())
+        {
+            hideout_ = j.at("hideoutGlobals").get<hideoutGlobals>();
+        }
+
         if (j.contains("aimGlobals") &&
             j["aimGlobals"].is_object())
         {
@@ -1043,6 +1065,7 @@ bool ConfigManager::SaveConfig()
     j["radarGlobals"] = radar_;
     j["espGlobals"] = esp_;
     j["atlasVisibilityGlobals"] = atlasVisibility_;
+    j["hideoutGlobals"] = hideout_;
     j["aimGlobals"] = aim_;
     j["coloursGlobals"] = colours_;
     j["keyGlobals"] = keys_;

@@ -1985,9 +1985,6 @@ void Memory::ClearTarkovPointerSnapshot()
 void Memory::PreloadTarkovPointerSnapshot()
 {
 	constexpr const char* kGameObjectManagerSignature = "48 89 05 ?? ?? ?? ?? 48 83 C4 ?? C3 33 C9";
-	constexpr uint64_t kGameObjectManagerLastActiveNode = 0x20;
-	constexpr uint64_t kGameObjectManagerActiveNodes = 0x28;
-
 	TarkovPointerSnapshot snapshot{};
 	uintptr_t unityPlayerBase = 0;
 	uintptr_t gameAssemblyBase = 0;
@@ -2025,12 +2022,12 @@ void Memory::PreloadTarkovPointerSnapshot()
 		IsValidPointer(refreshedSnapshot.gameObjectManager) &&
 		TryRead(
 			refreshedSnapshot.gameObjectManager +
-				kGameObjectManagerActiveNodes,
+				UnityOffsets::GameObjectManager_ActiveNodesOffset,
 			refreshedActiveNodes,
 			DmaCacheMode::Uncached) &&
 		TryRead(
 			refreshedSnapshot.gameObjectManager +
-				kGameObjectManagerLastActiveNode,
+				UnityOffsets::GameObjectManager_LastActiveNodeOffset,
 			refreshedLastActiveNode,
 			DmaCacheMode::Uncached) &&
 		IsValidPointer(refreshedActiveNodes) &&
@@ -2073,11 +2070,11 @@ void Memory::PreloadTarkovPointerSnapshot()
 		TryRead(resolvedSlot, resolvedManager, DmaCacheMode::Uncached) &&
 		IsValidPointer(resolvedManager) &&
 		TryRead(
-			resolvedManager + kGameObjectManagerActiveNodes,
+			resolvedManager + UnityOffsets::GameObjectManager_ActiveNodesOffset,
 			activeNodes,
 			DmaCacheMode::Uncached) &&
 		TryRead(
-			resolvedManager + kGameObjectManagerLastActiveNode,
+			resolvedManager + UnityOffsets::GameObjectManager_LastActiveNodeOffset,
 			lastActiveNode,
 			DmaCacheMode::Uncached) &&
 		IsValidPointer(activeNodes) &&

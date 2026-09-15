@@ -31,6 +31,9 @@ void from_json(const nlohmann::json& j, AimViewConfig& a);
 void to_json(nlohmann::json& j, const atlasVisibilityGlobals& v);
 void from_json(const nlohmann::json& j, atlasVisibilityGlobals& v);
 
+void to_json(nlohmann::json& j, const hideoutGlobals& h);
+void from_json(const nlohmann::json& j, hideoutGlobals& h);
+
 void to_json(nlohmann::json& j, const aimGlobals& a);
 void from_json(const nlohmann::json& j, aimGlobals& a);
 
@@ -69,6 +72,7 @@ private:
     radarGlobals radar_;
     espGlobals esp_;
     atlasVisibilityGlobals atlasVisibility_;
+    hideoutGlobals hideout_;
     aimGlobals aim_;
     coloursGlobals colours_;
     keyGlobals keys_;

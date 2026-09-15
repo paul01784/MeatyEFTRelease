@@ -79,6 +79,13 @@ struct gameGlobals {
     static bool inHideout;
 };
 
+struct hideoutGlobals {
+    static bool gymEnabled;
+    static bool gymAutoClick;
+    static bool neededLootFilterEnabled;
+    static glm::vec4 neededLootFilterColour;
+};
+
 struct appGlobals {
     static std::atomic_bool runRadar;
     static std::atomic_bool runThreads;

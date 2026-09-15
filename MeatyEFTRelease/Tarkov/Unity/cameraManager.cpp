@@ -39,25 +39,9 @@ namespace
     constexpr std::uint64_t kManagedArrayCount = 0x18;
     constexpr std::uint64_t kManagedArrayData = 0x20;
 
-    constexpr std::uint64_t kComponentObjectClass = 0x20;
     constexpr std::uint64_t kObjectClassMonoBehaviour = 0x10;
-    constexpr std::uint64_t kUnityObjectCachedPointer = 0x10;
-    constexpr std::uint64_t kComponentArraySize = 0x10;
-    constexpr std::uint64_t kComponentArrayEntryComponent = 0x8;
-    constexpr std::uint64_t kComponentArrayEntryStride = 0x10;
-
-    constexpr std::uint64_t kCameraManagerBss = 0x6E0C5A0;
     constexpr std::uint64_t kIl2CppClassStaticFields = 0xB8;
 
-    constexpr std::uint64_t kCameraManagerInstance = 0x0;
-    constexpr std::uint64_t kEftCameraManagerCamera = 0x70;
-
-    constexpr std::uint64_t kLegacyEftCameraManagerCamera = 0x60;
-    constexpr std::uint64_t kEftCameraManagerOpticManager = 0x10;
-    constexpr std::uint64_t kOpticCameraManagerCamera = 0x70;
-    constexpr std::uint64_t kOpticCameraManagerCurrentSight = 0x78;
-    constexpr std::uint64_t kOpticSightScopeTransform = 0x40;
-    constexpr std::uint64_t kSightBoneTransform = 0x18;
     constexpr int kMaxGameObjectComponents = 128;
 
     [[nodiscard]] bool validPointer(std::uint64_t value)
@@ -85,7 +69,7 @@ namespace
         if (!readPointer(cameraReference, cameraClass) ||
             !readPointer(cameraClass + 0x10, cameraClassName) ||
             mem.readString(cameraClassName, 32, DmaCacheMode::Uncached) != "Camera" ||
-            !readPointer(cameraReference + kUnityObjectCachedPointer, nativeCamera))
+            !readPointer(cameraReference + UnityOffsets::ManagedObject_NativePointerOffset, nativeCamera))
         {
             return false;
         }
@@ -96,22 +80,7 @@ namespace
     [[nodiscard]] bool readCameraReferenceFromManager(std::uint64_t manager, std::uint64_t& cameraReference)
     {
         cameraReference = 0;
-
-        for (const std::uint64_t cameraOffset : {
-                 kEftCameraManagerCamera,
-                 kLegacyEftCameraManagerCamera })
-        {
-            std::uint64_t candidate = 0;
-
-            if (readPointer(manager + cameraOffset, candidate) &&
-                isUnityCameraReference(candidate))
-            {
-                cameraReference = candidate;
-                return true;
-            }
-        }
-
-        return false;
+        return readPointer(manager + sdk::CameraManager::Camera, cameraReference) && isUnityCameraReference(cameraReference);
     }
 
     [[nodiscard]] bool isCameraManagerInstance(std::uint64_t instance)
@@ -129,7 +98,7 @@ namespace
 
         std::uint64_t bssValue = 0;
 
-        if (!validPointer(gameAssembly) || !readPointer(gameAssembly + kCameraManagerBss, bssValue))
+        if (!validPointer(gameAssembly) || !readPointer(gameAssembly + UnityOffsets::CameraManagerBSS, bssValue))
         {
             return false;
         }
@@ -140,7 +109,7 @@ namespace
         // BSS -> Il2CppClass -> static_fields -> Instance.  
         if (readPointer(bssValue + kIl2CppClassStaticFields, staticFields))
         {
-            if (readPointer(staticFields + kCameraManagerInstance, candidate) && isCameraManagerInstance(candidate))
+            if (readPointer(staticFields + sdk::CameraManager::Instance, candidate) && isCameraManagerInstance(candidate))
             {
                 manager = candidate;
                 return true;
@@ -148,7 +117,7 @@ namespace
         }
 
         // BSS -> static_fields -> Instance.  
-        if (readPointer(bssValue + kCameraManagerInstance, candidate) && isCameraManagerInstance(candidate))
+        if (readPointer(bssValue + sdk::CameraManager::Instance, candidate) && isCameraManagerInstance(candidate))
         {
             manager = candidate;
             return true;
@@ -206,7 +175,8 @@ namespace
         std::uint64_t leftNative = 0;
         std::uint64_t rightNative = 0;
 
-        return readPointer(left + kUnityObjectCachedPointer, leftNative) && readPointer(right + kUnityObjectCachedPointer, rightNative) && leftNative == rightNative;
+        return readPointer(left + UnityOffsets::ManagedObject_NativePointerOffset, leftNative) &&
+            readPointer(right + UnityOffsets::ManagedObject_NativePointerOffset, rightNative) && leftNative == rightNative;
     }
 
 }
@@ -214,7 +184,7 @@ namespace
 CameraManager cameraManagerTest;
 
 CameraManager::CameraManager()
-    : m_viewMatrixOffset(static_cast<std::uint32_t>(UnityOffsets::Camera_WorldToCameraMatrixOffset)),
+    : m_viewMatrixOffset(static_cast<std::uint32_t>(UnityOffsets::Camera_ViewMatrixOffset)),
       m_fovOffset(static_cast<std::uint32_t>(UnityOffsets::Camera_FOVOffset)),
       m_aspectOffset(static_cast<std::uint32_t>(UnityOffsets::Camera_AspectRatioOffset)),
       m_snapshot(std::make_shared<const CameraManagerState>())
@@ -256,7 +226,7 @@ void CameraManager::reset()
     m_opticCameraManager = 0;
     m_gameAssemblyBase = 0;
 
-    m_viewMatrixOffset = static_cast<std::uint32_t>(UnityOffsets::Camera_WorldToCameraMatrixOffset);
+    m_viewMatrixOffset = static_cast<std::uint32_t>(UnityOffsets::Camera_ViewMatrixOffset);
     m_fovOffset = static_cast<std::uint32_t>(UnityOffsets::Camera_FOVOffset);
     m_aspectOffset = static_cast<std::uint32_t>(UnityOffsets::Camera_AspectRatioOffset);
 
@@ -299,37 +269,29 @@ bool CameraManager::readCameraList(std::uint64_t globalAddress, CameraListView& 
     if (!readPointer(globalAddress, listObject))
         return false;
 
-    if (!readPointer(listObject, list.items))
+    if (!readPointer(listObject + UnityOffsets::AllCameras_ItemsOffset, list.items))
         return false;
 
-    int dmaRadarCount = 0;
-    std::uint64_t meatyCount = 0;
-
-    const bool readDmaCount = readUncached(listObject + 0x8, dmaRadarCount);
-    const bool readMeatyCount = readUncached(listObject + 0x10, meatyCount);
-
-    const bool dmaCountValid = readDmaCount && dmaRadarCount > 0 && dmaRadarCount <= kMaxCameraCount;
-    const bool meatyCountValid = readMeatyCount && meatyCount > 0 && meatyCount <= kMaxCameraCount;
-
-    if (!dmaCountValid && !meatyCountValid)
+    std::uint64_t count = 0;
+    std::uint64_t capacity = 0;
+    if (!readUncached(listObject + UnityOffsets::AllCameras_CountOffset, count) ||
+        !readUncached(listObject + UnityOffsets::AllCameras_CapacityOffset, capacity) ||
+        count == 0 || count > kMaxCameraCount || capacity < count)
+    {
         return false;
+    }
 
-    list.count = dmaCountValid ? dmaRadarCount : 0;
-    if (meatyCountValid)
-        list.count = (std::max)(list.count, static_cast<int>(meatyCount));
-
-    return list.count > 0;
+    list.count = static_cast<int>(count);
+    return true;
 }
 
 std::uint64_t CameraManager::resolveAllCamerasGlobal()
 {
-    if (!validPointer(m_gameAssemblyBase))
-        m_gameAssemblyBase = mem.GetTarkovPointerSnapshot().gameAssemblyBase;
-
-    if (!validPointer(m_gameAssemblyBase))
+    const std::uint64_t unityPlayerBase = mem.GetTarkovPointerSnapshot().unityPlayerBase;
+    if (!validPointer(unityPlayerBase))
         return 0;
 
-    const std::uint64_t hardcoded = m_gameAssemblyBase + UnityOffsets::AllCamera;
+    const std::uint64_t hardcoded = unityPlayerBase + UnityOffsets::AllCamera;
     CameraListView list{};
 
     if (validPointer(hardcoded) && readCameraList(hardcoded, list))
@@ -346,30 +308,15 @@ std::string CameraManager::readCameraName(std::uint64_t camera) const
     if (!validPointer(camera))
         return {};
 
-    constexpr std::array<std::uint64_t, 2> gameObjectOffsets = {
-        UnityOffsets::GameObject_ObjectClassOffset,
-        UnityOffsets::GameObject_ComponentsOffset
-    };
+    std::uint64_t gameObject = 0;
+    if (!readPointer(camera + UnityOffsets::Component_GameObjectOffset, gameObject))
+        return {};
 
-    for (const std::uint64_t offset : gameObjectOffsets)
-    {
-        std::uint64_t gameObject = 0;
-        if (!readPointer(camera + offset, gameObject))
-            continue;
+    std::uint64_t namePointer = 0;
+    if (!readPointer(gameObject + UnityOffsets::GameObject_NameOffset, namePointer))
+        return {};
 
-        std::uint64_t namePointer = 0;
-        if (!readPointer(gameObject + UnityOffsets::GameObject_NameOffset, namePointer))
-        {
-            continue;
-        }
-
-        std::string name = mem.readString(namePointer, 64, DmaCacheMode::Uncached);
-
-        if (!name.empty())
-            return name;
-    }
-
-    return {};
+    return mem.readString(namePointer, 64, DmaCacheMode::Uncached);
 }
 
 std::string CameraManager::readManagedComponentName(std::uint64_t objectClass) const
@@ -393,48 +340,40 @@ std::uint64_t CameraManager::resolveManagedComponent(std::uint64_t camera, std::
     if (!validPointer(camera) || className.empty())
         return 0;
 
-    constexpr std::array<std::uint64_t, 2> gameObjectOffsets = {
-        UnityOffsets::GameObject_ObjectClassOffset,
-        UnityOffsets::GameObject_ComponentsOffset
-    };
+    std::uint64_t gameObject = 0;
+    if (!readPointer(camera + UnityOffsets::Component_GameObjectOffset, gameObject))
+        return 0;
 
-    for (const std::uint64_t gameObjectOffset : gameObjectOffsets)
+    std::uint64_t components = 0;
+    std::uint64_t componentCount = 0;
+
+    if (!readPointer(gameObject + UnityOffsets::GameObject_ComponentsOffset, components) ||
+        !readUncached(gameObject + UnityOffsets::GameObject_ComponentsOffset + UnityOffsets::ComponentArray_SizeOffset, componentCount) ||
+        componentCount == 0 || componentCount > kMaxGameObjectComponents)
     {
-        std::uint64_t gameObject = 0;
-        if (!readPointer(camera + gameObjectOffset, gameObject))
-            continue;
+        return 0;
+    }
 
-        std::uint64_t components = 0;
-        std::uint64_t componentCount = 0;
+    for (std::uint64_t index = 0; index < componentCount; ++index)
+    {
+        std::uint64_t component = 0;
+        std::uint64_t objectClass = 0;
 
-        if (!readPointer(gameObject + UnityOffsets::GameObject_ComponentsOffset, components) ||
-            !readUncached(gameObject + UnityOffsets::GameObject_ComponentsOffset + kComponentArraySize, componentCount) ||
-            componentCount == 0 || componentCount > kMaxGameObjectComponents)
+        if (!readPointer(components + index * UnityOffsets::ComponentArray_EntryStride + UnityOffsets::ComponentArray_EntryComponentOffset, component) ||
+            !readPointer(component + UnityOffsets::Component_ObjectClassOffset, objectClass))
         {
             continue;
         }
 
-        for (std::uint64_t index = 0; index < componentCount; ++index)
+        const std::string candidate = readManagedComponentName(objectClass);
+
+        if (!classNameMatches(candidate, className))
+            continue;
+
+        std::uint64_t managedComponent = 0;
+        if (readPointer(objectClass + kObjectClassMonoBehaviour, managedComponent))
         {
-            std::uint64_t component = 0;
-            std::uint64_t objectClass = 0;
-
-            if (!readPointer(components + index * kComponentArrayEntryStride + kComponentArrayEntryComponent, component) ||
-                !readPointer(component + kComponentObjectClass, objectClass))
-            {
-                continue;
-            }
-
-            const std::string candidate = readManagedComponentName(objectClass);
-
-            if (!classNameMatches(candidate, className))
-                continue;
-
-            std::uint64_t managedComponent = 0;
-            if (readPointer(objectClass + kObjectClassMonoBehaviour, managedComponent))
-            {
-                return managedComponent;
-            }
+            return managedComponent;
         }
     }
 
@@ -451,7 +390,7 @@ bool CameraManager::resolveOpticCameraManager()
 
     if (!validPointer(manager) && validPointer(m_eftCameraManager))
     {
-        readPointer(m_eftCameraManager + kEftCameraManagerOpticManager, manager);
+        readPointer(m_eftCameraManager + sdk::CameraManager::OpticCameraManager, manager);
     }
 
     if (!validPointer(manager))
@@ -463,7 +402,7 @@ bool CameraManager::resolveOpticCameraManager()
     {
         const std::uint64_t resolvedManager = resolveManagedComponent(m_fpsCamera, "CameraManager");
 
-        if (!validPointer(resolvedManager) || !readPointer(resolvedManager + kEftCameraManagerOpticManager, manager))
+        if (!validPointer(resolvedManager) || !readPointer(resolvedManager + sdk::CameraManager::OpticCameraManager, manager))
         {
             // Camera transitions can briefly detach this component
             if (!hadCachedOpticPath)
@@ -477,9 +416,9 @@ bool CameraManager::resolveOpticCameraManager()
     std::uint64_t cameraReference = 0;
     std::uint64_t opticCamera = 0;
 
-    if (!readPointer(manager + kOpticCameraManagerCamera, cameraReference) ||
+    if (!readPointer(manager + sdk::OpticCameraManager::Camera, cameraReference) ||
         readManagedComponentName(cameraReference) != "Camera" ||
-        !readPointer(cameraReference + kUnityObjectCachedPointer, opticCamera))
+        !readPointer(cameraReference + UnityOffsets::ManagedObject_NativePointerOffset, opticCamera))
     {
 
         if (!hadCachedOpticPath)
@@ -524,7 +463,7 @@ bool CameraManager::readCurrentOpticSight(std::uint64_t& currentOpticSight, std:
     if (!validPointer(m_opticCameraManager))
         return false;
 
-    if (!readUncached(m_opticCameraManager + kOpticCameraManagerCurrentSight, currentOpticSight))
+    if (!readUncached(m_opticCameraManager + sdk::OpticCameraManager::CurrentOpticSight, currentOpticSight))
     {
         return false;
     }
@@ -535,7 +474,7 @@ bool CameraManager::readCurrentOpticSight(std::uint64_t& currentOpticSight, std:
         return true;
     }
 
-    readPointer(currentOpticSight + kOpticSightScopeTransform, currentScopeTransform);
+    readPointer(currentOpticSight + sdk::OpticSight::ScopeTransform, currentScopeTransform);
 
     return true;
 }
@@ -615,7 +554,7 @@ bool CameraManager::resolveCameras()
     std::uint64_t fpsCameraReference = 0;
     if (resolveEftCameraManagerFromBss(m_eftCameraManager, m_gameAssemblyBase) &&
         readCameraReferenceFromManager(m_eftCameraManager, fpsCameraReference) &&
-        readPointer(fpsCameraReference + kUnityObjectCachedPointer, fps))
+        readPointer(fpsCameraReference + UnityOffsets::ManagedObject_NativePointerOffset, fps))
     {
         const std::uint64_t fpsMatrix = resolveViewMatrixAddress(fps);
         if (validPointer(fpsMatrix))
@@ -768,7 +707,7 @@ bool CameraManager::readSight(std::uint64_t sightBone, int listIndex, std::uint6
         return false;
     }
 
-    readPointer(sightBone + kSightBoneTransform, result.sightBoneTransform);
+    readPointer(sightBone + sdk::SightNBone::Bone, result.sightBoneTransform);
 
     readUncached(result.sightComponent + sdk::SightComponent::SelectedScope, result.selectedScope);
     readUncached(result.sightComponent + sdk::SightComponent::ScopeZoomValue, result.scopeZoomValue);
@@ -1001,7 +940,7 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
 
         if (validPointer(resolvedCurrentOpticSight))
         {
-            readPointer(resolvedCurrentOpticSight + kOpticSightScopeTransform, currentScopeTransform);
+            readPointer(resolvedCurrentOpticSight + sdk::OpticSight::ScopeTransform, currentScopeTransform);
         }
         else
         {

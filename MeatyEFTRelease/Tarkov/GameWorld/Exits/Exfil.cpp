@@ -35,7 +35,7 @@ void Exfil::exfilTask()
 		if (!radarGlobals::drawExfils && !espGlobals::drawExfil)
 			return;
 
-		//update exfil status on timer pass & local hands good
+		// Update exfil status only while the local hands controller is valid.
 		if (!Utils::valid_pointer(mainGame.localPlayerHands))
 			return;
 
@@ -163,9 +163,8 @@ void Exfil::tryLoadMemoryExfils()
 				if (exfilName.empty())
 					return;
 
-				const uint64_t transformInternal = mem.ReadChain(exfilPointAddr, TransformChain);
-
-				if (!Utils::valid_pointer(transformInternal))
+				uint64_t transformInternal = 0;
+				if (!UnityTransform::TryResolveFromComponent(exfilPointAddr, transformInternal, false))
 					return;
 
 				const bool alreadyKnown = std::any_of(
