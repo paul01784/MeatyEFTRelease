@@ -25,20 +25,6 @@ constexpr float kClipW = 0.001f;
 constexpr std::size_t kMaxTransformDepth = 64;
 constexpr std::uint32_t kMaxTransformIndex = 65536;
 
-// Optic projection internals are not part of the scan-validated UnityOffsets contract.
-constexpr std::uint64_t kInstanceTableRva = 0x1A237F8;
-constexpr std::uint64_t kPropertyNameRegistryRva = 0x1A8E910;
-constexpr std::array<std::uint64_t, 4> kPropertyNameTableRvas = {0, 0x19FE2C0, 0x19FE6A0, 0x19FE750};
-constexpr std::uint64_t kMeshRendererTypeRva = 0x17B0FC8;
-constexpr std::uint64_t kRendererMaterialArrayTypeRva = 0x17B1100;
-constexpr std::uint64_t kTransformTypeDescriptorRva = 0x19CEBC0;
-constexpr std::uint64_t kMeshFilterTypeDescriptorRva = 0x19CD980;
-constexpr std::uint64_t kShaderTypeRva = 0x1743CD0;
-constexpr std::uint64_t kCameraWorldToCameraMatrixOffset = 0xA8;
-constexpr std::uint64_t kCameraProjectionMatrixOffset = 0xE8;
-constexpr std::uint64_t kCameraNonJitteredProjectionSetOffset = 0x57C;
-constexpr std::uint64_t kCameraNonJitteredProjectionMatrixOffset = 0x780;
-
 struct RawCameraSample
 {
     glm::mat4 view{};
@@ -192,7 +178,7 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
     std::uint64_t table = 0;
     std::uint32_t mask = 0;
 
-    if (!readPointer(unityPlayer + kInstanceTableRva, root) || !readPointer(root, table) || !readValue(root + 0x8, mask) || mask < 8 ||
+    if (!readPointer(unityPlayer + UnityOffsets::InstanceTable, root) || !readPointer(root, table) || !readValue(root + 0x8, mask) || mask < 8 ||
         mask > (1u << 27) || (mask & 7u) != 0)
     {
         return 0;
@@ -235,8 +221,8 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
     std::uint32_t firstType = 0;
     std::uint32_t typeCount = 0;
 
-    if (!readPointer(gameObject + UnityOffsets::GameObject_ComponentsOffset, entries) ||
-        !readValue(gameObject + UnityOffsets::GameObject_ComponentsOffset + UnityOffsets::ComponentArray_SizeOffset, count) || count == 0 || count > limit ||
+    if (!readPointer(gameObject + UnityOffsets::NativeGameObject_ComponentArrayOffset, entries) ||
+        !readValue(gameObject + UnityOffsets::NativeGameObject_ComponentCountOffset, count) || count == 0 || count > limit ||
         !readValue(descriptor + 0x30, firstType) || !readValue(descriptor + 0x34, typeCount) || typeCount == 0 || typeCount > 1024)
     {
         return 0;
@@ -244,7 +230,7 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
 
     for (std::uint64_t index = 0; index < count; ++index)
     {
-        const std::uint64_t entry = entries + index * UnityOffsets::ComponentArray_EntryStride;
+        const std::uint64_t entry = entries + index * 16;
         std::uint32_t type = 0;
         if (!readValue(entry, type))
             return 0;
@@ -252,7 +238,7 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
         if (static_cast<std::uint32_t>(type - firstType) < typeCount)
         {
             std::uint64_t component = 0;
-            return readPointer(entry + UnityOffsets::ComponentArray_EntryComponentOffset, component) ? component : 0;
+            return readPointer(entry + 0x8, component) ? component : 0;
         }
     }
 
@@ -267,10 +253,8 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
     std::uint64_t nodes = 0;
     std::uint32_t index = 0;
 
-    if (!readPointer(nativeTransform + UnityOffsets::TransformAccess_HierarchyOffset, hierarchy) ||
-        !readValue(nativeTransform + UnityOffsets::TransformAccess_IndexOffset, index) || index >= kMaxTransformIndex ||
-        !readPointer(hierarchy + UnityOffsets::Hierarchy_IndicesOffset, parents) ||
-        !readPointer(hierarchy + UnityOffsets::Hierarchy_VerticesOffset, nodes))
+    if (!readPointer(nativeTransform + 0x70, hierarchy) || !readValue(nativeTransform + 0x78, index) || index >= kMaxTransformIndex ||
+        !readPointer(hierarchy + 0x40, parents) || !readPointer(hierarchy + 0x68, nodes))
     {
         return false;
     }
@@ -305,9 +289,8 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
     std::uint64_t hierarchy = 0;
     std::uint64_t nodes = 0;
     std::uint32_t index = 0;
-    if (!readPointer(nativeTransform + UnityOffsets::TransformAccess_HierarchyOffset, hierarchy) ||
-        !readValue(nativeTransform + UnityOffsets::TransformAccess_IndexOffset, index) || index >= kMaxTransformIndex ||
-        !readPointer(hierarchy + UnityOffsets::Hierarchy_VerticesOffset, nodes))
+    if (!readPointer(nativeTransform + 0x70, hierarchy) || !readValue(nativeTransform + 0x78, index) || index >= kMaxTransformIndex ||
+        !readPointer(hierarchy + 0x68, nodes))
     {
         return 0;
     }
@@ -317,7 +300,7 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
 [[nodiscard]] bool managedTransformToNative(std::uint64_t managedTransform, std::uint64_t& nativeTransform)
 {
     nativeTransform = 0;
-    return readPointer(managedTransform + UnityOffsets::ManagedObject_NativePointerOffset, nativeTransform);
+    return readPointer(managedTransform + 0x10, nativeTransform);
 }
 
 [[nodiscard]] float cross2(const glm::vec2& left, const glm::vec2& right)
@@ -829,7 +812,7 @@ struct MeshChannel
         std::uint64_t root = 0;
         std::uint64_t slots = 0;
         std::uint32_t count = 0;
-        if (!readPointer(unityPlayer + kPropertyNameRegistryRva, root) || !readValue(root + 0x10, count) || index >= count || index > (1u << 20) ||
+        if (!readPointer(unityPlayer + UnityOffsets::PropertyNameRegistry, root) || !readValue(root + 0x10, count) || index >= count || index > (1u << 20) ||
             !readPointer(root, slots))
         {
             return {};
@@ -838,10 +821,12 @@ struct MeshChannel
     }
     else
     {
+        constexpr std::array<std::uint64_t, 4> tables = {0, UnityOffsets::PropertyNameTable1, UnityOffsets::PropertyNameTable2,
+                                                         UnityOffsets::PropertyNameTable3};
         constexpr std::array<std::uint32_t, 4> last = {0, 122, 20, 25};
         if (tag > 3 || index > last[tag])
             return {};
-        slot = unityPlayer + kPropertyNameTableRvas[tag] + static_cast<std::uint64_t>(index) * 8ull;
+        slot = unityPlayer + tables[tag] + static_cast<std::uint64_t>(index) * 8ull;
     }
 
     std::uint64_t stringAddress = 0;
@@ -1045,10 +1030,10 @@ bool OpticProjectionEngine::readCamera(std::uint64_t nativeCamera, CameraMatrixS
 
     RawCameraSample raw{};
     Memory::ScatterReadRequest requests[] = {
-        {nativeCamera + kCameraWorldToCameraMatrixOffset, &raw.view, sizeof(raw.view)},
-        {nativeCamera + kCameraProjectionMatrixOffset, &raw.activeProjection, sizeof(raw.activeProjection)},
-        {nativeCamera + kCameraNonJitteredProjectionSetOffset, &raw.nonJitteredSet, sizeof(raw.nonJitteredSet)},
-        {nativeCamera + kCameraNonJitteredProjectionMatrixOffset, &raw.nonJitteredProjection, sizeof(raw.nonJitteredProjection)}};
+        {nativeCamera + UnityOffsets::Camera_WorldToCameraMatrixOffset, &raw.view, sizeof(raw.view)},
+        {nativeCamera + UnityOffsets::Camera_ProjectionMatrixOffset, &raw.activeProjection, sizeof(raw.activeProjection)},
+        {nativeCamera + UnityOffsets::Camera_NonJitteredProjectionSetOffset, &raw.nonJitteredSet, sizeof(raw.nonJitteredSet)},
+        {nativeCamera + UnityOffsets::Camera_NonJitteredProjectionMatrixOffset, &raw.nonJitteredProjection, sizeof(raw.nonJitteredProjection)}};
     DWORD bytesRead[std::size(requests)]{};
     const auto result = mem.TryReadScatter(requests, std::size(requests), DmaCacheMode::Uncached, "Camera VP", bytesRead);
     if (result == Memory::TryScatterReadResult::Busy)
@@ -1198,8 +1183,7 @@ bool OpticProjectionEngine::discover(std::uint64_t localPlayer, std::uint64_t op
     route.opticCamera = opticCamera;
 
     m_failureReason = "OpticSight.LensRenderer";
-    if (!readPointer(opticSight + sdk::OpticSight::LensRenderer, route.lensManaged) ||
-        !readPointer(route.lensManaged + UnityOffsets::ManagedObject_NativePointerOffset, route.lens))
+    if (!readPointer(opticSight + sdk::OpticSight::LensRenderer, route.lensManaged) || !readPointer(route.lensManaged + 0x10, route.lens))
     {
         return false;
     }
@@ -1210,22 +1194,20 @@ bool OpticProjectionEngine::discover(std::uint64_t localPlayer, std::uint64_t op
     std::uint16_t staticBatchSubmeshCount = 0;
     std::uint32_t extraVertexStreamId = 0;
     m_failureReason = "native lens renderer validation";
-    if (!readPointer(route.lens, lensType) || lensType != unityPlayer + kMeshRendererTypeRva || !readPointer(route.lens + 0x60, materialArrayType) ||
-        materialArrayType != unityPlayer + kRendererMaterialArrayTypeRva ||
-        !readPointer(route.lens + UnityOffsets::Component_GameObjectOffset, gameObject) ||
+    if (!readPointer(route.lens, lensType) || lensType != unityPlayer + UnityOffsets::MeshRendererType || !readPointer(route.lens + 0x60, materialArrayType) ||
+        materialArrayType != unityPlayer + UnityOffsets::RendererMaterialArrayType || !readPointer(route.lens + 0x58, gameObject) ||
         !readValue(route.lens + 0x122, staticBatchSubmeshCount) || staticBatchSubmeshCount != 0 || !readValue(route.lens + 0x25C, extraVertexStreamId) ||
         extraVertexStreamId != 0)
     {
         return false;
     }
 
-    route.lensTransform = resolveComponent(gameObject, unityPlayer + kTransformTypeDescriptorRva);
-    route.meshFilter = resolveComponent(gameObject, unityPlayer + kMeshFilterTypeDescriptorRva);
+    route.lensTransform = resolveComponent(gameObject, unityPlayer + UnityOffsets::TransformTypeDescriptor);
+    route.meshFilter = resolveComponent(gameObject, unityPlayer + UnityOffsets::MeshFilterTypeDescriptor);
     std::uint64_t componentGameObject = 0;
     m_failureReason = "lens Transform or MeshFilter";
-    if (!validPointer(route.lensTransform) || !validPointer(route.meshFilter) ||
-        !readPointer(route.lensTransform + UnityOffsets::Component_GameObjectOffset, componentGameObject) || componentGameObject != gameObject ||
-        !readPointer(route.meshFilter + UnityOffsets::Component_GameObjectOffset, componentGameObject) || componentGameObject != gameObject ||
+    if (!validPointer(route.lensTransform) || !validPointer(route.meshFilter) || !readPointer(route.lensTransform + 0x58, componentGameObject) ||
+        componentGameObject != gameObject || !readPointer(route.meshFilter + 0x58, componentGameObject) || componentGameObject != gameObject ||
         !readValue(route.meshFilter + 0x60, route.meshId))
     {
         return false;
@@ -1250,7 +1232,7 @@ bool OpticProjectionEngine::discover(std::uint64_t localPlayer, std::uint64_t op
     std::uint64_t shaderType = 0;
     std::uint64_t parsed = 0;
     m_failureReason = "CW FX/OpticSight shader validation";
-    if (!validPointer(shader) || !readPointer(shader, shaderType) || shaderType != unityPlayer + kShaderTypeRva)
+    if (!validPointer(shader) || !readPointer(shader, shaderType) || shaderType != unityPlayer + UnityOffsets::ShaderType)
     {
         return false;
     }
@@ -1283,9 +1265,9 @@ bool OpticProjectionEngine::discover(std::uint64_t localPlayer, std::uint64_t op
     const auto resolveCameraChain = [&](std::uint64_t camera, std::vector<std::uint64_t>& chain)
     {
         std::uint64_t cameraObject = 0;
-        if (!readPointer(camera + UnityOffsets::Component_GameObjectOffset, cameraObject))
+        if (!readPointer(camera + 0x58, cameraObject))
             return false;
-        const std::uint64_t cameraTransform = resolveComponent(cameraObject, unityPlayer + kTransformTypeDescriptorRva, 256);
+        const std::uint64_t cameraTransform = resolveComponent(cameraObject, unityPlayer + UnityOffsets::TransformTypeDescriptor, 256);
         return validPointer(cameraTransform) && resolveTransformChain(cameraTransform, chain);
     };
     m_failureReason = "camera transform chains";
@@ -1386,11 +1368,11 @@ bool OpticProjectionEngine::update(std::uint64_t localPlayer, std::uint64_t opti
     requests.reserve(16 + lensNodes.size() + mainCameraNodes.size() + opticCameraNodes.size());
     auto addCamera = [&](std::uint64_t camera, RawCameraSample& sample)
     {
-        requests.push_back({camera + kCameraWorldToCameraMatrixOffset, &sample.view, sizeof(sample.view)});
-        requests.push_back({camera + kCameraProjectionMatrixOffset, &sample.activeProjection, sizeof(sample.activeProjection)});
-        requests.push_back({camera + kCameraNonJitteredProjectionSetOffset, &sample.nonJitteredSet, sizeof(sample.nonJitteredSet)});
+        requests.push_back({camera + UnityOffsets::Camera_WorldToCameraMatrixOffset, &sample.view, sizeof(sample.view)});
+        requests.push_back({camera + UnityOffsets::Camera_ProjectionMatrixOffset, &sample.activeProjection, sizeof(sample.activeProjection)});
+        requests.push_back({camera + UnityOffsets::Camera_NonJitteredProjectionSetOffset, &sample.nonJitteredSet, sizeof(sample.nonJitteredSet)});
         requests.push_back(
-            {camera + kCameraNonJitteredProjectionMatrixOffset, &sample.nonJitteredProjection, sizeof(sample.nonJitteredProjection)});
+            {camera + UnityOffsets::Camera_NonJitteredProjectionMatrixOffset, &sample.nonJitteredProjection, sizeof(sample.nonJitteredProjection)});
     };
     addCamera(mainCamera, rawMain);
     addCamera(opticCamera, rawOptic);

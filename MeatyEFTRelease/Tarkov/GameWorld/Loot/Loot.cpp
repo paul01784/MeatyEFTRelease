@@ -184,9 +184,13 @@ namespace
     {
         uint64_t instance = 0;
 
+        uint64_t monoBehaviour = 0;
         uint64_t interactiveClass = 0;
         uint64_t gameObject = 0;
         uint64_t gameObjectNamePtr = 0;
+        uint64_t components = 0;
+        uint64_t transformComponent = 0;
+        uint64_t transformObjectClass = 0;
         uint64_t transformInternal = 0;
     };
 
@@ -1328,7 +1332,6 @@ bool loot::buildNewLootItemsScatter(
 
         LootShellRead shell{};
         shell.instance = pointer;
-        shell.interactiveClass = pointer;
         shellReads.emplace_back(shell);
 
         LootEntity item{};
@@ -1339,14 +1342,54 @@ bool loot::buildNewLootItemsScatter(
     if (shellReads.empty())
         return true;
 
-    for (auto& shell : shellReads)
+    // MonoBehaviour.
     {
-        (void)UnityTransform::TryResolveGameObject(shell.instance, shell.gameObject, false);
-        if (Utils::valid_pointer(shell.gameObject))
-            (void)UnityTransform::TryResolveFromGameObject(shell.gameObject, shell.transformInternal, false);
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
+
+        for (auto& shell : shellReads)
+            batch.Add(shell.instance + 0x10, shell.monoBehaviour);
+
+        if (!batch.Execute())
+        {
+            for (auto& item : candidates)
+                markFailed(item, "MonoBehaviour scatter execution failed");
+
+            outItems = std::move(candidates);
+            return true;
+        }
     }
 
-    // GameObject name pointer.
+    // interactive class and GameObject.
+    {
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
+
+        for (auto& shell : shellReads)
+        {
+            if (!Utils::valid_pointer(shell.monoBehaviour))
+                continue;
+
+            batch.Add(
+                shell.monoBehaviour + UnityOffsets::Component_ObjectClassOffset,
+                shell.interactiveClass
+            );
+
+            batch.Add(
+                shell.monoBehaviour + UnityOffsets::Component_GameObjectOffset,
+                shell.gameObject
+            );
+        }
+
+        if (!batch.Execute())
+        {
+            for (auto& item : candidates)
+                markFailed(item, "Object pointer scatter execution failed");
+
+            outItems = std::move(candidates);
+            return true;
+        }
+    }
+
+    // name pointer and components.
     {
         ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
@@ -1360,15 +1403,83 @@ bool loot::buildNewLootItemsScatter(
                 shell.gameObjectNamePtr
             );
 
+            batch.Add(
+                shell.gameObject + UnityOffsets::GameObject_ComponentsOffset,
+                shell.components
+            );
         }
 
         if (!batch.Execute())
         {
             for (auto& item : candidates)
-                markFailed(item, "GameObject name scatter execution failed");
+                markFailed(item, "GameObject scatter execution failed");
 
             outItems = std::move(candidates);
             return true;
+        }
+    }
+
+    // transform component.
+    {
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
+
+        for (auto& shell : shellReads)
+        {
+            if (!Utils::valid_pointer(shell.components))
+                continue;
+
+            batch.Add(shell.components + 0x8, shell.transformComponent);
+        }
+
+        if (!batch.Execute())
+        {
+            for (size_t i = 0; i < candidates.size(); ++i)
+                shellReads[i].transformComponent = 0;
+        }
+    }
+
+    // transform object class.
+    {
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
+
+        for (auto& shell : shellReads)
+        {
+            if (!Utils::valid_pointer(shell.transformComponent))
+                continue;
+
+            batch.Add(
+                shell.transformComponent +
+                UnityOffsets::Component_ObjectClassOffset,
+                shell.transformObjectClass
+            );
+        }
+
+        if (!batch.Execute())
+        {
+            for (auto& shell : shellReads)
+                shell.transformObjectClass = 0;
+        }
+    }
+
+    // native transform access.
+    {
+        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
+
+        for (auto& shell : shellReads)
+        {
+            if (!Utils::valid_pointer(shell.transformObjectClass))
+                continue;
+
+            batch.Add(
+                shell.transformObjectClass + 0x10,
+                shell.transformInternal
+            );
+        }
+
+        if (!batch.Execute())
+        {
+            for (auto& shell : shellReads)
+                shell.transformInternal = 0;
         }
     }
 
@@ -1382,6 +1493,12 @@ bool loot::buildNewLootItemsScatter(
         item.m_gameObject = shell.gameObject;
         item.m_pGameObjectName = shell.gameObjectNamePtr;
         item.m_pointerToTransform1 = shell.transformInternal;
+
+        if (!Utils::valid_pointer(shell.monoBehaviour))
+        {
+            markFailed(item, "Invalid MonoBehaviour pointer");
+            continue;
+        }
 
         if (!Utils::valid_pointer(shell.interactiveClass))
         {

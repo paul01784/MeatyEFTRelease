@@ -34,18 +34,7 @@ public:
         bool useCache = false
     );
 
-    static bool TryResolveGameObject(
-        uint64_t componentObject,
-        uint64_t& gameObject,
-        bool useCache = false
-    );
-
-    static bool TryResolveFromGameObject(
-        uint64_t gameObject,
-        uint64_t& nativeTransform,
-        bool useCache = false
-    );
-
+    // Compatibility entry point retained for the unchanged gym feature.
     static bool TryResolveFromComponent(
         uint64_t componentObject,
         uint64_t& nativeTransform,

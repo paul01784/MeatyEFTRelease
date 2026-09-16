@@ -1,5 +1,4 @@
 #pragma once
-#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <cstring>
@@ -63,15 +62,11 @@ std::string trims(const std::string& s)
 #pragma pack(push, 8)
 struct LinkedListObject
 {
-    uint64_t NextObjectLink;
-    uint64_t PreviousObjectLink;
-    uint64_t ThisObject;
+    uint64_t PreviousObjectLink; // 0x0
+    uint64_t NextObjectLink;     // 0x8
+    uint64_t ThisObject;         // 0x10
 };
 #pragma pack(pop)
-
-static_assert(offsetof(LinkedListObject, PreviousObjectLink) == UnityOffsets::LinkedList_PreviousOffset);
-static_assert(offsetof(LinkedListObject, NextObjectLink) == UnityOffsets::LinkedList_NextOffset);
-static_assert(offsetof(LinkedListObject, ThisObject) == UnityOffsets::LinkedList_ThisObjectOffset);
 
 struct GameObjectManager
 {
@@ -80,15 +75,19 @@ struct GameObjectManager
         return mainGame.gameObjectManager;   // pull live value from mainGame instance
     }
 
+    // Offsets
+    static constexpr uint64_t OFFSET_LastActiveNode = 0x20;
+    static constexpr uint64_t OFFSET_ActiveNodes = 0x28;
+
     // Accessors
     uint64_t LastActiveNode() const
     {
-        return mem.Read<uint64_t>(base() + UnityOffsets::GameObjectManager_LastActiveNodeOffset);
+        return mem.Read<uint64_t>(base() + OFFSET_LastActiveNode);
     }
 
     uint64_t ActiveNodes() const
     {
-        return mem.Read<uint64_t>(base() + UnityOffsets::GameObjectManager_ActiveNodesOffset);
+        return mem.Read<uint64_t>(base() + OFFSET_ActiveNodes);
     }
 
     
@@ -162,10 +161,7 @@ struct GameObjectManager
 
                     //localgameworld ptr
                     uint64_t localGameWorld = 0x0;
-                    localGameWorld = mem.ReadChain(currentObject.ThisObject,
-                        { UnityOffsets::GameObject_ComponentsOffset,
-                          UnityOffsets::ComponentArray_EntryStride + UnityOffsets::ComponentArray_EntryComponentOffset,
-                          UnityOffsets::Component_ObjectClassOffset });
+                    localGameWorld = mem.ReadChain(currentObject.ThisObject, { UnityOffsets::GameObject_ComponentsOffset, 0x18, UnityOffsets::Component_ObjectClassOffset });
                     if (Utils::valid_pointer(localGameWorld))
                     {
                         //storage 
@@ -386,9 +382,7 @@ struct GameObjectManager
             // Resolve GameWorld
             uint64_t gameWorld = mem.ReadChain(
                 nodes[i].ThisObject,
-                { UnityOffsets::GameObject_ComponentsOffset,
-                  UnityOffsets::ComponentArray_EntryStride + UnityOffsets::ComponentArray_EntryComponentOffset,
-                  UnityOffsets::Component_ObjectClassOffset });
+                { UnityOffsets::GameObject_ComponentsOffset, 0x18, UnityOffsets::Component_ObjectClassOffset });
 
             dbg("gameWorld ptr: " + hex(gameWorld));
 
