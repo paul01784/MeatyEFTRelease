@@ -7,7 +7,7 @@
 #include "../../../Core/Utilities.h"
 #include "../../../memory/Memory.h"
 #include "../../../memory/ScatterReadBatch.h"
-#include "../../../UI/makcu.h"
+#include "../../../Core/InputDevice.h"
 
 #include <algorithm>
 #include <cmath>
@@ -180,7 +180,7 @@ bool Gym::Update()
     const auto finish = [&](bool active)
     {
         state.autoClickEnabled = autoClickEnabled_.load(std::memory_order_acquire);
-        state.makcuConnected = makcu.IsConnected();
+        state.inputDeviceConnected = inputDevice.IsConnected();
         state.autoClickCount = autoClickCount_;
         state.lastAutoClickSucceeded = lastAutoClickSucceeded_;
         state.lastAutoClickEvent = lastAutoClickEvent_;
@@ -194,7 +194,7 @@ bool Gym::Update()
                               state.overlayClassValid &&
                               state.qteControllerClassValid &&
                               state.shrinkingCircleClassValid;
-        state.readyToStart = state.resolverReady && state.makcuConnected && !state.shrinkingCircleValid;
+        state.readyToStart = state.resolverReady && state.inputDeviceConnected && !state.shrinkingCircleValid;
 
         // _spawnedQtes is transient in EFT. Keep the last observed address in
         // the published snapshot so Debug does not look as if our code clears
@@ -220,8 +220,8 @@ bool Gym::Update()
         }
         else if (state.autoClickStatus.empty())
         {
-            if (!state.makcuConnected)
-                state.autoClickStatus = "Waiting for MAKCU connection";
+            if (!state.inputDeviceConnected)
+                state.autoClickStatus = "Waiting for input-device connection";
             else if (state.readyToStart)
                 state.autoClickStatus = "Ready - start the gym game";
             else if (!state.resolverReady && !state.shrinkingCircleValid)
@@ -441,26 +441,24 @@ bool Gym::Update()
     const bool autoClick = autoClickEnabled_.load(std::memory_order_acquire);
     const bool successRisingEdge = state.predictedSuccess && !lastPredictedSuccess_;
 
-    if (autoClick && state.predictedSuccess && !makcu.IsConnected())
+    if (autoClick && state.predictedSuccess && !inputDevice.IsConnected())
     {
-        state.autoClickStatus = "Success window reached; MAKCU disconnected";
+        state.autoClickStatus = "Success window reached; input device disconnected";
     }
-    else if (autoClick && successRisingEdge && ShouldRead(generation) && makcu.IsConnected())
+    else if (autoClick && successRisingEdge && ShouldRead(generation) && inputDevice.IsConnected())
     {
-        state.autoClickStatus = "Sending MAKCU left click";
-        lastAutoClickSucceeded_ = makcu.Click(MakcuMouseButton::Left, 8, 25);
+        state.autoClickStatus = "Sending input-device left click";
+        const std::string deviceName = inputDevice.GetConnectedName();
+        lastAutoClickSucceeded_ = inputDevice.Click(InputMouseButton::Left, 8, 25);
         if (lastAutoClickSucceeded_)
         {
             ++autoClickCount_;
             lastAutoClickEvent_ = "Left click sent at scale " + std::to_string(state.circleScale.x);
-            state.autoClickStatus = "MAKCU left click sent";
+            state.autoClickStatus = deviceName + " left click sent";
         }
         else
         {
-            const MakcuDiagnostics diagnostics = makcu.GetDiagnostics();
-            lastAutoClickEvent_ = diagnostics.lastError.empty()
-                ? "MAKCU left click failed"
-                : "MAKCU left click failed: " + diagnostics.lastError;
+            lastAutoClickEvent_ = deviceName + " left click failed";
             state.autoClickStatus = lastAutoClickEvent_;
         }
         lastPredictedSuccess_ = true;

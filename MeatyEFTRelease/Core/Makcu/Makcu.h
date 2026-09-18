@@ -8,7 +8,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -136,5 +135,3 @@ public:
 extern MakcuController makcu;
 extern MakcuConfig makcuConfig;
 
-// Our menu render function
-void RenderMakcuWindow(bool* pOpen, float backgroundAlpha = 1.0f, const std::function<void()>& onConfigChanged = {});

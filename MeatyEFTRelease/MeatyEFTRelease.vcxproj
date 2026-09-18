@@ -171,7 +171,9 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="UI\IconsFontAwesome7.h" />
     <ClInclude Include="UI\IconsFontAwesomeCompat.h" />
     <ClInclude Include="UI\includes.h" />
-    <ClInclude Include="UI\makcu.h" />
+    <ClInclude Include="Core\InputDevice.h" />
+    <ClInclude Include="Core\Makcu\Makcu.h" />
+    <ClInclude Include="Core\Ferrum\Ferrum.h" />
     <ClInclude Include="UI\maps.h" />
     <ClInclude Include="UI\menuLayout.h" />
     <ClInclude Include="UI\perfMonitor.h" />
@@ -659,7 +661,10 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="Tarkov\GameWorld\Loot\WishList.cpp" />
     <ClCompile Include="UI\globals.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="UI\makcu.cpp" />
+    <ClCompile Include="Core\InputDevice.cpp" />
+    <ClCompile Include="Core\Makcu\Makcu.cpp" />
+    <ClCompile Include="Core\Ferrum\Ferrum.cpp" />
+    <ClCompile Include="Core\Render\InputDeviceRender.cpp" />
     <ClCompile Include="UI\maps.cpp" />
     <ClCompile Include="memory\InputManager.cpp" />
     <ClCompile Include="memory\Memory.cpp" />

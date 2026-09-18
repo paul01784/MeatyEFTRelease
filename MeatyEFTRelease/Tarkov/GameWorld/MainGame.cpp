@@ -31,7 +31,6 @@
 #include "../Features/Aim/ReadOnlyAim.h"
 #include "../Features/Visibility/AtlasVisibility.h"
 #include "Player/WatchList.h"
-#include "../../UI/makcu.h"
 
 #include <condition_variable>
 #include <mutex>

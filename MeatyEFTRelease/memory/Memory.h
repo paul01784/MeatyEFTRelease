@@ -120,6 +120,7 @@ enum class DmaHealthSource : uint8_t
     GameWorldSingleton,
     CameraChain,
     OpticMesh,
+    LocalPlayerPose,
     Count
 };
 

@@ -11,8 +11,10 @@
 #include "../../../memory/Memory.h"
 #include "../../../memory/ScatterReadBatch.h"
 #include "../MainGame.h"
+#include "../../Unity/cameraManager.h"
 
 #include <chrono>
+#include <cmath>
 
 namespace
 {
@@ -68,6 +70,47 @@ namespace
         player.aimLineTargetIsLocal = false;
         player.aimLineTargetLocation = {};
         player.aimLineTargetSince = {};
+    }
+
+    bool isUsableWorldPosition(const glm::vec3& position)
+    {
+        constexpr float kMaximumCoordinate = 1000000.0f;
+
+        return std::isfinite(position.x) &&
+            std::isfinite(position.y) &&
+            std::isfinite(position.z) &&
+            std::fabs(position.x) <= kMaximumCoordinate &&
+            std::fabs(position.y) <= kMaximumCoordinate &&
+            std::fabs(position.z) <= kMaximumCoordinate &&
+            (std::fabs(position.x) >= 0.001f ||
+                std::fabs(position.y) >= 0.001f ||
+                std::fabs(position.z) >= 0.001f);
+    }
+
+    bool tryGetLocalCameraPositionFallback(const Player& player, std::chrono::steady_clock::time_point now, glm::vec3& position)
+    {
+        constexpr auto kMaximumCameraSampleAge = std::chrono::milliseconds(250);
+
+        const CameraManagerSnapshot camera = cameraManagerTest.snapshot();
+        if (!camera ||
+            !camera->valid ||
+            !camera->fpsCameraWorldPositionValid ||
+            camera->publishedAt == std::chrono::steady_clock::time_point{} ||
+            now < camera->publishedAt ||
+            (now - camera->publishedAt) > kMaximumCameraSampleAge ||
+            !isUsableWorldPosition(camera->fpsCameraWorldPosition))
+        {
+            return false;
+        }
+
+        position = camera->fpsCameraWorldPosition;
+
+        // The FPS camera is at eye height. Retain the last trustworthy base
+        // height so the radar marker remains on the player's floor position.
+        if (isUsableWorldPosition(player.location))
+            position.y = player.location.y;
+
+        return isUsableWorldPosition(position);
     }
 
     void updateAimLineTarget(Player& player, const PlayerCollection& cache, std::chrono::steady_clock::time_point now)
@@ -209,13 +252,28 @@ void RegisteredPlayers::updateEntity()
             if (!Utils::valid_pointer(player.instance))
                 continue;
 
-            const glm::vec3 location = PlayerPosition::getBestBasePosition(player);
+            glm::vec3 location = PlayerPosition::getBestBasePosition(player);
+            const bool liveLocalPositionAvailable = !player.isLocal || !player.bonePointersNeedResolve || player.internalTransformPositionValid;
+            bool usingCameraPositionFallback = false;
+
+            if (player.isLocal && !liveLocalPositionAvailable)
+                usingCameraPositionFallback = tryGetLocalCameraPositionFallback(player, context.now, location);
 
             if (location.x != 0.0f || location.y != 0.0f || location.z != 0.0f)
                 player.location = location;
 
             if (player.isLocal)
+            {
+                if (usingCameraPositionFallback && !player.usingCameraPositionFallback)
+                    LOGS.logNotice(NoticeColour::RED, "Local player pose unavailable, using FPS camera position fallback");
+                else if (liveLocalPositionAvailable && player.usingCameraPositionFallback)
+                    LOGS.logNotice(NoticeColour::GREEN, "Local player position recovered from pose data");
+
+                if (usingCameraPositionFallback || liveLocalPositionAvailable)
+                    player.usingCameraPositionFallback = usingCameraPositionFallback;
+
                 mainGame.localLocation = player.location;
+            }
 
             player.distance = getDistance(player.location, mainGame.localLocation);
 

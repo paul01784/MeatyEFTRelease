@@ -34,6 +34,22 @@ namespace
     
     constexpr auto kSnapshotMaxAge = std::chrono::seconds(2);
 
+    bool isTerminalLensProjectionFailure(std::string_view failure)
+    {
+        return failure.find("lens mesh UV map") != std::string_view::npos ||
+            failure.find("vertex buffer read") != std::string_view::npos ||
+            failure.find("index-buffer read") != std::string_view::npos;
+    }
+
+    bool isExpectedLensProjectionRetry(std::string_view failure)
+    {
+        return failure.empty() ||
+            failure == "awaiting adjacent lens sample" ||
+            failure == "adjacent lens samples disagree" ||
+            failure == "DMA busy during paired sample" ||
+            failure == "active optic changed during sample";
+    }
+
     constexpr std::uint64_t kManagedListItems = 0x10;
     constexpr std::uint64_t kManagedListCount = 0x18;
     constexpr std::uint64_t kManagedArrayCount = 0x18;
@@ -46,7 +62,7 @@ namespace
     constexpr std::uint64_t kComponentArrayEntryComponent = 0x8;
     constexpr std::uint64_t kComponentArrayEntryStride = 0x10;
 
-    constexpr std::uint64_t kCameraManagerBss = 0x6E2D7E8;
+    constexpr std::uint64_t kCameraManagerBss = 0x5A6C928;
     constexpr std::uint64_t kIl2CppClassStaticFields = 0xB8;
 
     constexpr std::uint64_t kCameraManagerInstance = 0x0;
@@ -276,6 +292,8 @@ void CameraManager::reset()
     m_usedAllCamerasOffset = false;
     m_lastAds = false;
     m_lastUsingOptic = false;
+    m_lensProjectionSuppressedUntilAdsRelease = false;
+    m_lensProjectionFailureCount = 0;
     m_opticMatrixReadFailures = 0;
     m_cameraReadFailureSince = {};
     m_busyReadSkips = 0;
@@ -924,6 +942,12 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
 {
     m_lastUpdate = now;
 
+    if (!isAds)
+    {
+        m_lensProjectionSuppressedUntilAdsRelease = false;
+        m_lensProjectionFailureCount = 0;
+    }
+
     if (!validPointer(m_fpsCamera) || !validPointer(m_fpsViewMatrixAddress))
     {
         if (m_lastInitializeAttempt != std::chrono::steady_clock::time_point{} &&
@@ -1058,6 +1082,7 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
 
     state.scoped = state.ads && state.activeSightVectorIndex >= 0 && state.magnification > 1.0f;
     const bool wantOptic = state.scoped && validPointer(m_opticCamera);
+    state.lensProjectionSuppressed = wantOptic && m_lensProjectionSuppressedUntilAdsRelease;
 
     if (!wantOptic)
     {
@@ -1089,9 +1114,7 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
     const bool retryLensRoute =
         m_lastLensRefresh == std::chrono::steady_clock::time_point{} ||
         (now - m_lastLensRefresh) >= kLensRefreshInterval;
-    if (wantOptic && validPointer(localPlayer) &&
-        validPointer(state.currentOpticSight) &&
-        (routeWasReady || retryLensRoute))
+    if (wantOptic && !m_lensProjectionSuppressedUntilAdsRelease && validPointer(localPlayer) && validPointer(state.currentOpticSight) && (routeWasReady || retryLensRoute))
     {
         m_lastLensRefresh = now;
         const auto retryDeadline = std::chrono::steady_clock::now() +
@@ -1115,6 +1138,11 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
             {
                 m_opticRejectedSamples.fetch_add(1, std::memory_order_relaxed);
             }
+
+            if (isTerminalLensProjectionFailure(m_opticProjectionEngine.failureReason()))
+            {
+                break;
+            }
         }
         while (!properOpticRead &&
             std::chrono::steady_clock::now() < retryDeadline);
@@ -1128,6 +1156,7 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
             }
             m_lastOpticOutcome.store(
                 OpticPacketOutcome::Accepted, std::memory_order_relaxed);
+            m_lensProjectionFailureCount = 0;
             std::uint64_t liveOpticSight = 0;
             std::uint64_t liveScopeTransform = 0;
             if (!readCurrentOpticSight(liveOpticSight, liveScopeTransform) ||
@@ -1144,6 +1173,26 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
         else
         {
             const std::string& failure = m_opticProjectionEngine.failureReason();
+            const bool terminalFailure = isTerminalLensProjectionFailure(failure);
+
+            if (terminalFailure)
+            {
+                m_lensProjectionSuppressedUntilAdsRelease = true;
+                m_lensProjectionFailureCount = 0;
+                state.lensProjectionSuppressed = true;
+            }
+            else if (!properOpticBusy && !isExpectedLensProjectionRetry(failure))
+            {
+                if (m_lensProjectionFailureCount < 2)
+                    ++m_lensProjectionFailureCount;
+
+                if (m_lensProjectionFailureCount >= 2)
+                {
+                    m_lensProjectionSuppressedUntilAdsRelease = true;
+                    state.lensProjectionSuppressed = true;
+                }
+            }
+
             if (failure.find("vertex buffer read") != std::string::npos ||
                 failure.find("index-buffer read") != std::string::npos)
             {
@@ -1306,6 +1355,21 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
     state.valid = fpsRead;
     if (fpsRead)
     {
+        const glm::mat4 cameraToWorld = glm::inverse(fpsSample.view);
+        const glm::vec3 cameraPosition(cameraToWorld[3]);
+        constexpr float kMaximumCameraCoordinate = 1000000.0f;
+
+        state.fpsCameraWorldPositionValid =
+            std::isfinite(cameraPosition.x) &&
+            std::isfinite(cameraPosition.y) &&
+            std::isfinite(cameraPosition.z) &&
+            std::fabs(cameraPosition.x) <= kMaximumCameraCoordinate &&
+            std::fabs(cameraPosition.y) <= kMaximumCameraCoordinate &&
+            std::fabs(cameraPosition.z) <= kMaximumCameraCoordinate;
+
+        if (state.fpsCameraWorldPositionValid)
+            state.fpsCameraWorldPosition = cameraPosition;
+
         state.mainViewProjection = fpsSample.viewProjection;
         state.opticViewProjection = opticSample.viewProjection;
         state.opticProjection = std::move(opticProjection);

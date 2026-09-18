@@ -7,7 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
-#include "../../../UI/makcu.h"
+#include "../../../Core/InputDevice.h"
 
 ReadOnlyAim readOnlyAim;
 
@@ -260,7 +260,7 @@ void ReadOnlyAim::clearTargetState(bool keyIsHeld)
 
 void ReadOnlyAim::aimTask()
 {
-    if (!makcu.IsConnected())
+    if (!inputDevice.IsConnected())
     {
         clearTargetState(false);
         return;
@@ -400,7 +400,7 @@ void ReadOnlyAim::aimTask()
 
 bool ReadOnlyAim::moveToTargetBone(const TargetResult& target, const glm::vec2& aimRef)
 {
-    if (!aimGlobals::aimEnabled || !makcu.IsConnected())
+    if (!aimGlobals::aimEnabled || !inputDevice.IsConnected())
     {
         m_moveRemainder = {};
         m_lastMoveTime = {};
@@ -456,11 +456,13 @@ bool ReadOnlyAim::moveToTargetBone(const TargetResult& target, const glm::vec2& 
         return false;
 
     const glm::vec2 screenMove = glm::vec2(errorX, errorY) * (stepDistance / errorDistance);
-    const float calibrationX = std::isfinite(makcu.mouseUnitsPerScreenPixelX)
-        ? std::max(0.001f, makcu.mouseUnitsPerScreenPixelX)
+    const float deviceCalibrationX = inputDevice.GetMouseUnitsPerScreenPixelX();
+    const float deviceCalibrationY = inputDevice.GetMouseUnitsPerScreenPixelY();
+    const float calibrationX = std::isfinite(deviceCalibrationX)
+        ? std::max(0.001f, deviceCalibrationX)
         : 1.0f;
-    const float calibrationY = std::isfinite(makcu.mouseUnitsPerScreenPixelY)
-        ? std::max(0.001f, makcu.mouseUnitsPerScreenPixelY)
+    const float calibrationY = std::isfinite(deviceCalibrationY)
+        ? std::max(0.001f, deviceCalibrationY)
         : 1.0f;
 
     glm::vec2 hardwareMove = {
@@ -482,7 +484,7 @@ bool ReadOnlyAim::moveToTargetBone(const TargetResult& target, const glm::vec2& 
         return false;
     }
 
-    if (!makcu.Move(dx, dy, 25))
+    if (!inputDevice.Move(dx, dy, 25))
     {
         return false;
     }

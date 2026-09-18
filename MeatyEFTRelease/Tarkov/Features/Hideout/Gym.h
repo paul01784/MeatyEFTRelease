@@ -38,7 +38,7 @@ struct GymSnapshot
     bool circleResolvedByObjectScan{};
     bool directObjectScanAttempted{};
     bool autoClickEnabled{};
-    bool makcuConnected{};
+    bool inputDeviceConnected{};
     bool lastAutoClickSucceeded{};
     bool circleScaleValid{};
     bool transformAccessValid{};

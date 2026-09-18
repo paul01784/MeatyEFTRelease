@@ -60,6 +60,7 @@ struct CameraManagerState
     glm::highp_mat4 viewMatrix{};
     glm::highp_mat4 mainViewProjection{};
     glm::highp_mat4 opticViewProjection{};
+    glm::vec3 fpsCameraWorldPosition{};
     OpticProjectionState opticProjection{};
     std::string cameraSampleFailure;
     std::string opticProjectionFailure;
@@ -87,9 +88,11 @@ struct CameraManagerState
     float magnification = 1.0f;
 
     bool valid = false;
+    bool fpsCameraWorldPositionValid = false;
     bool ads = false;
     bool scoped = false;
     bool usingOptic = false;
+    bool lensProjectionSuppressed = false;
     bool stackedSightResolved = false;
     bool usedAllCamerasOffset = false;
 
@@ -189,6 +192,8 @@ private:
     bool m_usedAllCamerasOffset = false;
     bool m_lastAds = false;
     bool m_lastUsingOptic = false;
+    bool m_lensProjectionSuppressedUntilAdsRelease = false;
+    std::uint8_t m_lensProjectionFailureCount = 0;
 
     std::uint8_t m_opticMatrixReadFailures = 0;
     std::chrono::steady_clock::time_point m_cameraReadFailureSince{};

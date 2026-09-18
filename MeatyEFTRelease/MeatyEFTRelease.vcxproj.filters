@@ -55,6 +55,15 @@
     <Filter Include="Core\KeyManager">
       <UniqueIdentifier>{30A28A10-A6CA-4670-A054-E81BA8FBF1D4}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Core\Makcu">
+      <UniqueIdentifier>{A48CA580-031E-4A89-A259-1A92B6C8D03D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\Ferrum">
+      <UniqueIdentifier>{2A6D4124-E449-4DAB-A309-F4D8F2E29E8D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\Render">
+      <UniqueIdentifier>{D856D2C1-3793-48A6-88D9-6D00A9BC2E9A}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Tarkov\SDK">
       <UniqueIdentifier>{CE30CBB0-156E-4A3C-9042-DC53679A0C12}</UniqueIdentifier>
     </Filter>
@@ -577,7 +586,15 @@
     <ClInclude Include="Tarkov\GameWorld\Player\HandsManager.h">
       <Filter>Tarkov\GameWorld\Player</Filter>
     </ClInclude>
-    <ClInclude Include="UI\makcu.h" />
+    <ClInclude Include="Core\InputDevice.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Makcu\Makcu.h">
+      <Filter>Core\Makcu</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Ferrum\Ferrum.h">
+      <Filter>Core\Ferrum</Filter>
+    </ClInclude>
     <ClInclude Include="UI\menuLayout.h" />
     <ClInclude Include="UI\globals.h" />
     <ClInclude Include="Tarkov\Features\Aim\ReadOnlyAim.h">
@@ -770,8 +787,17 @@
     <ClCompile Include="UI\DxRenderWindow.cpp">
       <Filter>UI</Filter>
     </ClCompile>
-    <ClCompile Include="UI\makcu.cpp">
-      <Filter>UI</Filter>
+    <ClCompile Include="Core\InputDevice.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\Makcu\Makcu.cpp">
+      <Filter>Core\Makcu</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\Ferrum\Ferrum.cpp">
+      <Filter>Core\Ferrum</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\Render\InputDeviceRender.cpp">
+      <Filter>Core\Render</Filter>
     </ClCompile>
     <ClCompile Include="Tarkov\Features\Aim\ReadOnlyAim.cpp">
       <Filter>Tarkov\Features\Aim</Filter>

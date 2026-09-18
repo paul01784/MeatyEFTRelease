@@ -9,7 +9,8 @@
 #include "../Tarkov/GameWorld/Loot/Loot.h"
 #include "DxRenderWindow.h"
 #include "aimview.h"
-#include "makcu.h"
+#include "../Core/Makcu/Makcu.h"
+#include "../Core/Ferrum/Ferrum.h"
 #include "../Tarkov/Features/Visibility/AtlasVisibility.h"
 
 
@@ -78,6 +79,7 @@ private:
     keyGlobals keys_;
     lootGlobals loot_;
     MakcuConfig makcu_;
+    FerrumConfig ferrum_;
     memoryGlobals memoryGlobals_;
 
 };

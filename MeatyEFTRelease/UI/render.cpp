@@ -19,7 +19,7 @@
 #include "../Tarkov/GameWorld/QuestManager.h"
 #include "../Tarkov/GameWorld/Loot/WishList.h"
 #include "../Web/MeatyAPI/DogTagAPI.h"
-#include "makcu.h"
+#include "../Core/InputDevice.h"
 #include "menuLayout.h"
 #include "../Tarkov/GameWorld/Player/WatchList.h"
 #include "aimview.h"
@@ -65,16 +65,16 @@ void UpdateGymDiagnostics()
     const bool inRaid = IsRaidActiveForGym();
     const bool dmaReady = memoryGlobals::dmaConnected.load(std::memory_order_acquire) &&
                           memoryGlobals::processFound.load(std::memory_order_acquire) && !mem.IsInitRunning();
-    const bool makcuReady = makcu.IsConnected();
+    const bool inputDeviceReady = inputDevice.IsConnected();
 
-    if (hideoutGlobals::gymAutoClick && !makcuReady)
+    if (hideoutGlobals::gymAutoClick && !inputDeviceReady)
         hideoutGlobals::gymAutoClick = false;
 
     hideoutGlobals::gymEnabled = hideoutGlobals::gymAutoClick;
     const bool enabled = hideoutGlobals::gymEnabled;
 
     HIDEOUT_OVERVIEW.Configure(inRaid, dmaReady);
-    GYM.Configure(enabled, enabled && makcuReady, inRaid, dmaReady);
+    GYM.Configure(enabled, enabled && inputDeviceReady, inRaid, dmaReady);
     const GymSnapshot state = GYM.GetSnapshot();
 
     if (!enabled)
@@ -534,8 +534,8 @@ void closeSettingWindows(std::string dontClose)
         appMenu::appQuests = false;
     if (dontClose != "fuser")
         appMenu::appFuser = false;
-    if (dontClose != "makcu")
-        appMenu::appMakcu = false;
+    if (dontClose != "inputdevice")
+        appMenu::appInputDevice = false;
     if (dontClose != "watchlist")
         appMenu::appWatchList = false;
 }
@@ -984,11 +984,11 @@ static void renderMenuSettings()
         const GymSnapshot state = GYM.GetSnapshot();
         const HideoutOverviewSnapshot overview = HIDEOUT_OVERVIEW.GetSnapshot();
         const bool inHideout = state.hideoutAreaValid || Utils::valid_pointer(overview.hideoutController);
-        const bool makcuReady = makcu.IsConnected();
+        const bool inputDeviceReady = inputDevice.IsConnected();
         const bool resolverReady = state.hideoutAreaValid && state.typeInfoValid && state.overlayClassValid && state.qteControllerClassValid &&
                                    state.shrinkingCircleClassValid && state.staticFieldsValid && state.controllerValid;
         const bool diagnosticEligible = hideoutGlobals::gymEnabled && !inRaid && dmaReady;
-        const bool canEnableAutoPress = dmaReady && makcuReady && !inRaid;
+        const bool canEnableAutoPress = dmaReady && inputDeviceReady && !inRaid;
 
         std::string status = "Visit the Hideout, then enable Gym AutoPress";
         ImVec4 statusColour(0.48f, 0.48f, 0.46f, 1.0f);
@@ -997,9 +997,9 @@ static void renderMenuSettings()
             status = "Connect DMA and start Escape from Tarkov";
             statusColour = ImVec4(1.00f, 0.75f, 0.20f, 1.00f);
         }
-        else if (!makcuReady)
+        else if (!inputDeviceReady)
         {
-            status = "Connect MAKCU before enabling Gym AutoPress";
+            status = "Connect MAKCU or Ferrum before enabling Gym AutoPress";
             statusColour = ImVec4(1.00f, 0.75f, 0.20f, 1.00f);
         }
         else if (inRaid)
@@ -1263,10 +1263,10 @@ static void renderMenuSettings()
                             if (changed)
                             {
                                 hideoutGlobals::gymEnabled = hideoutGlobals::gymAutoClick;
-                                GYM.Configure(hideoutGlobals::gymEnabled, hideoutGlobals::gymAutoClick && makcuReady, inRaid, dmaReady);
+                                GYM.Configure(hideoutGlobals::gymEnabled, hideoutGlobals::gymAutoClick && inputDeviceReady, inRaid, dmaReady);
                             }
 
-                            ImGui::TextDisabled("Session only. Sends one MAKCU left click when the circle enters the calculated success window.");
+                            ImGui::TextDisabled("Session only. Sends one input-device left click when the circle enters the calculated success window.");
                         }
 
                         if (menuLayout::Section("Status"))
@@ -1275,8 +1275,8 @@ static void renderMenuSettings()
                             if (ImGui::BeginTable("##gymReadiness", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
                             {
                                 GymStageRow("DMA / game process", dmaReady, true);
-                                GymStageRow("MAKCU", makcuReady, dmaReady);
-                                GymStageRow("Hideout", inHideout, hideoutGlobals::gymAutoClick && dmaReady && makcuReady);
+                                GymStageRow("MAKCU / Ferrum", inputDeviceReady, dmaReady);
+                                GymStageRow("Hideout", inHideout, hideoutGlobals::gymAutoClick && dmaReady && inputDeviceReady);
                                 GymStageRow("Gym resolver", resolverReady, hideoutGlobals::gymAutoClick && inHideout);
                                 ImGui::EndTable();
                             }
@@ -1300,7 +1300,7 @@ static void renderMenuSettings()
                             GymBoolRow("In Hideout", inHideout);
                             GymBoolRow("Gym QTE Active", state.shrinkingCircleValid);
                             GymBoolRow("Auto Click Enabled", state.autoClickEnabled);
-                            GymBoolRow("MAKCU Connected", state.makcuConnected);
+                            GymBoolRow("Input Device Connected", state.inputDeviceConnected);
                             GymValueLabel("Successful Auto Clicks");
                             ImGui::Text("%llu", static_cast<unsigned long long>(state.autoClickCount));
                             GymBoolRow("Last Auto Click", state.lastAutoClickSucceeded);
@@ -2990,7 +2990,7 @@ static void renderDebugWindow()
                     const bool fpsReady = Utils::valid_pointer(cameraState.fpsCamera);
                     const bool opticReady = Utils::valid_pointer(cameraState.opticCamera);
                     const bool properOpticReady = cameraState.opticProjection.valid;
-                    const bool cameraHealthy = cameraState.valid && fpsReady && (!cameraState.usingOptic || (opticReady && properOpticReady));
+                    const bool cameraHealthy = cameraState.valid && fpsReady && (!cameraState.usingOptic || opticReady);
 
                     ImGui::SeparatorText("Status");
                     ImGui::TextColored(cameraHealthy ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.55f, 0.25f, 1.0f), "Camera %s",
@@ -3016,7 +3016,7 @@ static void renderDebugWindow()
                     }
                     if (cameraState.usingOptic && !properOpticReady)
                     {
-                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Warning: proper lens projection is unavailable; using the main-camera fallback.");
+                        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.20f, 1.0f), "Proper lens projection is unavailable; using the optic-camera fallback.");
                         if (!cameraState.opticProjectionFailure.empty())
                         {
                             ImGui::TextWrapped("Rejected at: %s", cameraState.opticProjectionFailure.c_str());
@@ -3028,6 +3028,7 @@ static void renderDebugWindow()
                         DebugTextBool("Magnified scope", cameraState.scoped);
                         DebugTextBool("Using optic camera", cameraState.usingOptic);
                         DebugTextBool("Proper optic projection", properOpticReady);
+                        DebugTextBool("Lens retry suppressed until ADS release", cameraState.lensProjectionSuppressed);
                         DebugTextBool("Stacked sight resolved", cameraState.stackedSightResolved);
 
                         for (const CameraSightState& sight : cameraState.sights)
@@ -3190,7 +3191,7 @@ static void renderDebugWindow()
                     const AimReferencePoint aimReference = readOnlyAim.resolveAimReference();
                     const CameraManagerSnapshot aimCameraSnapshot = cameraManagerTest.snapshot();
                     const bool cameraReady = aimCameraSnapshot && aimCameraSnapshot->valid;
-                    const bool deviceReady = makcu.IsConnected();
+                    const bool deviceReady = inputDevice.IsConnected();
                     const bool referenceReady = aimReference.valid;
 
                     ImGui::SeparatorText("Pipeline");
@@ -3244,7 +3245,7 @@ static void renderDebugWindow()
 
                     drawTarget("Best candidate", liveTarget);
                     drawTarget("Locked / active target", activeTarget);
-                    ImGui::TextDisabled("Configure aim in the MAKCU Aim tab; this page is runtime diagnostics.");
+                    ImGui::TextDisabled("Configure aim in the MAKCU / FERRUM Aim tab; this page is runtime diagnostics.");
 
                     ImGui::EndTabItem();
                 }
@@ -3932,7 +3933,7 @@ static void renderMenuIcons()
     std::string settingIcon = ICON_FK_COGS;
     std::string fuserIcon = ICON_FK_TELEVISION;
     std::string filterIcon = ICON_FK_FILTER;
-    std::string makcuIcon = ICON_FK_CROSSHAIRS;
+    std::string inputDeviceIcon = ICON_FK_CROSSHAIRS;
     std::string questsIcon = ICON_FK_FILES_O;
     std::string watchlistIcon = ICON_FK_USER;
     std::string widgetDebugIcon = ICON_FK_STETHOSCOPE;
@@ -3996,17 +3997,17 @@ static void renderMenuIcons()
         }
     }
 
-    if (sidebarButton(makcuIcon.c_str(), sidebarTop + (sidebarStep * 2.0f)))
+    if (sidebarButton(inputDeviceIcon.c_str(), sidebarTop + (sidebarStep * 2.0f)))
     {
-        appMenu::appMakcu = !appMenu::appMakcu;
-        closeSettingWindows("makcu");
+        appMenu::appInputDevice = !appMenu::appInputDevice;
+        closeSettingWindows("inputdevice");
     }
     else
     {
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary))
         {
             ImGui::BeginTooltip();
-            ImGui::Text("Makcu Settings");
+            ImGui::Text("MAKCU / FERRUM Settings");
             ImGui::EndTooltip();
         }
     }
@@ -4103,9 +4104,9 @@ static void renderMenuIcons()
     if (appMenu::appWatchList)
         watchListManager.RenderWindow();
 
-    if (appMenu::appMakcu)
+    if (appMenu::appInputDevice)
     {
-        RenderMakcuWindow(&appMenu::appMakcu, globals::appWindowAlpha, []() { configManager.SaveConfig(); });
+        RenderInputDeviceWindow(&appMenu::appInputDevice, globals::appWindowAlpha, []() { configManager.SaveConfig(); });
     }
 }
 

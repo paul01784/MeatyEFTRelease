@@ -285,6 +285,7 @@ public:
 	glm::vec3 internalTransformPosition{};
 	bool internalTransformPositionValid{ false };
 	bool usingInternalTransformFallback{ false };
+	bool usingCameraPositionFallback{ false };
 
 	std::vector<allPlayerBones> boneList = {
 		allPlayerBones::HumanPelvis, allPlayerBones::HumanHead, allPlayerBones::HumanNeck, allPlayerBones::HumanSpine1, allPlayerBones::HumanLForearm2,

@@ -12,9 +12,10 @@
 #include "DxRenderWindow.h"
 #include "../Tarkov/Features/Visibility/AtlasVisibility.h"
 
-#include "makcu.h"
+#include "../Core/Makcu/Makcu.h"
+#include "../Core/Ferrum/Ferrum.h"
+#include "../Core/InputDevice.h"
 #include "../memory/Memory.h"
-void ConnectMakcuOnStartup();
 
 
 namespace fs = std::filesystem;
@@ -836,6 +837,36 @@ void from_json(const nlohmann::json& j, MakcuConfig& k)
     );
 }
 
+void to_json(nlohmann::json& j, const FerrumConfig& k)
+{
+    j = nlohmann::json{
+        { "comPort", std::string(k.comPort) },
+        { "connectOnStartup", k.connectOnStartup },
+        { "mouseUnitsPerScreenPixelX", k.mouseUnitsPerScreenPixelX },
+        { "mouseUnitsPerScreenPixelY", k.mouseUnitsPerScreenPixelY }
+    };
+}
+
+void from_json(const nlohmann::json& j, FerrumConfig& k)
+{
+    k.comPort[0] = '\0';
+    k.connectOnStartup = false;
+    k.mouseUnitsPerScreenPixelX = 1.0f;
+    k.mouseUnitsPerScreenPixelY = 1.0f;
+
+    if (const auto it = j.find("comPort"); it != j.end() && it->is_string())
+    {
+        const std::string port = it->get<std::string>();
+        std::snprintf(k.comPort, sizeof(k.comPort), "%s", port.c_str());
+    }
+
+    if (const auto it = j.find("connectOnStartup"); it != j.end() && it->is_boolean())
+        k.connectOnStartup = it->get<bool>();
+
+    k.mouseUnitsPerScreenPixelX = j.value("mouseUnitsPerScreenPixelX", k.mouseUnitsPerScreenPixelX);
+    k.mouseUnitsPerScreenPixelY = j.value("mouseUnitsPerScreenPixelY", k.mouseUnitsPerScreenPixelY);
+}
+
 void to_json(nlohmann::json& j, const memoryGlobals& k) {
     j = nlohmann::json{
         {"dmaAutoConnect", k.dmaAutoConnect},
@@ -1013,6 +1044,23 @@ bool ConfigManager::LoadConfig()
         makcu.mouseUnitsPerScreenPixelX = makcu_.mouseUnitsPerScreenPixelX;
         makcu.mouseUnitsPerScreenPixelY = makcu_.mouseUnitsPerScreenPixelY;
 
+        if (j.contains("ferrum") && j["ferrum"].is_object())
+        {
+            ferrum_ = j.at("ferrum").get<FerrumConfig>();
+            ferrumConfig = ferrum_;
+        }
+        else
+        {
+            ferrum_ = FerrumConfig{};
+            ferrumConfig = ferrum_;
+        }
+
+        if (makcuConfig.connectOnStartup && ferrumConfig.connectOnStartup)
+            ferrumConfig.connectOnStartup = false;
+
+        ferrum.mouseUnitsPerScreenPixelX = ferrum_.mouseUnitsPerScreenPixelX;
+        ferrum.mouseUnitsPerScreenPixelY = ferrum_.mouseUnitsPerScreenPixelY;
+
         if (j.contains("memoryGlobals") &&
             j["memoryGlobals"].is_object())
         {
@@ -1022,7 +1070,7 @@ bool ConfigManager::LoadConfig()
 
 
         //startups
-        ConnectMakcuOnStartup();
+        ConnectInputDeviceOnStartup();
 
         if (memoryGlobals::dmaAutoConnect)
             mem.doDMAConnect();
@@ -1056,6 +1104,9 @@ bool ConfigManager::SaveConfig()
     makcu_ = makcuConfig;
     makcu_.mouseUnitsPerScreenPixelX = makcu.mouseUnitsPerScreenPixelX;
     makcu_.mouseUnitsPerScreenPixelY = makcu.mouseUnitsPerScreenPixelY;
+    ferrum_ = ferrumConfig;
+    ferrum_.mouseUnitsPerScreenPixelX = ferrum.mouseUnitsPerScreenPixelX;
+    ferrum_.mouseUnitsPerScreenPixelY = ferrum.mouseUnitsPerScreenPixelY;
 
     nlohmann::json j;
 
@@ -1071,6 +1122,7 @@ bool ConfigManager::SaveConfig()
     j["keyGlobals"] = keys_;
     j["lootGlobals"] = loot_;
     j["makcu"] = makcu_;
+    j["ferrum"] = ferrum_;
     j["memoryGlobals"] = memoryGlobals_;
 
     std::ofstream file(configFile);

@@ -8,7 +8,7 @@ namespace UnityOffsets
     constexpr uint64_t AllCamera = 0x19F3080; //0x19EACC0;
 
     // Compatibility values required only by the unchanged gym/hideout feature.
-    constexpr uint64_t GameWorld = 0x70FD1A8;
+    constexpr uint64_t GameWorld = 0x5F0F268;
     constexpr uint64_t GameObjectManager_LastActiveNodeOffset = 0x20;
     constexpr uint64_t GameObjectManager_ActiveNodesOffset = 0x28;
     constexpr uint64_t ComponentArray_SizeOffset = 0x10;

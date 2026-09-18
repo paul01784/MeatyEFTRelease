@@ -74,7 +74,12 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool forceResolve)
         player.bonePointersNeedResolve = true;
 
         if (player.isLocal)
-            RefreshLocalInternalTransform(player);
+        {
+            if (RefreshLocalInternalTransform(player))
+                mem.ReportDmaHealthSuccess(DmaHealthSource::LocalPlayerPose);
+            else
+                mem.ReportDmaHealthFailure(DmaHealthSource::LocalPlayerPose, player.instance);
+        }
 
         return false;
     }
@@ -154,8 +159,13 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool forceResolve)
         }
     );
 
-    if (player.isLocal && player.bonePointersNeedResolve)
-        RefreshLocalInternalTransform(player);
+    if (player.isLocal)
+    {
+        if (!player.bonePointersNeedResolve || RefreshLocalInternalTransform(player))
+            mem.ReportDmaHealthSuccess(DmaHealthSource::LocalPlayerPose);
+        else
+            mem.ReportDmaHealthFailure(DmaHealthSource::LocalPlayerPose, player.instance);
+    }
 
     return hasAnyBonePointer;
 }

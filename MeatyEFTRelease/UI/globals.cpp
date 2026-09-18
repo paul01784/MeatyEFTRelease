@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.36.1";
+std::string globals::appVersion = "1.0.37";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -68,7 +68,7 @@ void globals::resetTaskIntervals()
 bool appMenu::appSettings = false;
 bool appMenu::appLootFilters = false;
 bool appMenu::appFuser = false;
-bool appMenu::appMakcu = false;
+bool appMenu::appInputDevice = false;
 bool appMenu::appQuests = false;
 bool appMenu::appWatchList = false;
 

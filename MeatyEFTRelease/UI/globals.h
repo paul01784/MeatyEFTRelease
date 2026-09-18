@@ -49,7 +49,7 @@ struct appMenu {
 
     static bool appSettings;
     static bool appFuser;
-    static bool appMakcu;
+    static bool appInputDevice;
     static bool appLootFilters;
     static bool appQuests;
     static bool appWatchList;

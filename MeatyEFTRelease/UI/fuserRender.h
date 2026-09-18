@@ -22,7 +22,7 @@
 #include "../Tarkov/Features/Aim/ReadOnlyAim.h"
 #include "../Tarkov/Features/Visibility/AtlasVisibility.h"
 #include "aimLineTargeting.h"
-#include "makcu.h"
+#include "../Core/InputDevice.h"
 #include "globals.h"
 #include "../Tarkov/GameWorld/Exits/Exfil.h"
 
@@ -730,7 +730,7 @@ namespace fuserRender
     {
         if (!aimGlobals::showAimFovRing ||
             !aimGlobals::aimEnabled ||
-            !makcu.IsConnected())
+            !inputDevice.IsConnected())
             return;
         if (aimGlobals::aimFOV <= 0.f)
             return;
