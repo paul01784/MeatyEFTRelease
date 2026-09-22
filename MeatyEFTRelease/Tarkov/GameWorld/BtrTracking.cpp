@@ -115,6 +115,12 @@ void RegisteredPlayers::tryFindBTR()
 
         const bool wasAlreadyBTR = cachePlayer.isBTR;
         const uint64_t oldBtrView = cachePlayer.btrView;
+        if (!wasAlreadyBTR || oldBtrView != btrView)
+        {
+            cachePlayer.btrPositionSampled = false;
+            cachePlayer.btrHeadingValid = false;
+            cachePlayer.rotation.x = 0.0f;
+        }
 
         PlayerClassifier::get(PlayerKind::Btr).initialize(cachePlayer);
         cachePlayer.btrView = btrView;
@@ -144,89 +150,132 @@ void RegisteredPlayers::tryFindBTR()
     }
 }
 
-void RegisteredPlayers::recoverBtrStuckPlayers()
+void RegisteredPlayers::updateBtrPassengerStates()
 {
-    using Clock = std::chrono::steady_clock;
+    constexpr float kPassengerRadiusSquared = 25.0f;
+    constexpr float kEntryMinimumAngle = 80.0f;
+    constexpr float kEntryMaximumAngle = 100.0f;
+    constexpr float kRetainedMinimumAngle = 70.0f;
+    constexpr float kRetainedMaximumAngle = 110.0f;
+    constexpr float kRadiansToDegrees = 57.295779513f;
+    constexpr std::size_t kPassengerCapacity = 4;
 
-    static constexpr float kBtrRadius = 4.0f;
-    static constexpr float kBtrRadiusSquared = kBtrRadius * kBtrRadius;
-    static constexpr float kStaticRotationEpsilon = 0.75f;
-    static constexpr int kStaticRotationTicks = 5;
-    static constexpr auto kStuckDuration = std::chrono::milliseconds(600);
-    static constexpr auto kRecoveryCooldown = std::chrono::seconds(5);
+    const auto IsUsablePosition = [](const glm::vec3& position)
+    {
+        return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z) &&
+            position.x * position.x + position.y * position.y + position.z * position.z > 1.0f;
+    };
 
-    const Clock::time_point now = Clock::now();
+    struct BtrVehicle
+    {
+        Player* player{};
+        std::size_t passengerCount{};
+    };
 
-    auto ResetTracking = [](Player& player)
-        {
-            player.isInBTR = false;
-            player.btrNearSince = {};
-            player.lastBtrRotation = 0.0f;
-            player.btrStaticRotationTicks = 0;
-            player.hasBtrRotationSample = false;
-        };
-
-    auto IsFinitePosition = [](const glm::vec3& position)
-        {
-            return std::isfinite(position.x) &&
-                std::isfinite(position.y) &&
-                std::isfinite(position.z);
-        };
-
-    auto IsNear = [](const glm::vec3& first, const glm::vec3& second)
-        {
-            const glm::vec3 delta = first - second;
-
-            return
-                (delta.x * delta.x) +
-                (delta.y * delta.y) +
-                (delta.z * delta.z) <=
-                kBtrRadiusSquared;
-        };
-
-    auto RotationNearlyEqual = [](float first, float second)
-        {
-            float difference = std::fmod(
-                std::fabs(first - second),
-                360.0f
-            );
-
-            if (difference > 180.0f)
-                difference = 360.0f - difference;
-
-            return difference <= kStaticRotationEpsilon;
-        };
+    struct BtrCandidate
+    {
+        Player* player{};
+        BtrVehicle* vehicle{};
+        float distanceSquared{};
+    };
 
     std::lock_guard<std::mutex> lock(playerMutex);
-
     std::vector<Player>& cache = registeredPlayers.getCache();
+    std::vector<BtrVehicle> vehicles;
+    vehicles.reserve(1);
 
-    if (cache.empty())
-        return;
-
-    std::vector<glm::vec3> btrPositions;
-    btrPositions.reserve(1);
-
-    for (const Player& player : cache)
+    for (Player& player : cache)
     {
-        if (!player.isBTR || !IsFinitePosition(player.location))
+        if (!player.isBTR)
             continue;
 
-        const float positionMagnitudeSquared =
-            (player.location.x * player.location.x) +
-            (player.location.y * player.location.y) +
-            (player.location.z * player.location.z);
+        if (player.isDead || player.hasExfiled || !Utils::valid_pointer(player.instance) || !IsUsablePosition(player.location))
+        {
+            player.btrPositionSampled = false;
+            player.btrHeadingValid = false;
+            continue;
+        }
 
-        if (positionMagnitudeSquared > 1.0f)
-            btrPositions.emplace_back(player.location);
+        if (player.btrPositionSampled)
+        {
+            const glm::vec3 movement = player.location - player.btrPreviousPosition;
+            const float movementSquared = movement.x * movement.x + movement.z * movement.z;
+            if (movementSquared > 0.0025f && movementSquared <= 25.0f)
+            {
+                // The radar maps world +X to right and world -Z to down.
+                player.rotation.x = std::atan2(-movement.z, movement.x) * kRadiansToDegrees;
+                player.btrHeadingValid = true;
+            }
+        }
+
+        player.btrPreviousPosition = player.location;
+        player.btrPositionSampled = true;
+        vehicles.push_back({ &player });
     }
 
-    if (btrPositions.empty())
-    {
-        for (Player& player : cache)
-            ResetTracking(player);
+    std::vector<BtrCandidate> candidates;
+    candidates.reserve(cache.size());
 
-        return;
+    for (Player& player : cache)
+    {
+        if (player.isBTR)
+            continue;
+
+        const bool human = player.isLocal || (!player.isAi && (player.isPlayer || player.isPlayerScav));
+        if (!human || player.isDead || player.hasExfiled || !Utils::valid_pointer(player.instance) ||
+            !IsUsablePosition(player.location) || !std::isfinite(player.rotation.x))
+        {
+            continue;
+        }
+
+        BtrVehicle* nearestVehicle = nullptr;
+        float nearestDistanceSquared = kPassengerRadiusSquared;
+
+        for (BtrVehicle& vehicle : vehicles)
+        {
+            const Player& btr = *vehicle.player;
+            if (!btr.btrHeadingValid)
+                continue;
+
+            const glm::vec3 difference = player.location - btr.location;
+            const float distanceSquared = difference.x * difference.x + difference.y * difference.y + difference.z * difference.z;
+            if (distanceSquared > nearestDistanceSquared)
+                continue;
+
+            const float angle = std::fabs(std::remainder(player.rotation.x - btr.rotation.x, 360.0f));
+            const bool retained = player.isInBTR && player.btrPassengerVehicle == btr.instance;
+            const float minimumAngle = retained ? kRetainedMinimumAngle : kEntryMinimumAngle;
+            const float maximumAngle = retained ? kRetainedMaximumAngle : kEntryMaximumAngle;
+            if (angle < minimumAngle || angle > maximumAngle)
+                continue;
+
+            nearestVehicle = &vehicle;
+            nearestDistanceSquared = distanceSquared;
+        }
+
+        if (nearestVehicle)
+            candidates.push_back({ &player, nearestVehicle, nearestDistanceSquared });
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const BtrCandidate& left, const BtrCandidate& right)
+    {
+        const bool leftRetained = left.player->isInBTR && left.player->btrPassengerVehicle == left.vehicle->player->instance;
+        const bool rightRetained = right.player->isInBTR && right.player->btrPassengerVehicle == right.vehicle->player->instance;
+        if (leftRetained != rightRetained)
+            return leftRetained;
+        if (left.distanceSquared != right.distanceSquared)
+            return left.distanceSquared < right.distanceSquared;
+        return left.player->instance < right.player->instance;
+    });
+
+    std::vector<std::pair<Player*, std::uint64_t>> passengers;
+    passengers.reserve(vehicles.size() * kPassengerCapacity);
+    for (BtrCandidate& candidate : candidates)
+    {
+        if (candidate.vehicle->passengerCount >= kPassengerCapacity)
+            continue;
+        passengers.emplace_back(candidate.player, candidate.vehicle->player->instance);
+        ++candidate.vehicle->passengerCount;
     }
 
     for (Player& player : cache)
@@ -234,98 +283,30 @@ void RegisteredPlayers::recoverBtrStuckPlayers()
         if (player.isBTR)
             continue;
 
-        const bool isHuman =
-            player.isLocal ||
-            (!player.isAi &&
-                (player.isPlayer || player.isPlayerScav));
-
-        if (!isHuman ||
-            player.isDead ||
-            player.hasExfiled ||
-            !Utils::valid_pointer(player.instance) ||
-            !IsFinitePosition(player.location))
+        const auto selected = std::find_if(passengers.begin(), passengers.end(), [&player](const auto& entry)
         {
-            ResetTracking(player);
-            continue;
+            return entry.first == &player;
+        });
+        const std::uint64_t nextVehicle = selected == passengers.end() ? 0 : selected->second;
+
+        if (player.isInBTR && player.btrPassengerVehicle != nextVehicle && !player.isDead && !player.hasExfiled)
+        {
+            // Passenger transforms can remain attached to the vehicle after exit.
+            // Force a fresh hierarchy resolve before drawing the player's bones again.
+            player.playerBoneMatrixPtr = 0;
+            player.bonePointersNeedResolve = true;
+            player.invalidBones = true;
+            player.bonePtrRefreshTick = 0;
+            std::fill(player.bonePtrs.begin(), player.bonePtrs.end(), 0ULL);
+            std::fill(player.bonePositions.begin(), player.bonePositions.end(), glm::vec3(0.0f));
+            player.boneTransformCache.clear();
+            player.internalTransformPtr = 0;
+            player.internalTransformPositionValid = false;
+            player.btrExitBoneRefreshPending = true;
+            LOGS.logInfo("[BTR] Passenger exited; refreshing bones: " + player.name);
         }
 
-        const bool nearBtr = std::any_of(
-            btrPositions.begin(),
-            btrPositions.end(),
-            [&](const glm::vec3& btrPosition)
-            {
-                return IsNear(player.location, btrPosition);
-            }
-        );
-
-        if (!nearBtr)
-        {
-            ResetTracking(player);
-            continue;
-        }
-
-        player.isInBTR = true;
-
-        const float currentRotation = player.rotation.x;
-
-        if (!std::isfinite(currentRotation))
-        {
-            ResetTracking(player);
-            continue;
-        }
-
-        if (!player.hasBtrRotationSample)
-        {
-            player.btrNearSince = now;
-            player.lastBtrRotation = currentRotation;
-            player.btrStaticRotationTicks = 0;
-            player.hasBtrRotationSample = true;
-            continue;
-        }
-
-        if (RotationNearlyEqual(
-            currentRotation,
-            player.lastBtrRotation))
-        {
-            ++player.btrStaticRotationTicks;
-        }
-        else
-        {
-            player.btrStaticRotationTicks = 0;
-        }
-
-        player.lastBtrRotation = currentRotation;
-
-        if (now - player.btrNearSince < kStuckDuration ||
-            player.btrStaticRotationTicks >= kStaticRotationTicks ||
-            now < player.nextBtrRecovery)
-        {
-            continue;
-        }
-
-        // Refresh only the transform hierarchy
-        player.playerBoneMatrixPtr = 0;
-        player.bonePointersNeedResolve = true;
-        player.invalidBones = true;
-
-        std::fill(player.bonePtrs.begin(), player.bonePtrs.end(), 0ULL);
-
-        std::fill(player.bonePositions.begin(), player.bonePositions.end(), glm::vec3(0.0f));
-
-        player.boneTransformCache.clear();
-        player.nextBtrRecovery = now + kRecoveryCooldown;
-
-        std::ostringstream message;
-        message << "[BTR][RECOVERY] Refreshing stuck player transforms: "
-            << player.name
-            << " (0x"
-            << std::hex
-            << player.instance
-            << ')';
-
-        LOGS.logInfo(message.str());
-
-        ResetTracking(player);
-        player.isInBTR = true;
+        player.isInBTR = nextVehicle != 0;
+        player.btrPassengerVehicle = nextVehicle;
     }
 }

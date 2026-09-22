@@ -198,10 +198,6 @@ struct aimGlobals {
     static bool showAimFovRing;
 };
 
-struct cameraDebugGlobals {
-    static std::atomic_bool lensStabilityOverlay;
-};
-
 struct coloursGlobals {
     static glm::vec4 playerPMC;
     static glm::vec4 playerScav;

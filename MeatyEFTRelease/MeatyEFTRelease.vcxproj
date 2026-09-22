@@ -152,6 +152,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="UI\Appearance.h" />
+    <ClInclude Include="Web\WebRadar\WebRadar.h" />
     <ClInclude Include="UI\aimview.h" />
     <ClInclude Include="UI\Widgets\LootWidget.h" />
     <ClInclude Include="UI\Widgets\MapWidget.h" />
@@ -543,7 +545,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="Tarkov\Features\Aim\Ballistics.h" />
     <ClInclude Include="Tarkov\Features\Visibility\AtlasVisibility.h" />
     <ClInclude Include="Tarkov\Unity\cameraManager.h" />
-    <ClInclude Include="Tarkov\Unity\OpticProjection.h" />
+    <ClInclude Include="Tarkov\Unity\CameraTypes.h" />
     <ClInclude Include="Tarkov\GameWorld\Player\DogTagCache.h" />
     <ClInclude Include="Tarkov\GameWorld\Exits\Exfil.h" />
     <ClInclude Include="Tarkov\GameWorld\Explosives\ExplosiveManager.h" />
@@ -600,6 +602,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="UI\Appearance.cpp" />
+    <ClCompile Include="Web\WebRadar\WebRadar.cpp" />
     <ClCompile Include="UI\aimview.cpp" />
     <ClCompile Include="UI\config.cpp" />
     <ClCompile Include="UI\debug.cpp" />
@@ -619,7 +623,6 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="external\imgui\misc\cpp\imgui_stdlib.cpp" />
     <ClCompile Include="UI\FileUpdater.cpp" />
     <ClCompile Include="Tarkov\Unity\cameraManager.cpp" />
-    <ClCompile Include="Tarkov\Unity\OpticProjection.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Player\DogTagCache.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Exits\Exfil.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Explosives\ExplosiveManager.cpp" />

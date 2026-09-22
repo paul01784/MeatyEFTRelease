@@ -435,12 +435,15 @@ bool HandsInfo::update(const Player& playerCache)
     if (itemName == "Unknown")
         reset();
 
-    bool isWeapon = cachedIsWeapon;
     const bool itemChanged = itemBase != cachedItem;
+    const uint64_t marketRevision = marketListRevision.load(std::memory_order_acquire);
+    const bool identityChanged = itemChanged || marketRevision != cachedMarketRevision;
+    bool isWeapon = cachedIsWeapon;
 
-    if (itemChanged)
+    if (identityChanged)
     {
         reset();
+        cachedMarketRevision = marketRevision;
         isWeapon = false;
 
         uint64_t itemTemp = 0;
@@ -538,7 +541,7 @@ bool HandsInfo::update(const Player& playerCache)
             itemBase + sdk::LootItem::Version,
             currentWeaponVersion);
     const bool weaponVersionChanged =
-        itemChanged ||
+        identityChanged ||
         (versionRead && currentWeaponVersion != weaponVersion);
     const auto ballisticsNow = std::chrono::steady_clock::now();
     const bool ballisticsRequested =
@@ -556,11 +559,12 @@ bool HandsInfo::update(const Player& playerCache)
             ballisticsNow >= nextVelocityModifierRefresh);
 
     if (isWeapon &&
-        (itemChanged ||
+        (identityChanged ||
             (playerCache.isLocal &&
                 (weaponVersionChanged ||
                     ballisticsRetryDue ||
-                    velocityModifierRefreshDue))))
+                    velocityModifierRefreshDue ||
+                    (ammoName.empty() && chamberCount == 0 && magazineCount == 0)))))
     {
         uint64_t ammoTemplate = 0;
 
@@ -577,8 +581,6 @@ bool HandsInfo::update(const Player& playerCache)
         
         chamberCount = newChamberCount;
         magazineCount = newMagazineCount;
-        ammoName.clear();
-
         if (versionRead)
             weaponVersion = currentWeaponVersion;
 
@@ -641,27 +643,39 @@ bool HandsInfo::update(const Player& playerCache)
         }
 
         
-        if (gotAmmoTemplate || Utils::valid_pointer(ammoTemplate))
-        { 
-
+        if (gotAmmoTemplate && Utils::valid_pointer(ammoTemplate))
+        {
+            std::string resolvedAmmoName;
             MongoID ammoMongoId{};
-
             if (mem.TryRead<MongoID>(ammoTemplate + sdk::ItemTemplate::_id, ammoMongoId))
             {
-                std::string ammoId = TrimEFT(ammoMongoId.ReadString(mem, 64));
-
-                if (ammoId.empty())
-                    return true;
-
-                for (const auto& ml : marketList)
+                const std::string ammoId = TrimEFT(ammoMongoId.ReadString(mem, 64));
+                if (!ammoId.empty())
                 {
-                    if (ml.bsgid != ammoId)
-                        continue;
+                    for (const auto& ml : marketList)
+                    {
+                        if (ml.bsgid != ammoId)
+                            continue;
 
-                    ammoName = ml.shortName;
-                    break;
+                        if (!ml.shortName.empty())
+                            resolvedAmmoName = ml.shortName;
+                        break;
+                    }
                 }
             }
+
+            if (resolvedAmmoName.empty())
+            {
+                uint64_t shortNamePtr = 0;
+                if (mem.TryRead<uint64_t>(ammoTemplate + sdk::ItemTemplate::ShortName, shortNamePtr) &&
+                    Utils::valid_pointer(shortNamePtr))
+                {
+                    resolvedAmmoName = TrimEFT(mem.readUnityString(shortNamePtr, 32));
+                }
+            }
+
+            if (!resolvedAmmoName.empty())
+                ammoName = std::move(resolvedAmmoName);
         }
     }
 

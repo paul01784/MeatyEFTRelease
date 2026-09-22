@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.37";
+std::string globals::appVersion = "1.0.38";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -267,7 +267,6 @@ float aimGlobals::aimOffsetX = 0.f;
 float aimGlobals::aimOffsetY = 0.f;
 bool aimGlobals::showAimFovRing = true;
 
-std::atomic_bool cameraDebugGlobals::lensStabilityOverlay{ false };
 
 
 glm::vec4 coloursGlobals::playerPMC = { 1,1,1,1 };

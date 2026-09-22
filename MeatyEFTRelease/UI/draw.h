@@ -5,6 +5,7 @@
 #include "../Core/Utilities.h"
 #include "../Tarkov/GameWorld/RegisteredPlayers.h"
 #include "../Tarkov/GameWorld/Explosives/ExplosiveManager.h"
+#include "../Web/WebRadar/WebRadar.h"
 
 #include <algorithm>
 #include <array>
@@ -101,9 +102,6 @@ void drawPlayers()
 
     BeginRadarPlayerPanelFrame();
 
-    constexpr float kBtrPassengerRadius = 4.0f;
-    constexpr float kBtrPassengerRadiusSquared =
-        kBtrPassengerRadius * kBtrPassengerRadius;
     constexpr size_t kBtrPassengerCapacity = 4;
 
     struct BtrPassengerStack
@@ -138,26 +136,19 @@ void drawPlayers()
             continue;
         }
 
-        BtrPassengerStack* nearestBtr = nullptr;
-        float nearestDistanceSquared = kBtrPassengerRadiusSquared;
+        BtrPassengerStack* assignedBtr = nullptr;
 
         for (BtrPassengerStack& stack : btrStacks)
         {
-            const glm::vec3 delta = player.location - stack.btr->location;
-            const float distanceSquared =
-                (delta.x * delta.x) +
-                (delta.y * delta.y) +
-                (delta.z * delta.z);
-
-            if (distanceSquared <= nearestDistanceSquared)
+            if (stack.btr->instance == player.btrPassengerVehicle)
             {
-                nearestDistanceSquared = distanceSquared;
-                nearestBtr = &stack;
+                assignedBtr = &stack;
+                break;
             }
         }
 
-        if (nearestBtr && nearestBtr->count < kBtrPassengerCapacity)
-            nearestBtr->passengers[nearestBtr->count++] = &player;
+        if (assignedBtr && assignedBtr->count < kBtrPassengerCapacity)
+            assignedBtr->passengers[assignedBtr->count++] = &player;
     }
 
     for (BtrPassengerStack& stack : btrStacks)
@@ -171,44 +162,6 @@ void drawPlayers()
             }
         );
     }
-
-    struct BtrRadarHeadingState
-    {
-        glm::vec3 previousWorldPosition{};
-        glm::vec2 rotation{};
-        bool initialized = false;
-    };
-
-    static std::unordered_map<uint64_t, BtrRadarHeadingState> btrHeadingStates;
-    const auto getTrackedBtrRotation = [&](const Player& btr, const glm::vec3& mapPosition)
-        {
-            BtrRadarHeadingState& state = btrHeadingStates[btr.instance];
-            if (!state.initialized)
-            {
-                state.previousWorldPosition = btr.location;
-                state.initialized = true;
-                return state.rotation;
-            }
-
-            const glm::vec3 worldMovement = btr.location - state.previousWorldPosition;
-            const float worldMovementSquared = (worldMovement.x * worldMovement.x) + (worldMovement.z * worldMovement.z);
-
-            if (worldMovementSquared > 0.0025f)
-            {
-                const glm::vec3 previousMapPosition = mapControl.getMapPosition(state.previousWorldPosition, currentMap::configX, currentMap::configY, currentMap::configScale);
-                const float mapMovementX = mapPosition.x - previousMapPosition.x;
-                const float mapMovementY = mapPosition.y - previousMapPosition.y;
-
-                if ((mapMovementX * mapMovementX) + (mapMovementY * mapMovementY) > 0.01f)
-                {
-                    state.rotation.x = static_cast<float>(std::atan2(mapMovementY, mapMovementX) * (180.0 / PI));
-                }
-
-                state.previousWorldPosition = btr.location;
-            }
-
-            return state.rotation;
-        };
 
     for (const auto& player : cache)
     {
@@ -263,7 +216,7 @@ void drawPlayers()
                         passengerColours.push_back(GetRadarPlayerMarkerColour(*stack->passengers[index]));
                 }
 
-                DrawRadarBtrMarker(position.x, position.y, getTrackedBtrRotation(player, position), GetRadarPlayerMarkerColour(player), passengerColours, mapControl.zoomLevel);
+                DrawRadarBtrMarker(position.x, position.y, player.rotation, GetRadarPlayerMarkerColour(player), passengerColours, mapControl.zoomLevel);
                 continue;
             }
 
@@ -284,13 +237,15 @@ void drawPlayers()
                     player.aimLineTargetConfirmed)
                 {
                     const glm::vec3 targetPosition = mapControl.getMapPosition(player.aimLineTargetLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
-					const glm::vec2 lineStart = GetRadarFacingPoint(glm::vec2(position.x, position.y), player.rotation, GetRadarPlayerMarkerRadius());
+					const glm::vec2 lineStart = GetRadarFacingPoint(glm::vec2(position.x, position.y), player.rotation,
+						GetRadarPlayerMarkerRadius(PlayerAppearance::resolveMarkerType(player)));
 
 					DrawLine(lineStart.x, lineStart.y, targetPosition.x, targetPosition.y, GetRadarPlayerMarkerColour(player), 3);
                 }
                 else
                 {
-					drawAimLine(glm::vec2(position.x, position.y), player.rotation, aimLineLen, GetRadarPlayerMarkerColour(player), GetRadarPlayerMarkerRadius());
+					drawAimLine(glm::vec2(position.x, position.y), player.rotation, aimLineLen, GetRadarPlayerMarkerColour(player),
+						GetRadarPlayerMarkerRadius(PlayerAppearance::resolveMarkerType(player)));
                 }
 
                 if (!radarGlobals::minimalView)
@@ -320,6 +275,14 @@ void drawLocalPlayer()
 
     const PlayerSnapshot cacheSnapshot = registeredPlayers.getCacheSnapshot();
 
+    const auto local = std::find_if(cacheSnapshot->begin(), cacheSnapshot->end(), [](const Player& player) { return player.isLocal; });
+    if (local != cacheSnapshot->end() && local->isInBTR && local->btrPassengerVehicle != 0 &&
+        std::any_of(cacheSnapshot->begin(), cacheSnapshot->end(), [local](const Player& player)
+        {
+            return player.isBTR && !player.isDead && !player.hasExfiled && player.instance == local->btrPassengerVehicle;
+        }))
+        return;
+
     for (const Player& player : *cacheSnapshot)
     {
         if (player.isLocal && Utils::valid_pointer(player.P_CorpseClass))
@@ -340,15 +303,13 @@ void drawLocalPlayer()
 
 
 
-    drawAimLine(glm::vec2(position.x, position.y), mainGame.localRotation, radarGlobals::localAimLine, coloursGlobals::playerLocal, GetRadarPlayerMarkerRadius()
+    drawAimLine(glm::vec2(position.x, position.y), mainGame.localRotation, radarGlobals::localAimLine, coloursGlobals::playerLocal,
+		GetRadarPlayerMarkerRadius(PlayerMarkerType::Local)
     );
 
-    DrawRadarDirectionalTriangle(position.x, position.y, mainGame.localRotation,
-        ImColor(
-            coloursGlobals::playerLocal.x,
-            coloursGlobals::playerLocal.y,
-            coloursGlobals::playerLocal.z,
-            coloursGlobals::playerLocal.w));
+	const float markerRotation = static_cast<float>((PI / 180.0) * mainGame.localRotation.x);
+	DrawRadarPlayerMarkerShape(ImGui::GetWindowDrawList(), ImVec2(position.x, position.y), markerRotation,
+		PlayerMarkerType::Local, coloursGlobals::playerLocal, GetRadarMarkerScale());
 
 }
 
@@ -974,6 +935,8 @@ void drawLoot()
     for (const LootEntity& itemLoot : cacheLoot)
     {
         if (itemLoot.pendingResolve || itemLoot.failed || !itemLoot.hasValidPosition)
+            continue;
+        if (itemLoot.isCorpse() && webRadar.IsProtectedCorpse(itemLoot))
             continue;
 
         bool visible = false;

@@ -1,4 +1,4 @@
-﻿#include "TarkovDevClient.h"
+#include "TarkovDevClient.h"
 
 #include "../../Tarkov/QuestPlanner/TaskZonePatches.h"
 
@@ -10,7 +10,6 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
-#include <random>
 #include <set>
 #include <sstream>
 #include <system_error>
@@ -40,64 +39,39 @@ const std::vector<long long> LevelXpThresholds = {
     172016256
 };
 
-namespace
-{
-    constexpr const char* TASKS_URL = "https://json.tarkov.dev/regular/tasks";
-    constexpr const char* ITEMS_URL = "https://json.tarkov.dev/regular/items";
+namespace {
+    constexpr const char* TASKS_URL = "https://json.tarkov.dev/pvp-season/tasks";
+    constexpr const char* ITEMS_URL = "https://json.tarkov.dev/pvp-season/items";
+    constexpr const char* TASKS_EN_URL = "https://json.tarkov.dev/pvp-season/tasks_en";
+    constexpr const char* ITEMS_EN_URL = "https://json.tarkov.dev/pvp-season/items_en";
 
-    constexpr const char* TASKS_CACHE_FILE = "tarkovdev_tasks_cache.json";
-    constexpr const char* ITEMS_CACHE_FILE = "market_items_cache.json";
+    // Separate cache names prevent old regular-mode JSON from being reused after
+    // switching this client to the PvP-season feeds.
+    constexpr const char* TASKS_CACHE_FILE = "tarkovdev_pvp_tasks_cache.json";
+    constexpr const char* ITEMS_CACHE_FILE = "market_pvp_items_cache.json";
+    constexpr const char* TASKS_EN_CACHE_FILE = "tarkovdev_pvp_tasks_en_cache.json";
+    constexpr const char* ITEMS_EN_CACHE_FILE = "market_pvp_items_en_cache.json";
 
-    constexpr auto CACHE_MAX_AGE = std::chrono::hours(24);
+    constexpr auto TASKS_CACHE_MAX_AGE = std::chrono::hours(24 * 7);
+    constexpr auto ITEMS_CACHE_MAX_AGE = std::chrono::hours(24);
+    constexpr auto TRANSLATION_CACHE_MAX_AGE = std::chrono::hours(24 * 7);
 
     json tarkovDevDataTasks = json::array();
     json tarkovDevDataItems = json::array();
     json tarkovDevItemCategoriesById = json::object();
 
-    std::string MakeTarkovDevClientName()
-    {
-        constexpr char NameCharacters[] =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        constexpr std::size_t ClientNameLength = 24;
-
-        std::random_device randomDevice;
-        std::uniform_int_distribution<std::size_t> characterIndex(
-            0,
-            sizeof(NameCharacters) - 2);
-        std::string clientName;
-        clientName.reserve(ClientNameLength);
-
-        for (std::size_t i = 0; i < ClientNameLength; ++i)
-            clientName.push_back(NameCharacters[characterIndex(randomDevice)]);
-
-        return clientName;
-    }
-
-    const std::string& TarkovDevClientName()
-    {
-        // Use one opaque identifier per application run. It stays valid for the
-        // duration of each cURL call while preventing separate clients from
-        // presenting the same hard-coded identifier.
-        static const std::string clientName = MakeTarkovDevClientName();
-        return clientName;
-    }
-
-    class CurlGlobalGuard final
-    {
+    class CurlGlobalGuard final {
     public:
         CurlGlobalGuard()
-            : result_(curl_global_init(CURL_GLOBAL_ALL))
-        {
+            : result_(curl_global_init(CURL_GLOBAL_ALL)) {
         }
 
-        ~CurlGlobalGuard()
-        {
+        ~CurlGlobalGuard() {
             if (result_ == CURLE_OK)
                 curl_global_cleanup();
         }
 
-        CURLcode result() const noexcept
-        {
+        CURLcode result() const noexcept {
             return result_;
         }
 
@@ -105,14 +79,12 @@ namespace
         CURLcode result_ = CURLE_FAILED_INIT;
     };
 
-    CurlGlobalGuard& GetCurlGlobalGuard()
-    {
+    CurlGlobalGuard& GetCurlGlobalGuard() {
         static CurlGlobalGuard guard;
         return guard;
     }
 
-    bool IsCacheFresh(const std::filesystem::path& path)
-    {
+    bool IsCacheFresh(const std::filesystem::path& path, std::chrono::hours maxAge) {
         std::error_code ec;
 
         if (!std::filesystem::is_regular_file(path, ec) || ec)
@@ -126,11 +98,10 @@ namespace
         if (modified > now)
             return true;
 
-        return (now - modified) <= CACHE_MAX_AGE;
+        return (now - modified) <= maxAge;
     }
 
-    std::string ReadTextFile(const std::filesystem::path& path)
-    {
+    std::string ReadTextFile(const std::filesystem::path& path) {
         std::ifstream in(path, std::ios::binary);
         if (!in.is_open())
             return {};
@@ -140,8 +111,7 @@ namespace
         return buffer.str();
     }
 
-    bool WriteTextFileAtomically(const std::filesystem::path& path, const std::string& contents)
-    {
+    bool WriteTextFileAtomically(const std::filesystem::path& path, const std::string& contents) {
         const std::filesystem::path tempPath = path.string() + ".tmp";
 
         {
@@ -156,8 +126,7 @@ namespace
                 contents.data(),
                 static_cast<std::streamsize>(contents.size()));
 
-            if (!out.good())
-            {
+            if (!out.good()) {
                 out.close();
                 std::error_code removeError;
                 std::filesystem::remove(tempPath, removeError);
@@ -171,8 +140,7 @@ namespace
         ec.clear();
         std::filesystem::rename(tempPath, path, ec);
 
-        if (ec)
-        {
+        if (ec) {
             std::error_code removeError;
             std::filesystem::remove(tempPath, removeError);
             return false;
@@ -181,55 +149,31 @@ namespace
         return true;
     }
 
-    bool RewriteTextFileAtomicallyPreservingTimestamp(const std::filesystem::path& path, const std::string& contents)
-    {
-        std::error_code timestampError;
-        const auto originalTimestamp = std::filesystem::last_write_time(path, timestampError);
-
-        if (!WriteTextFileAtomically(path, contents))
-            return false;
-
-        if (!timestampError)
-        {
-            std::error_code restoreError;
-            std::filesystem::last_write_time(path, originalTimestamp, restoreError);
-        }
-
-        return true;
-    }
-
-    json* FindMutableCollection(json& root, bool tasks)
-    {
+    json* FindMutableCollection(json& root, bool tasks) {
         if (root.is_array())
             return &root;
 
-        const auto findInObject = [tasks](json& object) -> json*
-            {
+        const auto findInObject = [tasks](json& object) -> json* {
                 if (!object.is_object())
                     return nullptr;
 
-                if (tasks)
-                {
+                if (tasks) {
                     const auto it = object.find("tasks");
                     if (it != object.end() &&
-                        (it->is_array() || it->is_object()))
-                    {
+                        (it->is_array() || it->is_object())) {
                         return &(*it);
                     }
                 }
-                else
-                {
+                else {
                     const auto itemsIt = object.find("items");
                     if (itemsIt != object.end() &&
-                        (itemsIt->is_array() || itemsIt->is_object()))
-                    {
+                        (itemsIt->is_array() || itemsIt->is_object())) {
                         return &(*itemsIt);
                     }
 
                     const auto oldItemsIt = object.find("itemsByType");
                     if (oldItemsIt != object.end() &&
-                        (oldItemsIt->is_array() || oldItemsIt->is_object()))
-                    {
+                        (oldItemsIt->is_array() || oldItemsIt->is_object())) {
                         return &(*oldItemsIt);
                     }
                 }
@@ -238,8 +182,7 @@ namespace
             };
 
         const auto dataIt = root.find("data");
-        if (dataIt != root.end())
-        {
+        if (dataIt != root.end()) {
             if (json* collection = findInObject(*dataIt))
                 return collection;
         }
@@ -247,37 +190,32 @@ namespace
         return findInObject(root);
     }
 
-    struct TaskZonePatchStats
-    {
+    struct TaskZonePatchStats {
         std::size_t objectivesPatched = 0;
         std::size_t zonesAdded = 0;
         std::size_t plantingObjectivesStillMissing = 0;
         std::size_t plantingObjectivesWithNonCanonicalId = 0;
     };
 
-    bool IsCanonicalObjectId(std::string_view value)
-    {
+    bool IsCanonicalObjectId(std::string_view value) {
         if (value.size() != 24)
             return false;
 
         return std::all_of(
             value.begin(),
             value.end(),
-            [](const char character)
-            {
+            [](const char character) {
                 return (character >= '0' && character <= '9') ||
                     (character >= 'a' && character <= 'f') ||
                     (character >= 'A' && character <= 'F');
             });
     }
 
-    TaskZonePatchStats ApplyPlantingZonePatches(json& taskCollection)
-    {
+    TaskZonePatchStats ApplyPlantingZonePatches(json& taskCollection) {
         TaskZonePatchStats stats{};
 
         const auto readStringView = [](const json& object, const char* key)
-            -> std::string_view
-            {
+            -> std::string_view {
                 if (!object.is_object())
                     return {};
 
@@ -288,8 +226,7 @@ namespace
                 return it->get_ref<const std::string&>();
             };
 
-        const auto patchTask = [&](json& task)
-            {
+        const auto patchTask = [&](json& task) {
                 if (!task.is_object())
                     return;
 
@@ -298,13 +235,11 @@ namespace
 
                 if (taskId.empty() ||
                     objectivesIt == task.end() ||
-                    !objectivesIt->is_array())
-                {
+                    !objectivesIt->is_array()) {
                     return;
                 }
 
-                for (auto& objective : *objectivesIt)
-                {
+                for (auto& objective : *objectivesIt) {
                     if (!objective.is_object())
                         continue;
 
@@ -322,19 +257,16 @@ namespace
                     const auto zonesIt = objective.find("zones");
                     if (zonesIt != objective.end() &&
                         zonesIt->is_array() &&
-                        !zonesIt->empty())
-                    {
+                        !zonesIt->empty()) {
                         continue;
                     }
 
                     json recoveredZones = json::array();
 
-                    for (const auto& patch : TaskZonePatchData::kPlantingZonePatches)
-                    {
+                    for (const auto& patch : TaskZonePatchData::kPlantingZonePatches) {
                         if (patch.taskId != taskId ||
                             patch.objectiveId != objectiveId ||
-                            patch.objectiveType != objectiveType)
-                        {
+                            patch.objectiveType != objectiveType) {
                             continue;
                         }
 
@@ -348,8 +280,7 @@ namespace
                         });
                     }
 
-                    if (recoveredZones.empty())
-                    {
+                    if (recoveredZones.empty()) {
                         ++stats.plantingObjectivesStillMissing;
                         continue;
                     }
@@ -360,17 +291,14 @@ namespace
                 }
             };
 
-        if (taskCollection.is_array())
-        {
+        if (taskCollection.is_array()) {
             for (auto& task : taskCollection)
                 patchTask(task);
         }
-        else if (taskCollection.is_object())
-        {
+        else if (taskCollection.is_object()) {
             for (auto it = taskCollection.begin();
                 it != taskCollection.end();
-                ++it)
-            {
+                ++it) {
                 patchTask(it.value());
             }
         }
@@ -378,10 +306,8 @@ namespace
         return stats;
     }
 
-    bool CopyCollectionToArray(const json& collection, json& destination)
-    {
-        if (collection.is_array())
-        {
+    bool CopyCollectionToArray(const json& collection, json& destination) {
+        if (collection.is_array()) {
             destination = collection;
             return true;
         }
@@ -391,16 +317,14 @@ namespace
 
         destination = json::array();
 
-        for (auto it = collection.begin(); it != collection.end(); ++it)
-        {
+        for (auto it = collection.begin(); it != collection.end(); ++it) {
             if (!it.value().is_object())
                 continue;
 
             json entry = it.value();
 
             if ((!entry.contains("id") || !entry["id"].is_string()) &&
-                !it.key().empty())
-            {
+                !it.key().empty()) {
                 entry["id"] = it.key();
             }
 
@@ -410,8 +334,7 @@ namespace
         return true;
     }
 
-    void CaptureItemCategories(const json& root)
-    {
+    void CaptureItemCategories(const json& root) {
         tarkovDevItemCategoriesById = json::object();
 
         const json* payload = &root;
@@ -426,27 +349,22 @@ namespace
         if (categoriesIt == payload->end())
             return;
 
-        if (categoriesIt->is_object())
-        {
-            for (auto it = categoriesIt->begin(); it != categoriesIt->end(); ++it)
-            {
+        if (categoriesIt->is_object()) {
+            for (auto it = categoriesIt->begin(); it != categoriesIt->end(); ++it) {
                 if (!it.value().is_object())
                     continue;
 
                 json category = it.value();
                 if ((!category.contains("id") || !category["id"].is_string()) &&
-                    !it.key().empty())
-                {
+                    !it.key().empty()) {
                     category["id"] = it.key();
                 }
 
                 tarkovDevItemCategoriesById[it.key()] = std::move(category);
             }
         }
-        else if (categoriesIt->is_array())
-        {
-            for (const auto& category : *categoriesIt)
-            {
+        else if (categoriesIt->is_array()) {
+            for (const auto& category : *categoriesIt) {
                 if (!category.is_object())
                     continue;
 
@@ -457,13 +375,11 @@ namespace
         }
     }
 
-    void ApplyTranslationLookup(json& value, const json& translations, bool translateString = true)
-    {
+    void ApplyTranslationLookup(json& value, const json& translations, bool translateString = true) {
         if (!translations.is_object())
             return;
 
-        if (value.is_string())
-        {
+        if (value.is_string()) {
             if (!translateString)
                 return;
 
@@ -476,25 +392,21 @@ namespace
             return;
         }
 
-        if (value.is_array())
-        {
+        if (value.is_array()) {
             for (auto& entry : value)
                 ApplyTranslationLookup(entry, translations);
 
             return;
         }
 
-        if (value.is_object())
-        {
-            for (auto it = value.begin(); it != value.end(); ++it)
-            {
+        if (value.is_object()) {
+            for (auto it = value.begin(); it != value.end(); ++it) {
                 ApplyTranslationLookup(it.value(), translations, it.key() != "id");
             }
         }
     }
 
-    std::string ApplyEnglishTranslations(const std::string& baseResponse, const std::string& translationResponse)
-    {
+    std::string ApplyEnglishTranslations(const std::string& baseResponse, const std::string& translationResponse) {
         if (baseResponse.empty() || translationResponse.empty())
             return baseResponse;
 
@@ -502,15 +414,13 @@ namespace
         json translationRoot = json::parse(translationResponse, nullptr, false);
 
         if (baseRoot.is_discarded() || translationRoot.is_discarded() ||
-            !baseRoot.is_object() || !translationRoot.is_object())
-        {
+            !baseRoot.is_object() || !translationRoot.is_object()) {
             return baseResponse;
         }
 
         const auto translationDataIt = translationRoot.find("data");
         if (translationDataIt == translationRoot.end() ||
-            !translationDataIt->is_object())
-        {
+            !translationDataIt->is_object()) {
             return baseResponse;
         }
 
@@ -522,8 +432,19 @@ namespace
         return baseRoot.dump();
     }
 
-    bool ParseDataset(const std::string& raw, bool tasks, json& destination, std::string* patchedRaw = nullptr, TaskZonePatchStats* patchStats = nullptr)
-    {
+    bool IsTranslationDatasetValid(const std::string& raw) {
+        if (raw.empty())
+            return false;
+
+        const json root = json::parse(raw, nullptr, false);
+        if (root.is_discarded() || !root.is_object())
+            return false;
+
+        const auto dataIt = root.find("data");
+        return dataIt != root.end() && dataIt->is_object();
+    }
+
+    bool ParseDataset(const std::string& raw, bool tasks, json& destination, std::string* patchedRaw = nullptr, TaskZonePatchStats* patchStats = nullptr) {
         if (raw.empty())
             return false;
 
@@ -540,16 +461,14 @@ namespace
 
         TaskZonePatchStats localPatchStats{};
 
-        if (tasks)
-        {
+        if (tasks) {
             localPatchStats = ApplyPlantingZonePatches(*collection);
 
             if (patchStats)
                 *patchStats = localPatchStats;
         }
 
-        if (patchedRaw)
-        {
+        if (patchedRaw) {
             *patchedRaw = localPatchStats.objectivesPatched > 0
                 ? root.dump()
                 : raw;
@@ -558,8 +477,7 @@ namespace
         return CopyCollectionToArray(*collection, destination);
     }
 
-    void SaveErrorBody(const char* filename, const std::string& body)
-    {
+    void SaveErrorBody(const char* filename, const std::string& body) {
         if (body.empty())
             return;
 
@@ -574,10 +492,8 @@ namespace
             out << body;
     }
 
-    void LogTaskZonePatchStats(const TaskZonePatchStats& stats, const char* source)
-    {
-        if (stats.objectivesPatched > 0)
-        {
+    void LogTaskZonePatchStats(const TaskZonePatchStats& stats, const char* source) {
+        if (stats.objectivesPatched > 0) {
             LOGS.logInfo(
                 std::string("[TASKS][ZONE PATCH][") + source +
                 "] Recovered " +
@@ -587,8 +503,7 @@ namespace
                 " zones)");
         }
 
-        if (stats.plantingObjectivesStillMissing > 0)
-        {
+        if (stats.plantingObjectivesStillMissing > 0) {
             LOGS.logInfo(
                 std::string("[TASKS][ZONE PATCH][") + source +
                 "] " +
@@ -597,8 +512,7 @@ namespace
         }
     }
 
-    std::string ReadString(const json& object, const char* key)
-    {
+    std::string ReadString(const json& object, const char* key) {
         if (!object.is_object())
             return {};
 
@@ -609,8 +523,7 @@ namespace
         return it->get<std::string>();
     }
 
-    std::string ReadReferenceId(const json& value)
-    {
+    std::string ReadReferenceId(const json& value) {
         if (value.is_string())
             return value.get<std::string>();
 
@@ -624,18 +537,15 @@ namespace
         return id;
     }
 
-    std::string ReadCategoryName(const json& category)
-    {
+    std::string ReadCategoryName(const json& category) {
         const json* resolved = &category;
 
-        if (category.is_string())
-        {
+        if (category.is_string()) {
             const std::string categoryId = category.get<std::string>();
             const auto categoryIt = tarkovDevItemCategoriesById.find(categoryId);
 
             if (categoryIt == tarkovDevItemCategoriesById.end() ||
-                !categoryIt->is_object())
-            {
+                !categoryIt->is_object()) {
                 return {};
             }
 
@@ -652,8 +562,7 @@ namespace
         return name;
     }
 
-    long ReadLong(const json& object, const char* key, long fallback = 0)
-    {
+    long ReadLong(const json& object, const char* key, long fallback = 0) {
         if (!object.is_object())
             return fallback;
 
@@ -661,18 +570,15 @@ namespace
         if (it == object.end() || !it->is_number())
             return fallback;
 
-        try
-        {
+        try {
             return it->get<long>();
         }
-        catch (...)
-        {
+        catch (...) {
             return fallback;
         }
     }
 
-    float ReadFloat(const json& object, const char* key, float fallback = 0.0f)
-    {
+    float ReadFloat(const json& object, const char* key, float fallback = 0.0f) {
         if (!object.is_object())
             return fallback;
 
@@ -680,41 +586,35 @@ namespace
         if (it == object.end() || !it->is_number())
             return fallback;
 
-        try
-        {
+        try {
             return it->get<float>();
         }
-        catch (...)
-        {
+        catch (...) {
             return fallback;
         }
     }
 
-    std::string ReadMapId(const json& map)
-    {
+    std::string ReadMapId(const json& map) {
         std::string value = ReadString(map, "nameId");
         if (value.empty())
             value = ReadString(map, "id");
         return value;
     }
 
-    long ReadMarketPrice(const json& item)
-    {
+    long ReadMarketPrice(const json& item) {
         long price = ReadLong(item, "avg24hPrice", 0);
         if (price > 0)
             return price;
 
         const auto fleaIt = item.find("fleaMarket");
-        if (fleaIt != item.end() && fleaIt->is_object())
-        {
+        if (fleaIt != item.end() && fleaIt->is_object()) {
             price = ReadLong(*fleaIt, "avg24hPrice", 0);
             if (price > 0)
                 return price;
         }
 
         const auto fleaDataIt = item.find("fleaMarketData");
-        if (fleaDataIt != item.end() && fleaDataIt->is_object())
-        {
+        if (fleaDataIt != item.end() && fleaDataIt->is_object()) {
             price = ReadLong(*fleaDataIt, "avg24hPrice", 0);
             if (price > 0)
                 return price;
@@ -723,19 +623,16 @@ namespace
         return 0;
     }
 
-    long ReadBestTraderSellPrice(const json& item)
-    {
+    long ReadBestTraderSellPrice(const json& item) {
         long bestPrice = 0;
 
-        const auto readOffers = [&item, &bestPrice](const char* field)
-        {
+        const auto readOffers = [&item, &bestPrice](const char* field) {
             const auto offersIt = item.find(field);
 
             if (offersIt == item.end() || !offersIt->is_array())
                 return;
 
-            for (const auto& offer : *offersIt)
-            {
+            for (const auto& offer : *offersIt) {
                 long price = ReadLong(offer, "priceRUB", 0);
 
                 if (price <= 0 && ReadString(offer, "currency") == "RUB")
@@ -750,12 +647,10 @@ namespace
         return bestPrice;
     }
 
-    int CalculateLevel(int experience)
-    {
+    int CalculateLevel(int experience) {
         int level = 1;
 
-        for (std::size_t i = 0; i < LevelXpThresholds.size(); ++i)
-        {
+        for (std::size_t i = 0; i < LevelXpThresholds.size(); ++i) {
             if (static_cast<long long>(experience) < LevelXpThresholds[i])
                 break;
 
@@ -765,8 +660,7 @@ namespace
         return level;
     }
 
-    size_t ProfileWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
-    {
+    size_t ProfileWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
         if (!userp)
             return 0;
 
@@ -779,14 +673,12 @@ namespace
     }
 }
 
-std::string TarkovDevProfileClient::HttpGet(const std::string& url, long& httpCode)
-{
+std::string TarkovDevProfileClient::HttpGet(const std::string& url, long& httpCode) {
     httpCode = 0;
     std::string response;
 
     CurlGlobalGuard& curlGlobal = GetCurlGlobalGuard();
-    if (curlGlobal.result() != CURLE_OK)
-    {
+    if (curlGlobal.result() != CURLE_OK) {
         LOGS.logError("[PROFILE][CURL] curl_global_init failed: " + std::string(curl_easy_strerror(curlGlobal.result())));
         return response;
     }
@@ -800,7 +692,6 @@ std::string TarkovDevProfileClient::HttpGet(const std::string& url, long& httpCo
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, TarkovDevClientName().c_str());
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -813,12 +704,10 @@ std::string TarkovDevProfileClient::HttpGet(const std::string& url, long& httpCo
 
     const CURLcode result = curl_easy_perform(curl);
 
-    if (result == CURLE_OK)
-    {
+    if (result == CURLE_OK) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
     }
-    else
-    {
+    else {
         const std::string detail =
             errorBuffer[0] != '\0'
             ? std::string(errorBuffer)
@@ -833,19 +722,16 @@ std::string TarkovDevProfileClient::HttpGet(const std::string& url, long& httpCo
 
 std::optional<PlayerProfileStats> TarkovDevProfileClient::GetProfileForAccountId(
     const std::string& accountId,
-    int profileMode)
-{
+    int profileMode) {
     if (accountId.empty())
         return std::nullopt;
 
     long long aid = 0;
 
-    try
-    {
+    try {
         aid = std::stoll(accountId);
     }
-    catch (...)
-    {
+    catch (...) {
         LOGS.logError("[PROFILE] Invalid account ID: " + accountId);
         return std::nullopt;
     }
@@ -853,8 +739,7 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::GetProfileForAccountId
     return FetchProfile(aid, profileMode);
 }
 
-std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long accountId, int profileMode)
-{
+std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long accountId, int profileMode) {
     if (accountId <= 0)
         return std::nullopt;
 
@@ -866,21 +751,18 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
     long httpCode = 0;
     const std::string body = HttpGet(url, httpCode);
 
-    if (httpCode == 404)
-    {
+    if (httpCode == 404) {
         LOGS.logInfo("[PROFILE] Account ID not found");
         return std::nullopt;
     }
 
-    if (httpCode < 200 || httpCode >= 300 || body.empty())
-    {
+    if (httpCode < 200 || httpCode >= 300 || body.empty()) {
         LOGS.logError("[PROFILE] HTTP error: " + std::to_string(httpCode));
         return std::nullopt;
     }
 
     const json root = json::parse(body, nullptr, false);
-    if (root.is_discarded() || !root.is_object())
-    {
+    if (root.is_discarded() || !root.is_object()) {
         LOGS.logError("[PROFILE] Invalid JSON response");
         return std::nullopt;
     }
@@ -889,8 +771,7 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
     info.aid = root.value("aid", 0LL);
 
     const auto infoIt = root.find("info");
-    if (infoIt != root.end() && infoIt->is_object())
-    {
+    if (infoIt != root.end() && infoIt->is_object()) {
         info.nickname = infoIt->value("nickname", "");
         info.side = infoIt->value("side", "");
         info.experience = infoIt->value("experience", 0);
@@ -902,11 +783,9 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
     info.level = CalculateLevel(info.experience);
 
     const auto pmcStatsIt = root.find("pmcStats");
-    if (pmcStatsIt != root.end() && pmcStatsIt->is_object())
-    {
+    if (pmcStatsIt != root.end() && pmcStatsIt->is_object()) {
         const auto eftIt = pmcStatsIt->find("eft");
-        if (eftIt != pmcStatsIt->end() && eftIt->is_object())
-        {
+        if (eftIt != pmcStatsIt->end() && eftIt->is_object()) {
             const long long totalSeconds =
                 eftIt->value("totalInGameTime", 0LL);
 
@@ -914,25 +793,20 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
                 std::max(0LL, totalSeconds) / 3600LL);
 
             const auto countersIt = eftIt->find("overAllCounters");
-            if (countersIt != eftIt->end() && countersIt->is_object())
-            {
+            if (countersIt != eftIt->end() && countersIt->is_object()) {
                 const auto itemsIt = countersIt->find("Items");
-                if (itemsIt != countersIt->end() && itemsIt->is_array())
-                {
-                    for (const auto& item : *itemsIt)
-                    {
+                if (itemsIt != countersIt->end() && itemsIt->is_array()) {
+                    for (const auto& item : *itemsIt) {
                         if (!item.is_object())
                             continue;
 
                         std::vector<std::string> keyList;
 
                         const auto keyIt = item.find("Key");
-                        if (keyIt != item.end() && keyIt->is_array())
-                        {
+                        if (keyIt != item.end() && keyIt->is_array()) {
                             keyList.reserve(keyIt->size());
 
-                            for (const auto& key : *keyIt)
-                            {
+                            for (const auto& key : *keyIt) {
                                 if (key.is_string())
                                     keyList.emplace_back(key.get<std::string>());
                             }
@@ -971,15 +845,13 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
     return info;
 }
 
-bool TarkovDev::Initialize(bool forceRefresh, bool pauseRefresh)
-{
+bool TarkovDev::Initialize(bool forceRefresh, bool pauseRefresh) {
     const bool tasksOk = !loadDataset(Dataset::Tasks, forceRefresh, pauseRefresh).empty();
     if (tasksOk)
         buildTasksList();
 
     const bool itemsOk = !loadDataset(Dataset::Items, forceRefresh, pauseRefresh).empty();
-    if (itemsOk)
-    {
+    if (itemsOk) {
         buildItemList();
         buildCatList();
     }
@@ -987,18 +859,98 @@ bool TarkovDev::Initialize(bool forceRefresh, bool pauseRefresh)
     return tasksOk && itemsOk;
 }
 
-std::string TarkovDev::loadJsonQuests(bool forceRefresh)
-{
+std::string TarkovDev::loadJsonQuests(bool forceRefresh) {
     return loadDataset(Dataset::Tasks, forceRefresh);
 }
 
-std::string TarkovDev::loadJsonItems(bool forceRefresh)
-{
+std::string TarkovDev::loadJsonItems(bool forceRefresh) {
     return loadDataset(Dataset::Items, forceRefresh);
 }
 
-std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh, bool pauseRefresh)
-{
+std::string TarkovDev::loadTranslationDataset(Dataset dataset, bool forceRefresh, bool pauseRefresh) {
+    const bool isTasks = dataset == Dataset::Tasks;
+    const char* label = isTasks ? "TASKS_EN" : "ITEMS_EN";
+    const char* url = isTasks ? TASKS_EN_URL : ITEMS_EN_URL;
+    const std::filesystem::path cacheFile = isTasks ? TASKS_EN_CACHE_FILE : ITEMS_EN_CACHE_FILE;
+
+    const auto tryCache = [&](bool requireFresh) -> std::string {
+        if (requireFresh && !IsCacheFresh(cacheFile, TRANSLATION_CACHE_MAX_AGE))
+            return {};
+
+        const std::string cached = ReadTextFile(cacheFile);
+        if (!IsTranslationDatasetValid(cached))
+            return {};
+
+        LOGS.logInfo(std::string("[") + label + "][CACHE] Loaded English translation cache");
+        return cached;
+    };
+
+    if (!forceRefresh) {
+        const std::string freshCache = tryCache(true);
+        if (!freshCache.empty())
+            return freshCache;
+    }
+
+    if (pauseRefresh) {
+        const std::string cached = tryCache(false);
+        if (!cached.empty()) {
+            LOGS.logInfo(std::string("[") + label + "][CACHE] Refresh paused; using cached translations regardless of age");
+            return cached;
+        }
+
+        LOGS.logWarn(std::string("[") + label + "][CACHE] Refresh paused and no usable translation cache is available");
+        return {};
+    }
+
+    CurlGlobalGuard& curlGlobal = GetCurlGlobalGuard();
+    if (curlGlobal.result() != CURLE_OK) {
+        LOGS.logError(std::string("[") + label + "][CURL] curl_global_init failed: " + curl_easy_strerror(curlGlobal.result()));
+        return tryCache(false);
+    }
+
+    std::ostringstream responseStream;
+    long httpStatus = 0;
+
+    const CURLcode curlResult = curl_read(url, responseStream, 30, &httpStatus);
+    const std::string response = responseStream.str();
+
+    if (curlResult == CURLE_OK && httpStatus >= 200 && httpStatus < 300) {
+        if (IsTranslationDatasetValid(response)) {
+            if (WriteTextFileAtomically(cacheFile, response))
+                LOGS.logInfo(std::string("[") + label + "][CACHE] Refreshed English translation cache");
+            else
+                LOGS.logError(std::string("[") + label + "][CACHE] Failed to write English translation cache");
+
+            return response;
+        }
+
+        LOGS.logError(std::string("[") + label + "][JSON] Translation response did not contain a data object");
+        SaveErrorBody(
+            isTasks ? "tarkov_tasks_en_api_error.txt" : "tarkov_items_en_api_error.txt",
+            response);
+    }
+    else {
+        if (curlResult != CURLE_OK)
+            LOGS.logError(std::string("[") + label + "][CURL] Request failed: " + curl_easy_strerror(curlResult));
+        else
+            LOGS.logError(std::string("[") + label + "][HTTP] Request returned HTTP " + std::to_string(httpStatus));
+
+        SaveErrorBody(
+            isTasks ? "tarkov_tasks_en_api_error.txt" : "tarkov_items_en_api_error.txt",
+            response);
+    }
+
+    const std::string staleCache = tryCache(false);
+    if (!staleCache.empty()) {
+        LOGS.logWarn(std::string("[") + label + "][CACHE] Using stale English translation cache after refresh failure");
+        return staleCache;
+    }
+
+    LOGS.logWarn(std::string("[") + label + "][JSON] No usable English translation response or cache");
+    return {};
+}
+
+std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh, bool pauseRefresh) {
     const bool isTasks = dataset == Dataset::Tasks;
 
     bool& loaded = isTasks ? tasksLoaded_ : itemsLoaded_;
@@ -1007,74 +959,74 @@ std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh, bool paus
 
     const char* label = isTasks ? "TASKS" : "MARKET";
     const char* url = isTasks ? TASKS_URL : ITEMS_URL;
-    const std::filesystem::path cacheFile =
-        isTasks ? TASKS_CACHE_FILE : ITEMS_CACHE_FILE;
+    const std::filesystem::path cacheFile = isTasks ? TASKS_CACHE_FILE : ITEMS_CACHE_FILE;
+    const std::chrono::hours cacheMaxAge = isTasks ? TASKS_CACHE_MAX_AGE : ITEMS_CACHE_MAX_AGE;
 
     if (loaded && !forceRefresh)
         return rawStorage;
 
-    const auto tryCache = [&](bool requireFresh) -> std::string
-        {
-            if (requireFresh && !IsCacheFresh(cacheFile))
-                return {};
+    // English text is a separate 7-day cache. The base cache stays exactly as
+    // downloaded so translations can refresh independently of the base dataset.
+    const std::string translationRaw = loadTranslationDataset(dataset, forceRefresh, pauseRefresh);
 
-            const std::string cached = ReadTextFile(cacheFile);
-            if (cached.empty())
-                return {};
+    const auto parseDataset = [&](const std::string& baseRaw, const char* source, json& parsedArray, std::string& processedRaw) -> bool {
+        processedRaw = translationRaw.empty()
+            ? baseRaw
+            : ApplyEnglishTranslations(baseRaw, translationRaw);
 
-            json parsedArray;
-            std::string usableCache = cached;
-            TaskZonePatchStats zonePatchStats{};
+        TaskZonePatchStats zonePatchStats{};
+        std::string patchedRaw = processedRaw;
 
-            if (!ParseDataset(cached, isTasks, parsedArray,
-                isTasks ? &usableCache : nullptr,
-                isTasks ? &zonePatchStats : nullptr))
-            {
-                LOGS.logError(std::string("[") + label + "][CACHE] Cached JSON is invalid");
-                return {};
-            }
+        if (!ParseDataset(
+            processedRaw,
+            isTasks,
+            parsedArray,
+            isTasks ? &patchedRaw : nullptr,
+            isTasks ? &zonePatchStats : nullptr)) {
+            return false;
+        }
 
-            if (isTasks && requireFresh && zonePatchStats.plantingObjectivesWithNonCanonicalId > 0)
-            {
-                LOGS.logInfo(
-                    "[TASKS][ZONE PATCH][CACHE] Cached objective IDs were "
-                    "translated; refreshing cache");
-                return {};
-            }
+        if (isTasks) {
+            processedRaw = std::move(patchedRaw);
+            LogTaskZonePatchStats(zonePatchStats, source);
+        }
 
-            destination = std::move(parsedArray);
-            rawStorage = std::move(usableCache);
-            loaded = true;
+        return true;
+    };
 
-            if (isTasks)
-            {
-                LogTaskZonePatchStats(zonePatchStats, "CACHE");
+    const auto tryCache = [&](bool requireFresh) -> std::string {
+        if (requireFresh && !IsCacheFresh(cacheFile, cacheMaxAge))
+            return {};
 
-                if (zonePatchStats.objectivesPatched > 0 && !RewriteTextFileAtomicallyPreservingTimestamp(cacheFile,rawStorage))
-                {
-                    LOGS.logError(
-                        "[TASKS][ZONE PATCH][CACHE] "
-                        "Failed to persist recovered zones");
-                }
-            }
+        const std::string cached = ReadTextFile(cacheFile);
+        if (cached.empty())
+            return {};
 
-            LOGS.logInfo(std::string("[") + label + "][CACHE] Loaded cached JSON");
+        json parsedArray;
+        std::string processedCache;
 
-            return rawStorage;
-        };
+        if (!parseDataset(cached, "CACHE", parsedArray, processedCache)) {
+            LOGS.logError(std::string("[") + label + "][CACHE] Cached JSON is invalid");
+            return {};
+        }
 
-    if (!forceRefresh)
-    {
+        destination = std::move(parsedArray);
+        rawStorage = std::move(processedCache);
+        loaded = true;
+
+        LOGS.logInfo(std::string("[") + label + "][CACHE] Loaded cached JSON");
+        return rawStorage;
+    };
+
+    if (!forceRefresh) {
         const std::string freshCache = tryCache(true);
         if (!freshCache.empty())
             return freshCache;
     }
 
-    if (pauseRefresh)
-    {
+    if (pauseRefresh) {
         const std::string cached = tryCache(false);
-        if (!cached.empty())
-        {
+        if (!cached.empty()) {
             LOGS.logInfo(std::string("[") + label + "][CACHE] Refresh paused; using cached JSON regardless of age");
             return cached;
         }
@@ -1084,8 +1036,7 @@ std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh, bool paus
     }
 
     CurlGlobalGuard& curlGlobal = GetCurlGlobalGuard();
-    if (curlGlobal.result() != CURLE_OK)
-    {
+    if (curlGlobal.result() != CURLE_OK) {
         LOGS.logError(std::string("[") + label + "][CURL] curl_global_init failed: " + curl_easy_strerror(curlGlobal.result()));
 
         const std::string staleCache = tryCache(false);
@@ -1098,103 +1049,39 @@ std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh, bool paus
     std::ostringstream responseStream;
     long httpStatus = 0;
 
-    const CURLcode curlResult = curl_read(
-        url,
-        responseStream,
-        30,
-        &httpStatus);
-
+    const CURLcode curlResult = curl_read(url, responseStream, 30, &httpStatus);
     const std::string response = responseStream.str();
 
-    if (curlResult == CURLE_OK &&
-        httpStatus >= 200 &&
-        httpStatus < 300)
-    {
-        std::string processedResponse = response;
-
-        const json baseRoot = json::parse(response, nullptr, false);
-        if (!baseRoot.is_discarded() && baseRoot.is_object())
-        {
-            const auto pathsIt = baseRoot.find("translations");
-            if (pathsIt != baseRoot.end() &&
-                pathsIt->is_array() &&
-                !pathsIt->empty())
-            {
-                std::ostringstream translationStream;
-                long translationHttpStatus = 0;
-                const std::string translationUrl = std::string(url) + "_en";
-
-                const CURLcode translationResult = curl_read(
-                    translationUrl,
-                    translationStream,
-                    30,
-                    &translationHttpStatus);
-
-                if (translationResult == CURLE_OK &&
-                    translationHttpStatus >= 200 &&
-                    translationHttpStatus < 300)
-                {
-                    processedResponse = ApplyEnglishTranslations(
-                        response,
-                        translationStream.str());
-                }
-                else
-                {
-                    LOGS.logError(std::string("[") + label + "][JSON] English translation lookup failed; using raw values");
-                }
-            }
-        }
-
+    if (curlResult == CURLE_OK && httpStatus >= 200 && httpStatus < 300) {
         json parsedArray;
-        std::string cacheResponse = processedResponse;
-        TaskZonePatchStats zonePatchStats{};
+        std::string processedResponse;
 
-        if (ParseDataset(processedResponse, isTasks, parsedArray,
-            isTasks ? &cacheResponse : nullptr,
-            isTasks ? &zonePatchStats : nullptr))
-        {
+        if (parseDataset(response, "DOWNLOAD", parsedArray, processedResponse)) {
             destination = std::move(parsedArray);
-            rawStorage = std::move(cacheResponse);
+            rawStorage = std::move(processedResponse);
             loaded = true;
 
-            if (isTasks)
-                LogTaskZonePatchStats(zonePatchStats, "DOWNLOAD");
-
-            if (WriteTextFileAtomically(cacheFile, rawStorage))
-            {
+            if (WriteTextFileAtomically(cacheFile, response))
                 LOGS.logInfo(std::string("[") + label + "][CACHE] Refreshed cache from JSON endpoint");
-            }
             else
-            {
                 LOGS.logError(std::string("[") + label + "][CACHE] Failed to write cache file");
-            }
 
             return rawStorage;
         }
 
-        LOGS.logError(std::string("[") + label + "][JSON] Response did not contain the expected " +  (isTasks ? "data.tasks" : "data.items") + " collection");
-
+        LOGS.logError(std::string("[") + label + "][JSON] Response did not contain the expected " + (isTasks ? "data.tasks" : "data.items") + " collection");
         SaveErrorBody(
-            isTasks
-            ? "tarkov_tasks_api_error.txt"
-            : "tarkov_items_api_error.txt",
+            isTasks ? "tarkov_tasks_api_error.txt" : "tarkov_items_api_error.txt",
             response);
     }
-    else
-    {
+    else {
         if (curlResult != CURLE_OK)
-        {
             LOGS.logError(std::string("[") + label + "][CURL] Request failed: " + curl_easy_strerror(curlResult));
-        }
         else
-        {
             LOGS.logError(std::string("[") + label + "][HTTP] Request returned HTTP " + std::to_string(httpStatus));
-        }
 
         SaveErrorBody(
-            isTasks
-            ? "tarkov_tasks_api_error.txt"
-            : "tarkov_items_api_error.txt",
+            isTasks ? "tarkov_tasks_api_error.txt" : "tarkov_items_api_error.txt",
             response);
     }
 
@@ -1206,24 +1093,20 @@ std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh, bool paus
         return rawStorage;
 
     LOGS.logError(std::string("[") + label + "][JSON] No usable API response or cache");
-
     return {};
 }
 
-void TarkovDev::buildTasksList()
-{
+void TarkovDev::buildTasksList() {
     tarkovDevTasksData.clear();
 
-    if (!tarkovDevDataTasks.is_array())
-    {
+    if (!tarkovDevDataTasks.is_array()) {
         LOGS.logError("[TASKS][BUILD] Task JSON is not an array");
         return;
     }
 
     tarkovDevTasksData.reserve(tarkovDevDataTasks.size());
 
-    for (const auto& taskJson : tarkovDevDataTasks)
-    {
+    for (const auto& taskJson : tarkovDevDataTasks) {
         if (!taskJson.is_object())
             continue;
 
@@ -1232,12 +1115,10 @@ void TarkovDev::buildTasksList()
         task.qName = ReadString(taskJson, "name");
 
         const auto objectivesIt = taskJson.find("objectives");
-        if (objectivesIt != taskJson.end() && objectivesIt->is_array())
-        {
+        if (objectivesIt != taskJson.end() && objectivesIt->is_array()) {
             task.objectives.reserve(objectivesIt->size());
 
-            for (const auto& objectiveJson : *objectivesIt)
-            {
+            for (const auto& objectiveJson : *objectivesIt) {
                 if (!objectiveJson.is_object())
                     continue;
 
@@ -1249,32 +1130,41 @@ void TarkovDev::buildTasksList()
                 if (objective.type.empty())
                     objective.type = ReadString(objectiveJson, "__typename");
 
+                objective.count = static_cast<int>(ReadLong(objectiveJson, "count", 1));
+                objective.optional = objectiveJson.value("optional", false);
+                objective.foundInRaid = objectiveJson.value("foundInRaid", false);
+
+                const auto addItemId = [&objective](const json& value) {
+                    const std::string itemId = ReadReferenceId(value);
+                    if (itemId.empty() || std::find(objective.itemIds.begin(), objective.itemIds.end(), itemId) != objective.itemIds.end())
+                        return;
+
+                    objective.itemIds.emplace_back(itemId);
+                };
+
                 const auto itemIt = objectiveJson.find("item");
                 if (itemIt != objectiveJson.end())
-                    objective.itemId = ReadReferenceId(*itemIt);
+                    addItemId(*itemIt);
 
-                if (objective.itemId.empty())
-                {
-                    const auto itemsIt = objectiveJson.find("items");
-                    if (itemsIt != objectiveJson.end() &&
-                        itemsIt->is_array() &&
-                        !itemsIt->empty())
-                    {
-                        objective.itemId = ReadReferenceId(itemsIt->front());
-                    }
+                const auto itemsIt = objectiveJson.find("items");
+                if (itemsIt != objectiveJson.end() && itemsIt->is_array()) {
+                    objective.itemIds.reserve(objective.itemIds.size() + itemsIt->size());
+                    for (const auto& itemJson : *itemsIt)
+                        addItemId(itemJson);
                 }
+
+                if (!objective.itemIds.empty())
+                    objective.itemId = objective.itemIds.front();
 
                 const auto questItemIt = objectiveJson.find("questItem");
                 if (questItemIt != objectiveJson.end())
                     objective.questItemId = ReadReferenceId(*questItemIt);
 
                 const auto mapsIt = objectiveJson.find("maps");
-                if (mapsIt != objectiveJson.end() && mapsIt->is_array())
-                {
+                if (mapsIt != objectiveJson.end() && mapsIt->is_array()) {
                     objective.maps.reserve(mapsIt->size());
 
-                    for (const auto& mapJson : *mapsIt)
-                    {
+                    for (const auto& mapJson : *mapsIt) {
                         const std::string mapId = ReadReferenceId(mapJson);
                         if (!mapId.empty())
                             objective.maps.emplace_back(mapId);
@@ -1282,20 +1172,17 @@ void TarkovDev::buildTasksList()
                 }
 
                 const auto zonesIt = objectiveJson.find("zones");
-                if (zonesIt != objectiveJson.end() && zonesIt->is_array())
-                {
+                if (zonesIt != objectiveJson.end() && zonesIt->is_array()) {
                     objective.zones.reserve(zonesIt->size());
 
-                    for (const auto& zoneJson : *zonesIt)
-                    {
+                    for (const auto& zoneJson : *zonesIt) {
                         if (!zoneJson.is_object())
                             continue;
 
                         TarkovZone zone{};
 
                         const auto positionIt = zoneJson.find("position");
-                        if (positionIt != zoneJson.end() && positionIt->is_object())
-                        {
+                        if (positionIt != zoneJson.end() && positionIt->is_object()) {
                             zone.position = glm::vec3{
                                 ReadFloat(*positionIt, "x"),
                                 ReadFloat(*positionIt, "y"),
@@ -1318,30 +1205,25 @@ void TarkovDev::buildTasksList()
         tarkovDevTasksData.emplace_back(std::move(task));
     }
 
-    if (!tarkovDevTasksData.empty())
-    {
+    if (!tarkovDevTasksData.empty()) {
         LOGS.logInfo("[TASKS][BUILD] Task data updated (" + std::to_string(tarkovDevTasksData.size()) + ")");
     }
-    else
-    {
+    else {
         LOGS.logError("[TASKS][BUILD] No task data parsed");
     }
 }
 
-void TarkovDev::buildItemList()
-{
+void TarkovDev::buildItemList() {
     marketList.clear();
 
-    if (!tarkovDevDataItems.is_array())
-    {
+    if (!tarkovDevDataItems.is_array()) {
         LOGS.logError("[MARKET][BUILD] Item JSON is not an array");
         return;
     }
 
     marketList.reserve(tarkovDevDataItems.size());
 
-    for (const auto& itemJson : tarkovDevDataItems)
-    {
+    for (const auto& itemJson : tarkovDevDataItems) {
         if (!itemJson.is_object())
             continue;
 
@@ -1354,8 +1236,7 @@ void TarkovDev::buildItemList()
         if (item.bsgid == "mosinscopedbarter0000001" ||
             item.bsgid == "5648b2414bdc2d3b4c8b4578" ||
             item.bsgid == "5648b6ff4bdc2d3d1c8b4581" ||
-            item.bsgid == "59984b4286f77445bd2d4a07")
-        {
+            item.bsgid == "59984b4286f77445bd2d4a07") {
             continue;
         }
 
@@ -1365,34 +1246,29 @@ void TarkovDev::buildItemList()
         item.marketPrice = ReadMarketPrice(itemJson);
 
         const auto categoriesIt = itemJson.find("categories");
-        if (categoriesIt != itemJson.end() && categoriesIt->is_array())
-        {
-            for (const auto& categoryJson : *categoriesIt)
-            {
+        if (categoriesIt != itemJson.end() && categoriesIt->is_array()) {
+            for (const auto& categoryJson : *categoriesIt) {
                 std::string categoryName = ReadCategoryName(categoryJson);
 
                 if (!categoryName.empty() &&
                     std::find(
                         item.bsgCategory.begin(),
                         item.bsgCategory.end(),
-                        categoryName) == item.bsgCategory.end())
-                {
+                        categoryName) == item.bsgCategory.end()) {
                     item.bsgCategory.emplace_back(std::move(categoryName));
                 }
             }
         }
 
         const auto categoryIt = itemJson.find("category");
-        if (categoryIt != itemJson.end())
-        {
+        if (categoryIt != itemJson.end()) {
             std::string categoryName = ReadCategoryName(*categoryIt);
 
             if (!categoryName.empty() &&
                 std::find(
                     item.bsgCategory.begin(),
                     item.bsgCategory.end(),
-                    categoryName) == item.bsgCategory.end())
-            {
+                    categoryName) == item.bsgCategory.end()) {
                 item.bsgCategory.emplace_back(std::move(categoryName));
             }
         }
@@ -1400,13 +1276,11 @@ void TarkovDev::buildItemList()
         // Tarkov.dev currently classifies Battle Pass crates only under broad
         // item types such as Other and Random Loot Container. Preserve a
         // dedicated derived category so they remain selectable as a group.
-        const auto hasBattlePassLabel = [](const std::string& value)
-        {
+        const auto hasBattlePassLabel = [](const std::string& value) {
             std::string normalized;
             normalized.reserve(value.size());
 
-            for (const unsigned char character : value)
-            {
+            for (const unsigned char character : value) {
                 if (std::isalnum(character))
                     normalized.push_back(
                         static_cast<char>(std::tolower(character)));
@@ -1420,8 +1294,7 @@ void TarkovDev::buildItemList()
             std::find(
                 item.bsgCategory.begin(),
                 item.bsgCategory.end(),
-                "Battle Pass") == item.bsgCategory.end())
-        {
+                "Battle Pass") == item.bsgCategory.end()) {
             item.bsgCategory.emplace_back("Battle Pass");
         }
 
@@ -1431,33 +1304,27 @@ void TarkovDev::buildItemList()
     std::sort(
         marketList.begin(),
         marketList.end(),
-        [](const gameItemList& lhs, const gameItemList& rhs)
-        {
+        [](const gameItemList& lhs, const gameItemList& rhs) {
             return lhs.name < rhs.name;
         });
 
     marketListRevision.fetch_add(1, std::memory_order_release);
 
-    if (!marketList.empty())
-    {
+    if (!marketList.empty()) {
         LOGS.logInfo("[MARKET][BUILD] Market data updated (" + std::to_string(marketList.size()) + ")");
     }
-    else
-    {
+    else {
         LOGS.logError("[MARKET][BUILD] No item data parsed");
     }
 }
 
-void TarkovDev::buildCatList()
-{
+void TarkovDev::buildCatList() {
     catList.clear();
 
     std::set<std::string> uniqueCategories;
 
-    for (const auto& item : marketList)
-    {
-        for (const auto& category : item.bsgCategory)
-        {
+    for (const auto& item : marketList) {
+        for (const auto& category : item.bsgCategory) {
             if (!category.empty())
                 uniqueCategories.insert(category);
         }
@@ -1470,18 +1337,15 @@ void TarkovDev::buildCatList()
     for (const auto& category : uniqueCategories)
         catList.push_back(gameCatList{ id++, category });
 
-    if (!catList.empty())
-    {
+    if (!catList.empty()) {
         LOGS.logInfo("[MARKET][BUILD] Category list created (" + std::to_string(catList.size()) + ")");
     }
-    else
-    {
+    else {
         LOGS.logError("[MARKET][BUILD] Category list failed");
     }
 }
 
-std::string TarkovDev::BSGidToName(const std::string& bsgid) const
-{
+std::string TarkovDev::BSGidToName(const std::string& bsgid) const {
     if (bsgid.empty())
         return "ERR";
 
@@ -1494,8 +1358,7 @@ std::string TarkovDev::BSGidToName(const std::string& bsgid) const
     const auto itemIt = std::find_if(
         marketList.begin(),
         marketList.end(),
-        [&bsgid](const gameItemList& item)
-        {
+        [&bsgid](const gameItemList& item) {
             return item.bsgid == bsgid;
         });
 
@@ -1505,13 +1368,11 @@ std::string TarkovDev::BSGidToName(const std::string& bsgid) const
     return "NoData";
 }
 
-long TarkovDev::MarketPrice(const std::string& bsgid) const
-{
+long TarkovDev::MarketPrice(const std::string& bsgid) const {
     const auto itemIt = std::find_if(
         marketList.begin(),
         marketList.end(),
-        [&bsgid](const gameItemList& item)
-        {
+        [&bsgid](const gameItemList& item) {
             return item.bsgid == bsgid;
         });
 
@@ -1521,8 +1382,7 @@ long TarkovDev::MarketPrice(const std::string& bsgid) const
     return std::max(0L, itemIt->marketPrice);
 }
 
-size_t TarkovDev::data_write(void* buf, size_t size, size_t nmemb, void* userp)
-{
+size_t TarkovDev::data_write(void* buf, size_t size, size_t nmemb, void* userp) {
     if (!userp)
         return 0;
 
@@ -1536,8 +1396,7 @@ size_t TarkovDev::data_write(void* buf, size_t size, size_t nmemb, void* userp)
     return static_cast<size_t>(length);
 }
 
-CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long timeout, long* httpStatus)
-{
+CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long timeout, long* httpStatus) {
     if (httpStatus)
         *httpStatus = 0;
 
@@ -1549,8 +1408,7 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
     curl_slist* headers = nullptr;
     char errorBuffer[CURL_ERROR_SIZE]{};
 
-    const auto appendHeader = [&](const char* value) -> bool
-        {
+    const auto appendHeader = [&](const char* value) -> bool {
             curl_slist* updated = curl_slist_append(headers, value);
             if (!updated)
                 return false;
@@ -1559,10 +1417,8 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
             return true;
         };
 
-    do
-    {
-        if (!appendHeader("Accept: application/json"))
-        {
+    do {
+        if (!appendHeader("Accept: application/json")) {
             code = CURLE_OUT_OF_MEMORY;
             break;
         }
@@ -1580,9 +1436,6 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
         if (code != CURLE_OK) break;
 
         code = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        if (code != CURLE_OK) break;
-
-        code = curl_easy_setopt(curl, CURLOPT_USERAGENT, TarkovDevClientName().c_str());
         if (code != CURLE_OK) break;
 
         code = curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
@@ -1628,8 +1481,7 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
         if (httpStatus)
             *httpStatus = responseCode;
 
-        if (code != CURLE_OK)
-        {
+        if (code != CURLE_OK) {
             std::string error = errorBuffer[0] != '\0'
                 ? errorBuffer
                 : curl_easy_strerror(code);
@@ -1638,8 +1490,7 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
             break;
         }
 
-        if (responseCode < 200 || responseCode >= 300)
-        {
+        if (responseCode < 200 || responseCode >= 300) {
             std::string message =
                 "[TDEV][CURL] HTTP status=" + std::to_string(responseCode) +
                 " URL=" + (effectiveUrl ? std::string(effectiveUrl) : url) +
@@ -1656,28 +1507,23 @@ CURLcode TarkovDev::curl_read(const std::string& url, std::ostream& os, long tim
     return code;
 }
 
-std::string loadjson(bool forceRefresh)
-{
+std::string loadjson(bool forceRefresh) {
     return tarkovDev.loadJsonItems(forceRefresh);
 }
 
-void buildCatList()
-{
+void buildCatList() {
     tarkovDev.buildCatList();
 }
 
-void buildItemList()
-{
+void buildItemList() {
     tarkovDev.buildItemList();
 }
 
-std::string BSGidToName(const std::string& bsgid)
-{
+std::string BSGidToName(const std::string& bsgid) {
     return tarkovDev.BSGidToName(bsgid);
 }
 
-int Marketprice(const std::string& bsgid)
-{
+int Marketprice(const std::string& bsgid) {
     const long price = tarkovDev.MarketPrice(bsgid);
 
     if (price > static_cast<long>(std::numeric_limits<int>::max()))

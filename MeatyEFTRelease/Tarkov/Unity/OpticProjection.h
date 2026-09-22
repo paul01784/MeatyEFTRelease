@@ -9,15 +9,8 @@
 
 #include <glm/glm.hpp>
 
+#include "CameraTypes.h"
 #include "Transform.h"
-
-struct CameraMatrixSample
-{
-    glm::mat4 view{ 1.0f };
-    glm::mat4 projection{ 1.0f };
-    glm::mat4 viewProjection{ 1.0f };
-    bool valid = false;
-};
 
 struct OpticProjectionState
 {
@@ -51,12 +44,6 @@ struct OpticProjectionState
     std::uint64_t material = 0;
 
     bool valid = false;
-};
-
-struct CameraScreenSegment
-{
-    glm::vec2 start{};
-    glm::vec2 end{};
 };
 
 class OpticProjectionEngine

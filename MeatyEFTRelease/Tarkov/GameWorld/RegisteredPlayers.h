@@ -97,7 +97,7 @@ private:
     void readDogTagComponent(Player& player, bool force = false);
     std::optional<Player> buildEntity(uint64_t instance, bool isLocal);
     void tryFindBTR();
-    void recoverBtrStuckPlayers();
+    void updateBtrPassengerStates();
     void updateEntity();
     void checkGroupIDs();
     void checkExfil();

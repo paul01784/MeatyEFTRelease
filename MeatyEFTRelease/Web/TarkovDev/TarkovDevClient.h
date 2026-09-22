@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <chrono>
 #include <atomic>
@@ -14,8 +14,7 @@
 
 extern const std::vector<long long> LevelXpThresholds;
 
-struct PlayerProfileStats
-{
+struct PlayerProfileStats {
     long long aid = 0;
     std::string nickname;
     std::string side;
@@ -40,39 +39,38 @@ struct PlayerProfileStats
     std::vector<std::pair<std::vector<std::string>, int>> otherCounters;
 };
 
-struct ItemCounter
-{
+struct ItemCounter {
     std::vector<std::string> Key;
     int Value = 0;
 };
 
-struct TarkovZone
-{
+struct TarkovZone {
     glm::vec3 position{ 0.0f, 0.0f, 0.0f };
     std::string mapNameId;
 };
 
-struct TarkovObjective
-{
+struct TarkovObjective {
     std::string type;
     std::string id;
     std::string description;
     std::string itemId;
+    std::vector<std::string> itemIds;
     std::string questItemId;
+    int count = 1;
+    bool optional = false;
+    bool foundInRaid = false;
 
     std::vector<std::string> maps;
     std::vector<TarkovZone> zones;
 };
 
-struct TarkovDevTasks
-{
+struct TarkovDevTasks {
     std::string qID;
     std::string qName;
     std::vector<TarkovObjective> objectives;
 };
 
-struct gameItemList
-{
+struct gameItemList {
     std::string bsgid;
     std::vector<std::string> bsgCategory;
     std::string name;
@@ -81,8 +79,7 @@ struct gameItemList
     long marketPrice = 0;
 };
 
-struct gameCatList
-{
+struct gameCatList {
     long id = 0;
     std::string categoryName;
 };
@@ -91,8 +88,7 @@ struct gameCatList
 // indexes which hold copied price data.
 extern std::atomic<std::uint64_t> marketListRevision;
 
-class TarkovDevProfileClient
-{
+class TarkovDevProfileClient {
 public:
     static std::optional<PlayerProfileStats> FetchProfile(long long accountId, int profileMode);
     static std::optional<PlayerProfileStats> GetProfileForAccountId(const std::string& accountId, int profileMode);
@@ -101,8 +97,7 @@ private:
     static std::string HttpGet(const std::string& url, long& httpCode);
 };
 
-class TarkovDev
-{
+class TarkovDev {
 public:
     bool Initialize(bool forceRefresh = false, bool pauseRefresh = false);
 
@@ -117,12 +112,12 @@ public:
     long MarketPrice(const std::string& bsgid) const;
 
 private:
-    enum class Dataset
-    {
+    enum class Dataset {
         Tasks,
         Items
     };
 
+    std::string loadTranslationDataset(Dataset dataset, bool forceRefresh, bool pauseRefresh = false);
     std::string loadDataset(Dataset dataset, bool forceRefresh, bool pauseRefresh = false);
 
     static size_t data_write(void* buf, size_t size, size_t nmemb, void* userp);

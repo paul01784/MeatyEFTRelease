@@ -10,9 +10,11 @@
 #include "../Tarkov/GameWorld/MainGame.h"
 #include "../Tarkov/GameWorld/Loot/Loot.h"
 #include "../Web/TarkovDev/TarkovDevClient.h"
+#include "../Web/WebRadar/WebRadar.h"
 #include "../Tarkov/GameWorld/RegisteredPlayers.h"
 #include "draw.h"
 #include "config.h"
+#include "Appearance.h"
 #include "DxRenderWindow.h"
 #include "fuserRender.h"
 #include "../Tarkov/GameWorld/Exits/Exfil.h"
@@ -649,6 +651,609 @@ bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, i
     return true;
 }
 
+static glm::vec4* GetMarkerEditorColour(MarkerCategory category, int playerType)
+{
+    if (category == MarkerCategory::Player)
+    {
+        glm::vec4* playerColours[] = {
+            &coloursGlobals::playerPMC,
+            &coloursGlobals::playerScav,
+            &coloursGlobals::playerAI,
+            &coloursGlobals::playerBoss,
+            &coloursGlobals::playerBlackDiv,
+            &coloursGlobals::playerLocal,
+            &coloursGlobals::playerFriendly,
+            &coloursGlobals::playerWatched,
+            &coloursGlobals::aiBTR
+        };
+        return playerColours[std::clamp(playerType, 0, IM_ARRAYSIZE(playerColours) - 1)];
+    }
+
+    switch (category)
+    {
+    case MarkerCategory::Loot: return &coloursGlobals::valueLootColour;
+    case MarkerCategory::Quest: return &coloursGlobals::questMarker;
+    case MarkerCategory::Exfil: return &coloursGlobals::exfils;
+    case MarkerCategory::Grenade: return &coloursGlobals::grenades;
+    case MarkerCategory::Tripwire: return &coloursGlobals::tripwires;
+    case MarkerCategory::Corpse: return &coloursGlobals::playerCorpse;
+    case MarkerCategory::Container: return &coloursGlobals::containerColour;
+    case MarkerCategory::GroupLine: return &coloursGlobals::playerGroupLine;
+    case MarkerCategory::Crosshair: return &coloursGlobals::crosshair;
+    case MarkerCategory::FovCircle: return &coloursGlobals::fovCircle;
+    default: return &coloursGlobals::playerPMC;
+    }
+}
+
+static glm::vec4 GetMarkerEditorExfilColour(int status, MarkerView view)
+{
+    switch (status)
+    {
+    case 1: return view == MarkerView::Radar ? glm::vec4(0.0f, 1.0f, 0.0f, 1.0f) : glm::vec4(0.2f, 1.0f, 0.2f, 1.0f);
+    case 2: return view == MarkerView::Radar ? glm::vec4(1.0f, 0.0f, 0.0f, 1.0f) : glm::vec4(1.0f, 0.2f, 0.2f, 1.0f);
+    case 3: return view == MarkerView::Radar ? glm::vec4(1.0f, 0.5f, 0.0f, 1.0f) : glm::vec4(1.0f, 0.65f, 0.0f, 1.0f);
+    case 4: return glm::vec4(0.85f, 0.35f, 1.0f, 1.0f);
+    case 5: return glm::vec4(0.2f, 0.8f, 1.0f, 1.0f);
+    default: return coloursGlobals::exfils;
+    }
+}
+
+static void DrawMarkerEditorPreviewShape(ImDrawList* drawList, const ImVec2& centre, const MarkerViewStyle& view, const MarkerStyle& style, const glm::vec4& colour)
+{
+    glm::vec4 fill = colour;
+    fill.a *= style.fillOpacity;
+    const ImU32 fillColour = ImGui::ColorConvertFloat4ToU32(ImVec4(fill.r, fill.g, fill.b, fill.a));
+    const ImU32 outlineColour = ImGui::ColorConvertFloat4ToU32(ImVec4(style.markerOutlineColour.r, style.markerOutlineColour.g,
+        style.markerOutlineColour.b, style.markerOutlineColour.a * colour.a));
+    const float radius = view.size;
+
+    if (view.shape == MarkerShape::Cross || view.shape == MarkerShape::X)
+    {
+        const bool diagonal = view.shape == MarkerShape::X;
+        const ImVec2 firstStart = diagonal ? ImVec2(centre.x - radius, centre.y - radius) : ImVec2(centre.x - radius, centre.y);
+        const ImVec2 firstEnd = diagonal ? ImVec2(centre.x + radius, centre.y + radius) : ImVec2(centre.x + radius, centre.y);
+        const ImVec2 secondStart = diagonal ? ImVec2(centre.x + radius, centre.y - radius) : ImVec2(centre.x, centre.y - radius);
+        const ImVec2 secondEnd = diagonal ? ImVec2(centre.x - radius, centre.y + radius) : ImVec2(centre.x, centre.y + radius);
+        if (style.markerOutline)
+        {
+            drawList->AddLine(firstStart, firstEnd, outlineColour, style.markerOutlineThickness + 2.0f);
+            drawList->AddLine(secondStart, secondEnd, outlineColour, style.markerOutlineThickness + 2.0f);
+        }
+        drawList->AddLine(firstStart, firstEnd, fillColour, style.markerOutlineThickness);
+        drawList->AddLine(secondStart, secondEnd, fillColour, style.markerOutlineThickness);
+        return;
+    }
+
+    if (view.shape == MarkerShape::Circle)
+    {
+        drawList->AddCircleFilled(centre, radius, fillColour, 24);
+        if (style.markerOutline)
+            drawList->AddCircle(centre, radius, outlineColour, 24, style.markerOutlineThickness);
+        return;
+    }
+
+    ImVec2 points[4]{};
+    const int pointCount = view.shape == MarkerShape::Triangle ? 3 : 4;
+    const float step = (2.0f * IM_PI) / static_cast<float>(pointCount);
+    const float start = view.shape == MarkerShape::Square ? (IM_PI * 0.25f) : -IM_PI * 0.5f;
+    for (int index = 0; index < pointCount; ++index)
+    {
+        const float angle = start + step * static_cast<float>(index);
+        points[index] = ImVec2(centre.x + std::cos(angle) * radius, centre.y + std::sin(angle) * radius);
+    }
+    drawList->AddConvexPolyFilled(points, pointCount, fillColour);
+    if (style.markerOutline)
+        drawList->AddPolyline(points, pointCount, outlineColour, ImDrawFlags_Closed, style.markerOutlineThickness);
+}
+
+static void DrawMarkerEditorCrosshairPreview(ImDrawList* drawList, const ImVec2& centre, const MarkerViewStyle& view, const MarkerStyle& style,
+    const glm::vec4& colour)
+{
+    const ImU32 lineColour = ImGui::ColorConvertFloat4ToU32(ImVec4(colour.r, colour.g, colour.b, colour.a));
+    const float radius = view.size;
+    const float thickness = style.markerOutlineThickness;
+
+    if (view.shape == MarkerShape::Circle)
+    {
+        drawList->AddCircle(centre, radius, lineColour, 32, thickness);
+        return;
+    }
+    if (view.shape == MarkerShape::Square)
+    {
+        drawList->AddRect(ImVec2(centre.x - radius, centre.y - radius), ImVec2(centre.x + radius, centre.y + radius), lineColour, 0.0f, 0, thickness);
+        return;
+    }
+
+    if (view.shape == MarkerShape::Triangle || view.shape == MarkerShape::Diamond)
+    {
+        ImVec2 points[4]{};
+        const int pointCount = view.shape == MarkerShape::Triangle ? 3 : 4;
+        const float step = (2.0f * IM_PI) / static_cast<float>(pointCount);
+        for (int index = 0; index < pointCount; ++index)
+        {
+            const float angle = -IM_PI * 0.5f + step * static_cast<float>(index);
+            points[index] = ImVec2(centre.x + std::cos(angle) * radius, centre.y + std::sin(angle) * radius);
+        }
+        drawList->AddPolyline(points, pointCount, lineColour, ImDrawFlags_Closed, thickness);
+        return;
+    }
+
+    const bool diagonal = view.shape == MarkerShape::X;
+    const ImVec2 firstStart = diagonal ? ImVec2(centre.x - radius, centre.y - radius) : ImVec2(centre.x - radius, centre.y);
+    const ImVec2 firstEnd = diagonal ? ImVec2(centre.x + radius, centre.y + radius) : ImVec2(centre.x + radius, centre.y);
+    const ImVec2 secondStart = diagonal ? ImVec2(centre.x + radius, centre.y - radius) : ImVec2(centre.x, centre.y - radius);
+    const ImVec2 secondEnd = diagonal ? ImVec2(centre.x - radius, centre.y + radius) : ImVec2(centre.x, centre.y + radius);
+    drawList->AddLine(firstStart, firstEnd, lineColour, thickness);
+    drawList->AddLine(secondStart, secondEnd, lineColour, thickness);
+}
+
+static void DrawMarkerEditorPreviewText(ImDrawList* drawList, const ImVec2& position, const MarkerViewStyle& view, const MarkerStyle& style,
+    const glm::vec4& markerColour, const char* text, bool centered = true)
+{
+    if (!text || text[0] == '\0')
+        return;
+
+    const glm::vec4 textColour = GetMarkerTextColour(style, markerColour);
+    const ImU32 drawColour = ImGui::ColorConvertFloat4ToU32(ImVec4(textColour.r, textColour.g, textColour.b, textColour.a));
+    const ImU32 effectColour = ImGui::ColorConvertFloat4ToU32(ImVec4(style.textOutlineColour.r, style.textOutlineColour.g,
+        style.textOutlineColour.b, style.textOutlineColour.a * markerColour.a));
+    ImVec2 drawPosition = position;
+    if (centered)
+        drawPosition.x -= ImGui::GetFont()->CalcTextSizeA(view.fontSize, FLT_MAX, 0.0f, text).x * 0.5f;
+
+    if (style.textShadow)
+        drawList->AddText(ImGui::GetFont(), view.fontSize, ImVec2(drawPosition.x + style.shadowOffset, drawPosition.y + style.shadowOffset), effectColour, text);
+    if (style.textOutline)
+    {
+        drawList->AddText(ImGui::GetFont(), view.fontSize, ImVec2(drawPosition.x - 1.0f, drawPosition.y), effectColour, text);
+        drawList->AddText(ImGui::GetFont(), view.fontSize, ImVec2(drawPosition.x + 1.0f, drawPosition.y), effectColour, text);
+        drawList->AddText(ImGui::GetFont(), view.fontSize, ImVec2(drawPosition.x, drawPosition.y - 1.0f), effectColour, text);
+        drawList->AddText(ImGui::GetFont(), view.fontSize, ImVec2(drawPosition.x, drawPosition.y + 1.0f), effectColour, text);
+    }
+    drawList->AddText(ImGui::GetFont(), view.fontSize, drawPosition, drawColour, text);
+}
+
+static void DrawMarkerEditorPreviewBackground(ImDrawList* drawList, const ImVec2& minimum, const ImVec2& maximum, MarkerView viewMode)
+{
+    drawList->PushClipRect(minimum, maximum, true);
+    if (viewMode == MarkerView::Radar)
+    {
+        drawList->AddRectFilled(minimum, maximum, IM_COL32(27, 34, 31, 255));
+        for (float x = minimum.x; x < maximum.x; x += 24.0f)
+            drawList->AddLine(ImVec2(x, minimum.y), ImVec2(x, maximum.y), IM_COL32(83, 101, 91, 42));
+        for (float y = minimum.y; y < maximum.y; y += 24.0f)
+            drawList->AddLine(ImVec2(minimum.x, y), ImVec2(maximum.x, y), IM_COL32(83, 101, 91, 42));
+        drawList->AddLine(ImVec2(minimum.x - 12.0f, maximum.y - 42.0f), ImVec2(maximum.x + 18.0f, minimum.y + 35.0f), IM_COL32(99, 105, 99, 125), 11.0f);
+        drawList->AddLine(ImVec2(minimum.x - 12.0f, maximum.y - 42.0f), ImVec2(maximum.x + 18.0f, minimum.y + 35.0f), IM_COL32(48, 55, 52, 255), 7.0f);
+        drawList->AddRectFilled(ImVec2(minimum.x + 18.0f, minimum.y + 20.0f), ImVec2(minimum.x + 82.0f, minimum.y + 60.0f), IM_COL32(49, 59, 55, 255));
+        drawList->AddRect(ImVec2(minimum.x + 18.0f, minimum.y + 20.0f), ImVec2(minimum.x + 82.0f, minimum.y + 60.0f), IM_COL32(108, 121, 114, 135));
+    }
+    else
+    {
+        const float horizon = minimum.y + (maximum.y - minimum.y) * 0.52f;
+        drawList->AddRectFilled(minimum, ImVec2(maximum.x, horizon), IM_COL32(47, 58, 67, 255));
+        drawList->AddRectFilled(ImVec2(minimum.x, horizon), maximum, IM_COL32(30, 35, 31, 255));
+        drawList->AddCircleFilled(ImVec2(maximum.x - 38.0f, minimum.y + 34.0f), 17.0f, IM_COL32(224, 190, 122, 48), 24);
+        drawList->AddRectFilled(ImVec2(minimum.x + 12.0f, horizon - 34.0f), ImVec2(minimum.x + 78.0f, horizon), IM_COL32(24, 29, 32, 255));
+        drawList->AddRectFilled(ImVec2(maximum.x - 92.0f, horizon - 50.0f), ImVec2(maximum.x - 20.0f, horizon), IM_COL32(24, 29, 32, 255));
+        for (int index = 0; index < 5; ++index)
+        {
+            const float y = horizon + 18.0f + static_cast<float>(index) * 22.0f;
+            drawList->AddLine(ImVec2(minimum.x, y), ImVec2(maximum.x, y), IM_COL32(93, 101, 92, 28));
+        }
+    }
+    drawList->PopClipRect();
+}
+
+static void DrawMarkerEditorPlayerPreview(ImDrawList* drawList, const ImVec2& centre, MarkerView viewMode, const MarkerViewStyle& view,
+    const MarkerStyle& style, const glm::vec4& colour, int playerType)
+{
+    const ImU32 playerColour = ImGui::ColorConvertFloat4ToU32(ImVec4(colour.r, colour.g, colour.b, colour.a));
+    const ImU32 referenceColour = IM_COL32(190, 198, 202, 48);
+    if (playerType == static_cast<int>(PlayerMarkerType::Btr) && viewMode == MarkerView::Fuser)
+    {
+        for (int index = 0; index < 3; ++index)
+        {
+            const ImVec2 passenger(centre.x - 8.0f + static_cast<float>(index) * 8.0f, centre.y);
+            drawList->AddCircleFilled(passenger, 3.5f, IM_COL32(0, 0, 0, 245), 12);
+            drawList->AddCircleFilled(passenger, 2.4f, playerColour, 12);
+        }
+        DrawMarkerEditorPreviewText(drawList, ImVec2(centre.x, centre.y - 28.0f), view, style, colour, "BTR");
+        return;
+    }
+
+    if (viewMode == MarkerView::Radar)
+    {
+        const int configuredAimLine = playerType == 5
+            ? radarGlobals::localAimLine
+            : (playerType == 6 ? radarGlobals::friendAimLine : radarGlobals::enemyAimLine);
+        if (configuredAimLine > 0 && playerType != static_cast<int>(PlayerMarkerType::Btr))
+        {
+            const float previewLength = std::clamp(static_cast<float>(configuredAimLine) * 0.35f, 18.0f, 78.0f);
+            drawList->AddLine(centre, ImVec2(centre.x, centre.y - previewLength), playerColour, 2.0f);
+        }
+        DrawMarkerEditorPreviewShape(drawList, centre, view, style, colour);
+        DrawMarkerEditorPreviewText(drawList, ImVec2(centre.x, centre.y + view.size + 8.0f), view, style, colour,
+            PlayerMarkerTypeName(static_cast<PlayerMarkerType>(playerType)));
+        return;
+    }
+
+    const float headY = centre.y - 65.0f;
+    const float pelvisY = centre.y + 18.0f;
+    const ImVec2 head(centre.x, headY);
+    const ImVec2 neck(centre.x, headY + 17.0f);
+    const ImVec2 pelvis(centre.x, pelvisY);
+    const ImVec2 leftHand(centre.x - 30.0f, centre.y - 7.0f);
+    const ImVec2 rightHand(centre.x + 30.0f, centre.y - 7.0f);
+    const ImVec2 leftFoot(centre.x - 17.0f, centre.y + 68.0f);
+    const ImVec2 rightFoot(centre.x + 17.0f, centre.y + 68.0f);
+
+    drawList->AddCircle(head, 9.0f, referenceColour, 18, 1.0f);
+    drawList->AddLine(neck, pelvis, referenceColour, 1.0f);
+    drawList->AddLine(neck, leftHand, referenceColour, 1.0f);
+    drawList->AddLine(neck, rightHand, referenceColour, 1.0f);
+    drawList->AddLine(pelvis, leftFoot, referenceColour, 1.0f);
+    drawList->AddLine(pelvis, rightFoot, referenceColour, 1.0f);
+
+    if (espGlobals::drawSkeletons)
+    {
+        drawList->AddCircle(head, 9.0f, playerColour, 18, 1.5f);
+        drawList->AddLine(neck, pelvis, playerColour, 1.5f);
+        drawList->AddLine(neck, leftHand, playerColour, 1.5f);
+        drawList->AddLine(neck, rightHand, playerColour, 1.5f);
+        drawList->AddLine(pelvis, leftFoot, playerColour, 1.5f);
+        drawList->AddLine(pelvis, rightFoot, playerColour, 1.5f);
+    }
+
+    const ImVec2 boxMin(centre.x - 38.0f, headY - 12.0f);
+    const ImVec2 boxMax(centre.x + 38.0f, centre.y + 72.0f);
+    if (espGlobals::drawBoxPlayers)
+    {
+        constexpr float corner = 15.0f;
+        drawList->AddLine(boxMin, ImVec2(boxMin.x + corner, boxMin.y), playerColour, 1.5f);
+        drawList->AddLine(boxMin, ImVec2(boxMin.x, boxMin.y + corner), playerColour, 1.5f);
+        drawList->AddLine(ImVec2(boxMax.x, boxMin.y), ImVec2(boxMax.x - corner, boxMin.y), playerColour, 1.5f);
+        drawList->AddLine(ImVec2(boxMax.x, boxMin.y), ImVec2(boxMax.x, boxMin.y + corner), playerColour, 1.5f);
+        drawList->AddLine(ImVec2(boxMin.x, boxMax.y), ImVec2(boxMin.x + corner, boxMax.y), playerColour, 1.5f);
+        drawList->AddLine(ImVec2(boxMin.x, boxMax.y), ImVec2(boxMin.x, boxMax.y - corner), playerColour, 1.5f);
+        drawList->AddLine(boxMax, ImVec2(boxMax.x - corner, boxMax.y), playerColour, 1.5f);
+        drawList->AddLine(boxMax, ImVec2(boxMax.x, boxMax.y - corner), playerColour, 1.5f);
+    }
+    if (espGlobals::drawHeadDot)
+        drawList->AddCircleFilled(ImVec2(head.x, head.y - 2.0f), (std::max)(2.0f, espGlobals::headDotSize), playerColour, 16);
+    if (espGlobals::drawHealthPlayers)
+    {
+        drawList->AddRectFilled(ImVec2(boxMin.x - 8.0f, boxMin.y), ImVec2(boxMin.x - 4.0f, boxMax.y), IM_COL32(0, 0, 0, 210));
+        drawList->AddRectFilled(ImVec2(boxMin.x - 7.0f, boxMin.y + 18.0f), ImVec2(boxMin.x - 5.0f, boxMax.y - 1.0f), IM_COL32(47, 224, 83, 255));
+    }
+    const std::string playerLabel = std::string(PlayerMarkerTypeName(static_cast<PlayerMarkerType>(playerType))) + " [84m]";
+    DrawMarkerEditorPreviewText(drawList, ImVec2(centre.x, boxMax.y + 7.0f), view, style, colour, playerLabel.c_str());
+}
+
+static void RenderMarkerEditorPanel()
+{
+    static AppearanceConfig draft = appearanceManager.GetConfig();
+    static MarkerCategory category = MarkerCategory::Player;
+    static MarkerView viewMode = MarkerView::Radar;
+    static int playerType = 0;
+    static int exfilPreviewStatus = 1;
+
+    if (category == MarkerCategory::GroupLine)
+        category = MarkerCategory::Player;
+
+    if (ImGui::BeginTabBar("##markerTypes", ImGuiTabBarFlags_FittingPolicyScroll))
+    {
+        for (int index = 0; index < static_cast<int>(MarkerCategory::Count); ++index)
+        {
+            const MarkerCategory candidate = static_cast<MarkerCategory>(index);
+            if (candidate == MarkerCategory::GroupLine)
+                continue;
+            if (ImGui::BeginTabItem(MarkerCategoryName(candidate)))
+            {
+                category = candidate;
+                ImGui::EndTabItem();
+            }
+        }
+        ImGui::EndTabBar();
+    }
+
+    MarkerStyle& style = draft.markers[static_cast<size_t>(category)];
+    bool changed = false;
+    const float previewWidth = 300.0f;
+    constexpr float panelHeight = 435.0f;
+    ImGui::BeginChild("##markerControls", ImVec2(ImGui::GetContentRegionAvail().x - previewWidth - 10.0f, panelHeight), false);
+    const float rowStartX = ImGui::GetCursorPosX();
+    const float controlX = rowStartX + 142.0f;
+    constexpr float controlWidth = 170.0f;
+    const auto beginRow = [&](const char* label)
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(controlX);
+    };
+    const auto colourButton = [&](const char* id, glm::vec4* colour)
+    {
+        ImGui::PushID(id);
+        const bool colourChanged = ImGui::ColorEdit4("##colour", &colour->x,
+            ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
+        ImGui::PopID();
+        return colourChanged;
+    };
+
+    ImGui::TextDisabled("VIEW");
+    if (category == MarkerCategory::Crosshair || category == MarkerCategory::FovCircle)
+    {
+        viewMode = MarkerView::Fuser;
+        ImGui::TextUnformatted("Fuser only");
+    }
+    else
+    {
+        if (ImGui::RadioButton("Radar", viewMode == MarkerView::Radar))
+            viewMode = MarkerView::Radar;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Fuser", viewMode == MarkerView::Fuser))
+            viewMode = MarkerView::Fuser;
+    }
+
+    ImGui::Spacing();
+    glm::vec4 exfilPreviewColour = GetMarkerEditorExfilColour(exfilPreviewStatus, viewMode);
+    glm::vec4* markerColour = GetMarkerEditorColour(category, playerType);
+    if (category == MarkerCategory::Player)
+    {
+        static constexpr const char* PlayerTypes[] = {"PMC", "Player scav", "AI", "Boss", "Black Division", "Local player", "Friendly", "Watched", "BTR"};
+        beginRow("Player type");
+        ImGui::SetNextItemWidth(105.0f);
+        changed |= ImGui::Combo("##playerType", &playerType, PlayerTypes, IM_ARRAYSIZE(PlayerTypes));
+        markerColour = GetMarkerEditorColour(category, playerType);
+        ImGui::SameLine(0.0f, 8.0f);
+        ImGui::TextDisabled("Colour");
+        ImGui::SameLine(0.0f, 6.0f);
+        changed |= colourButton("playerColour", markerColour);
+    }
+    else if (category == MarkerCategory::Exfil)
+    {
+        static constexpr const char* ExfilStatuses[] = {"Default", "Open", "Closed", "Pending / required", "Secret", "Transit"};
+        beginRow("Preview status");
+        ImGui::SetNextItemWidth(120.0f);
+        ImGui::Combo("##exfilStatus", &exfilPreviewStatus, ExfilStatuses, IM_ARRAYSIZE(ExfilStatuses));
+        exfilPreviewColour = GetMarkerEditorExfilColour(exfilPreviewStatus, viewMode);
+        markerColour = &exfilPreviewColour;
+        ImGui::SameLine(0.0f, 8.0f);
+        ImGui::TextDisabled("Status colour");
+        ImGui::SameLine(0.0f, 6.0f);
+        ImGui::ColorButton("##exfilStatusColour", ImVec4(markerColour->r, markerColour->g, markerColour->b, markerColour->a),
+            ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_AlphaPreviewHalf);
+    }
+    else
+    {
+        beginRow("Colour");
+        changed |= colourButton("markerColour", markerColour);
+    }
+
+    MarkerViewStyle& baseView = GetMarkerViewStyle(style, viewMode);
+    PlayerMarkerStyle* playerMarker = category == MarkerCategory::Player && viewMode == MarkerView::Radar
+        ? &draft.playerMarkers[static_cast<size_t>(std::clamp(playerType, 0, static_cast<int>(PlayerMarkerType::Count) - 1))]
+        : nullptr;
+    MarkerViewStyle view = baseView;
+    if (playerMarker)
+    {
+        view.shape = playerMarker->shape;
+        view.size = playerMarker->size;
+    }
+    const bool playerFuser = category == MarkerCategory::Player && viewMode == MarkerView::Fuser;
+    const bool specializedMarker = playerFuser || category == MarkerCategory::Grenade || category == MarkerCategory::Tripwire ||
+        category == MarkerCategory::GroupLine || category == MarkerCategory::FovCircle;
+    ImGui::SeparatorText(playerFuser ? "Player ESP" : (category == MarkerCategory::Crosshair ? "Crosshair" : "Marker"));
+    if (!specializedMarker)
+    {
+        int shape = static_cast<int>(view.shape);
+        static constexpr const char* ShapeNames[] = {"Circle", "Square", "Triangle", "Diamond", "Cross", "X"};
+        beginRow("Shape");
+        ImGui::SetNextItemWidth(controlWidth);
+        if (ImGui::Combo("##shape", &shape, ShapeNames, IM_ARRAYSIZE(ShapeNames)))
+        {
+            if (playerMarker)
+                playerMarker->shape = static_cast<MarkerShape>(shape);
+            else
+                baseView.shape = static_cast<MarkerShape>(shape);
+            changed = true;
+        }
+        beginRow("Size");
+        ImGui::SetNextItemWidth(controlWidth);
+        changed |= ImGui::SliderFloat("##size", playerMarker ? &playerMarker->size : &baseView.size, 3.0f, 30.0f, "%.1f px");
+        if (category != MarkerCategory::Crosshair)
+        {
+            beginRow("Fill opacity");
+            ImGui::SetNextItemWidth(controlWidth);
+            changed |= ImGui::SliderFloat("##fill", &style.fillOpacity, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        }
+        if (category == MarkerCategory::Crosshair)
+        {
+            beginRow("Line thickness");
+            ImGui::SetNextItemWidth(controlWidth);
+            changed |= ImGui::SliderFloat("##outlineThickness", &style.markerOutlineThickness, 0.5f, 5.0f, "%.1f px");
+        }
+        else
+        {
+            beginRow("Marker outline");
+            changed |= ImGui::Checkbox("##markerOutline", &style.markerOutline);
+            if (style.markerOutline)
+            {
+                beginRow("Outline thickness");
+                ImGui::SetNextItemWidth(controlWidth);
+                changed |= ImGui::SliderFloat("##outlineThickness", &style.markerOutlineThickness, 0.5f, 5.0f, "%.1f px");
+                beginRow("Outline colour");
+                changed |= colourButton("outlineColour", &style.markerOutlineColour);
+            }
+        }
+    }
+    else if (playerFuser)
+    {
+        ImGui::TextWrapped("Preview follows the current Box, Head dot, Health and Skeleton options from the player ESP settings.");
+    }
+    else if (category == MarkerCategory::Tripwire)
+    {
+        ImGui::TextWrapped("Tripwires keep their anchor-to-endpoint line and compact armed endpoint.");
+    }
+    else if (category == MarkerCategory::GroupLine)
+    {
+        ImGui::TextWrapped("Player group connections remain lines between members.");
+    }
+    else if (category == MarkerCategory::FovCircle)
+    {
+        beginRow("Line thickness");
+        ImGui::SetNextItemWidth(controlWidth);
+        changed |= ImGui::SliderFloat("##fovThickness", &style.markerOutlineThickness, 0.5f, 5.0f, "%.1f px");
+        ImGui::TextWrapped("Radius continues to follow the Aim FOV setting.");
+    }
+    else
+    {
+        ImGui::TextWrapped("Grenades keep their radar danger ring and fuser warning label.");
+    }
+
+    const bool hasLabel = category != MarkerCategory::Crosshair && category != MarkerCategory::FovCircle && category != MarkerCategory::GroupLine;
+    if (hasLabel)
+    {
+        ImGui::SeparatorText("Label");
+        beginRow("Font size");
+        ImGui::SetNextItemWidth(controlWidth);
+        changed |= ImGui::SliderFloat("##fontSize", &baseView.fontSize, 8.0f, 32.0f, "%.0f px");
+        beginRow("Use marker colour");
+        changed |= ImGui::Checkbox("##useMarkerColour", &style.useMarkerColourForText);
+        if (!style.useMarkerColourForText)
+        {
+            beginRow("Text colour");
+            changed |= colourButton("textColour", &style.textColour);
+        }
+        beginRow("Text outline");
+        changed |= ImGui::Checkbox("##textOutline", &style.textOutline);
+        beginRow("Text shadow");
+        changed |= ImGui::Checkbox("##textShadow", &style.textShadow);
+        if (style.textOutline || style.textShadow)
+        {
+            beginRow("Effect colour");
+            changed |= colourButton("effectColour", &style.textOutlineColour);
+        }
+        if (style.textShadow)
+        {
+            beginRow("Shadow offset");
+            ImGui::SetNextItemWidth(controlWidth);
+            changed |= ImGui::SliderFloat("##shadowOffset", &style.shadowOffset, 1.0f, 6.0f, "%.1f px");
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::SetCursorPosX(controlX);
+    if (ImGui::Button("Reset", ImVec2(controlWidth, 26.0f)))
+    {
+        if (playerMarker)
+            appearanceManager.ResetPlayerMarkerStyle(draft, static_cast<PlayerMarkerType>(playerType));
+        else
+            appearanceManager.ResetStyle(draft, category);
+        changed = true;
+    }
+    ImGui::EndChild();
+
+    view = baseView;
+    if (playerMarker)
+    {
+        view.shape = playerMarker->shape;
+        view.size = playerMarker->size;
+    }
+
+    if (changed)
+    {
+        if (category == MarkerCategory::Crosshair)
+        {
+            espGlobals::crosshairSize = static_cast<int>(std::round(view.size));
+            if (view.shape == MarkerShape::Circle || view.shape == MarkerShape::Cross)
+                espGlobals::crosshairType = view.shape == MarkerShape::Cross ? 1 : 0;
+        }
+        appearanceManager.Apply(draft);
+        appearanceManager.Save();
+        configManager.SaveConfig();
+    }
+
+    ImGui::SameLine();
+    ImGui::BeginChild("##markerPreviewPanel", ImVec2(0.0f, panelHeight), true);
+    ImGui::TextDisabled("LIVE PREVIEW");
+    ImGui::Text("%s  /  %s", MarkerCategoryName(category), viewMode == MarkerView::Radar ? "Radar" : "Fuser");
+    const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
+    const ImVec2 canvasSize(ImGui::GetContentRegionAvail().x, 300.0f);
+    const ImVec2 canvasMax(canvasMin.x + canvasSize.x, canvasMin.y + canvasSize.y);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    DrawMarkerEditorPreviewBackground(drawList, canvasMin, canvasMax, viewMode);
+    drawList->AddRect(canvasMin, canvasMax, IM_COL32(54, 62, 72, 255), 7.0f);
+
+    const ImVec2 centre((canvasMin.x + canvasMax.x) * 0.5f, canvasMin.y + 132.0f);
+    drawList->PushClipRect(canvasMin, canvasMax, true);
+    if (category == MarkerCategory::Player)
+    {
+        DrawMarkerEditorPlayerPreview(drawList, centre, viewMode, view, style, *markerColour, playerType);
+    }
+    else if (category == MarkerCategory::Tripwire)
+    {
+        const ImU32 lineColour = ImGui::ColorConvertFloat4ToU32(ImVec4(markerColour->r, markerColour->g, markerColour->b, markerColour->a));
+        const ImVec2 start(canvasMin.x + 35.0f, canvasMin.y + 80.0f);
+        const ImVec2 end(canvasMax.x - 36.0f, canvasMax.y - 82.0f);
+        drawList->AddLine(start, end, lineColour, 2.0f);
+        drawList->AddCircleFilled(end, 4.0f, lineColour, 12);
+        drawList->AddCircle(end, 5.0f, IM_COL32(0, 0, 0, 220), 12, 1.0f);
+        if (viewMode == MarkerView::Fuser)
+            DrawMarkerEditorPreviewText(drawList, ImVec2(end.x, end.y + 9.0f), view, style, *markerColour, "TRIPWIRE 18m");
+    }
+    else if (category == MarkerCategory::Grenade)
+    {
+        if (viewMode == MarkerView::Radar)
+        {
+            const ImU32 grenadeColour = ImGui::ColorConvertFloat4ToU32(ImVec4(markerColour->r, markerColour->g, markerColour->b, markerColour->a));
+            drawList->AddCircleFilled(centre, 5.0f, grenadeColour, 18);
+            drawList->AddCircle(centre, 15.0f, grenadeColour, 32, 1.0f);
+        }
+        else
+        {
+            DrawMarkerEditorPreviewText(drawList, centre, view, style, *markerColour, "NADE");
+        }
+    }
+    else if (category == MarkerCategory::GroupLine)
+    {
+        const ImU32 lineColour = ImGui::ColorConvertFloat4ToU32(ImVec4(markerColour->r, markerColour->g, markerColour->b, markerColour->a));
+        const ImVec2 start(canvasMin.x + 42.0f, canvasMax.y - 72.0f);
+        const ImVec2 end(canvasMax.x - 42.0f, canvasMin.y + 72.0f);
+        drawList->AddCircleFilled(start, 5.0f, lineColour, 16);
+        drawList->AddCircleFilled(end, 5.0f, lineColour, 16);
+        drawList->AddLine(start, end, lineColour, 2.0f);
+    }
+    else if (category == MarkerCategory::Crosshair)
+    {
+        DrawMarkerEditorCrosshairPreview(drawList, centre, view, style, *markerColour);
+    }
+    else if (category == MarkerCategory::FovCircle)
+    {
+        const ImU32 ringColour = ImGui::ColorConvertFloat4ToU32(ImVec4(markerColour->r, markerColour->g, markerColour->b, markerColour->a));
+        drawList->AddCircle(centre, 68.0f, ringColour, 64, style.markerOutlineThickness);
+    }
+    else if (category == MarkerCategory::Exfil)
+    {
+        static constexpr const char* ExfilPreviewLabels[] = {"EXFIL", "EXFIL [Open]", "EXFIL [Closed]", "EXFIL [Pending]", "SECRET EXFIL", "TRANSIT"};
+        DrawMarkerEditorPreviewShape(drawList, centre, view, style, *markerColour);
+        DrawMarkerEditorPreviewText(drawList, ImVec2(centre.x, centre.y + view.size + 8.0f), view, style, *markerColour,
+            ExfilPreviewLabels[std::clamp(exfilPreviewStatus, 0, IM_ARRAYSIZE(ExfilPreviewLabels) - 1)]);
+    }
+    else
+    {
+        DrawMarkerEditorPreviewShape(drawList, centre, view, style, *markerColour);
+        DrawMarkerEditorPreviewText(drawList, ImVec2(centre.x, centre.y + view.size + 8.0f), view, style, *markerColour, MarkerCategoryName(category));
+    }
+    drawList->PopClipRect();
+    ImGui::Dummy(canvasSize);
+
+    ImGui::Spacing();
+    ImGui::TextWrapped("Preview uses the real marker rules for the selected view. Radar and fuser label sizing remain independent.");
+    ImGui::EndChild();
+}
+
 static void renderMenuSettings()
 {
     enum class SettingsPage : int
@@ -759,6 +1364,58 @@ static void renderMenuSettings()
                 {
                     ApplyRadarWindowSettings(static_cast<HWND>(viewport->PlatformHandleRaw));
                     configManager.SaveConfig();
+                }
+            }
+
+            if (menuLayout::Section("WebRadar"))
+            {
+                if (webRadar.IsRunning())
+                {
+                    if (ImGui::Button("Stop WebRadar", ImVec2(150.0f, 28.0f)))
+                        webRadar.Stop();
+                    else
+                    {
+                        ImGui::SameLine();
+                        if (ImGui::Button("WebRadar info", ImVec2(150.0f, 28.0f)))
+                            ImGui::OpenPopup("WebRadar info");
+                    }
+                }
+                else
+                {
+                    if (ImGui::Button("Start WebRadar", ImVec2(150.0f, 28.0f)))
+                    {
+                        if (webRadar.Start())
+                            ImGui::OpenPopup("WebRadar info");
+                    }
+                    const std::string error = webRadar.LastError();
+                    if (!error.empty())
+                        ImGui::TextWrapped("%s", error.c_str());
+                }
+
+                bool privacyEnabled = webRadar.PrivacyEnabled();
+                if (menuLayout::ToggleRow("Protect local/friend identities", "webRadarPrivacy", &privacyEnabled))
+                    webRadar.SetPrivacyEnabled(privacyEnabled);
+                ImGui::TextWrapped("When on, WebRadar hides local and friendly names and excludes their corpses from shared loot and the radar corpse list while sharing.");
+
+                ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
+                if (ImGui::BeginPopupModal("WebRadar info", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+                {
+                    ImGui::TextUnformatted("Remote WebRadar link");
+                    ImGui::Separator();
+                    const std::string externalLink = webRadar.PublicSharePath();
+                    if (!externalLink.empty())
+                    {
+                        ImGui::TextWrapped("%s", externalLink.c_str());
+                        if (ImGui::Button("Copy external link", ImVec2(160.0f, 28.0f)))
+                            ImGui::SetClipboardText(externalLink.c_str());
+                    }
+                    else
+                        ImGui::TextWrapped("%s", webRadar.PublicIpStatus().c_str());
+                    ImGui::Spacing();
+                    ImGui::TextWrapped("Remote access requires port 8742 to reach this PC or an HTTPS tunnel. Direct HTTP exposes the access token in transit. Anyone with the link can view the live radar.");
+                    if (ImGui::Button("Close", ImVec2(100.0f, 28.0f)))
+                        ImGui::CloseCurrentPopup();
+                    ImGui::EndPopup();
                 }
             }
 
@@ -948,11 +1605,7 @@ static void renderMenuSettings()
             }
             if (menuLayout::Section("ESP Local"))
             {
-                static const char* const crosshairTypeOptions[] = {"Circle", "Cross"};
-
-                saveIfChanged(menuLayout::ToggleComboIntSliderRow("Crosshair", "espCrosshair", &espGlobals::drawCrosshair, "Type", &espGlobals::crosshairType,
-                                                                  crosshairTypeOptions, IM_ARRAYSIZE(crosshairTypeOptions), "Size", &espGlobals::crosshairSize,
-                                                                  1, 20, "%d", true));
+                saveIfChanged(menuLayout::ToggleRow("Crosshair", "espCrosshair", &espGlobals::drawCrosshair));
                 saveIfChanged(menuLayout::ToggleRow("Draw Fireport Line", "drawFireportLine", &espGlobals::drawFireportLine));
             }
 
@@ -1427,47 +2080,21 @@ static void renderMenuSettings()
     }
     else if (activePage == SettingsPage::Appearance)
     {
-        if (menuLayout::BeginTwoColumns("##appearanceColumns"))
-        {
-            menuLayout::NextColumn();
-            if (menuLayout::Section("Players"))
-            {
-                saveIfChanged(menuLayout::ColourRow("PMC", "pmcColour", (float*)&coloursGlobals::playerPMC));
-                saveIfChanged(menuLayout::ColourRow("Player scav", "scavColour", (float*)&coloursGlobals::playerScav));
-                saveIfChanged(menuLayout::ColourRow("AI", "aiColour", (float*)&coloursGlobals::playerAI));
-                saveIfChanged(menuLayout::ColourRow("Boss", "bossColour", (float*)&coloursGlobals::playerBoss));
-                saveIfChanged(menuLayout::ColourRow("Black Division", "blackDivColour", (float*)&coloursGlobals::playerBlackDiv));
-                saveIfChanged(menuLayout::ColourRow("Local player", "localColour", (float*)&coloursGlobals::playerLocal));
-                saveIfChanged(menuLayout::ColourRow("Friendly", "friendlyColour", (float*)&coloursGlobals::playerFriendly));
-                saveIfChanged(menuLayout::ColourRow("Watched", "watchedColour", (float*)&coloursGlobals::playerWatched));
-            }
-            if (menuLayout::Section("Fuser distance fading"))
-            {
-                bool fadeChanged = menuLayout::ToggleRow("Enable fading", "fuserDistanceFadeEnabled", &espGlobals::fuserDistanceFadeEnabled);
-                fadeChanged |= menuLayout::SliderIntRow("Fade starts", "fuserFadeStartDistance", &espGlobals::fuserFadeStartDistance, 0, 999, "%d m", espGlobals::fuserDistanceFadeEnabled);
-                fadeChanged |= menuLayout::SliderIntRow("Fade reaches minimum", "fuserFadeEndDistance", &espGlobals::fuserFadeEndDistance, 1, 1000, "%d m", espGlobals::fuserDistanceFadeEnabled);
-                fadeChanged |= menuLayout::SliderIntRow("Minimum opacity", "fuserFadeMinimumOpacity", &espGlobals::fuserFadeMinimumOpacity, 0, 100, "%d%%", espGlobals::fuserDistanceFadeEnabled);
+        if (menuLayout::Section("Appearance Editor"))
+            RenderMarkerEditorPanel();
 
-                espGlobals::fuserFadeStartDistance = std::clamp(espGlobals::fuserFadeStartDistance, 0, 999);
-                espGlobals::fuserFadeEndDistance = std::clamp(espGlobals::fuserFadeEndDistance, espGlobals::fuserFadeStartDistance + 1, 1000);
-                espGlobals::fuserFadeMinimumOpacity = std::clamp(espGlobals::fuserFadeMinimumOpacity, 0, 100);
-                saveIfChanged(fadeChanged);
-                ImGui::TextDisabled("Players, loot, quests, tripwires and extracts only.");
-            }
-            menuLayout::NextColumn();
-            if (menuLayout::Section("World"))
-            {
-                saveIfChanged(menuLayout::ColourRow("Grenades", "grenadesColour", (float*)&coloursGlobals::grenades));
-                saveIfChanged(menuLayout::ColourRow("Tripwires", "tripwiresColour", (float*)&coloursGlobals::tripwires));
-                saveIfChanged(menuLayout::ColourRow("Extracts", "extractsColour", (float*)&coloursGlobals::exfils));
-                saveIfChanged(menuLayout::ColourRow("Quest markers", "questColour", (float*)&coloursGlobals::questMarker));
-                saveIfChanged(menuLayout::ColourRow("Containers", "containersColour", (float*)&coloursGlobals::containerColour));
-                saveIfChanged(menuLayout::ColourRow("Player group lines", "groupLineColour", (float*)&coloursGlobals::playerGroupLine));
-                saveIfChanged(menuLayout::ColourRow("Player corpses", "corpseColour", (float*)&coloursGlobals::playerCorpse));
-                saveIfChanged(menuLayout::ColourRow("Crosshair", "crosshairColour", (float*)&coloursGlobals::crosshair));
-                saveIfChanged(menuLayout::ColourRow("FOV circle", "fovColour", (float*)&coloursGlobals::fovCircle));
-            }
-            menuLayout::EndTwoColumns();
+        if (menuLayout::Section("Fuser distance fading"))
+        {
+            bool fadeChanged = menuLayout::ToggleRow("Enable fading", "fuserDistanceFadeEnabled", &espGlobals::fuserDistanceFadeEnabled);
+            fadeChanged |= menuLayout::SliderIntRow("Fade starts", "fuserFadeStartDistance", &espGlobals::fuserFadeStartDistance, 0, 999, "%d m", espGlobals::fuserDistanceFadeEnabled);
+            fadeChanged |= menuLayout::SliderIntRow("Fade reaches minimum", "fuserFadeEndDistance", &espGlobals::fuserFadeEndDistance, 1, 1000, "%d m", espGlobals::fuserDistanceFadeEnabled);
+            fadeChanged |= menuLayout::SliderIntRow("Minimum opacity", "fuserFadeMinimumOpacity", &espGlobals::fuserFadeMinimumOpacity, 0, 100, "%d%%", espGlobals::fuserDistanceFadeEnabled);
+
+            espGlobals::fuserFadeStartDistance = std::clamp(espGlobals::fuserFadeStartDistance, 0, 999);
+            espGlobals::fuserFadeEndDistance = std::clamp(espGlobals::fuserFadeEndDistance, espGlobals::fuserFadeStartDistance + 1, 1000);
+            espGlobals::fuserFadeMinimumOpacity = std::clamp(espGlobals::fuserFadeMinimumOpacity, 0, 100);
+            saveIfChanged(fadeChanged);
+            ImGui::TextDisabled("Players, loot, quests, tripwires and extracts only.");
         }
     }
     else if (activePage == SettingsPage::Keybinds)
@@ -2989,22 +3616,38 @@ static void renderDebugWindow()
                     const CameraManagerState& cameraState = *cameraSnapshot;
                     const bool fpsReady = Utils::valid_pointer(cameraState.fpsCamera);
                     const bool opticReady = Utils::valid_pointer(cameraState.opticCamera);
-                    const bool properOpticReady = cameraState.opticProjection.valid;
-                    const bool cameraHealthy = cameraState.valid && fpsReady && (!cameraState.usingOptic || opticReady);
+                    const bool cameraHealthy = cameraState.valid && fpsReady;
+                    const bool opticSampleReady = cameraState.opticRequested && cameraState.opticMatrixValid;
 
                     ImGui::SeparatorText("Status");
                     ImGui::TextColored(cameraHealthy ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f) : ImVec4(0.95f, 0.55f, 0.25f, 1.0f), "Camera %s",
                                        cameraHealthy ? "READY" : "NEEDS ATTENTION");
                     ImGui::SameLine();
-                    ImGui::Text("| Active %s | Lens projection: %s", cameraState.usingOptic ? "OPTIC" : "FPS", properOpticReady ? "READY" : "FALLBACK");
-                    ImGui::Text("FPS path: %s | Optic path: %s | ADS: %s | Scoped: %s", fpsReady ? "READY" : "MISSING", opticReady ? "READY" : "MISSING",
-                                cameraState.ads ? "YES" : "NO", cameraState.scoped ? "YES" : "NO");
+                    ImGui::Text("| Screen projection: %s | Matrix: %s", cameraState.usingOptic ? "OPTIC" : "FPS", cameraState.valid ? "READY" : "INVALID");
+                    ImGui::Text("FPS path: %s | Optic path: %s | ADS: %s | Magnified: %s | 1x+ optic requested: %s", fpsReady ? "READY" : "MISSING", opticReady ? "READY" : "MISSING",
+                                cameraState.ads ? "YES" : "NO", cameraState.scoped ? "YES" : "NO", cameraState.opticRequested ? "YES" : "NO");
+                    ImGui::Text("AllCameras cache: FPS %s | Optic %s | Using: FPS %s / Optic %s",
+                                Utils::valid_pointer(cameraState.allCamerasFpsCamera) ? "CACHED" : "MISSING",
+                                Utils::valid_pointer(cameraState.allCamerasOpticCamera) ? "CACHED" : "MISSING",
+                                cameraState.fpsFromAllCameras ? "ALLCAMERAS" : "MANAGER",
+                                cameraState.opticFromAllCameras ? "ALLCAMERAS" : "MANAGER");
                     ImGui::Text("Zoom %.2fx | Sight %d/%zu | Stacked match: %s", cameraState.magnification, cameraState.activeSightVectorIndex,
                                 cameraState.sights.size(), cameraState.stackedSightResolved ? "YES" : "NO");
-
-                    if (cameraState.scoped && !opticReady)
+                    ImGui::Text("Renderer uses: %s matrix (%s)", cameraState.usingOptic ? "OPTIC" : "FPS",
+                                cameraState.usingOptic ? (cameraState.opticFromAllCameras ? "AllCameras" : "OpticCameraManager") :
+                                (cameraState.fpsFromAllCameras ? "AllCameras" : "CameraManager"));
+                    if (cameraState.opticRequested)
                     {
-                        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.20f, 1.0f), "Warning: scoped, but the optic camera path is unavailable.");
+                        ImGui::Text("Optic matrix sample: %s | FPS FOV %.2f | aspect %.3f | scale %.3f / %.3f",
+                                    opticSampleReady ? "READY" : "UNAVAILABLE", cameraState.fpsFov, cameraState.fpsAspect,
+                                    cameraState.opticScaleX, cameraState.opticScaleY);
+                        if (opticSampleReady && !cameraState.usingOptic)
+                            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.20f, 1.0f), "FPS FOV/aspect unavailable; using FPS projection.");
+                    }
+
+                    if (cameraState.opticRequested && !opticReady)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.20f, 1.0f), "Warning: optic camera path is unavailable.");
                     }
                     if (!cameraState.valid)
                     {
@@ -3014,27 +3657,21 @@ static void renderDebugWindow()
                             ImGui::TextWrapped("Camera rejected at: %s", cameraState.cameraSampleFailure.c_str());
                         }
                     }
-                    if (cameraState.usingOptic && !properOpticReady)
-                    {
-                        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.20f, 1.0f), "Proper lens projection is unavailable; using the optic-camera fallback.");
-                        if (!cameraState.opticProjectionFailure.empty())
-                        {
-                            ImGui::TextWrapped("Rejected at: %s", cameraState.opticProjectionFailure.c_str());
-                        }
-                    }
+                    if (cameraState.opticRequested && !cameraState.opticCameraFailure.empty())
+                        ImGui::TextWrapped("Optic camera: %s", cameraState.opticCameraFailure.c_str());
                     if (ImGui::CollapsingHeader("Optic selection details"))
                     {
                         DebugTextBool("ADS", cameraState.ads);
                         DebugTextBool("Magnified scope", cameraState.scoped);
-                        DebugTextBool("Using optic camera", cameraState.usingOptic);
-                        DebugTextBool("Proper optic projection", properOpticReady);
-                        DebugTextBool("Lens retry suppressed until ADS release", cameraState.lensProjectionSuppressed);
+                        DebugTextBool("1x+ optic requested", cameraState.opticRequested);
+                        DebugTextBool("Optic matrix sampled", opticSampleReady);
+                        DebugTextBool("Optic screen projection", cameraState.usingOptic);
                         DebugTextBool("Stacked sight resolved", cameraState.stackedSightResolved);
 
                         for (const CameraSightState& sight : cameraState.sights)
                         {
-                            ImGui::Text("[%d] scope %d mode %d | %.2fx | %s%s", sight.opticsListIndex, sight.selectedScope, sight.selectedMode,
-                                        sight.resolvedZoom, sight.valid ? "VALID" : "INVALID", sight.selectedByCurrentOptic ? " | CURRENT" : "");
+                            ImGui::Text("[%d] scope %d mode %d | %.2fx | raw FOV %.2f | %s%s", sight.opticsListIndex, sight.selectedScope, sight.selectedMode,
+                                        sight.resolvedZoom, sight.scopeZoomValue, sight.valid ? "VALID" : "INVALID", sight.selectedByCurrentOptic ? " | CURRENT" : "");
                         }
                     }
 
@@ -3045,141 +3682,42 @@ static void renderDebugWindow()
                         DebugTextPtr("Active camera", cameraState.activeCamera);
                         DebugTextPtr("Active matrix address", cameraState.activeViewMatrixAddress);
                         DebugTextPtr("AllCameras global", cameraState.allCamerasGlobal);
+                        DebugTextPtr("AllCameras FPS", cameraState.allCamerasFpsCamera);
+                        DebugTextPtr("AllCameras optic", cameraState.allCamerasOpticCamera);
                         DebugTextPtr("EFT camera manager", cameraState.eftCameraManager);
                         DebugTextPtr("Optic camera manager", cameraState.opticCameraManager);
                         DebugTextPtr("Current optic sight", cameraState.currentOpticSight);
                         DebugTextPtr("Current scope transform", cameraState.currentOpticScopeTransform);
-                        DebugTextPtr("Lens renderer", cameraState.opticProjection.lensRenderer);
-                        DebugTextPtr("Lens mesh", cameraState.opticProjection.mesh);
-                        DebugTextPtr("Lens material", cameraState.opticProjection.material);
-                        ImGui::Text("Camera view-matrix offset: 0x%X", cameraState.viewMatrixOffset);
+                        ImGui::Text("Matrix offset: 0x%X", cameraState.viewMatrixOffset);
                         ImGui::Text("AllCameras offset path: %s | busy skips: %llu", cameraState.usedAllCamerasOffset ? "YES" : "NO",
                                     static_cast<unsigned long long>(cameraState.busyReadSkips));
                     }
 
                     if (ImGui::CollapsingHeader("Matrix validation"))
                     {
-                        DebugMatrixSummary("Selected camera VP", cameraState.rawViewMatrix);
-                        DebugMatrixSummary("Published projection", cameraState.viewMatrix);
+                        DebugMatrixSummary("Renderer matrix", cameraState.viewMatrix);
+                        DebugMatrixSummary("FPS camera matrix", cameraState.mainViewProjection);
+                        if (cameraState.opticMatrixValid)
+                            DebugMatrixSummary("Optic camera matrix", cameraState.opticViewProjection);
+                        else
+                            ImGui::Text("Optic camera matrix: NOT SAMPLED");
+                        if (cameraState.fpsMatrixDelta >= 0.0f)
+                            ImGui::Text("FPS matrix change since last sample: %.6f", cameraState.fpsMatrixDelta);
+                        if (cameraState.opticMatrixDelta >= 0.0f)
+                            ImGui::Text("Optic matrix change since last sample: %.6f", cameraState.opticMatrixDelta);
+                        ImGui::TextDisabled("A zero change is expected while the camera is still.");
                     }
 
-                    if (ImGui::CollapsingHeader("Lens stability diagnostics", ImGuiTreeNodeFlags_DefaultOpen))
+                    if (ImGui::CollapsingHeader("Camera sample telemetry"))
                     {
-                        bool showOverlay = cameraDebugGlobals::lensStabilityOverlay.load(std::memory_order_acquire);
-                        if (ImGui::Checkbox("Show lens diagnostic overlay on fuser", &showOverlay))
-                        {
-                            cameraDebugGlobals::lensStabilityOverlay.store(showOverlay, std::memory_order_release);
-                        }
-
                         const auto now = std::chrono::steady_clock::now();
-                        const auto ageMs = [&](const auto time)
-                        {
-                            if (time == decltype(time){} || now < time)
-                                return -1.0;
-                            return std::chrono::duration<double, std::milli>(now - time).count();
-                        };
-                        const double packetAgeMs = ageMs(cameraState.publishedAt);
-                        const double lensAgeMs = ageMs(cameraState.opticProjection.sampledAt);
-                        const FireportPoseSnapshot fireport = g_fireport.getSnapshot();
-                        const double fireportAgeMs = fireport ? ageMs(fireport->publishedAt) : -1.0;
-                        const PlayerSnapshotTelemetry players = registeredPlayers.getSnapshotTelemetry();
-                        const CameraProjectionDiagnostics diagnostics = cameraManagerTest.diagnostics();
-
-                        static std::uint64_t trackedSight = 0;
-                        static std::uint64_t trackedSample = 0;
-                        static glm::vec2 previousCenter{};
-                        static glm::vec3 previousLens{};
-                        static glm::vec3 previousHands{};
-                        static float centerDeltaPx = 0.0f;
-                        static float lensDeltaMm = 0.0f;
-                        static float handsDeltaMm = 0.0f;
-                        static std::uint64_t lastRejectedCount = 0;
-                        static std::string lastRejectedReason = "none";
-                        static std::uint64_t lastRootResetSample = 0;
-                        static float lastRootResetErrorMm = 0.0f;
-                        static bool lastRootResetWindowExpired = false;
-
-                        const OpticProjectionState& optic = cameraState.opticProjection;
-                        const glm::vec2 centerPixels{(optic.imageCenterNdc.x + 1.0f) * espGlobals::gameRes.x * 0.5f,
-                                                     (1.0f - optic.imageCenterNdc.y) * espGlobals::gameRes.y * 0.5f};
-                        if (optic.valid && (trackedSight != optic.opticSight || trackedSample != optic.sampleSequence))
-                        {
-                            if (trackedSight == optic.opticSight && trackedSample != 0)
-                            {
-                                centerDeltaPx = glm::length(centerPixels - previousCenter);
-                                lensDeltaMm = glm::length(optic.mainCameraRelativeLens - previousLens) * 1000.0f;
-                                handsDeltaMm = glm::length(optic.mainCameraRelativeHands - previousHands) * 1000.0f;
-                            }
-                            else
-                            {
-                                centerDeltaPx = 0.0f;
-                                lensDeltaMm = 0.0f;
-                                handsDeltaMm = 0.0f;
-                            }
-                            trackedSight = optic.opticSight;
-                            trackedSample = optic.sampleSequence;
-                            previousCenter = centerPixels;
-                            previousLens = optic.mainCameraRelativeLens;
-                            previousHands = optic.mainCameraRelativeHands;
-                        }
-
-                        if (diagnostics.rejected != lastRejectedCount)
-                        {
-                            lastRejectedCount = diagnostics.rejected;
-                            if (!cameraState.opticProjectionFailure.empty())
-                            {
-                                lastRejectedReason = cameraState.opticProjectionFailure;
-                            }
-                        }
-                        if (optic.valid && optic.rootHistoryReset && lastRootResetSample != optic.sampleSequence)
-                        {
-                            lastRootResetSample = optic.sampleSequence;
-                            lastRootResetErrorMm = optic.rootPredictionErrorMm;
-                            lastRootResetWindowExpired = optic.rootCorrectionWindowExpired;
-                        }
-
-                        ImGui::Text("Packet %llu | Sample %llu | %s", static_cast<unsigned long long>(cameraState.version),
-                                    static_cast<unsigned long long>(optic.sampleSequence),
-                                    diagnostics.lastOutcome == OpticPacketOutcome::Retained   ? "RETAINED"
-                                    : diagnostics.lastOutcome == OpticPacketOutcome::Accepted ? "ACCEPTED"
-                                    : diagnostics.lastOutcome == OpticPacketOutcome::Rejected ? "REJECTED"
-                                                                                              : "IDLE");
-                        ImGui::Text("Attempts %llu | accepted %llu | rejected %llu | retained %llu", static_cast<unsigned long long>(diagnostics.attempts),
-                                    static_cast<unsigned long long>(diagnostics.accepted), static_cast<unsigned long long>(diagnostics.rejected),
-                                    static_cast<unsigned long long>(diagnostics.retained));
+                        const double ageMs = cameraState.publishedAt == std::chrono::steady_clock::time_point{} ||
+                            now < cameraState.publishedAt ? -1.0 :
+                            std::chrono::duration<double, std::milli>(now - cameraState.publishedAt).count();
+                        ImGui::Text("Packet %llu | age %.1f ms | DMA busy skips %llu",
+                                    static_cast<unsigned long long>(cameraState.version), ageMs,
+                                    static_cast<unsigned long long>(cameraState.busyReadSkips));
                         ImGui::Text("DMA recovery epoch: %llu", static_cast<unsigned long long>(mem.GetDmaRecoveryEpoch()));
-                        ImGui::Text("Ages: camera %.1f ms | lens %.1f ms | player motion %.1f ms | fireport %.1f ms", packetAgeMs, lensAgeMs,
-                                    players.motionAgeMs, fireportAgeMs);
-                        ImGui::Text("Image centre: %.1f, %.1f px | accepted delta %.2f px", centerPixels.x, centerPixels.y, centerDeltaPx);
-                        ImGui::Text("Camera-relative delta: lens %.3f mm | hands root %.3f mm", lensDeltaMm, handsDeltaMm);
-                        ImGui::Text("Material scale %.6f | shift %.6f | intended FOV scale %.6f", optic.materialScale, optic.materialShift,
-                                    optic.intendedFovScale);
-                        ImGui::Text("Hands-root correction: %s | applied %.3f mm | residual %.3f mm", optic.rootTranslationCorrected ? "ACTIVE" : "NONE",
-                                    optic.rootCorrectionMm, optic.rootPredictionErrorMm);
-                        ImGui::Text("Latched root event: %s at sample %llu | %.3f mm",
-                                    lastRootResetSample == 0     ? "none"
-                                    : lastRootResetWindowExpired ? "WINDOW EXPIRED"
-                                                                 : "HISTORY RESET",
-                                    static_cast<unsigned long long>(lastRootResetSample), lastRootResetErrorMm);
-                        ImGui::TextWrapped("Latched projection rejection #%llu: %s", static_cast<unsigned long long>(lastRejectedCount),
-                                           lastRejectedReason.c_str());
-                        ImGui::Text("FOV node raw Z scales:");
-                        ImGui::SameLine();
-                        if (optic.fovNodeCount == 0)
-                        {
-                            ImGui::TextDisabled("none");
-                        }
-                        else
-                        {
-                            for (std::uint32_t index = 0; index < optic.fovNodeCount; ++index)
-                            {
-                                if (index != 0)
-                                    ImGui::SameLine();
-                                ImGui::Text("[%u] %.6f", index, optic.fovNodeScaleZ[index]);
-                            }
-                        }
-                        ImGui::TextWrapped("Overlay colours: yellow image quad, pink visible mask, orange lens centre, green main-camera fireport point, cyan "
-                                           "optic/lens fireport point");
                     }
 
                     ImGui::EndTabItem();
@@ -4519,6 +5057,8 @@ bool renderThread()
         ImGui_ImplDX9_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+
+        webRadar.PublishFrame();
 
         UpdateGymDiagnostics();
 

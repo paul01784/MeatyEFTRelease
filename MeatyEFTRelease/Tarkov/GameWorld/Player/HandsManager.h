@@ -15,6 +15,7 @@ struct HandsInfo
 {
     uint64_t cachedItem = 0;
     uint64_t cachedItemTemplate = 0;
+    uint64_t cachedMarketRevision = 0;
     uint64_t loadedAmmoTemplate = 0;
     bool cachedIsWeapon = false;
     int weaponVersion = -1;
@@ -37,6 +38,7 @@ struct HandsInfo
         itemPtr = 0;
         cachedItem = 0;
         cachedItemTemplate = 0;
+        cachedMarketRevision = 0;
         loadedAmmoTemplate = 0;
         cachedIsWeapon = false;
         weaponVersion = -1;

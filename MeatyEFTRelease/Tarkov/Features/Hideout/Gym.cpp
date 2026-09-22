@@ -1067,8 +1067,6 @@ bool Gym::TryCacheTransformAccess(std::uint64_t candidate, std::uint64_t circle,
     std::string resolvedBy = resolver ? resolver : "native transform";
     if (!resolveHierarchy(transformData))
     {
-        // Some current Unity builds expose the transform-data pointer again at
-        // +0x90. dma-radar uses this location for its lightweight validation.
         std::uint64_t alternateData = 0;
         (void)mem.TryRead(candidate + 0x90, alternateData, kGymReadMode);
         vertices = 0;

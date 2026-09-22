@@ -35,7 +35,7 @@ namespace UnityOffsets
     constexpr uint64_t Camera_CullingMatrixOffset = 0x128;
     constexpr uint64_t Camera_NonJitteredProjectionSetOffset = 0x57C;
     constexpr uint64_t Camera_NonJitteredProjectionMatrixOffset = 0x780;
-    constexpr uint64_t Camera_ViewMatrixOffset = Camera_CullingMatrixOffset; // legacy fallback
+    constexpr uint64_t Camera_ViewMatrixOffset = Camera_CullingMatrixOffset;
     constexpr uint64_t Camera_FOVOffset = 0x1A8;
     constexpr uint64_t Camera_AspectRatioOffset = 0x518;
     constexpr uint64_t Camera_ZoomLevelOffset = 0xE8;

@@ -10,29 +10,12 @@
 
 #include <glm/glm.hpp>
 
-#include "OpticProjection.h"
+#include "CameraTypes.h"
 
 enum class ManagedCameraKind : std::uint8_t
 {
     Fps,
     Optic
-};
-
-enum class OpticPacketOutcome : std::uint8_t
-{
-    Idle,
-    Accepted,
-    Rejected,
-    Retained
-};
-
-struct CameraProjectionDiagnostics
-{
-    std::uint64_t attempts = 0;
-    std::uint64_t accepted = 0;
-    std::uint64_t rejected = 0;
-    std::uint64_t retained = 0;
-    OpticPacketOutcome lastOutcome = OpticPacketOutcome::Idle;
 };
 
 struct CameraSightState
@@ -61,9 +44,8 @@ struct CameraManagerState
     glm::highp_mat4 mainViewProjection{};
     glm::highp_mat4 opticViewProjection{};
     glm::vec3 fpsCameraWorldPosition{};
-    OpticProjectionState opticProjection{};
     std::string cameraSampleFailure;
-    std::string opticProjectionFailure;
+    std::string opticCameraFailure;
 
     std::vector<CameraSightState> sights;
 
@@ -72,29 +54,37 @@ struct CameraManagerState
     std::uint64_t activeCamera = 0;
     std::uint64_t activeViewMatrixAddress = 0;
     std::uint64_t allCamerasGlobal = 0;
+    std::uint64_t allCamerasFpsCamera = 0;
+    std::uint64_t allCamerasOpticCamera = 0;
     std::uint64_t eftCameraManager = 0;
     std::uint64_t opticCameraManager = 0;
     std::uint64_t currentOpticSight = 0;
     std::uint64_t currentOpticScopeTransform = 0;
 
     std::uint32_t viewMatrixOffset = 0;
-    std::uint32_t fovOffset = 0;
-    std::uint32_t aspectOffset = 0;
 
     int activeSightVectorIndex = -1;
 
-    float fov = 0.0f;
-    float aspect = 0.0f;
     float magnification = 1.0f;
+    float fpsFov = 0.0f;
+    float fpsAspect = 0.0f;
+    float opticScaleX = 1.0f;
+    float opticScaleY = 1.0f;
+    float fpsMatrixDelta = -1.0f;
+    float opticMatrixDelta = -1.0f;
 
     bool valid = false;
+    bool fpsMatrixValid = false;
+    bool opticMatrixValid = false;
     bool fpsCameraWorldPositionValid = false;
     bool ads = false;
     bool scoped = false;
+    bool opticRequested = false;
     bool usingOptic = false;
-    bool lensProjectionSuppressed = false;
     bool stackedSightResolved = false;
     bool usedAllCamerasOffset = false;
+    bool fpsFromAllCameras = false;
+    bool opticFromAllCameras = false;
 
     std::uint64_t busyReadSkips = 0;
 
@@ -109,6 +99,8 @@ using CameraManagerSnapshot = std::shared_ptr<const CameraManagerState>;
 class CameraManager
 {
 public:
+    static constexpr float kScreenEdgeBufferPixels = 8.0f;
+
     CameraManager();
 
     [[nodiscard]] bool initialize();
@@ -121,11 +113,9 @@ public:
 
     [[nodiscard]] CameraManagerSnapshot snapshot() const noexcept;
 
-    [[nodiscard]] CameraProjectionDiagnostics diagnostics() const noexcept;
+    [[nodiscard]] static bool worldToScreen(const CameraManagerState& state, const glm::vec3& world, glm::vec2& screen, float viewportWidth, float viewportHeight, float edgeBufferPixels = kScreenEdgeBufferPixels);
 
-    [[nodiscard]] static bool worldToScreen(const CameraManagerState& state, const glm::vec3& world, glm::vec2& screen, float viewportWidth, float viewportHeight, bool opticOnly = false);
-
-    [[nodiscard]] static bool worldSegmentToScreen(const CameraManagerState& state, const glm::vec3& worldStart, const glm::vec3& worldEnd, float viewportWidth, float viewportHeight, std::vector<CameraScreenSegment>& segments, bool opticOnly = false);
+    [[nodiscard]] static bool worldSegmentToScreen(const CameraManagerState& state, const glm::vec3& worldStart, const glm::vec3& worldEnd, float viewportWidth, float viewportHeight, std::vector<CameraScreenSegment>& segments);
 
 private:
     struct CameraListView
@@ -142,7 +132,7 @@ private:
 
     [[nodiscard]] bool readCameraList(std::uint64_t globalAddress, CameraListView& list) const;
     [[nodiscard]] std::string readCameraName(std::uint64_t camera) const;
-    [[nodiscard]] std::uint64_t resolveViewMatrixAddress(std::uint64_t camera) const;
+    [[nodiscard]] std::uint64_t resolveViewMatrixAddress(std::uint64_t camera, bool preferDirect = false) const;
     [[nodiscard]] std::string readManagedComponentName(std::uint64_t objectClass) const;
     [[nodiscard]] std::uint64_t resolveManagedComponent(std::uint64_t camera, std::string_view className) const;
     [[nodiscard]] bool resolveOpticCameraManager();
@@ -150,31 +140,31 @@ private:
 
     [[nodiscard]] std::vector<CameraSightState> readSights(std::uint64_t localPwa, std::uint64_t currentOpticSight, std::uint64_t currentScopeTransform) const;
     [[nodiscard]] bool readSight(std::uint64_t sightBone, int listIndex, std::uint64_t currentOpticSight, std::uint64_t currentScopeTransform, CameraSightState& result) const;
-    [[nodiscard]] float readSelectedZoom(std::uint64_t sightTemplate, std::uint64_t selectedModes, int selectedScope, int& selectedMode) const;
+    [[nodiscard]] float readSelectedZoom(std::uint64_t sightTemplate, std::uint64_t selectedModes, int selectedScope, int& selectedMode, float& minimumZoom, float& maximumZoom) const;
 
     [[nodiscard]] static int selectActiveSight(const std::vector<CameraSightState>& sights);
     [[nodiscard]] static bool matrixLooksValid(const glm::highp_mat4& matrix);
-    [[nodiscard]] static bool validFov(float value);
-    [[nodiscard]] static bool validAspect(float value);
+    [[nodiscard]] static bool viewProjectionLooksValid(const glm::highp_mat4& matrix);
+    [[nodiscard]] static bool viewProjectionMatchesView(const glm::highp_mat4& viewProjection, const glm::highp_mat4& view);
+    [[nodiscard]] static bool readCameraSample(std::uint64_t nativeCamera, std::uint64_t matrixAddress, CameraMatrixSample& sample, bool* busy = nullptr);
 
     void publish(CameraManagerState&& state);
 
 private:
     std::uint64_t m_allCamerasGlobal = 0;
+    std::uint64_t m_allCamerasFpsCamera = 0;
+    std::uint64_t m_allCamerasOpticCamera = 0;
+    std::uint64_t m_allCamerasFpsViewMatrixAddress = 0;
+    std::uint64_t m_allCamerasOpticViewMatrixAddress = 0;
+    std::uint64_t m_unityPlayerBase = 0;
     std::uint64_t m_fpsCamera = 0;
     std::uint64_t m_opticCamera = 0;
     std::uint64_t m_fpsViewMatrixAddress = 0;
     std::uint64_t m_opticViewMatrixAddress = 0;
     std::uint64_t m_eftCameraManager = 0;
     std::uint64_t m_opticCameraManager = 0;
-    std::uint64_t m_gameAssemblyBase = 0;
 
     std::uint32_t m_viewMatrixOffset = 0;
-    std::uint32_t m_fovOffset = 0;
-    std::uint32_t m_aspectOffset = 0;
-
-    float m_lastFov = 0.0f;
-    float m_lastAspect = 0.0f;
 
     std::vector<CameraSightState> m_cachedSights;
     std::uint64_t m_cachedCurrentOpticSight = 0;
@@ -184,16 +174,15 @@ private:
     std::chrono::steady_clock::time_point m_lastUpdate{};
     std::chrono::steady_clock::time_point m_lastInitializeAttempt{};
     std::chrono::steady_clock::time_point m_lastManagedCameraResolve{};
+    std::chrono::steady_clock::time_point m_lastCameraRefresh{};
     std::chrono::steady_clock::time_point m_lastSightRefresh{};
     std::chrono::steady_clock::time_point m_lastViewMatrixResolve{};
-    std::chrono::steady_clock::time_point m_lastLensRefresh{};
     std::chrono::steady_clock::time_point m_lastAllCamerasResolve{};
 
     bool m_usedAllCamerasOffset = false;
+    bool m_fpsFromAllCameras = false;
+    bool m_opticFromAllCameras = false;
     bool m_lastAds = false;
-    bool m_lastUsingOptic = false;
-    bool m_lensProjectionSuppressedUntilAdsRelease = false;
-    std::uint8_t m_lensProjectionFailureCount = 0;
 
     std::uint8_t m_opticMatrixReadFailures = 0;
     std::chrono::steady_clock::time_point m_cameraReadFailureSince{};
@@ -201,18 +190,9 @@ private:
     std::uint64_t m_busyReadSkips = 0;
     std::uint64_t m_observedDmaRecoveryEpoch = 0;
     bool m_cameraHealthFailureActive = false;
-    bool m_opticMeshHealthFailureActive = false;
-
-    OpticProjectionEngine m_opticProjectionEngine{};
 
     std::atomic<CameraManagerSnapshot> m_snapshot;
     std::atomic<std::uint64_t> m_version{ 0 };
-    std::atomic<std::uint64_t> m_opticSampleAttempts{ 0 };
-    std::atomic<std::uint64_t> m_opticAcceptedSamples{ 0 };
-    std::atomic<std::uint64_t> m_opticRejectedSamples{ 0 };
-    std::atomic<std::uint64_t> m_opticRetainedPackets{ 0 };
-    std::atomic<OpticPacketOutcome> m_lastOpticOutcome{
-        OpticPacketOutcome::Idle };
 };
 
 extern CameraManager cameraManagerTest;

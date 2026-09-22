@@ -1,4 +1,5 @@
 #include "aimview.h"
+#include "Appearance.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -11,6 +12,7 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include "../Tarkov/GameWorld/RegisteredPlayers.h"
+#include "../Tarkov/GameWorld/Player/PlayerAppearance.h"
 #include "../Tarkov/GameWorld/Loot/Loot.h"
 #include "../Tarkov/Unity/cameraManager.h"
 
@@ -149,9 +151,6 @@ void AimViewWidget::Render(const ImVec2& sourceResolution) {
         DrawLoot(drawList);
 
         DrawContainers(drawList);
-
-        if (espGlobals::drawCrosshair)
-            DrawCrosshair(drawList);
 
         drawList->PopClipRect();
     }
@@ -536,37 +535,6 @@ void AimViewWidget::DrawBackground(ImDrawList* drawList) const {
     );
 }
 
-void AimViewWidget::DrawCrosshair(ImDrawList* drawList) const {
-    if (!drawList)
-        return;
-
-    const float size = static_cast<float>(std::clamp(espGlobals::crosshairSize, 1, 20));
-    const ImU32 colour = ImGui::ColorConvertFloat4ToU32(ImVec4(
-        coloursGlobals::crosshair.r,
-        coloursGlobals::crosshair.g,
-        coloursGlobals::crosshair.b,
-        coloursGlobals::crosshair.a
-    ));
-
-    if (espGlobals::crosshairType == 1) {
-        drawList->AddLine(
-            ImVec2(canvasCentre_.x - size, canvasCentre_.y),
-            ImVec2(canvasCentre_.x + size, canvasCentre_.y),
-            colour,
-            1.0f
-        );
-        drawList->AddLine(
-            ImVec2(canvasCentre_.x, canvasCentre_.y - size),
-            ImVec2(canvasCentre_.x, canvasCentre_.y + size),
-            colour,
-            1.0f
-        );
-        return;
-    }
-
-    drawList->AddCircle(canvasCentre_, size, colour, 0, 1.0f);
-}
-
 void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
     if (!drawList)
         return;
@@ -583,6 +551,7 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
             player.isLocal ||
             player.hasExfiled ||
             player.isDead ||
+            player.isInBTR ||
             player.isBTR) {
             continue;
         }
@@ -607,7 +576,7 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
             continue;
         }
 
-        const glm::vec4& playerColour = player.colour;
+        const glm::vec4 playerColour = PlayerAppearance::resolveColour(player);
 
         const ImU32 drawColour = ImGui::ColorConvertFloat4ToU32(ImVec4(
                     playerColour.r,
@@ -650,8 +619,15 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
                     boxMinimum.x + width,
                     boxMinimum.y + height
                 );
-
-                drawList->AddRect(boxMinimum, boxMaximum, drawColour, 0.0f, 0, 1.0f);
+                const float corner = std::min(15.0f, std::min(width, height) * 0.3f);
+                drawList->AddLine(boxMinimum, ImVec2(boxMinimum.x + corner, boxMinimum.y), drawColour, 1.0f);
+                drawList->AddLine(boxMinimum, ImVec2(boxMinimum.x, boxMinimum.y + corner), drawColour, 1.0f);
+                drawList->AddLine(ImVec2(boxMaximum.x, boxMinimum.y), ImVec2(boxMaximum.x - corner, boxMinimum.y), drawColour, 1.0f);
+                drawList->AddLine(ImVec2(boxMaximum.x, boxMinimum.y), ImVec2(boxMaximum.x, boxMinimum.y + corner), drawColour, 1.0f);
+                drawList->AddLine(ImVec2(boxMinimum.x, boxMaximum.y), ImVec2(boxMinimum.x + corner, boxMaximum.y), drawColour, 1.0f);
+                drawList->AddLine(ImVec2(boxMinimum.x, boxMaximum.y), ImVec2(boxMinimum.x, boxMaximum.y - corner), drawColour, 1.0f);
+                drawList->AddLine(boxMaximum, ImVec2(boxMaximum.x - corner, boxMaximum.y), drawColour, 1.0f);
+                drawList->AddLine(boxMaximum, ImVec2(boxMaximum.x, boxMaximum.y - corner), drawColour, 1.0f);
             }
         }
 
@@ -663,89 +639,46 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
             drawList->AddCircle(dotPosition, radius, drawColour, 0, 1.0f);
         }
 
-        if (!skeletonDrawn && !espGlobals::drawBoxPlayers && !espGlobals::drawHeadDot)
-            drawList->AddCircleFilled(widgetPlayerPosition, 2.5f, drawColour);
-
         const ImVec2 labelAnchor = skeletonDrawn || headVisible
             ? mappedHeadPosition
             : widgetPlayerPosition;
 
-        const bool showName =
-            player.isBoss ||
-            player.isPlayer ||
-            player.isPlayerScav;
-
-        std::string label;
-        std::string cleanName = CleanText(player.name);
-
-        if (showName && cleanName.empty()) {
-            cleanName = player.isBoss
-                ? "Boss"
-                : "Player";
-        }
-
-        if (showName)
-            label = cleanName;
-
-        if (espGlobals::drawPlayerEquip && radarGlobals::getPlayerEquip)
+        std::string playerName = CleanText(player.name);
+        if (playerName.empty())
         {
-            for (const auto& slot : player._slots)
-            {
-                const std::string slotName = TrimEFT(slot.name);
-
-                if (!slot.wanted ||
-                    slotName == "SecuredContainer" ||
-                    (player.isPlayer && !player.isPlayerScav && !player.isAi &&
-                        slotName == "Scabbard"))
-                {
-                    continue;
-                }
-
-                const std::string equipmentName = CleanText(slot.equipName);
-                if (equipmentName.empty())
-                    continue;
-
-                if (!label.empty())
-                    label += '\n';
-
-                label += equipmentName;
-            }
+            if (player.isBlackDivision)
+                playerName = "Black Division";
+            else if (player.isBoss)
+                playerName = "Boss";
+            else if (player.isPlayerScav)
+                playerName = "Player scav";
+            else if (player.isPlayer && !player.isAi)
+                playerName = "PMC";
+            else
+                playerName = "AI";
         }
 
-        if (label.empty())
-            continue;
+        const MarkerStyle nameStyle = appearanceManager.GetStyle(MarkerCategory::Player);
+        const float fontSize = nameStyle.fuser.fontSize;
+        const glm::vec4 styledTextColour = GetMarkerTextColour(nameStyle, playerColour);
+        const ImU32 textColour = ImGui::ColorConvertFloat4ToU32(ImVec4(styledTextColour.r, styledTextColour.g,
+            styledTextColour.b, styledTextColour.a));
+        const ImU32 effectColour = ImGui::ColorConvertFloat4ToU32(ImVec4(nameStyle.textOutlineColour.r,
+            nameStyle.textOutlineColour.g, nameStyle.textOutlineColour.b, nameStyle.textOutlineColour.a * playerColour.a));
+        const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, playerName.c_str());
+        const ImVec2 textPosition(labelAnchor.x - textSize.x * 0.5f, labelAnchor.y - textSize.y - 4.0f);
 
-        constexpr float fontSize = 12.0f;
-
-        const ImVec2 textSize =
-            ImGui::GetFont()->CalcTextSizeA(
-                fontSize,
-                FLT_MAX,
-                0.0f,
-                label.c_str()
-            );
-
-
-        const ImVec2 textPosition = ImVec2(labelAnchor.x - textSize.x * 0.5f, labelAnchor.y - textSize.y - 4.0f);
-
-        drawList->AddText(
-            ImGui::GetFont(),
-            fontSize,
-            ImVec2(
-                textPosition.x + 1.0f,
-                textPosition.y + 1.0f
-            ),
-            IM_COL32(0, 0, 0, 220),
-            label.c_str()
-        );
-
-        drawList->AddText(
-            ImGui::GetFont(),
-            fontSize,
-            textPosition,
-            drawColour,
-            label.c_str()
-        );
+        if (nameStyle.textShadow)
+            drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textPosition.x + nameStyle.shadowOffset,
+                textPosition.y + nameStyle.shadowOffset), effectColour, playerName.c_str());
+        if (nameStyle.textOutline)
+        {
+            drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textPosition.x - 1.0f, textPosition.y), effectColour, playerName.c_str());
+            drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textPosition.x + 1.0f, textPosition.y), effectColour, playerName.c_str());
+            drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textPosition.x, textPosition.y - 1.0f), effectColour, playerName.c_str());
+            drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textPosition.x, textPosition.y + 1.0f), effectColour, playerName.c_str());
+        }
+        drawList->AddText(ImGui::GetFont(), fontSize, textPosition, textColour, playerName.c_str());
     }
 }
 
@@ -1012,6 +945,17 @@ void AimViewWidget::DrawLoot(ImDrawList* drawList) {
             continue;
         }
 
+        const MarkerCategory markerCategory = isCorpse ? MarkerCategory::Corpse : (isQuestItem ? MarkerCategory::Quest : MarkerCategory::Loot);
+        const glm::vec4 aimViewColour = isQuestItem ? coloursGlobals::questMarker : (isCorpse ? coloursGlobals::playerCorpse : loot.color);
+        std::string aimViewName = CleanText(GetLootDisplayName(loot));
+        if (aimViewName.empty())
+            aimViewName = isCorpse ? "Corpse" : "Loot";
+        const MarkerStyle aimViewStyle = appearanceManager.GetStyle(markerCategory);
+        DrawRadarMarkerShape(drawList, widgetPosition, 0.0f, markerCategory, aimViewColour, 0.75f);
+        DrawRadarStyledText(drawList, ImGui::GetFont(), ImVec2(widgetPosition.x,
+            widgetPosition.y + (aimViewStyle.radar.size * 0.75f) + 3.0f), markerCategory, aimViewColour, aimViewName.c_str(), 0.80f, true);
+        continue;
+
         const glm::vec4& lootColour = isQuestItem
             ? coloursGlobals::questMarker
             : loot.color;
@@ -1140,6 +1084,16 @@ void AimViewWidget::DrawContainers(ImDrawList* drawList) {
         )) {
             continue;
         }
+
+        const glm::vec4 aimViewColour = loot.color;
+        std::string aimViewName = CleanText(loot.shortName);
+        if (aimViewName.empty())
+            aimViewName = loot.isAirdrop() ? "Airdrop" : "Container";
+        const MarkerStyle aimViewStyle = appearanceManager.GetStyle(MarkerCategory::Container);
+        DrawRadarMarkerShape(drawList, widgetPosition, 0.0f, MarkerCategory::Container, aimViewColour, 0.75f);
+        DrawRadarStyledText(drawList, ImGui::GetFont(), ImVec2(widgetPosition.x,
+            widgetPosition.y + (aimViewStyle.radar.size * 0.75f) + 3.0f), MarkerCategory::Container, aimViewColour, aimViewName.c_str(), 0.80f, true);
+        continue;
 
         const glm::vec4& containerColour = loot.color;
 

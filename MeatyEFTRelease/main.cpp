@@ -193,7 +193,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 splash.SetStatus(L"Loading Tarkov.dev data...");
 
                 constexpr bool forceTarkovDevJsonRefresh = false;
-                constexpr bool pauseTarkovDevRefresh = true;
+                constexpr bool pauseTarkovDevRefresh = false;
 
                 if (!tarkovDev.Initialize(forceTarkovDevJsonRefresh, pauseTarkovDevRefresh))
                     LOGS.logWarn("[MAIN][TARKOV.DEV] Failed to load one or more startup datasets");

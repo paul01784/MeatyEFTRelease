@@ -24,6 +24,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Appearance.h"
+
 struct DxFontSettings
 {
     std::wstring name = L"Arial";
@@ -186,7 +188,9 @@ public:
         bool centered = false,
         bool outlined = false,
         const glm::vec4& outlineColour = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
-        const std::wstring& fontName = L"");
+        const std::wstring& fontName = L"",
+        bool shadowed = false,
+        float shadowOffset = 2.0f);
 
     void DrawMarkerWithText(
         float x,
@@ -200,7 +204,10 @@ public:
         float textOffsetY = 5.0f,
         float outlineThickness = 1.0f,
         bool outlinedText = true,
-        const glm::vec4& textOutlineColour = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)
+        const glm::vec4& textOutlineColour = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
+        MarkerShape shape = MarkerShape::Square,
+        bool textShadow = false,
+        float shadowOffset = 2.0f
     );
 
 private:
@@ -241,6 +248,9 @@ private:
         float fontSize = 0.0f;
         bool centered = false;
         bool outlined = false;
+        bool shadowed = false;
+        float shadowOffset = 2.0f;
+        MarkerShape markerShape = MarkerShape::Square;
 
         float markerSize = 0.0f;
         float textOffsetY = 0.0f;

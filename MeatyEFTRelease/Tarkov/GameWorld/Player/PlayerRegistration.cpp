@@ -143,7 +143,7 @@ void RegisteredPlayers::playersTask()
         }
 
         updateEntity();
-        recoverBtrStuckPlayers();
+        updateBtrPassengerStates();
         checkGroupIDs();
         checkExfil();
 

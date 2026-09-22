@@ -14,6 +14,7 @@
 #include "../Tarkov/GameWorld/MainGame.h"
 #include "../Core/Utilities.h"
 #include "../Tarkov/GameWorld/RegisteredPlayers.h"
+#include "../Tarkov/GameWorld/Player/PlayerAppearance.h"
 #include "../Tarkov/GameWorld/Loot/Loot.h"
 #include "../Tarkov/GameWorld/Explosives/ExplosiveManager.h"
 #include "../Tarkov/GameWorld/QuestManager.h"
@@ -266,6 +267,42 @@ namespace fuserRender
         glm::vec4 result = colour;
         result.a = std::clamp(result.a * opacityMultiplier, 0.0f, 1.0f);
         return result;
+    }
+
+    static inline void RenderStyledWorldMarker(MarkerCategory category, const glm::vec2& screenPosition, const std::string& label, const glm::vec4& markerColour)
+    {
+        const MarkerStyle style = appearanceManager.GetStyle(category);
+        const MarkerViewStyle& view = style.fuser;
+        glm::vec4 fillColour = markerColour;
+        fillColour.a = std::clamp(fillColour.a * style.fillOpacity, 0.0f, 1.0f);
+        glm::vec4 outlineColour = style.markerOutline ? style.markerOutlineColour : glm::vec4(0.0f);
+        outlineColour.a = std::clamp(outlineColour.a * markerColour.a, 0.0f, 1.0f);
+        const glm::vec4 textColour = GetMarkerTextColour(style, markerColour);
+
+        g_DxWindow.DrawMarkerWithText(
+            screenPosition.x,
+            screenPosition.y,
+            view.size * 2.0f,
+            label,
+            outlineColour,
+            fillColour,
+            textColour,
+            view.fontSize,
+            4.0f,
+            style.markerOutlineThickness,
+            style.textOutline,
+            style.textOutlineColour,
+            view.shape,
+            style.textShadow,
+            style.shadowOffset);
+    }
+
+    static inline void RenderStyledWorldLabel(MarkerCategory category, const glm::vec2& screenPosition, const std::string& label, const glm::vec4& markerColour, bool centered = true)
+    {
+        const MarkerStyle style = appearanceManager.GetStyle(category);
+        const glm::vec4 textColour = GetMarkerTextColour(style, markerColour);
+        g_DxWindow.DrawString(label, screenPosition.x, screenPosition.y, style.fuser.fontSize, textColour, centered, style.textOutline,
+            style.textOutlineColour, L"", style.textShadow, style.shadowOffset);
     }
 
     static inline void RenderMovingBox(float time, float screenW, float screenH, float renderScale)
@@ -673,35 +710,54 @@ namespace fuserRender
         const float screenH = ScreenHeight();
         const float centerX = screenW * 0.5f;
         const float centerY = screenH * 0.5f;
-        const float size = static_cast<float>(
-            std::clamp(espGlobals::crosshairSize, 1, 20));
+        const MarkerStyle style = appearanceManager.GetStyle(MarkerCategory::Crosshair);
+        const float size = style.fuser.size;
+        const float thickness = style.markerOutlineThickness;
 
-        if (espGlobals::crosshairType == 1)
+        if (style.fuser.shape == MarkerShape::Cross || style.fuser.shape == MarkerShape::X)
         {
+            const bool diagonal = style.fuser.shape == MarkerShape::X;
             g_DxWindow.DrawLine(
-                centerX - size,
-                centerY,
-                centerX + size,
-                centerY,
+                diagonal ? centerX - size : centerX - size,
+                diagonal ? centerY - size : centerY,
+                diagonal ? centerX + size : centerX + size,
+                diagonal ? centerY + size : centerY,
                 coloursGlobals::crosshair,
-                1.0f);
+                thickness);
             g_DxWindow.DrawLine(
-                centerX,
+                diagonal ? centerX + size : centerX,
                 centerY - size,
-                centerX,
+                diagonal ? centerX - size : centerX,
                 centerY + size,
                 coloursGlobals::crosshair,
-                1.0f);
+                thickness);
+            return;
         }
-        else
+
+        if (style.fuser.shape == MarkerShape::Square)
         {
-            g_DxWindow.DrawCircle(
-                centerX,
-                centerY,
-                size,
-                coloursGlobals::crosshair,
-                1.0f);
+            g_DxWindow.DrawRect(centerX - size, centerY - size, size * 2.0f, size * 2.0f, coloursGlobals::crosshair, thickness);
+            return;
         }
+
+        if (style.fuser.shape == MarkerShape::Triangle)
+        {
+            g_DxWindow.DrawLine(centerX, centerY - size, centerX + size, centerY + size, coloursGlobals::crosshair, thickness);
+            g_DxWindow.DrawLine(centerX + size, centerY + size, centerX - size, centerY + size, coloursGlobals::crosshair, thickness);
+            g_DxWindow.DrawLine(centerX - size, centerY + size, centerX, centerY - size, coloursGlobals::crosshair, thickness);
+            return;
+        }
+
+        if (style.fuser.shape == MarkerShape::Diamond)
+        {
+            g_DxWindow.DrawLine(centerX, centerY - size, centerX + size, centerY, coloursGlobals::crosshair, thickness);
+            g_DxWindow.DrawLine(centerX + size, centerY, centerX, centerY + size, coloursGlobals::crosshair, thickness);
+            g_DxWindow.DrawLine(centerX, centerY + size, centerX - size, centerY, coloursGlobals::crosshair, thickness);
+            g_DxWindow.DrawLine(centerX - size, centerY, centerX, centerY - size, coloursGlobals::crosshair, thickness);
+            return;
+        }
+
+        g_DxWindow.DrawCircle(centerX, centerY, size, coloursGlobals::crosshair, thickness);
     }
 
     static inline void RenderFireportVisual()
@@ -739,118 +795,16 @@ namespace fuserRender
         if (!pose.valid || !pose.aimRefOk)
             return;
 
+        const MarkerStyle style = appearanceManager.GetStyle(MarkerCategory::FovCircle);
         g_DxWindow.DrawCircle(
             pose.screenEnd.x,
             pose.screenEnd.y,
             aimGlobals::aimFOV,
             coloursGlobals::fovCircle,
-            1.5f
+            style.markerOutlineThickness
         );
     }
 
-    static inline glm::vec2 DiagnosticNdcToScreen(const glm::vec2& ndc)
-    {
-        return {
-            (ndc.x + 1.0f) * ScreenWidth() * 0.5f,
-            (1.0f - ndc.y) * ScreenHeight() * 0.5f
-        };
-    }
-
-    static inline void DrawDiagnosticCross(const glm::vec2& point, const glm::vec4& colour, float size)
-    {
-        g_DxWindow.DrawLine(point.x - size, point.y, point.x + size, point.y, colour, 2.0f);
-        g_DxWindow.DrawLine(point.x, point.y - size, point.x, point.y + size, colour, 2.0f);
-    }
-
-    static inline void RenderLensStabilityDiagnostics()
-    {
-        if (!cameraDebugGlobals::lensStabilityOverlay.load(
-            std::memory_order_acquire) ||
-            !g_frameManagedCameraSnapshot ||
-            !g_frameManagedCameraSnapshot->scoped ||
-            !g_frameManagedCameraSnapshot->opticProjection.valid)
-        {
-            return;
-        }
-
-        const CameraManagerState& camera = *g_frameManagedCameraSnapshot;
-        const OpticProjectionState& optic = camera.opticProjection;
-        const glm::vec4 quadColour{ 1.0f, 0.82f, 0.10f, 0.95f };
-        const glm::vec4 maskColour{ 1.0f, 0.15f, 0.75f, 0.95f };
-        const glm::vec4 centerColour{ 1.0f, 0.45f, 0.05f, 1.0f };
-        const glm::vec4 mainPointColour{ 0.25f, 1.0f, 0.30f, 1.0f };
-        const glm::vec4 opticPointColour{ 0.10f, 0.90f, 1.0f, 1.0f };
-
-        for (std::size_t index = 0; index < optic.imageQuad.size(); ++index)
-        {
-            const glm::vec2 start = DiagnosticNdcToScreen(optic.imageQuad[index]);
-            const glm::vec2 end = DiagnosticNdcToScreen(optic.imageQuad[(index + 1) % optic.imageQuad.size()]);
-            g_DxWindow.DrawLine(start.x, start.y, end.x, end.y, quadColour, 1.5f);
-        }
-
-        for (std::size_t index = 0; index < optic.mask.size(); ++index)
-        {
-            const glm::vec2 start = DiagnosticNdcToScreen(optic.mask[index]);
-            const glm::vec2 end = DiagnosticNdcToScreen(optic.mask[(index + 1) % optic.mask.size()]);
-            g_DxWindow.DrawLine(start.x, start.y, end.x, end.y, maskColour, 1.5f);
-        }
-
-        const glm::vec2 imageCenter = DiagnosticNdcToScreen(optic.imageCenterNdc);
-        DrawDiagnosticCross(imageCenter, centerColour, 8.0f);
-
-        const FireportPose& fireport = *g_frameFireportSnapshot;
-        if (fireport.valid)
-        {
-            const glm::vec3 testWorld = fireport.worldOrigin +
-                fireport.worldForward * kFireportProjectionDistanceM;
-            glm::vec2 mainNdc{};
-            if (OpticProjectionEngine::projectPoint(camera.mainViewProjection, testWorld, mainNdc))
-            {
-                DrawDiagnosticCross(DiagnosticNdcToScreen(mainNdc), mainPointColour, 6.0f);
-            }
-
-            if (fireport.screenEndOk)
-                DrawDiagnosticCross(fireport.screenEnd, opticPointColour, 6.0f);
-        }
-
-        const auto now = std::chrono::steady_clock::now();
-        const auto ageMs = [&](std::chrono::steady_clock::time_point time)
-        {
-            if (time == std::chrono::steady_clock::time_point{} || now < time)
-                return -1.0;
-            return std::chrono::duration<double, std::milli>(now - time).count();
-        };
-        const double cameraAgeMs = ageMs(camera.publishedAt);
-        const double lensAgeMs = ageMs(optic.sampledAt);
-        const double fireportAgeMs = ageMs(fireport.publishedAt);
-        const PlayerSnapshotTelemetry players = registeredPlayers.getSnapshotTelemetry();
-        const CameraProjectionDiagnostics diagnostics = cameraManagerTest.diagnostics();
-        const bool held = diagnostics.lastOutcome == OpticPacketOutcome::Retained;
-
-        std::ostringstream firstLine;
-        firstLine << std::fixed << std::setprecision(1)
-            << "LENS DIAG  packet " << camera.version
-            << "  sample " << optic.sampleSequence
-            << (held ? "  HELD/STALE" : "  FRESH")
-            << "  camera " << cameraAgeMs << "ms"
-            << "  lens " << lensAgeMs << "ms";
-        g_DxWindow.DrawString(
-            firstLine.str(), 20.0f, 108.0f, 13.0f,
-            held ? glm::vec4(1.0f, 0.30f, 0.20f, 1.0f)
-                 : glm::vec4(0.30f, 1.0f, 0.40f, 1.0f),
-            false, true);
-
-        std::ostringstream secondLine;
-        secondLine << std::fixed << std::setprecision(1)
-            << "player motion " << players.motionAgeMs << "ms"
-            << "  fireport " << fireportAgeMs << "ms"
-            << "  lens px " << imageCenter.x << ", " << imageCenter.y
-            << "  A/R/H " << diagnostics.accepted << "/"
-            << diagnostics.rejected << "/" << diagnostics.retained;
-        g_DxWindow.DrawString(
-            secondLine.str(), 20.0f, 126.0f, 13.0f,
-            glm::vec4(0.95f, 0.95f, 0.95f, 1.0f), false, true);
-    }
 
     static inline void RenderTasks()
     {
@@ -902,22 +856,7 @@ namespace fuserRender
             else if (loc.objectiveType == "mark")
                 questText += " (MARK)";
 
-            g_DxWindow.DrawFilledCircle(
-                screenPos.x,
-                screenPos.y,
-                2.0f,
-                questColour
-            );
-
-            g_DxWindow.DrawString(
-                questText,
-                screenPos.x + 6.0f,
-                screenPos.y - 3.0f,
-                13.0f,
-                questColour,
-                false,
-                true
-            );
+            RenderStyledWorldMarker(MarkerCategory::Quest, screenPos, questText, questColour);
         }
     }
 
@@ -1026,15 +965,7 @@ namespace fuserRender
 
             const std::string exfilText = currentExfil.extractName + " [" + statusText + "]" + " " + std::to_string(distance) + "m";
 
-            g_DxWindow.DrawString(
-                exfilText.c_str(),
-                screenPos.x,
-                screenPos.y + 3.0f,
-                14.0f,
-                statusColour,
-                true,
-                true
-            );
+            RenderStyledWorldMarker(MarkerCategory::Exfil, screenPos, exfilText, statusColour);
         }
     }
 
@@ -1084,14 +1015,7 @@ namespace fuserRender
                 continue;
             }
 
-            g_DxWindow.DrawString(
-                "NADE",
-                screenPos.x,
-                screenPos.y + 3.0f,
-                14.0f,
-                coloursGlobals::grenades,
-                true,
-                true);
+            RenderStyledWorldLabel(MarkerCategory::Grenade, glm::vec2(screenPos.x, screenPos.y + 3.0f), "NADE", coloursGlobals::grenades);
         }
 
         if (closeGrenade)
@@ -1158,14 +1082,7 @@ namespace fuserRender
             const std::string label = "TRIPWIRE " +
                 std::to_string(static_cast<int>(distance)) + "m";
 
-            g_DxWindow.DrawString(
-                label.c_str(),
-                toScreen.x,
-                toScreen.y + 3.0f,
-                14.0f,
-                tripwireColour,
-                true,
-                true);
+            RenderStyledWorldLabel(MarkerCategory::Tripwire, glm::vec2(toScreen.x, toScreen.y + 3.0f), label, tripwireColour);
         }
     }
 
@@ -1201,8 +1118,7 @@ namespace fuserRender
                         player.bonePositions[secondBone],
                         espGlobals::gameRes.x,
                         espGlobals::gameRes.y,
-                        segments,
-                        false))
+                        segments))
                 {
                     for (const CameraScreenSegment& segment : segments)
                     {
@@ -1331,12 +1247,14 @@ namespace fuserRender
             const HandsInfo& handInfo = player.observedHandsInfo;
 
             std::string ammoName = CleanText(handInfo.ammoName);
+            const int chamberCount = std::max(0, handInfo.chamberCount);
+            const int magazineCount = std::max(0, handInfo.magazineCount);
+
+            if (!handInfo.cachedIsWeapon || (ammoName.empty() && chamberCount == 0 && magazineCount == 0))
+                return;
 
             if (ammoName.empty())
                 ammoName = "?";
-
-            const int chamberCount = std::max(0, handInfo.chamberCount);
-            const int magazineCount = std::max(0, handInfo.magazineCount);
 
             std::string ammoText =
                 ammoName +
@@ -1376,37 +1294,24 @@ namespace fuserRender
 
     static inline const Player* FindPassengerBtr(const Player& passenger, const PlayerCollection& players)
     {
-        if (!passenger.isInBTR || passenger.isBTR)
+        if (!passenger.isInBTR || passenger.isBTR || passenger.btrPassengerVehicle == 0)
             return nullptr;
-
-        constexpr float kPassengerRadiusSquared = 16.0f;
-        const Player* nearestBtr = nullptr;
-        float nearestDistanceSquared = kPassengerRadiusSquared;
 
         for (const Player& candidate : players)
         {
             if (!candidate.isBTR ||
                 candidate.isDead ||
                 candidate.hasExfiled ||
-                !Utils::valid_pointer(candidate.instance))
+                !Utils::valid_pointer(candidate.instance) ||
+                candidate.instance != passenger.btrPassengerVehicle)
             {
                 continue;
             }
 
-            const glm::vec3 offset = passenger.location - candidate.location;
-            const float distanceSquared =
-                (offset.x * offset.x) +
-                (offset.y * offset.y) +
-                (offset.z * offset.z);
-
-            if (distanceSquared <= nearestDistanceSquared)
-            {
-                nearestDistanceSquared = distanceSquared;
-                nearestBtr = &candidate;
-            }
+            return &candidate;
         }
 
-        return nearestBtr;
+        return nullptr;
     }
 
     static inline std::vector<glm::vec4> GetBtrPassengerColours(const Player& btr, const PlayerCollection& players, float opacityMultiplier)
@@ -1439,7 +1344,7 @@ namespace fuserRender
         colours.reserve(std::min<size_t>(4, passengers.size()));
         for (size_t index = 0; index < passengers.size() && index < 4; ++index)
         {
-            glm::vec4 colour = passengers[index]->colour;
+            glm::vec4 colour = PlayerAppearance::resolveColour(*passengers[index]);
             colour.a = std::clamp(colour.a * opacityMultiplier, 0.0f, 1.0f);
             colours.push_back(colour);
         }
@@ -1497,7 +1402,8 @@ namespace fuserRender
 
                 const float frameDistance = glm::distance(g_frameLocalLocation, player.location);
 
-                if (!std::isfinite(frameDistance) || frameDistance <= 0.0f || frameDistance > static_cast<float>(espGlobals::getPlayerDrawDistance(player)))
+                if (!std::isfinite(frameDistance) || (frameDistance <= 0.0f && !player.isBTR) ||
+                    frameDistance > static_cast<float>(espGlobals::getPlayerDrawDistance(player)))
                     continue;
 
                 const int displayDistance = static_cast<int>(frameDistance);
@@ -1510,7 +1416,7 @@ namespace fuserRender
                     player.location, &screenPos);
 
                 const float distanceOpacity = espGlobals::getFuserDistanceOpacity(frameDistance);
-                const glm::vec4 playerColour = WithOpacityMultiplier(player.colour, distanceOpacity);
+                const glm::vec4 playerColour = WithOpacityMultiplier(PlayerAppearance::resolveColour(player), distanceOpacity);
 
                 if (playerColour.a <= 0.001f)
                     continue;
@@ -1536,15 +1442,7 @@ namespace fuserRender
                         std::to_string(displayDistance) +
                         "m]";
 
-                    g_DxWindow.DrawString(
-                        info,
-                        screenPos.x,
-                        screenPos.y + 5.0f,
-                        13.0f,
-                        playerColour,
-                        true,
-                        true
-                    );
+                    RenderStyledWorldLabel(MarkerCategory::Player, glm::vec2(screenPos.x, screenPos.y + 5.0f), info, playerColour);
 
                     if (!player.isBTR)
                     {
@@ -1806,12 +1704,9 @@ namespace fuserRender
                     "m";
             }
 
-            g_DxWindow.DrawFilledCircle(
-                screenPos.x,
-                screenPos.y,
-                2.0f,
-                lootColour
-            );
+            const MarkerCategory lootCategory = isCorpse
+                ? MarkerCategory::Corpse
+                : (isQuestItem ? MarkerCategory::Quest : (loot.isContainer() ? MarkerCategory::Container : MarkerCategory::Loot));
 
             if (corpseHasWantedEquipment)
             {
@@ -1826,27 +1721,13 @@ namespace fuserRender
                 );
             }
 
-            g_DxWindow.DrawString(
-                lootText,
-                screenPos.x + 6.0f,
-                screenPos.y - 3.0f,
-                13.0f,
-                lootColour,
-                false,
-                true
-            );
+            RenderStyledWorldMarker(lootCategory, screenPos, lootText, lootColour);
 
             if (isCorpse)
             {
-                g_DxWindow.DrawString(
-                    corpseDetailText,
-                    screenPos.x + 6.0f,
-                    screenPos.y + 11.0f,
-                    13.0f,
-                    lootColour,
-                    false,
-                    true
-                );
+                const MarkerStyle corpseStyle = appearanceManager.GetStyle(MarkerCategory::Corpse);
+                const float detailY = screenPos.y + corpseStyle.fuser.size + 4.0f + corpseStyle.fuser.fontSize + 3.0f;
+                RenderStyledWorldLabel(MarkerCategory::Corpse, glm::vec2(screenPos.x, detailY), corpseDetailText, lootColour);
             }
         }
     }
@@ -1914,11 +1795,6 @@ namespace fuserRender
         SafeRenderStage("RenderAimFovRing", []()
             {
                 RenderAimFovRing();
-            });
-
-        SafeRenderStage("RenderLensStabilityDiagnostics", []()
-            {
-                RenderLensStabilityDiagnostics();
             });
 
         SafeRenderStage("RenderPlayers", []()

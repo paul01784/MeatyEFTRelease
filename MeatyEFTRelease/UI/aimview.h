@@ -29,7 +29,6 @@ private:
     void UpdateTransform(const ImVec2& sourceResolution);
 
     void DrawBackground(ImDrawList* drawList) const;
-    void DrawCrosshair(ImDrawList* drawList) const;
     void DrawPlayers(ImDrawList* drawList);
     void DrawLoot(ImDrawList* drawList);
     void DrawContainers(ImDrawList* drawList);

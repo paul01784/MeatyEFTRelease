@@ -637,7 +637,9 @@ void DxRenderWindow::DrawString(
     bool centered,
     bool outlined,
     const glm::vec4& outlineColour,
-    const std::wstring& fontName)
+    const std::wstring& fontName,
+    bool shadowed,
+    float shadowOffset)
 {
     if (text.empty())
         return;
@@ -654,6 +656,8 @@ void DxRenderWindow::DrawString(
     cmd.outlineColour.a = std::clamp(outlineColour.a * colour.a, 0.0f, 1.0f);
     cmd.centered = centered;
     cmd.outlined = outlined;
+    cmd.shadowed = shadowed;
+    cmd.shadowOffset = shadowOffset;
 
     PushDrawCommand(std::move(cmd));
 }
@@ -670,7 +674,10 @@ void DxRenderWindow::DrawMarkerWithText(
     float textOffsetY,
     float outlineThickness,
     bool outlinedText,
-    const glm::vec4& textOutlineColour)
+    const glm::vec4& textOutlineColour,
+    MarkerShape shape,
+    bool textShadow,
+    float shadowOffset)
 {
     DrawCommand cmd{};
     cmd.type = DrawCommandType::MarkerWithText;
@@ -685,6 +692,9 @@ void DxRenderWindow::DrawMarkerWithText(
     cmd.textColour = textColour;
     cmd.thickness = outlineThickness;
     cmd.outlined = outlinedText;
+    cmd.shadowed = textShadow;
+    cmd.shadowOffset = shadowOffset;
+    cmd.markerShape = shape;
     cmd.colour = textOutlineColour;
     cmd.colour.a = std::clamp(textOutlineColour.a * textColour.a, 0.0f, 1.0f);
     PushDrawCommand(std::move(cmd));
@@ -1586,6 +1596,17 @@ void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowCon
     if (!IsSafeCoord(drawX) || !IsSafeCoord(drawY))
         return;
 
+    if (cmd.shadowed)
+    {
+        const float shadowOffset = std::max(1.0f, cmd.shadowOffset * scale);
+        m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+        m_d2dRenderTarget->DrawTextLayout(
+            D2D1::Point2F(drawX + shadowOffset, drawY + shadowOffset),
+            layout.Get(),
+            m_solidBrush.Get(),
+            D2D1_DRAW_TEXT_OPTIONS_NONE);
+    }
+
     if (cmd.outlined)
     {
         const float outlineOffset = std::max(1.0f, std::round(scale));
@@ -1634,16 +1655,87 @@ void DxRenderWindow::RenderMarkerWithTextCommand(const DrawCommand& cmd, const D
     const float half = markerSize * 0.5f;
     const float thickness = std::max(0.1f, std::min(cmd.thickness * scale, MAX_DRAW_THICKNESS));
 
-    const D2D1_RECT_F markerRect = D2D1::RectF(cmd.x - half, cmd.y - half, cmd.x + half, cmd.y + half);
-
-    if (Clamp01Safe(cmd.fillColour.a, 0.0f) > 0.0f)
+    const bool hasFill = Clamp01Safe(cmd.fillColour.a, 0.0f) > 0.0f;
+    if (cmd.markerShape == MarkerShape::Cross || cmd.markerShape == MarkerShape::X)
     {
+        const bool diagonal = cmd.markerShape == MarkerShape::X;
+        const D2D1_POINT_2F firstStart = diagonal ? D2D1::Point2F(cmd.x - half, cmd.y - half) : D2D1::Point2F(cmd.x - half, cmd.y);
+        const D2D1_POINT_2F firstEnd = diagonal ? D2D1::Point2F(cmd.x + half, cmd.y + half) : D2D1::Point2F(cmd.x + half, cmd.y);
+        const D2D1_POINT_2F secondStart = diagonal ? D2D1::Point2F(cmd.x + half, cmd.y - half) : D2D1::Point2F(cmd.x, cmd.y - half);
+        const D2D1_POINT_2F secondEnd = diagonal ? D2D1::Point2F(cmd.x - half, cmd.y + half) : D2D1::Point2F(cmd.x, cmd.y + half);
+        if (Clamp01Safe(cmd.outlineColour.a, 0.0f) > 0.0f)
+        {
+            m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+            m_d2dRenderTarget->DrawLine(firstStart, firstEnd, m_solidBrush.Get(), thickness + (2.0f * scale));
+            m_d2dRenderTarget->DrawLine(secondStart, secondEnd, m_solidBrush.Get(), thickness + (2.0f * scale));
+        }
         m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
-        m_d2dRenderTarget->FillRectangle(markerRect, m_solidBrush.Get());
+        m_d2dRenderTarget->DrawLine(firstStart, firstEnd, m_solidBrush.Get(), thickness);
+        m_d2dRenderTarget->DrawLine(secondStart, secondEnd, m_solidBrush.Get(), thickness);
     }
-
-    m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
-    m_d2dRenderTarget->DrawRectangle(markerRect, m_solidBrush.Get(), thickness);
+    else if (cmd.markerShape == MarkerShape::Circle)
+    {
+        const D2D1_ELLIPSE ellipse = D2D1::Ellipse(D2D1::Point2F(cmd.x, cmd.y), half, half);
+        if (hasFill)
+        {
+            m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
+            m_d2dRenderTarget->FillEllipse(ellipse, m_solidBrush.Get());
+        }
+        if (Clamp01Safe(cmd.outlineColour.a, 0.0f) > 0.0f)
+        {
+            m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+            m_d2dRenderTarget->DrawEllipse(ellipse, m_solidBrush.Get(), thickness);
+        }
+    }
+    else if (cmd.markerShape == MarkerShape::Square)
+    {
+        const D2D1_RECT_F markerRect = D2D1::RectF(cmd.x - half, cmd.y - half, cmd.x + half, cmd.y + half);
+        if (hasFill)
+        {
+            m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
+            m_d2dRenderTarget->FillRectangle(markerRect, m_solidBrush.Get());
+        }
+        if (Clamp01Safe(cmd.outlineColour.a, 0.0f) > 0.0f)
+        {
+            m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+            m_d2dRenderTarget->DrawRectangle(markerRect, m_solidBrush.Get(), thickness);
+        }
+    }
+    else if (m_d2dFactory)
+    {
+        Microsoft::WRL::ComPtr<ID2D1PathGeometry> geometry;
+        Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+        if (SUCCEEDED(m_d2dFactory->CreatePathGeometry(geometry.GetAddressOf())) &&
+            SUCCEEDED(geometry->Open(sink.GetAddressOf())))
+        {
+            if (cmd.markerShape == MarkerShape::Triangle)
+            {
+                sink->BeginFigure(D2D1::Point2F(cmd.x, cmd.y - half), D2D1_FIGURE_BEGIN_FILLED);
+                const D2D1_POINT_2F points[] = {D2D1::Point2F(cmd.x + half, cmd.y + half), D2D1::Point2F(cmd.x - half, cmd.y + half)};
+                sink->AddLines(points, ARRAYSIZE(points));
+            }
+            else
+            {
+                sink->BeginFigure(D2D1::Point2F(cmd.x, cmd.y - half), D2D1_FIGURE_BEGIN_FILLED);
+                const D2D1_POINT_2F points[] = {D2D1::Point2F(cmd.x + half, cmd.y), D2D1::Point2F(cmd.x, cmd.y + half), D2D1::Point2F(cmd.x - half, cmd.y)};
+                sink->AddLines(points, ARRAYSIZE(points));
+            }
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            if (SUCCEEDED(sink->Close()))
+            {
+                if (hasFill)
+                {
+                    m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
+                    m_d2dRenderTarget->FillGeometry(geometry.Get(), m_solidBrush.Get());
+                }
+                if (Clamp01Safe(cmd.outlineColour.a, 0.0f) > 0.0f)
+                {
+                    m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+                    m_d2dRenderTarget->DrawGeometry(geometry.Get(), m_solidBrush.Get(), thickness);
+                }
+            }
+        }
+    }
 
     if (!cmd.text.empty())
     {
@@ -1658,6 +1750,8 @@ void DxRenderWindow::RenderMarkerWithTextCommand(const DrawCommand& cmd, const D
         textCmd.outlineColour = cmd.colour;
         textCmd.centered = true;
         textCmd.outlined = cmd.outlined;
+        textCmd.shadowed = cmd.shadowed;
+        textCmd.shadowOffset = cmd.shadowOffset;
 
         RenderTextCommand(textCmd, cfg, scale);
     }

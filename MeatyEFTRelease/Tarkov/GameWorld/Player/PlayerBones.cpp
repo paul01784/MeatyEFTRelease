@@ -1567,28 +1567,15 @@ void RegisteredPlayers::boneTask()
 
                 glm::vec2 screenPosition{};
 
-                if (!CameraManager::worldToScreen(
+                // Refresh the full skeleton just before its root reaches the viewport.
+                constexpr float kSkeletonRefreshEdgeBufferPixels = 160.0f;
+                return CameraManager::worldToScreen(
                     *projection,
                     PlayerPosition::getBestBasePosition(player),
                     screenPosition,
                     espGlobals::gameRes.x,
-                    espGlobals::gameRes.y))
-                {
-                    return false;
-                }
-
-                constexpr float kScreenBoundsExtension = 0.12f;
-
-                const float horizontalMargin =
-                    espGlobals::gameRes.x * kScreenBoundsExtension;
-                const float verticalMargin =
-                    espGlobals::gameRes.y * kScreenBoundsExtension;
-
-                return
-                    screenPosition.x >= -horizontalMargin &&
-                    screenPosition.y >= -verticalMargin &&
-                    screenPosition.x <= espGlobals::gameRes.x + horizontalMargin &&
-                    screenPosition.y <= espGlobals::gameRes.y + verticalMargin;
+                    espGlobals::gameRes.y,
+                    kSkeletonRefreshEdgeBufferPixels);
             };
 
         struct PendingBoneScan
@@ -1627,7 +1614,19 @@ void RegisteredPlayers::boneTask()
                     pendingResolves.emplace_back(std::move(resolve));
                 }
 
-                const size_t maximumPendingResolves = kMaxBonePointerResolvesPerPass + (localPlayer != cache.end() ? 1 : 0);
+                for (const Player& player : cache)
+                {
+                    if (!player.btrExitBoneRefreshPending || player.isLocal || player.isBTR || player.isDead || player.hasExfiled ||
+                        !Utils::valid_pointer(player.instance))
+                        continue;
+
+                    PendingBoneResolve resolve{};
+                    resolve.instance = player.instance;
+                    resolve.workingCopy = player;
+                    pendingResolves.emplace_back(std::move(resolve));
+                }
+
+                const size_t maximumPendingResolves = pendingResolves.size() + kMaxBonePointerResolvesPerPass;
                 const size_t start = boneResolveCursor % cache.size();
                 size_t inspected = 0;
 
@@ -1641,6 +1640,7 @@ void RegisteredPlayers::boneTask()
                     if (!Utils::valid_pointer(player.instance) ||
                         player.isBTR ||
                         player.isLocal ||
+                        player.btrExitBoneRefreshPending ||
                         player.isDead ||
                         player.hasExfiled)
                     {
@@ -1692,6 +1692,7 @@ void RegisteredPlayers::boneTask()
                 player->internalTransformPosition = resolve.workingCopy.internalTransformPosition;
                 player->internalTransformPositionValid = resolve.workingCopy.internalTransformPositionValid;
                 player->usingInternalTransformFallback = resolve.workingCopy.usingInternalTransformFallback;
+                player->btrExitBoneRefreshPending = false;
 
                 if (player->isLocal && player->internalTransformPositionValid && !HasMinimalBonePointers(*player))
                 {

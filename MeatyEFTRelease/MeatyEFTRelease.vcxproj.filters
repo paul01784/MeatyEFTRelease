@@ -49,6 +49,9 @@
     <Filter Include="Web\TarkovDev">
       <UniqueIdentifier>{0214F3B2-9AE7-4B1E-9378-53B2B652C6F9}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Web\WebRadar">
+      <UniqueIdentifier>{D2B5E72A-7146-4A25-9F65-28167035DF67}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Core">
       <UniqueIdentifier>{71E60CFA-17A5-4DDD-BBB9-A1B80E2F1AF7}</UniqueIdentifier>
     </Filter>
@@ -69,6 +72,10 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="UI\Appearance.h" />
+    <ClInclude Include="Web\WebRadar\WebRadar.h">
+      <Filter>Web\WebRadar</Filter>
+    </ClInclude>
     <ClInclude Include="UI\render.h">
       <Filter>UI</Filter>
     </ClInclude>
@@ -518,7 +525,7 @@
     <ClInclude Include="Tarkov\Unity\cameraManager.h">
       <Filter>Tarkov\Unity</Filter>
     </ClInclude>
-    <ClInclude Include="Tarkov\Unity\OpticProjection.h">
+    <ClInclude Include="Tarkov\Unity\CameraTypes.h">
       <Filter>Tarkov\Unity</Filter>
     </ClInclude>
     <ClInclude Include="Web\TarkovDev\TarkovDevClient.h">
@@ -632,6 +639,7 @@
       <Filter>UI</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="UI\Appearance.cpp" />
     <ClCompile Include="UI\render.cpp">
       <Filter>UI</Filter>
     </ClCompile>
@@ -733,11 +741,11 @@
     <ClCompile Include="Tarkov\Unity\cameraManager.cpp">
       <Filter>Tarkov\Unity</Filter>
     </ClCompile>
-    <ClCompile Include="Tarkov\Unity\OpticProjection.cpp">
-      <Filter>Tarkov\Unity</Filter>
-    </ClCompile>
     <ClCompile Include="Web\TarkovDev\TarkovDevClient.cpp">
       <Filter>Web\TarkovDev</Filter>
+    </ClCompile>
+    <ClCompile Include="Web\WebRadar\WebRadar.cpp">
+      <Filter>Web\WebRadar</Filter>
     </ClCompile>
     <ClCompile Include="Tarkov\GameWorld\Loot\Loot.cpp">
       <Filter>Tarkov\GameWorld\Loot</Filter>

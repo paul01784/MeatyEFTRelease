@@ -216,12 +216,12 @@ public:
 	bool isBTR;
 	uint64_t btrView;
 	bool isInBTR;
+	uint64_t btrPassengerVehicle{ 0 };
+	glm::vec3 btrPreviousPosition{};
+	bool btrPositionSampled{ false };
+	bool btrHeadingValid{ false };
+	bool btrExitBoneRefreshPending{ false };
 	bool visibleToLocal{ false };
-	std::chrono::steady_clock::time_point btrNearSince{};
-	std::chrono::steady_clock::time_point nextBtrRecovery{};
-	float lastBtrRotation{ 0.0f };
-	int btrStaticRotationTicks{ 0 };
-	bool hasBtrRotationSample{ false };
 
 	bool invalidBones;
 	int bonePtrRefreshTick{ 0 };

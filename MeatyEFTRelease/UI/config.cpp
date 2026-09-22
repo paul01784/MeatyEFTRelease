@@ -6,6 +6,7 @@
 #include "render.h"
 #include "globals.h"
 #include "config.h"
+#include "Appearance.h"
 #include "../Tarkov/GameWorld/Loot/Loot.h"
 #include "../Web/TarkovDev/TarkovDevClient.h"
 #include "../Core/Utilities.h"
@@ -924,12 +925,18 @@ bool ConfigManager::LoadConfig()
     const fs::path configFile = configDir / filename_;
 
     if (!fs::exists(configDir))
+    {
+        appearanceManager.LoadOrCreateFromLegacy();
         return false;
+    }
 
     std::ifstream file(configFile);
 
     if (!file.is_open())
+    {
+        appearanceManager.LoadOrCreateFromLegacy();
         return false;
+    }
 
     try
     {
@@ -1000,6 +1007,11 @@ bool ConfigManager::LoadConfig()
             colours_ =
                 j.at("coloursGlobals").get<coloursGlobals>();
         }
+
+        // Appearance is deliberately loaded after the legacy palette. On the
+        // first launch the new file is seeded from these already-loaded colours,
+        // so existing users keep their current setup without a migration step.
+        appearanceManager.LoadOrCreateFromLegacy();
 
         if (j.contains("keyGlobals") &&
             j["keyGlobals"].is_object())
@@ -1130,6 +1142,8 @@ bool ConfigManager::SaveConfig()
         return false;
 
     file << j.dump(4);
+    file.close();
+    appearanceManager.Save();
     return true;
 }
 
