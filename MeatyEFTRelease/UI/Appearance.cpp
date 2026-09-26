@@ -115,9 +115,9 @@ nlohmann::json PlayerMarkerStyleJson(const PlayerMarkerStyle& style)
     return {{"shape", static_cast<int>(style.shape)}, {"size", style.size}};
 }
 
-void ReadPlayerMarkerStyle(const nlohmann::json& json, PlayerMarkerStyle& style)
+void ReadPlayerMarkerStyle(const nlohmann::json& json, PlayerMarkerStyle& style, bool allowTank)
 {
-    style.shape = static_cast<MarkerShape>(std::clamp(json.value("shape", static_cast<int>(style.shape)), 0, 5));
+    style.shape = static_cast<MarkerShape>(std::clamp(json.value("shape", static_cast<int>(style.shape)), 0, allowTank ? 6 : 5));
     style.size = std::clamp(json.value("size", style.size), 3.0f, 30.0f);
 }
 
@@ -242,7 +242,7 @@ bool AppearanceManager::LoadOrCreateFromLegacy()
             {
                 const PlayerMarkerType type = static_cast<PlayerMarkerType>(index);
                 if (const auto item = playerMarkers->find(PlayerMarkerTypeName(type)); item != playerMarkers->end() && item->is_object())
-                    ReadPlayerMarkerStyle(*item, config.playerMarkers[static_cast<size_t>(index)]);
+                    ReadPlayerMarkerStyle(*item, config.playerMarkers[static_cast<size_t>(index)], type == PlayerMarkerType::Btr);
             }
         }
 
@@ -347,7 +347,7 @@ const char* MarkerCategoryName(MarkerCategory category)
 
 const char* MarkerShapeName(MarkerShape shape)
 {
-    static constexpr const char* Names[] = {"Circle", "Square", "Triangle", "Diamond", "Cross", "X"};
+    static constexpr const char* Names[] = {"Circle", "Square", "Triangle", "Diamond", "Cross", "X", "Tank"};
     const int index = static_cast<int>(shape);
     return index >= 0 && index < IM_ARRAYSIZE(Names) ? Names[index] : "Circle";
 }
@@ -376,8 +376,8 @@ glm::vec4 GetMarkerTextColour(const MarkerStyle& style, const glm::vec4& markerC
     return result;
 }
 
-static void DrawRadarMarkerShapeWithStyle(ImDrawList* drawList, const ImVec2& centre, float rotationRadians, const MarkerStyle& style,
-    const MarkerShape shape, float markerSize, const glm::vec4& colour, float sizeScale)
+void DrawRadarMarkerShape(ImDrawList* drawList, const ImVec2& centre, float rotationRadians, const MarkerStyle& style, MarkerShape shape, float markerSize,
+    const glm::vec4& colour, float sizeScale)
 {
     if (!drawList)
         return;
@@ -388,6 +388,37 @@ static void DrawRadarMarkerShapeWithStyle(ImDrawList* drawList, const ImVec2& ce
     const ImU32 fillColour = ImGui::ColorConvertFloat4ToU32(ImVec4(fill.r, fill.g, fill.b, fill.a));
     const ImU32 outlineColour = ImGui::ColorConvertFloat4ToU32(ImVec4(style.markerOutlineColour.r, style.markerOutlineColour.g, style.markerOutlineColour.b, style.markerOutlineColour.a * colour.a));
     const float thickness = style.markerOutlineThickness;
+
+    if (shape == MarkerShape::Tank)
+    {
+        const ImVec2 forward(std::cos(rotationRadians), std::sin(rotationRadians));
+        const ImVec2 sideways(-forward.y, forward.x);
+        const float tankScale = radius / 9.0f;
+        const auto point = [&centre, &forward, &sideways, tankScale](float along, float across)
+        {
+            return ImVec2(centre.x + ((forward.x * along) + (sideways.x * across)) * tankScale,
+                centre.y + ((forward.y * along) + (sideways.y * across)) * tankScale);
+        };
+        const std::array<ImVec2, 7> bodyPoints = {
+            point(13.0f, 0.0f), point(8.0f, 6.0f), point(-8.0f, 6.0f), point(-12.0f, 3.0f),
+            point(-12.0f, -3.0f), point(-8.0f, -6.0f), point(8.0f, -6.0f)
+        };
+        const ImU32 markerColour = ImGui::ColorConvertFloat4ToU32(ImVec4(colour.r, colour.g, colour.b, colour.a));
+        const ImU32 bodyColour = ImGui::ColorConvertFloat4ToU32(ImVec4(12.0f / 255.0f, 15.0f / 255.0f, 17.0f / 255.0f,
+            colour.a * style.fillOpacity * (225.0f / 255.0f)));
+
+        drawList->AddConvexPolyFilled(bodyPoints.data(), static_cast<int>(bodyPoints.size()), bodyColour);
+        drawList->AddPolyline(bodyPoints.data(), static_cast<int>(bodyPoints.size()), markerColour, ImDrawFlags_Closed, (std::max)(1.0f, thickness));
+        for (const float side : {-8.0f, 8.0f})
+        {
+            const ImVec2 trackStart = point(-8.0f, side);
+            const ImVec2 trackEnd = point(7.0f, side);
+            if (style.markerOutline)
+                drawList->AddLine(trackStart, trackEnd, outlineColour, thickness + 1.75f);
+            drawList->AddLine(trackStart, trackEnd, markerColour, (std::max)(1.0f, thickness));
+        }
+        return;
+    }
 
     if (shape == MarkerShape::Cross || shape == MarkerShape::X)
     {
@@ -443,14 +474,57 @@ static void DrawRadarMarkerShapeWithStyle(ImDrawList* drawList, const ImVec2& ce
 void DrawRadarMarkerShape(ImDrawList* drawList, const ImVec2& centre, float rotationRadians, MarkerCategory category, const glm::vec4& colour, float sizeScale)
 {
     const MarkerStyle style = appearanceManager.GetStyle(category);
-    DrawRadarMarkerShapeWithStyle(drawList, centre, rotationRadians, style, style.radar.shape, style.radar.size, colour, sizeScale);
+    DrawRadarMarkerShape(drawList, centre, rotationRadians, style, style.radar.shape, style.radar.size, colour, sizeScale);
 }
 
 void DrawRadarPlayerMarkerShape(ImDrawList* drawList, const ImVec2& centre, float rotationRadians, PlayerMarkerType type, const glm::vec4& colour, float sizeScale)
 {
     const MarkerStyle style = appearanceManager.GetStyle(MarkerCategory::Player);
     const PlayerMarkerStyle playerMarker = appearanceManager.GetPlayerMarkerStyle(type);
-    DrawRadarMarkerShapeWithStyle(drawList, centre, rotationRadians, style, playerMarker.shape, playerMarker.size, colour, sizeScale);
+    DrawRadarMarkerShape(drawList, centre, rotationRadians, style, playerMarker.shape, playerMarker.size, colour, sizeScale);
+}
+
+void DrawCrosshairShape(ImDrawList* drawList, const ImVec2& centre, const MarkerViewStyle& view, const MarkerStyle& style, const glm::vec4& colour,
+    float sizeScale)
+{
+    if (!drawList)
+        return;
+
+    const ImU32 lineColour = ImGui::ColorConvertFloat4ToU32(ImVec4(colour.r, colour.g, colour.b, colour.a));
+    const float radius = (std::max)(1.0f, view.size * sizeScale);
+    const float thickness = style.markerOutlineThickness;
+
+    if (view.shape == MarkerShape::Circle)
+    {
+        drawList->AddCircle(centre, radius, lineColour, 32, thickness);
+        return;
+    }
+    if (view.shape == MarkerShape::Square)
+    {
+        drawList->AddRect(ImVec2(centre.x - radius, centre.y - radius), ImVec2(centre.x + radius, centre.y + radius), lineColour, 0.0f, 0, thickness);
+        return;
+    }
+    if (view.shape == MarkerShape::Triangle || view.shape == MarkerShape::Diamond)
+    {
+        std::array<ImVec2, 4> points{};
+        const int pointCount = view.shape == MarkerShape::Triangle ? 3 : 4;
+        const float step = (2.0f * IM_PI) / static_cast<float>(pointCount);
+        for (int index = 0; index < pointCount; ++index)
+        {
+            const float angle = -IM_PI * 0.5f + step * static_cast<float>(index);
+            points[index] = ImVec2(centre.x + std::cos(angle) * radius, centre.y + std::sin(angle) * radius);
+        }
+        drawList->AddPolyline(points.data(), pointCount, lineColour, ImDrawFlags_Closed, thickness);
+        return;
+    }
+
+    const bool diagonal = view.shape == MarkerShape::X;
+    const ImVec2 firstStart = diagonal ? ImVec2(centre.x - radius, centre.y - radius) : ImVec2(centre.x - radius, centre.y);
+    const ImVec2 firstEnd = diagonal ? ImVec2(centre.x + radius, centre.y + radius) : ImVec2(centre.x + radius, centre.y);
+    const ImVec2 secondStart = diagonal ? ImVec2(centre.x + radius, centre.y - radius) : ImVec2(centre.x, centre.y - radius);
+    const ImVec2 secondEnd = diagonal ? ImVec2(centre.x - radius, centre.y + radius) : ImVec2(centre.x, centre.y + radius);
+    drawList->AddLine(firstStart, firstEnd, lineColour, thickness);
+    drawList->AddLine(secondStart, secondEnd, lineColour, thickness);
 }
 
 void DrawRadarStyledText(ImDrawList* drawList, ImFont* font, const ImVec2& position, MarkerCategory category, const glm::vec4& markerColour, const char* text, float sizeScale, bool centered)

@@ -11,12 +11,22 @@
 #include "../../Unity/Transform.h"
 
 #include <algorithm>
+#include <cctype>
+#include <string_view>
 
 namespace
 {
 	constexpr int kMaxExfilPoints = 256;
 	constexpr int kMaxExfilRequirements = 64;
 	constexpr auto kExfilStatusUpdateInterval = std::chrono::seconds(1);
+
+	bool EqualsIgnoreCase(std::string_view left, std::string_view right)
+	{
+		return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(), [](const char lhs, const char rhs)
+		{
+			return std::tolower(static_cast<unsigned char>(lhs)) == std::tolower(static_cast<unsigned char>(rhs));
+		});
+	}
 }
 
 
@@ -133,6 +143,7 @@ void Exfil::tryLoadMemoryExfils()
 		return;
 
 	loadStaticTransits();
+	const std::string localEligibilityId = getLocalEligibilityId();
 
 	try
 	{
@@ -141,13 +152,16 @@ void Exfil::tryLoadMemoryExfils()
 		if (!Utils::valid_pointer(exfilController))
 			return;
 
-		auto addExfil = [this](const uint64_t exfilPointAddr, const ExfilType type)
+		auto addExfil = [this, &localEligibilityId](const uint64_t exfilPointAddr, const ExfilType type)
 		{
 			if (!Utils::valid_pointer(exfilPointAddr))
 				return;
 
 			try
 			{
+				if (type == ExfilType::Regular && (localEligibilityId.empty() || !isEligibleForLocalPlayer(exfilPointAddr, localEligibilityId)))
+					return;
+
 				const uint64_t settingsAddr = mem.Read<uint64_t>(exfilPointAddr + sdk::ExfiltrationPoint::Settings);
 
 				if (!Utils::valid_pointer(settingsAddr))
@@ -319,36 +333,76 @@ void Exfil::updateStatus()
 
 }
 
-void Exfil::LoadEligibleEntryPoints(uint64_t exfilPointAddr)
+std::string Exfil::getLocalEligibilityId() const
 {
 	try
 	{
-		auto arrPtr = mem.Read<uint64_t>(exfilPointAddr + sdk::ExfiltrationPoint::EligibleEntryPoints);
-		if (!Utils::valid_pointer(arrPtr))
-			return;
+		if (!Utils::valid_pointer(mainGame.localplayerProfile))
+			return {};
 
-		auto arr = UnityArray<uint64_t>(
-			arrPtr,
-			"Exfil requirements",
-			kMaxExfilRequirements);
-		for (auto& strPtr : arr)
+		uint64_t eligibilityIdPtr = 0;
+
+		if (mainGame.localIsSavage)
 		{
+			eligibilityIdPtr = mem.Read<uint64_t>(mainGame.localplayerProfile + sdk::Profile::Id);
+		}
+		else
+		{
+			const uint64_t playerInfo = mem.Read<uint64_t>(mainGame.localplayerProfile + sdk::Profile::Info);
 
-			if (!Utils::valid_pointer(strPtr))
-				continue;
+			if (!Utils::valid_pointer(playerInfo))
+				return {};
 
-			auto name = TrimEFT(mem.readUnityString(strPtr, 256));
-
-			if (name != "")
-				_pmcEntries.emplace_back(name);
-
+			eligibilityIdPtr = mem.Read<uint64_t>(playerInfo + sdk::PlayerInfo::EntryPoint);
 		}
 
+		if (!Utils::valid_pointer(eligibilityIdPtr))
+			return {};
+
+		return TrimEFT(mem.readUnityString(eligibilityIdPtr, 256));
 	}
 	catch (...)
 	{
+		return {};
+	}
+}
 
+bool Exfil::isEligibleForLocalPlayer(const uint64_t exfilPointAddr, const std::string& localEligibilityId) const
+{
+	try
+	{
+		const uint64_t eligibleCollection = mem.Read<uint64_t>(exfilPointAddr + (mainGame.localIsSavage
+			? sdk::ScavExfiltrationPoint::EligibleIds
+			: sdk::ExfiltrationPoint::EligibleEntryPoints));
+
+		if (!Utils::valid_pointer(eligibleCollection))
+			return false;
+
+		if (mainGame.localIsSavage)
+		{
+			const UnityList<uint64_t> eligibleIds = UnityList<uint64_t>::Create(eligibleCollection, DmaCacheMode::Cached, kMaxExfilRequirements);
+
+			for (const uint64_t idPtr : eligibleIds)
+			{
+				if (Utils::valid_pointer(idPtr) && EqualsIgnoreCase(TrimEFT(mem.readUnityString(idPtr, 256)), localEligibilityId))
+					return true;
+			}
+		}
+		else
+		{
+			UnityArray<uint64_t> eligibleEntryPoints(eligibleCollection, "Exfil eligible entry points", kMaxExfilRequirements);
+
+			for (const uint64_t entryPointPtr : eligibleEntryPoints)
+			{
+				if (Utils::valid_pointer(entryPointPtr) && EqualsIgnoreCase(TrimEFT(mem.readUnityString(entryPointPtr, 256)), localEligibilityId))
+					return true;
+			}
+		}
+	}
+	catch (...)
+	{
 	}
 
+	return false;
 }
 

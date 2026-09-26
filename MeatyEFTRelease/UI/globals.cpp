@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.38";
+std::string globals::appVersion = "1.0.39";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -32,12 +32,8 @@ double globals::taskQuest = 7000;
 double globals::taskWishManager = 1000;
 double globals::taskTripWire = 100;
 double globals::taskKeyManager = 25;
-// Poll frequently so a busy DMA gate can be retried on the next scheduler tick.
-// CameraManager enforces its own four-millisecond update interval.
 double globals::taskCamera = 1;
 double globals::taskFireport = 16;
-// Lightweight scheduler tick; RunCacheMaintenance enforces the actual
-// 300 ms memory and 2 second TLB partial-refresh intervals.
 double globals::taskMemoryManager = 100;
 double globals::taskRaidMonitor = 800;
 double globals::taskAim = 1;

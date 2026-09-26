@@ -18,7 +18,8 @@ enum class MarkerShape : int
     Triangle,
     Diamond,
     Cross,
-    X
+    X,
+    Tank
 };
 
 enum class MarkerCategory : int
@@ -124,5 +125,9 @@ MarkerViewStyle& GetMarkerViewStyle(MarkerStyle& style, MarkerView view);
 glm::vec4 GetMarkerTextColour(const MarkerStyle& style, const glm::vec4& markerColour);
 
 void DrawRadarMarkerShape(ImDrawList* drawList, const ImVec2& centre, float rotationRadians, MarkerCategory category, const glm::vec4& colour, float sizeScale = 1.0f);
+void DrawRadarMarkerShape(ImDrawList* drawList, const ImVec2& centre, float rotationRadians, const MarkerStyle& style, MarkerShape shape, float markerSize,
+    const glm::vec4& colour, float sizeScale = 1.0f);
 void DrawRadarPlayerMarkerShape(ImDrawList* drawList, const ImVec2& centre, float rotationRadians, PlayerMarkerType type, const glm::vec4& colour, float sizeScale = 1.0f);
+void DrawCrosshairShape(ImDrawList* drawList, const ImVec2& centre, const MarkerViewStyle& view, const MarkerStyle& style, const glm::vec4& colour,
+    float sizeScale = 1.0f);
 void DrawRadarStyledText(ImDrawList* drawList, ImFont* font, const ImVec2& position, MarkerCategory category, const glm::vec4& markerColour, const char* text, float sizeScale = 1.0f, bool centered = false);

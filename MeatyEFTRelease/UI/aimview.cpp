@@ -152,6 +152,8 @@ void AimViewWidget::Render(const ImVec2& sourceResolution) {
 
         DrawContainers(drawList);
 
+        DrawCrosshair(drawList);
+
         drawList->PopClipRect();
     }
 
@@ -533,6 +535,14 @@ void AimViewWidget::DrawBackground(ImDrawList* drawList) const {
         0,
         1.0f
     );
+}
+
+void AimViewWidget::DrawCrosshair(ImDrawList* drawList) const {
+    if (!drawList || !espGlobals::drawCrosshair)
+        return;
+
+    const MarkerStyle style = appearanceManager.GetStyle(MarkerCategory::Crosshair);
+    DrawCrosshairShape(drawList, canvasCentre_, style.radar, style, coloursGlobals::crosshair);
 }
 
 void AimViewWidget::DrawPlayers(ImDrawList* drawList) {

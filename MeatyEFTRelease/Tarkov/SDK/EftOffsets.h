@@ -47,6 +47,12 @@ namespace sdk
         inline constexpr std::uint64_t EligibleEntryPoints = 0xC0; // EligibleEntryPoints: string[]
     }
 
+    // EFT.Interactive.ScavExfiltrationPoint
+    namespace ScavExfiltrationPoint
+    {
+        inline constexpr std::uint64_t EligibleIds = 0xF8; // EligibleIds: List<string>
+    }
+
     // EFT.Interactive.ExitTriggerSettings
     namespace ExitSettings
     {
@@ -282,6 +288,7 @@ namespace sdk
     // EFT.Profile
     namespace Profile
     {
+        inline constexpr std::uint64_t Id = 0x10; // Id: string
         inline constexpr std::uint64_t Info = 0x48; // Info: EFT.ProfileInfo
         inline constexpr std::uint64_t QuestsData = 0x98; // QuestsData: genericinst
         inline constexpr std::uint64_t WishlistManager = 0x130; // WishlistManager: EFT.WishlistManager
@@ -304,6 +311,7 @@ namespace sdk
     // EFT.ProfileInfo
     namespace PlayerInfo
     {
+        inline constexpr std::uint64_t EntryPoint = 0x28; // EntryPoint: string
         inline constexpr std::uint64_t Side = 0x48; // <Side>k__BackingField: EFT.EPlayerSide
     }
 

@@ -180,7 +180,9 @@ float GetRadarMarkerScale()
 
 float GetRadarPlayerMarkerRadius(PlayerMarkerType type)
 {
-	return appearanceManager.GetPlayerMarkerStyle(type).size * GetRadarMarkerScale();
+	const PlayerMarkerStyle style = appearanceManager.GetPlayerMarkerStyle(type);
+	const float shapeScale = style.shape == MarkerShape::Tank ? (13.0f / 9.0f) : 1.0f;
+	return style.size * shapeScale * GetRadarMarkerScale();
 }
 
 void DrawRadarHealthDot(float centerX, float centerY, int healthStatus)

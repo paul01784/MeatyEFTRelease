@@ -50,9 +50,6 @@ private:
 	std::vector<exfilsMemory> exfilList;
 	std::atomic<ExfilCacheSnapshot> publishedExfilCache;
 
-	std::vector<std::string> _pmcEntries;
-	std::vector<std::string> _scavIds;
-
 	std::chrono::steady_clock::time_point lastExfilStatusUpdate;
 	std::chrono::steady_clock::time_point lastExfilDiscovery;
 
@@ -62,8 +59,8 @@ private:
 	
 	int getDistance(glm::vec3 point1, glm::vec3 point2);
 	void updateStatus();
-
-	void LoadEligibleEntryPoints(uint64_t exfilPointAddr);
+	std::string getLocalEligibilityId() const;
+	bool isEligibleForLocalPlayer(uint64_t exfilPointAddr, const std::string& localEligibilityId) const;
 
 };
 

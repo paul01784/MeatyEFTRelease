@@ -700,91 +700,13 @@ static glm::vec4 GetMarkerEditorExfilColour(int status, MarkerView view)
 
 static void DrawMarkerEditorPreviewShape(ImDrawList* drawList, const ImVec2& centre, const MarkerViewStyle& view, const MarkerStyle& style, const glm::vec4& colour)
 {
-    glm::vec4 fill = colour;
-    fill.a *= style.fillOpacity;
-    const ImU32 fillColour = ImGui::ColorConvertFloat4ToU32(ImVec4(fill.r, fill.g, fill.b, fill.a));
-    const ImU32 outlineColour = ImGui::ColorConvertFloat4ToU32(ImVec4(style.markerOutlineColour.r, style.markerOutlineColour.g,
-        style.markerOutlineColour.b, style.markerOutlineColour.a * colour.a));
-    const float radius = view.size;
-
-    if (view.shape == MarkerShape::Cross || view.shape == MarkerShape::X)
-    {
-        const bool diagonal = view.shape == MarkerShape::X;
-        const ImVec2 firstStart = diagonal ? ImVec2(centre.x - radius, centre.y - radius) : ImVec2(centre.x - radius, centre.y);
-        const ImVec2 firstEnd = diagonal ? ImVec2(centre.x + radius, centre.y + radius) : ImVec2(centre.x + radius, centre.y);
-        const ImVec2 secondStart = diagonal ? ImVec2(centre.x + radius, centre.y - radius) : ImVec2(centre.x, centre.y - radius);
-        const ImVec2 secondEnd = diagonal ? ImVec2(centre.x - radius, centre.y + radius) : ImVec2(centre.x, centre.y + radius);
-        if (style.markerOutline)
-        {
-            drawList->AddLine(firstStart, firstEnd, outlineColour, style.markerOutlineThickness + 2.0f);
-            drawList->AddLine(secondStart, secondEnd, outlineColour, style.markerOutlineThickness + 2.0f);
-        }
-        drawList->AddLine(firstStart, firstEnd, fillColour, style.markerOutlineThickness);
-        drawList->AddLine(secondStart, secondEnd, fillColour, style.markerOutlineThickness);
-        return;
-    }
-
-    if (view.shape == MarkerShape::Circle)
-    {
-        drawList->AddCircleFilled(centre, radius, fillColour, 24);
-        if (style.markerOutline)
-            drawList->AddCircle(centre, radius, outlineColour, 24, style.markerOutlineThickness);
-        return;
-    }
-
-    ImVec2 points[4]{};
-    const int pointCount = view.shape == MarkerShape::Triangle ? 3 : 4;
-    const float step = (2.0f * IM_PI) / static_cast<float>(pointCount);
-    const float start = view.shape == MarkerShape::Square ? (IM_PI * 0.25f) : -IM_PI * 0.5f;
-    for (int index = 0; index < pointCount; ++index)
-    {
-        const float angle = start + step * static_cast<float>(index);
-        points[index] = ImVec2(centre.x + std::cos(angle) * radius, centre.y + std::sin(angle) * radius);
-    }
-    drawList->AddConvexPolyFilled(points, pointCount, fillColour);
-    if (style.markerOutline)
-        drawList->AddPolyline(points, pointCount, outlineColour, ImDrawFlags_Closed, style.markerOutlineThickness);
+    DrawRadarMarkerShape(drawList, centre, -IM_PI * 0.5f, style, view.shape, view.size, colour);
 }
 
 static void DrawMarkerEditorCrosshairPreview(ImDrawList* drawList, const ImVec2& centre, const MarkerViewStyle& view, const MarkerStyle& style,
     const glm::vec4& colour)
 {
-    const ImU32 lineColour = ImGui::ColorConvertFloat4ToU32(ImVec4(colour.r, colour.g, colour.b, colour.a));
-    const float radius = view.size;
-    const float thickness = style.markerOutlineThickness;
-
-    if (view.shape == MarkerShape::Circle)
-    {
-        drawList->AddCircle(centre, radius, lineColour, 32, thickness);
-        return;
-    }
-    if (view.shape == MarkerShape::Square)
-    {
-        drawList->AddRect(ImVec2(centre.x - radius, centre.y - radius), ImVec2(centre.x + radius, centre.y + radius), lineColour, 0.0f, 0, thickness);
-        return;
-    }
-
-    if (view.shape == MarkerShape::Triangle || view.shape == MarkerShape::Diamond)
-    {
-        ImVec2 points[4]{};
-        const int pointCount = view.shape == MarkerShape::Triangle ? 3 : 4;
-        const float step = (2.0f * IM_PI) / static_cast<float>(pointCount);
-        for (int index = 0; index < pointCount; ++index)
-        {
-            const float angle = -IM_PI * 0.5f + step * static_cast<float>(index);
-            points[index] = ImVec2(centre.x + std::cos(angle) * radius, centre.y + std::sin(angle) * radius);
-        }
-        drawList->AddPolyline(points, pointCount, lineColour, ImDrawFlags_Closed, thickness);
-        return;
-    }
-
-    const bool diagonal = view.shape == MarkerShape::X;
-    const ImVec2 firstStart = diagonal ? ImVec2(centre.x - radius, centre.y - radius) : ImVec2(centre.x - radius, centre.y);
-    const ImVec2 firstEnd = diagonal ? ImVec2(centre.x + radius, centre.y + radius) : ImVec2(centre.x + radius, centre.y);
-    const ImVec2 secondStart = diagonal ? ImVec2(centre.x + radius, centre.y - radius) : ImVec2(centre.x, centre.y - radius);
-    const ImVec2 secondEnd = diagonal ? ImVec2(centre.x - radius, centre.y + radius) : ImVec2(centre.x, centre.y + radius);
-    drawList->AddLine(firstStart, firstEnd, lineColour, thickness);
-    drawList->AddLine(secondStart, secondEnd, lineColour, thickness);
+    DrawCrosshairShape(drawList, centre, view, style, colour);
 }
 
 static void DrawMarkerEditorPreviewText(ImDrawList* drawList, const ImVec2& position, const MarkerViewStyle& view, const MarkerStyle& style,
@@ -1049,9 +971,11 @@ static void RenderMarkerEditorPanel()
     {
         int shape = static_cast<int>(view.shape);
         static constexpr const char* ShapeNames[] = {"Circle", "Square", "Triangle", "Diamond", "Cross", "X"};
+        static constexpr const char* BtrShapeNames[] = {"Circle", "Square", "Triangle", "Diamond", "Cross", "X", "Tank"};
+        const bool btrMarker = playerMarker && playerType == static_cast<int>(PlayerMarkerType::Btr);
         beginRow("Shape");
         ImGui::SetNextItemWidth(controlWidth);
-        if (ImGui::Combo("##shape", &shape, ShapeNames, IM_ARRAYSIZE(ShapeNames)))
+        if (ImGui::Combo("##shape", &shape, btrMarker ? BtrShapeNames : ShapeNames, btrMarker ? IM_ARRAYSIZE(BtrShapeNames) : IM_ARRAYSIZE(ShapeNames)))
         {
             if (playerMarker)
                 playerMarker->shape = static_cast<MarkerShape>(shape);
