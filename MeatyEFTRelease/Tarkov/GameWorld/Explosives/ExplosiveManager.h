@@ -61,6 +61,11 @@ public:
     [[nodiscard]] std::uint64_t getLocalGameWorld() const;
     [[nodiscard]] std::uint64_t getGrenadesController() const;
     [[nodiscard]] std::uint64_t getGrenadesListPointer() const;
+    [[nodiscard]] std::uint64_t getSynchronizableObjectLogicProcessor() const;
+    [[nodiscard]] std::uint64_t getActiveSynchronizableObjectsListPointer() const;
+    [[nodiscard]] std::uint64_t getStaticSynchronizableObjectsListPointer() const;
+    [[nodiscard]] std::size_t getLastActiveSynchronizableObjectCount() const;
+    [[nodiscard]] std::size_t getLastStaticSynchronizableObjectCount() const;
     [[nodiscard]] std::size_t getLastUnityListCount() const;
     [[nodiscard]] bool lastUnityListReadSucceeded() const;
 
@@ -105,9 +110,11 @@ private:
     // localGameWorld + GameWorld::SynchronizableObjectLogicProcessor
     std::uint64_t m_synchronizableObjectLogicProcessor = 0;
 
-    // synchronizableObjectLogicProcessor +
-    // SynchronizableObjectLogicProcessor::_activeSynchronizableObjects
-    std::uint64_t m_synchronizableObjectsListPointer = 0;
+    // synchronizableObjectLogicProcessor + SynchronizableObjectLogicProcessor collections.
+    std::uint64_t m_activeSynchronizableObjectsListPointer = 0;
+    std::uint64_t m_staticSynchronizableObjectsListPointer = 0;
+    std::size_t m_lastActiveSynchronizableObjectCount = 0;
+    std::size_t m_lastStaticSynchronizableObjectCount = 0;
 
     std::size_t m_lastUnityListCount = 0;
     bool m_lastUnityListReadSucceeded = false;

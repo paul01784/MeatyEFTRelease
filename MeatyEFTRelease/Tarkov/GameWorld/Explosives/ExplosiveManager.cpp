@@ -157,6 +157,41 @@ std::uint64_t ExplosiveManager::getGrenadesListPointer() const
     return m_grenadesListPointer;
 }
 
+std::uint64_t ExplosiveManager::getSynchronizableObjectLogicProcessor() const
+{
+    std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
+
+    return m_synchronizableObjectLogicProcessor;
+}
+
+std::uint64_t ExplosiveManager::getActiveSynchronizableObjectsListPointer() const
+{
+    std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
+
+    return m_activeSynchronizableObjectsListPointer;
+}
+
+std::uint64_t ExplosiveManager::getStaticSynchronizableObjectsListPointer() const
+{
+    std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
+
+    return m_staticSynchronizableObjectsListPointer;
+}
+
+std::size_t ExplosiveManager::getLastActiveSynchronizableObjectCount() const
+{
+    std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
+
+    return m_lastActiveSynchronizableObjectCount;
+}
+
+std::size_t ExplosiveManager::getLastStaticSynchronizableObjectCount() const
+{
+    std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
+
+    return m_lastStaticSynchronizableObjectCount;
+}
+
 std::size_t ExplosiveManager::getLastUnityListCount() const
 {
     std::lock_guard<std::mutex> refreshLock(m_refreshMutex);
@@ -275,35 +310,52 @@ bool ExplosiveManager::readTripwireAddressesUnlocked(std::vector<std::uint64_t>&
         if (!Utils::valid_pointer(logicProcessor))
         {
             m_synchronizableObjectLogicProcessor = 0;
-            m_synchronizableObjectsListPointer = 0;
+            m_activeSynchronizableObjectsListPointer = 0;
+            m_staticSynchronizableObjectsListPointer = 0;
+            m_lastActiveSynchronizableObjectCount = 0;
+            m_lastStaticSynchronizableObjectCount = 0;
             return false;
         }
 
-        const std::uint64_t synchronizableObjects = mem.Read<std::uint64_t>(logicProcessor + sdk::SynchronizableObjectLogicProcessor::_activeSynchronizableObjects);
-
-        if (!Utils::valid_pointer(synchronizableObjects))
-        {
-            m_synchronizableObjectLogicProcessor = logicProcessor;
-            m_synchronizableObjectsListPointer = 0;
-            return false;
-        }
+        const std::uint64_t activeSynchronizableObjects =
+            mem.Read<std::uint64_t>(logicProcessor + sdk::SynchronizableObjectLogicProcessor::_activeSynchronizableObjects, DmaCacheMode::Uncached);
+        const std::uint64_t staticSynchronizableObjects =
+            mem.Read<std::uint64_t>(logicProcessor + sdk::SynchronizableObjectLogicProcessor::_staticSynchronizableObjects, DmaCacheMode::Uncached);
 
         m_synchronizableObjectLogicProcessor = logicProcessor;
-        m_synchronizableObjectsListPointer = synchronizableObjects;
+        m_activeSynchronizableObjectsListPointer = Utils::valid_pointer(activeSynchronizableObjects) ? activeSynchronizableObjects : 0;
+        m_staticSynchronizableObjectsListPointer = Utils::valid_pointer(staticSynchronizableObjects) ? staticSynchronizableObjects : 0;
+        m_lastActiveSynchronizableObjectCount = 0;
+        m_lastStaticSynchronizableObjectCount = 0;
 
-        const auto synchronizableObjectList = UnityList<std::uint64_t>::Create(
-            synchronizableObjects,
-            DmaCacheMode::Uncached,
-            static_cast<int>(MaxReasonableTripwires));
+        if (!m_activeSynchronizableObjectsListPointer && !m_staticSynchronizableObjectsListPointer)
+            return false;
 
         std::vector<std::uint64_t> candidates;
-        candidates.reserve(synchronizableObjectList.count());
-
-        for (const std::uint64_t objectAddress : synchronizableObjectList)
+        const auto appendCandidates = [&candidates](const std::uint64_t listPointer, std::size_t& sourceCount)
         {
-            if (Utils::valid_pointer(objectAddress))
-                candidates.emplace_back(objectAddress);
-        }
+            if (!Utils::valid_pointer(listPointer))
+                return;
+
+            const auto synchronizableObjectList = UnityList<std::uint64_t>::Create(
+                listPointer,
+                DmaCacheMode::Uncached,
+                static_cast<int>(MaxReasonableTripwires));
+
+            sourceCount = static_cast<std::size_t>(synchronizableObjectList.count());
+            candidates.reserve(candidates.size() + sourceCount);
+
+            for (const std::uint64_t objectAddress : synchronizableObjectList)
+            {
+                if (Utils::valid_pointer(objectAddress))
+                    candidates.emplace_back(objectAddress);
+            }
+        };
+
+        appendCandidates(m_activeSynchronizableObjectsListPointer, m_lastActiveSynchronizableObjectCount);
+
+        if (m_staticSynchronizableObjectsListPointer != m_activeSynchronizableObjectsListPointer)
+            appendCandidates(m_staticSynchronizableObjectsListPointer, m_lastStaticSynchronizableObjectCount);
 
         std::vector<std::int32_t> objectTypes(candidates.size(), -1);
 
@@ -326,7 +378,7 @@ bool ExplosiveManager::readTripwireAddressesUnlocked(std::vector<std::uint64_t>&
         }
 
         std::unordered_set<std::uint64_t> uniqueAddresses;
-        uniqueAddresses.reserve(synchronizableObjectList.count());
+        uniqueAddresses.reserve(candidates.size());
 
         for (size_t i = 0; i < candidates.size(); ++i)
         {
@@ -348,7 +400,10 @@ bool ExplosiveManager::readTripwireAddressesUnlocked(std::vector<std::uint64_t>&
     }
     catch (...)
     {
-        m_synchronizableObjectsListPointer = 0;
+        m_activeSynchronizableObjectsListPointer = 0;
+        m_staticSynchronizableObjectsListPointer = 0;
+        m_lastActiveSynchronizableObjectCount = 0;
+        m_lastStaticSynchronizableObjectCount = 0;
         return false;
     }
 }
@@ -725,7 +780,10 @@ void ExplosiveManager::resetUnlocked()
     m_grenadesController = 0;
     m_grenadesListPointer = 0;
     m_synchronizableObjectLogicProcessor = 0;
-    m_synchronizableObjectsListPointer = 0;
+    m_activeSynchronizableObjectsListPointer = 0;
+    m_staticSynchronizableObjectsListPointer = 0;
+    m_lastActiveSynchronizableObjectCount = 0;
+    m_lastStaticSynchronizableObjectCount = 0;
 
     m_lastUnityListCount = 0;
     m_lastUnityListReadSucceeded = false;

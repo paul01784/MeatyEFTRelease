@@ -7,7 +7,6 @@
 #include "../../../Web/MeatyAPI/DogTagAPI.h"
 #include "../../../UI/debug.h"
 #include "../../../UI/globals.h"
-#include "../../Features/Visibility/AtlasVisibility.h"
 #include "../../../memory/Memory.h"
 #include "../../../memory/ScatterReadBatch.h"
 #include "DogTagCache.h"
@@ -18,7 +17,6 @@
 #include "../../../Core/Utilities.h"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <immintrin.h>
@@ -253,22 +251,6 @@ namespace
     {
         static_cast<int>(boneListIndexes::Base),
         static_cast<int>(boneListIndexes::LFoot),
-        static_cast<int>(boneListIndexes::RFoot),
-    };
-
-    constexpr int kFireportAimBoneSlots[] =
-    {
-        static_cast<int>(boneListIndexes::Pelvis),
-        static_cast<int>(boneListIndexes::Head),
-        static_cast<int>(boneListIndexes::Neck),
-        static_cast<int>(boneListIndexes::Spine),
-        static_cast<int>(boneListIndexes::LForearm),
-        static_cast<int>(boneListIndexes::LPalm),
-        static_cast<int>(boneListIndexes::RForearm),
-        static_cast<int>(boneListIndexes::RPalm),
-        static_cast<int>(boneListIndexes::LThigh),
-        static_cast<int>(boneListIndexes::LFoot),
-        static_cast<int>(boneListIndexes::RThigh),
         static_cast<int>(boneListIndexes::RFoot),
     };
 
@@ -1400,90 +1382,6 @@ namespace
             : AppendResult::NoBones;
     }
 
-    static AppendResult AppendFastPlayerBoneReads(
-        const BonePlayerSnapshot& player,
-        std::vector<LiveBoneRead>& reads)
-    {
-        const size_t firstRead = reads.size();
-
-        auto QueueBone = [&](int slot)
-            {
-                if (slot < 0)
-                    return;
-
-                for (size_t i = firstRead; i < reads.size(); ++i)
-                {
-                    if (reads[i].boneSlot == slot)
-                        return;
-                }
-
-                const size_t boneIndex = static_cast<size_t>(slot);
-                if (boneIndex >= player.bonePtrs.size())
-                    return;
-
-                const uint64_t bonePtr = player.bonePtrs[boneIndex];
-                if (!Utils::valid_pointer(bonePtr))
-                    return;
-
-                LiveBoneRead read{};
-                read.playerInstance = player.instance;
-                read.boneTransform = bonePtr;
-                read.boneSlot = slot;
-                read.kind = BoneReadKind::Normal;
-
-                if (boneIndex < player.transformCache.size())
-                    read.cache = player.transformCache[boneIndex];
-
-                reads.emplace_back(std::move(read));
-            };
-
-        // Base drives the player marker and is the only movement bone needed
-        // for the local player.
-        QueueBone(static_cast<int>(boneListIndexes::Base));
-        QueueBone(static_cast<int>(boneListIndexes::LFoot));
-        QueueBone(static_cast<int>(boneListIndexes::RFoot));
-
-        if (atlasVisibilityGlobals::enabled)
-        {
-            QueueBone(static_cast<int>(boneListIndexes::Head));
-
-            if (!player.isLocal)
-            {
-                QueueBone(static_cast<int>(boneListIndexes::Neck));
-                QueueBone(static_cast<int>(boneListIndexes::Pelvis));
-            }
-        }
-
-        if (!player.isLocal)
-        {
-            if (espGlobals::drawBoxPlayers ||
-                espGlobals::drawHeadDot ||
-                espGlobals::drawSkeletons)
-            {
-                QueueBone(static_cast<int>(boneListIndexes::Head));
-            }
-
-            if (aimGlobals::aimEnabled)
-            {
-                if (aimGlobals::aimClosestBoneToFireport)
-                {
-                    for (const int slot : kFireportAimBoneSlots)
-                    {
-                        QueueBone(slot);
-                    }
-                }
-                else
-                {
-                    QueueBone(static_cast<int>(aimGlobals::aiBone));
-                    QueueBone(static_cast<int>(aimGlobals::pmcBone));
-                }
-            }
-        }
-
-        return reads.size() > firstRead
-            ? AppendResult::Queued
-            : AppendResult::NoBones;
-    }
 }
 
 
@@ -1526,11 +1424,6 @@ void RegisteredPlayers::boneTask()
         constexpr float kFullBoneUpdateDistanceMargin = 1.0f;
 
         const float drawPlayerDistance = static_cast<float>(espGlobals::getMaximumPlayerDrawDistance());
-        const bool closestFireportBoneEnabled =
-            aimGlobals::aimEnabled && aimGlobals::aimClosestBoneToFireport;
-        const float fullSkeletonDistance = closestFireportBoneEnabled
-            ? (std::max)(drawPlayerDistance, static_cast<float>(aimGlobals::aimDistance))
-            : drawPlayerDistance;
         const CameraManagerSnapshot projection = cameraManagerTest.snapshot();
 
         const auto IsFiniteVector = [](const glm::vec3& value) -> bool
@@ -1559,7 +1452,7 @@ void RegisteredPlayers::boneTask()
                     (delta.z * delta.z);
             };
 
-        const auto IsInsideSkeletonRefreshBounds =
+        const auto IsPlayerRootOnScreen =
             [&](const Player& player) -> bool
             {
                 if (!projection || !projection->valid)
@@ -1567,15 +1460,13 @@ void RegisteredPlayers::boneTask()
 
                 glm::vec2 screenPosition{};
 
-                // Refresh the full skeleton just before its root reaches the viewport.
-                constexpr float kSkeletonRefreshEdgeBufferPixels = 160.0f;
                 return CameraManager::worldToScreen(
                     *projection,
                     PlayerPosition::getBestBasePosition(player),
                     screenPosition,
                     espGlobals::gameRes.x,
                     espGlobals::gameRes.y,
-                    kSkeletonRefreshEdgeBufferPixels);
+                    0.0f);
             };
 
         struct PendingBoneScan
@@ -1751,15 +1642,11 @@ void RegisteredPlayers::boneTask()
                 pending.snapshot.bonePtrs = player.bonePtrs;
                 pending.snapshot.transformCache = player.boneTransformCache;
 
-                // Every player gets Base/LFoot/RFoot. A full scan is also
-                // needed when closest-bone-to-fireport selection is enabled.
                 pending.readFullBoneList =
                     runFullBonePass &&
-                    (espGlobals::drawSkeletons || closestFireportBoneEnabled) &&
                     !player.isLocal &&
-                    player.distance > 0.0f &&
-                    player.distance <= fullSkeletonDistance + kFullBoneUpdateDistanceMargin &&
-                    IsInsideSkeletonRefreshBounds(player);
+                    player.distance <= drawPlayerDistance + kFullBoneUpdateDistanceMargin &&
+                    IsPlayerRootOnScreen(player);
 
                 pendingScans.emplace_back(std::move(pending));
             }
@@ -1793,8 +1680,10 @@ void RegisteredPlayers::boneTask()
             }
             else
             {
-                AppendFastPlayerBoneReads(
+                AppendPlayerBoneReads(
                     pending.snapshot,
+                    BoneReadKind::Normal,
+                    false,
                     reads);
             }
 

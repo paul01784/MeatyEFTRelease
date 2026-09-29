@@ -797,6 +797,7 @@ bool MakcuController::ExecuteAsciiLocked(const std::string& command, std::string
         framedCommand += "\r\n";
     }
 
+    PurgeComm(serialHandle_, PURGE_RXABORT | PURGE_RXCLEAR);
     if (!WriteAllLocked(
         framedCommand.data(),
         framedCommand.size(),
@@ -804,6 +805,12 @@ bool MakcuController::ExecuteAsciiLocked(const std::string& command, std::string
     ))
     {
         return false;
+    }
+
+    if (!reply)
+    {
+        lastError_.clear();
+        return true;
     }
 
     std::string rawReply;

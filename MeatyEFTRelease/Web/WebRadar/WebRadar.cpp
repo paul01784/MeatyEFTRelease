@@ -300,11 +300,48 @@ void WebRadar::PublishLootSnapshot() {
     const LootCacheSnapshot loot = Loot.getCacheSnapshot();
 
     for (const LootEntity& item : *loot) {
-        if (item.pendingResolve || item.failed || item.bsgId.empty() || !item.hasValidPosition || !IsFinite(item.worldLocation) || glm::dot(item.worldLocation, item.worldLocation) < 1.0f)
+        if (item.pendingResolve || item.failed || !item.hasValidPosition || !IsFinite(item.worldLocation) || glm::dot(item.worldLocation, item.worldLocation) < 1.0f)
+            continue;
+
+        if (item.isCorpse()) {
+            lootFrame["items"].push_back({
+                {"id", "corpse:" + std::to_string(item.instance)},
+                {"kind", "corpse"},
+                {"name", "Corpse"},
+                {"x", item.worldLocation.x},
+                {"y", item.worldLocation.y},
+                {"z", item.worldLocation.z}
+            });
+            continue;
+        }
+
+        const bool isContainer = item.m_objectClassName == "LootableContainer" || item.shortName == "AirDrop";
+        if (isContainer) {
+            std::string containerName = !item.shortName.empty() ? item.shortName : item.longName;
+            if (containerName.empty())
+                containerName = "Container";
+
+            const std::string containerId = !item.bsgId.empty()
+                ? item.bsgId
+                : "container:" + NormalizeName(containerName);
+
+            lootFrame["items"].push_back({
+                {"id", containerId},
+                {"kind", "container"},
+                {"name", containerName},
+                {"x", item.worldLocation.x},
+                {"y", item.worldLocation.y},
+                {"z", item.worldLocation.z}
+            });
+            continue;
+        }
+
+        if (item.bsgId.empty())
             continue;
 
         lootFrame["items"].push_back({
             {"id", item.bsgId},
+            {"kind", "item"},
             {"x", item.worldLocation.x},
             {"y", item.worldLocation.y},
             {"z", item.worldLocation.z}

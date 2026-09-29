@@ -69,6 +69,7 @@ namespace sdk
     namespace SynchronizableObjectLogicProcessor
     {
         inline constexpr std::uint64_t _activeSynchronizableObjects = 0x10; // _activeSynchronizableObjects: genericinst
+        inline constexpr std::uint64_t _staticSynchronizableObjects = 0x18; // _staticSynchronizableObjects: genericinst
     }
 
     // EFT.SynchronizableObjects.TripwireSynchronizableObject

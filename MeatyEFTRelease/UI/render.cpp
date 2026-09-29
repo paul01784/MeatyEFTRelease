@@ -3716,6 +3716,7 @@ static void renderDebugWindow()
                     const PlayerSnapshot featurePlayers = registeredPlayers.getCacheSnapshot();
                     const std::vector<LootEntity> lootCache = Loot.getCacheLoot();
                     const std::size_t grenadeCount = explosiveManager.getGrenadeCount();
+                    const std::size_t tripwireCount = explosiveManager.getTripwireCount();
                     const std::vector<QuestData> activeQuests = GetQuestDataActiveSnapshot();
                     const std::size_t equipmentReady = static_cast<std::size_t>(
                         std::count_if(featurePlayers->begin(), featurePlayers->end(), [](const Player& player) { return player.equipInited; }));
@@ -3759,6 +3760,12 @@ static void renderDebugWindow()
                                        : espGlobals::drawGrenades                             ? "ESP"
                                                                                               : "OFF",
                                        grenadeCount, globals::taskGrenades, "HIGH");
+                        drawFeatureRow("Tripwires",
+                                       radarGlobals::drawTripwires && espGlobals::drawTripwires ? "RADAR + ESP"
+                                       : radarGlobals::drawTripwires                             ? "RADAR"
+                                       : espGlobals::drawTripwires                               ? "ESP"
+                                                                                                 : "OFF",
+                                       tripwireCount, globals::taskTripWire, "BACKGROUND");
                         drawFeatureRow("Quests",
                                        radarGlobals::drawQuestHelper && espGlobals::drawQuestHelper ? "RADAR + ESP"
                                        : radarGlobals::drawQuestHelper                              ? "RADAR"
@@ -3778,12 +3785,14 @@ static void renderDebugWindow()
 
                     if (ImGui::CollapsingHeader("Feature switches"))
                     {
-                        ImGui::Text("Radar: players %s | loot %s | grenades %s | quests %s | exfils %s", "ON", radarGlobals::drawLoot ? "ON" : "OFF",
-                                    radarGlobals::drawGrenades ? "ON" : "OFF", radarGlobals::drawQuestHelper ? "ON" : "OFF",
+                        ImGui::Text("Radar: players %s | loot %s | grenades %s | tripwires %s | quests %s | exfils %s", "ON",
+                                    radarGlobals::drawLoot ? "ON" : "OFF", radarGlobals::drawGrenades ? "ON" : "OFF",
+                                    radarGlobals::drawTripwires ? "ON" : "OFF", radarGlobals::drawQuestHelper ? "ON" : "OFF",
                                     radarGlobals::drawExfils ? "ON" : "OFF");
-                        ImGui::Text("ESP: %s | players %s | loot %s | grenades %s | quests %s | exfils %s", espGlobals::espEnabled ? "ON" : "OFF", "ON",
-                                    espGlobals::drawLoot ? "ON" : "OFF", espGlobals::drawGrenades ? "ON" : "OFF", espGlobals::drawQuestHelper ? "ON" : "OFF",
-                                    espGlobals::drawExfil ? "ON" : "OFF");
+                        ImGui::Text("ESP: %s | players %s | loot %s | grenades %s | tripwires %s | quests %s | exfils %s",
+                                    espGlobals::espEnabled ? "ON" : "OFF", "ON", espGlobals::drawLoot ? "ON" : "OFF",
+                                    espGlobals::drawGrenades ? "ON" : "OFF", espGlobals::drawTripwires ? "ON" : "OFF",
+                                    espGlobals::drawQuestHelper ? "ON" : "OFF", espGlobals::drawExfil ? "ON" : "OFF");
                     }
 
                     if (ImGui::CollapsingHeader("Grenade source details"))
@@ -3793,6 +3802,16 @@ static void renderDebugWindow()
                         DebugTextPtr("Unity list", explosiveManager.getGrenadesListPointer());
                         ImGui::Text("Last list count: %zu | Read: %s", explosiveManager.getLastUnityListCount(),
                                     explosiveManager.lastUnityListReadSucceeded() ? "OK" : "FAILED / NOT RUN");
+                    }
+
+                    if (ImGui::CollapsingHeader("Tripwire source details"))
+                    {
+                        DebugTextPtr("Logic processor", explosiveManager.getSynchronizableObjectLogicProcessor());
+                        DebugTextPtr("Active list", explosiveManager.getActiveSynchronizableObjectsListPointer());
+                        DebugTextPtr("Static list", explosiveManager.getStaticSynchronizableObjectsListPointer());
+                        ImGui::Text("Source counts: active %zu | static %zu | cached tripwires %zu",
+                                    explosiveManager.getLastActiveSynchronizableObjectCount(),
+                                    explosiveManager.getLastStaticSynchronizableObjectCount(), tripwireCount);
                     }
 
                     ImGui::EndTabItem();
