@@ -1208,7 +1208,6 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
             else if (fov < kOpticFovReengage || m_opticLiveFrames >= kOpticLiveFrameLimit)
                 m_opticSuppressed = false;
         }
-        const bool opticCameraLive = !m_opticSuppressed;
         if (fov > 1.0f && fov < 180.0f && aspect > 0.1f && aspect < 5.0f)
         {
             const float halfFovRadians = fov * (3.14159265358979323846f / 360.0f);
