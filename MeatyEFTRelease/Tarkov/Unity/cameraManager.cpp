@@ -30,6 +30,9 @@ namespace
     constexpr auto kCameraRefreshInterval = std::chrono::seconds(3);
     constexpr std::uint8_t kOpticMatrixFailureLimit = 3;
     constexpr int kOpticFrozenFrameLimit = 6;
+    constexpr int kOpticLiveFrameLimit = 30;
+    constexpr float kOpticFovSuppress = 48.0f;
+    constexpr float kOpticFovReengage = 42.0f;
     constexpr auto kCameraReadFailureGrace = std::chrono::milliseconds(750);
     constexpr auto kAllCamerasRetryInterval = std::chrono::seconds(3);
     
@@ -181,6 +184,8 @@ void CameraManager::reset()
     m_lastAds = false;
     m_opticMatrixReadFailures = 0;
     m_opticFrozenFrames = 0;
+    m_opticLiveFrames = 0;
+    m_opticSuppressed = false;
     m_cameraReadFailureSince = {};
     m_busyReadSkips = 0;
     if (m_cameraHealthFailureActive)
@@ -1165,26 +1170,45 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
 
         state.fpsFov = fov;
         state.fpsAspect = aspect;
-        // Backup/canted sights (e.g. a DeltaPoint piggybacked on a Bravo4/HAMR)
-        // take over the view without updating OpticCameraManager: the game keeps
-        // rendering the wide FPS view while the cached magnified route (still
-        // readable, still "valid") no longer describes what the player sees.
-        // A live FPS FOV far above scoped levels with magnification still cached
-        // means the route is stale — fall back to FPS projection instead of
-        // projecting through the dead optic matrix (which empties every view).
-        const bool routeMatchesView = !(state.magnification > 1.5f && fov > 45.0f);
-        // A live optic camera drifts every frame (breath/sway), so its matrix
-        // is never bit-identical twice. A deactivated one (e.g. HHS-1 left in
-        // 1x mode while the route still points at it) reads back frozen
-        // matrices while the FPS matrix advances — after a short run, stop
-        // projecting through the dead matrix. Releases the instant it moves.
-        const bool opticDeltaLive = previous && previous->opticRequested && previous->opticCamera == sampledOpticCamera;
-        const bool fpsDeltaLive = previous && previous->valid && previous->fpsCamera == sampledFpsCamera;
-        if (opticRead && fpsRead && opticDeltaLive && fpsDeltaLive && state.opticMatrixDelta <= 0.0f && state.fpsMatrixDelta > 0.0f)
-            ++m_opticFrozenFrames;
-        else
+        // Backup/canted sights (e.g. a DeltaPoint piggybacked on a Bravo4/HAMR,
+        // or an HHS-1 left in 1x mode) can take over the view while the cached
+        // magnified route stays readable: the game keeps rendering the wide FPS
+        // view but OpticCameraManager never updates, so the dead/stale optic
+        // matrix would empty every projected view. Suppress the optic path
+        // through a LATCH (never a per-frame flip, which visibly flashes):
+        // trip when the live FPS FOV looks unmagnified with magnification
+        // cached, or the optic matrix freezes while FPS advances; release only
+        // on firmly magnified FOV or sustained live optic frames.
+        const bool opticDeltaComputed = previous && previous->opticRequested && previous->opticCamera == sampledOpticCamera;
+        const bool fpsDeltaComputed = previous && previous->valid && previous->fpsCamera == sampledFpsCamera;
+        if (!wantOptic)
+        {
+            m_opticSuppressed = false;
             m_opticFrozenFrames = 0;
-        const bool opticCameraLive = m_opticFrozenFrames < kOpticFrozenFrameLimit;
+            m_opticLiveFrames = 0;
+        }
+        else
+        {
+            const bool fovMismatch = state.magnification > 1.5f && fov > kOpticFovSuppress;
+            const bool frozenFrame = opticRead && fpsRead && opticDeltaComputed && fpsDeltaComputed &&
+                state.opticMatrixDelta <= 0.0f && state.fpsMatrixDelta > 0.0f;
+            const bool liveFrame = opticRead && fpsRead && opticDeltaComputed && state.opticMatrixDelta > 0.0f;
+            if (frozenFrame)
+            {
+                ++m_opticFrozenFrames;
+                m_opticLiveFrames = 0;
+            }
+            else
+            {
+                m_opticFrozenFrames = 0;
+                m_opticLiveFrames = liveFrame ? m_opticLiveFrames + 1 : 0;
+            }
+            if (fovMismatch || m_opticFrozenFrames >= kOpticFrozenFrameLimit)
+                m_opticSuppressed = true;
+            else if (fov < kOpticFovReengage || m_opticLiveFrames >= kOpticLiveFrameLimit)
+                m_opticSuppressed = false;
+        }
+        const bool opticCameraLive = !m_opticSuppressed;
         if (fov > 1.0f && fov < 180.0f && aspect > 0.1f && aspect < 5.0f)
         {
             const float halfFovRadians = fov * (3.14159265358979323846f / 360.0f);
@@ -1194,7 +1218,7 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
             {
                 state.opticScaleX = scaleX;
                 state.opticScaleY = scaleY;
-                state.usingOptic = routeMatchesView && opticCameraLive;
+                state.usingOptic = !m_opticSuppressed;
             }
         }
     }

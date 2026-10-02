@@ -186,6 +186,8 @@ private:
 
     std::uint8_t m_opticMatrixReadFailures = 0;
     int m_opticFrozenFrames = 0;
+    int m_opticLiveFrames = 0;
+    bool m_opticSuppressed = false;
     std::chrono::steady_clock::time_point m_cameraReadFailureSince{};
 
     std::uint64_t m_busyReadSkips = 0;
