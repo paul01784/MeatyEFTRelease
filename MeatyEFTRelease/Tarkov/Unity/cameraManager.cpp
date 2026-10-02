@@ -29,6 +29,7 @@ namespace
     constexpr auto kManagedCameraRetryInterval = std::chrono::seconds(3);
     constexpr auto kCameraRefreshInterval = std::chrono::seconds(3);
     constexpr std::uint8_t kOpticMatrixFailureLimit = 3;
+    constexpr int kOpticFrozenFrameLimit = 6;
     constexpr auto kCameraReadFailureGrace = std::chrono::milliseconds(750);
     constexpr auto kAllCamerasRetryInterval = std::chrono::seconds(3);
     
@@ -179,6 +180,7 @@ void CameraManager::reset()
     m_opticFromAllCameras = false;
     m_lastAds = false;
     m_opticMatrixReadFailures = 0;
+    m_opticFrozenFrames = 0;
     m_cameraReadFailureSince = {};
     m_busyReadSkips = 0;
     if (m_cameraHealthFailureActive)
@@ -1171,6 +1173,18 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
         // means the route is stale — fall back to FPS projection instead of
         // projecting through the dead optic matrix (which empties every view).
         const bool routeMatchesView = !(state.magnification > 1.5f && fov > 45.0f);
+        // A live optic camera drifts every frame (breath/sway), so its matrix
+        // is never bit-identical twice. A deactivated one (e.g. HHS-1 left in
+        // 1x mode while the route still points at it) reads back frozen
+        // matrices while the FPS matrix advances — after a short run, stop
+        // projecting through the dead matrix. Releases the instant it moves.
+        const bool opticDeltaLive = previous && previous->opticRequested && previous->opticCamera == sampledOpticCamera;
+        const bool fpsDeltaLive = previous && previous->valid && previous->fpsCamera == sampledFpsCamera;
+        if (opticRead && fpsRead && opticDeltaLive && fpsDeltaLive && state.opticMatrixDelta <= 0.0f && state.fpsMatrixDelta > 0.0f)
+            ++m_opticFrozenFrames;
+        else
+            m_opticFrozenFrames = 0;
+        const bool opticCameraLive = m_opticFrozenFrames < kOpticFrozenFrameLimit;
         if (fov > 1.0f && fov < 180.0f && aspect > 0.1f && aspect < 5.0f)
         {
             const float halfFovRadians = fov * (3.14159265358979323846f / 360.0f);
@@ -1180,7 +1194,7 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
             {
                 state.opticScaleX = scaleX;
                 state.opticScaleY = scaleY;
-                state.usingOptic = routeMatchesView;
+                state.usingOptic = routeMatchesView && opticCameraLive;
             }
         }
     }
