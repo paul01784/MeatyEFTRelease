@@ -1,7 +1,5 @@
 #include "../../../UI/includes.h"
 #include "../RegisteredPlayers.h"
-#include "PlayerLookup.h"
-
 #include "../../../Web/MeatyAPI/DogTagAPI.h"
 #include "../../../UI/debug.h"
 #include "../../../UI/globals.h"
@@ -64,6 +62,7 @@ void RegisteredPlayers::playerEquipment()
     struct InitJob
     {
         uint64_t instance = 0;
+        uint64_t cacheEntryId = 0;
         uint64_t inventoryControllerAddr = 0;
 
         uint64_t inventoryController = 0;
@@ -75,6 +74,7 @@ void RegisteredPlayers::playerEquipment()
     struct InitResult
     {
         uint64_t instance = 0;
+        uint64_t cacheEntryId = 0;
         SlotVec slots;
         bool success = false;
     };
@@ -82,6 +82,7 @@ void RegisteredPlayers::playerEquipment()
     struct ScanJob
     {
         uint64_t instance = 0;
+        uint64_t cacheEntryId = 0;
         bool isPlayer = false;
         bool isPmc = false;
         std::string profileId;
@@ -102,6 +103,7 @@ void RegisteredPlayers::playerEquipment()
     struct ScanResult
     {
         uint64_t instance = 0;
+        uint64_t cacheEntryId = 0;
         bool isPmc = false;
         SlotVec slots;
         PlayerValueT playerValue{};
@@ -218,43 +220,37 @@ void RegisteredPlayers::playerEquipment()
     {
         //Build slot-pointer-cache init candidates
         std::vector<InitJob> initCandidates;
+        const PlayerSnapshot initSnapshot = getCacheSnapshot();
+        initCandidates.reserve(initSnapshot->size());
 
+        for (const Player& player : *initSnapshot)
         {
-            std::lock_guard<std::mutex> lock(playerMutex);
+            if (!Utils::valid_pointer(player.instance))
+                continue;
 
-            std::vector<Player>& cache =
-                registeredPlayers.getCache();
-
-            initCandidates.reserve(cache.size());
-
-            for (const Player& player : cache)
+            if (player.isBTR ||
+                player.isDead ||
+                player.hasExfiled)
             {
-                if (!Utils::valid_pointer(player.instance))
-                    continue;
-
-                if (player.isBTR ||
-                    player.isDead ||
-                    player.hasExfiled)
-                {
-                    continue;
-                }
-
-                if (player.equipInited)
-                    continue;
-
-                if (!Utils::valid_pointer(
-                    player.P_InventoryControllerAddr))
-                {
-                    continue;
-                }
-
-                InitJob job{};
-                job.instance = player.instance;
-                job.inventoryControllerAddr =
-                    player.P_InventoryControllerAddr;
-
-                initCandidates.emplace_back(std::move(job));
+                continue;
             }
+
+            if (player.equipInited)
+                continue;
+
+            if (!Utils::valid_pointer(
+                player.P_InventoryControllerAddr))
+            {
+                continue;
+            }
+
+            InitJob job{};
+            job.instance = player.instance;
+            job.cacheEntryId = player.cacheEntryId;
+            job.inventoryControllerAddr =
+                player.P_InventoryControllerAddr;
+
+            initCandidates.emplace_back(std::move(job));
         }
 
         std::vector<InitJob> initJobs =
@@ -384,6 +380,7 @@ void RegisteredPlayers::playerEquipment()
 
                 InitResult result{};
                 result.instance = job.instance;
+                result.cacheEntryId = job.cacheEntryId;
 
                 try
                 {
@@ -447,96 +444,67 @@ void RegisteredPlayers::playerEquipment()
             }
         }
 
-        // Apply slot-pointer cache.
+        // Queue slot-pointer cache updates for the live player owner.
+        // The equipment worker never waits for, or mutates, the live cache.
+        for (InitResult& result : initResults)
         {
-            std::lock_guard<std::mutex> lock(playerMutex);
+            if (!result.success)
+                continue;
 
-            std::vector<Player>& cache =
-                registeredPlayers.getCache();
-
-            for (InitResult& result : initResults)
-            {
-                Player* player =
-                    PlayerLookup::findByInstance(
-                        cache,
-                        result.instance
-                    );
-
-                if (!player)
-                    continue;
-
-                if (!Utils::valid_pointer(player->instance))
-                    continue;
-
-                if (player->isBTR ||
-                    player->isDead ||
-                    player->hasExfiled)
+            const uint64_t instance = result.instance;
+            const uint64_t cacheEntryId = result.cacheEntryId;
+            queuePlayerEdit(instance, cacheEntryId, [slots = std::move(result.slots)](Player& player) mutable
                 {
-                    continue;
-                }
+                    if (player.isBTR || player.isDead || player.hasExfiled || player.equipInited)
+                        return;
 
-                if (player->equipInited)
-                    continue;
-
-                if (!result.success)
-                    continue;
-
-                player->_slots = std::move(result.slots);
-                player->equipInited = true;
-
-                // Forces the first contents scan immediately
-                player->lastEquipmentUpdate = {};
-            }
+                    player._slots = std::move(slots);
+                    player.equipInited = true;
+                    player.lastEquipmentUpdate = {};
+                });
         }
 
         // Stage 3: Build normal contents-update candidates
         // Each cached player is due every 5 seconds
         std::vector<ScanJob> scanCandidates;
+        const PlayerSnapshot scanSnapshot = getCacheSnapshot();
+        scanCandidates.reserve(scanSnapshot->size());
+        const Clock::time_point now = Clock::now();
 
+        for (const Player& player : *scanSnapshot)
         {
-            std::lock_guard<std::mutex> lock(playerMutex);
+            if (!Utils::valid_pointer(player.instance))
+                continue;
 
-            std::vector<Player>& cache =
-                registeredPlayers.getCache();
-
-            scanCandidates.reserve(cache.size());
-
-            const Clock::time_point now = Clock::now();
-
-            for (const Player& player : cache)
+            if (player.isBTR ||
+                player.isDead ||
+                player.hasExfiled)
             {
-                if (!Utils::valid_pointer(player.instance))
-                    continue;
-
-                if (player.isBTR ||
-                    player.isDead ||
-                    player.hasExfiled)
-                {
-                    continue;
-                }
-
-                if (!player.equipInited)
-                    continue;
-
-                if (player._slots.empty())
-                    continue;
-
-                if (now - player.lastEquipmentUpdate <
-                    player.equipmentUpdateInterval)
-                {
-                    continue;
-                }
-
-                ScanJob job{};
-                job.instance = player.instance;
-                job.isPlayer = player.isPlayer;
-                job.isPmc = player.isPlayer && !player.isPlayerScav && !player.isAi;
-                job.profileId = player.profileId;
-                job.slots = player._slots;
-                job.updateTime = now;
-
-                scanCandidates.emplace_back(std::move(job));
+                continue;
             }
+
+            if (!player.equipInited)
+                continue;
+
+            if (player._slots.empty())
+                continue;
+
+            if (now - player.lastEquipmentUpdate <
+                player.equipmentUpdateInterval)
+            {
+                continue;
+            }
+
+            ScanJob job{};
+            job.instance = player.instance;
+            job.cacheEntryId = player.cacheEntryId;
+            job.isPlayer = player.isPlayer;
+            job.isPmc = player.isPlayer && !player.isPlayerScav && !player.isAi;
+            job.profileId = player.profileId;
+            job.slots = player._slots;
+            job.updateTime = now;
+
+            scanCandidates.emplace_back(std::move(job));
         }
 
         std::vector<ScanJob> scanJobs =
@@ -684,6 +652,7 @@ void RegisteredPlayers::playerEquipment()
             ScanResult result{};
 
             result.instance = job.instance;
+            result.cacheEntryId = job.cacheEntryId;
             result.isPmc = job.isPmc;
             result.updateTime = job.updateTime;
             result.slots = std::move(job.slots);
@@ -766,32 +735,32 @@ void RegisteredPlayers::playerEquipment()
                                 result.hasProfileUpdate = true;
                                 result.profileId = readString;
 
-                                if (g_DogTagAPI.hasApiKey())
+                                auto apiResult = getCachedDogTagApiResult(result.profileId);
+
+                                if (!apiResult && g_DogTagAPI.hasApiKey() &&
+                                    tryBeginDogTagApiRequest(result.profileId))
                                 {
-                                    const auto apiResult =
+                                    const auto fetchedResult =
                                         g_DogTagAPI.getByProfile(
                                             result.profileId
                                         );
 
-                                    if (apiResult)
+                                    if (fetchedResult)
                                     {
-                                        if (!apiResult->accountId.empty())
-                                        {
-                                            result.accountId =
-                                                apiResult->accountId;
-                                        }
-
-                                        if (!apiResult->nickname.empty())
-                                        {
-                                            result.nickname =
-                                                apiResult->nickname;
-                                        }
-
-                                        if (apiResult->lvl > 0)
-                                        {
-                                            result.lvl = apiResult->lvl;
-                                        }
+                                        DogTagApiResult cachedResult{};
+                                        cachedResult.accountId = fetchedResult->accountId;
+                                        cachedResult.nickname = fetchedResult->nickname;
+                                        cachedResult.level = fetchedResult->lvl;
+                                        cacheDogTagApiResult(result.profileId, cachedResult);
+                                        apiResult = std::move(cachedResult);
                                     }
+                                }
+
+                                if (apiResult)
+                                {
+                                    result.accountId = apiResult->accountId;
+                                    result.nickname = apiResult->nickname;
+                                    result.lvl = apiResult->level;
                                 }
                             }
                         }
@@ -905,66 +874,56 @@ void RegisteredPlayers::playerEquipment()
             }
         }
 
-        //Apply updated contents and next 5-second scan time
+        // Queue updated contents for the live player owner.
         {
-            std::lock_guard<std::mutex> lock(playerMutex);
-
-            std::vector<Player>& cache =
-                registeredPlayers.getCache();
-
             for (ScanResult& result : scanResults)
             {
-                Player* player =
-                    PlayerLookup::findByInstance(
-                        cache,
-                        result.instance
-                    );
-
-                if (!player)
-                    continue;
-
-                if (!Utils::valid_pointer(player->instance))
-                    continue;
-
-                if (player->isBTR ||
-                    player->isDead ||
-                    player->hasExfiled)
+                if (result.hasProfileUpdate)
                 {
-                    continue;
+                    const auto source = std::find_if(scanSnapshot->begin(), scanSnapshot->end(), [&](const Player& player)
+                    {
+                            return player.instance == result.instance;
+                        });
+
+                    if (source != scanSnapshot->end())
+                    {
+                        Player updatedPlayer = *source;
+                        updatedPlayer.profileId = result.profileId;
+
+                        if (!result.accountId.empty())
+                            updatedPlayer.accountId = result.accountId;
+                        if (!result.nickname.empty())
+                            updatedPlayer.name = result.nickname;
+                        if (result.lvl > 0)
+                            updatedPlayer.DT_lvl = result.lvl;
+
+                        watchListManager.logUpdatePlayerPID(updatedPlayer);
+                    }
                 }
 
-                player->_slots = std::move(result.slots);
-                player->playerValue = result.playerValue;
-
-                
-                player->lastEquipmentUpdate = result.updateTime;
-
-                if (result.hasProfileUpdate &&
-                    player->profileId.empty())
-                {
-                    player->profileId =
-                        result.profileId;
-
-                    if (!result.accountId.empty())
+                const uint64_t instance = result.instance;
+                const uint64_t cacheEntryId = result.cacheEntryId;
+                queuePlayerEdit(instance, cacheEntryId, [result = std::move(result)](Player& player) mutable
                     {
-                        player->accountId =
-                            result.accountId;
-                    }
+                        if (player.isBTR || player.isDead || player.hasExfiled)
+                            return;
 
-                    if (!result.nickname.empty())
-                    {
-                        player->name =
-                            result.nickname;
-                    }
+                        player._slots = std::move(result.slots);
+                        player.playerValue = result.playerValue;
+                        player.lastEquipmentUpdate = result.updateTime;
 
-                    if (result.lvl > 0)
-                    {
-                        player->DT_lvl = result.lvl;
-                    }
+                        if (!result.hasProfileUpdate || !player.profileId.empty())
+                            return;
 
-                    //update watchlist raid list pid
-                    watchListManager.logUpdatePlayerPID(*player);
-                }
+                        player.profileId = std::move(result.profileId);
+
+                        if (!result.accountId.empty())
+                            player.accountId = std::move(result.accountId);
+                        if (!result.nickname.empty())
+                            player.name = std::move(result.nickname);
+                        if (result.lvl > 0)
+                            player.DT_lvl = result.lvl;
+                    });
             }
         }
     }
@@ -981,6 +940,4 @@ void RegisteredPlayers::playerEquipment()
             "[PLAYER][EQUIP] Unknown exception."
         );
     }
-
-    publishCacheSnapshot();
 }

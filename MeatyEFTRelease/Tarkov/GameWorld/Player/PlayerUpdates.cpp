@@ -210,10 +210,9 @@ void RegisteredPlayers::updateEntity()
         return;
     }
 
-    const bool rosterProtectionActive = isLocalGroupRosterProtectionActive(playerCache);
-
     {
         std::lock_guard<std::mutex> lock(playerMutex);
+        const bool rosterProtectionActive = isLocalGroupRosterProtectionActive(playerCache);
 
         for (Player& player : playerCache)
         {
@@ -228,10 +227,7 @@ void RegisteredPlayers::updateEntity()
                 isProtectedLocalGroupMember(player, rosterProtectionActive);
 
             if (isProtectedGroupMember)
-            {
-                player.isDead = false;
                 player.hasExfiled = false;
-            }
 
             if (player.isDead || player.hasExfiled)
             {
@@ -240,8 +236,7 @@ void RegisteredPlayers::updateEntity()
                 continue;
             }
 
-            if (!isProtectedGroupMember &&
-                Utils::valid_pointer(player.P_CorpseClass))
+            if (Utils::valid_pointer(player.P_CorpseClass))
             {
                 player.isDead = true;
                 player.distance = getDistance(player.location, mainGame.localLocation);

@@ -33,7 +33,7 @@ public:
     FireportTracker();
 
     void clear() noexcept;
-    void update(uint64_t localPlayer);
+    void update(uint64_t localPlayer, uint64_t handsController);
     [[nodiscard]] FireportPoseSnapshot
         getSnapshot() const noexcept;
     [[nodiscard]] FireportPose snapshot() const noexcept;

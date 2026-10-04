@@ -5,12 +5,9 @@
 
 
 
-#include <mutex>
-#include <shared_mutex>
-#include <atomic>
+#include <array>
 #include <chrono>
 #include <memory>
-#include <utility>
 #include <vector>
 #include "HandsManager.h"
 
@@ -21,12 +18,6 @@ struct TransformAccessReadOnly
 	uint64_t pTransformData; // offset 0x88
 	int32_t index;          // offset 0x90
 	int32_t pad;            // optional padding for alignment
-};
-
-struct TransformData
-{
-	uint64_t pTransformArray;   // relation_array   (pTransformData + 0x40)
-	uint64_t pTransformIndices; // dependency_index_array (pTransformData + 0x68)
 };
 
 struct Matrix34
@@ -160,6 +151,7 @@ class Player
 public:
 
 	uint64_t instance;
+	uint64_t cacheEntryId{ 0 };
 	bool isLocal;
 	PlayerKind kind{ PlayerKind::Unknown };
 	PlayerType type{ PlayerType::Default };
@@ -185,15 +177,11 @@ public:
 	bool hasProfileData;
 	int profileDataMode;
 	unsigned int attemptedProfileDataModes;
-	std::string DT_profileId;
-	std::string DT_accountId;
-	std::string DT_nickname;
 	int DT_lvl;
-	int DT_Side;
 
 
 	int kd;
-	double pkd;
+	double pkd{ 0.0 };
 	int hours;
 
 	glm::vec4 colour;
@@ -224,7 +212,6 @@ public:
 	bool visibleToLocal{ false };
 
 	bool invalidBones;
-	int bonePtrRefreshTick{ 0 };
 
 	bool isDead;
 	bool hasExfiled;
@@ -246,10 +233,7 @@ public:
 
 	std::vector<BoneTransformCacheEntry> boneTransformCache;
 
-	std::chrono::steady_clock::time_point lastHandsUpdate{};
-	std::chrono::milliseconds handsUpdateInterval{2000};
 	std::string itemInHand;
-	uint64_t _lastObservedHands;
 
 	HandsInfo observedHandsInfo;
 
@@ -287,7 +271,7 @@ public:
 	bool usingInternalTransformFallback{ false };
 	bool usingCameraPositionFallback{ false };
 
-	std::vector<allPlayerBones> boneList = {
+	inline static constexpr std::array<allPlayerBones, 13> boneList = {
 		allPlayerBones::HumanPelvis, allPlayerBones::HumanHead, allPlayerBones::HumanNeck, allPlayerBones::HumanSpine1, allPlayerBones::HumanLForearm2,
 		allPlayerBones::HumanLPalm, allPlayerBones::HumanRForearm2, allPlayerBones::HumanRPalm,
 		allPlayerBones::HumanLThigh2, allPlayerBones::HumanLFoot,
@@ -295,16 +279,7 @@ public:
 	};
 
 	std::vector<uint64_t> bonePtrs = std::vector<uint64_t>(boneList.size());
-
-	std::vector<TransformAccessReadOnly> boneTransforms = std::vector<TransformAccessReadOnly>(boneList.size());
-	std::vector<TransformData> boneTransformsData = std::vector<TransformData>(boneList.size());
 	std::vector<glm::vec3> bonePositions = std::vector<glm::vec3>(boneList.size());
-
-	std::vector<PVOID> pMatriciesBuffers = std::vector<PVOID>(boneList.size());
-	std::vector<PVOID> pIndicesBuffers = std::vector<PVOID>(boneList.size());
-
-	std::vector<size_t> matCap;
-	std::vector<size_t> idxCap;
 	
 
 	bool bonePointersNeedResolve;
@@ -315,7 +290,6 @@ public:
 		: instance(0),
 		kind(playerKind),
 		P_HandsController(0),
-		_lastObservedHands(0),
 		equipInited(0),
 		invalidBones(0),
 		isAiming(0),
@@ -336,11 +310,7 @@ public:
 		profileDataMode(-1),
 		attemptedProfileDataModes(0),
 		profileStats(0),
-		DT_profileId(""),
-		DT_accountId(""),
-		DT_nickname(""),
 		DT_lvl(0),
-		DT_Side(0),
 		kd(0),
 		hours(0),
 		lastDogTagLookup{},
@@ -364,7 +334,6 @@ public:
 		isInBTR(false),
 		isDead(false),
 		hasExfiled(false),
-		handsUpdateInterval{ 2000 },
 		equipmentUpdateInterval{ 5000 },
 		P_Profile(0),
 		P_Info(0),

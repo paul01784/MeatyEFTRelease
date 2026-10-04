@@ -18,6 +18,7 @@ struct globals {
     static float appRadarMaxFPS;
     static bool appMaximizeWindow;
     static bool appHideTitlebar;
+    static bool useMeatyJsonMirror;
     static std::string dogTagAPIKey;
 
     static std::string radarSubText;

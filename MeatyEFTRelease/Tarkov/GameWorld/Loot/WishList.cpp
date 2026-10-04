@@ -4,6 +4,7 @@
 #include "../../SDK/EftOffsets.h"
 #include "../../Unity/UnityContainers.h"
 #include "../MainGame.h"
+#include "../RegisteredPlayers.h"
 #include "../../../Core/Utilities.h"
 #include "../../../Web/TarkovDev/TarkovDevClient.h"
 
@@ -14,7 +15,8 @@ void WishListManager::createWishList()
 {
 	try
 	{
-		if (!Utils::valid_pointer(mainGame.localplayerProfile))
+		const uint64_t localProfile = registeredPlayers.getLocalStateSnapshot()->profile;
+		if (!Utils::valid_pointer(localProfile))
 			return;
 
 		if (wishListData.size() > 0)
@@ -22,7 +24,7 @@ void WishListManager::createWishList()
 			return;
 		}
 
-		auto wishListManagerPTR = mem.Read<uint64_t>(mainGame.localplayerProfile + sdk::Profile::WishlistManager);
+		auto wishListManagerPTR = mem.Read<uint64_t>(localProfile + sdk::Profile::WishlistManager);
 		auto itemPtr = mem.Read<uint64_t>(wishListManagerPTR + sdk::WishlistManager::_wishlistItems);
 		if (!Utils::valid_pointer(itemPtr))
 		{

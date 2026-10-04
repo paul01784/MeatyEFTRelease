@@ -209,6 +209,7 @@ void to_json(nlohmann::json& j, const globals& r) {
         {"appRadarMaxFPS", r.appRadarMaxFPS},
         {"appMaximizeWindow", r.appMaximizeWindow},
         {"appHideTitlebar", r.appHideTitlebar},
+        {"useMeatyJsonMirror", r.useMeatyJsonMirror},
         {"dogTagAPIKey", r.dogTagAPIKey}
     };
 }
@@ -221,6 +222,7 @@ void from_json(const nlohmann::json& j, globals& r) {
         240.0f);
     r.appMaximizeWindow = j.value("appMaximizeWindow", r.appMaximizeWindow);
     r.appHideTitlebar = j.value("appHideTitlebar", r.appHideTitlebar);
+    r.useMeatyJsonMirror = j.value("useMeatyJsonMirror", true);
     r.dogTagAPIKey = j.value("dogTagAPIKey", r.dogTagAPIKey);
 }
 

@@ -51,7 +51,7 @@ namespace
         if (containsIgnoreCase(voice, "bear")) return { "Bear", PlayerType::AIRaider };
         if (containsIgnoreCase(voice, "scav")) return { "Scav", PlayerType::AIScav };
 
-        return { voice, PlayerType::AIBoss };
+        return { voice.empty() ? "Ai" : voice, PlayerType::AIScav };
     }
 
     std::string sideToString(EPlayerSide side)
@@ -154,8 +154,12 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
     if (isSavage && player.isAi)
     {
         uint64_t voicePointer = 0;
-        PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::Voice, voicePointer);
-        const AIRole role = getAiRole(PlayerMemoryAccess::readString(voicePointer));
+        std::string voice;
+
+        if (PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::Voice, voicePointer))
+            voice = PlayerMemoryAccess::readString(voicePointer);
+
+        const AIRole role = getAiRole(voice);
 		player.type = role.Type;
         player.name = role.Name.empty() ? "Ai" : role.Name;
         player.isBoss = role.Type == PlayerType::AIBoss;

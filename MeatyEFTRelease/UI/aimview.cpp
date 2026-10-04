@@ -931,7 +931,7 @@ void AimViewWidget::DrawLoot(ImDrawList* drawList) {
         if (!isCorpse && !espGlobals::drawLoot)
             continue;
 
-        const float distance = glm::distance(mainGame.localLocation, loot.worldLocation);
+        const float distance = glm::distance(registeredPlayers.getLocalStateSnapshot()->location, loot.worldLocation);
 
         const float maximumDistance = static_cast<float>(espGlobals::getLootDrawDistance(loot));
 
@@ -1070,7 +1070,7 @@ void AimViewWidget::DrawContainers(ImDrawList* drawList) {
             continue;
         }
 
-        const float distance = glm::distance(mainGame.localLocation, loot.worldLocation);
+        const float distance = glm::distance(registeredPlayers.getLocalStateSnapshot()->location, loot.worldLocation);
 
         if (distance <= 0.0f || distance > static_cast<float>(espGlobals::drawContainerDist)) {
             continue;

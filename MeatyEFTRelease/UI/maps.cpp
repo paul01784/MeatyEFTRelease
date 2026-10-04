@@ -3,6 +3,7 @@
 #include "globals.h"
 #include "maps.h"
 #include "../Tarkov/GameWorld/MainGame.h"
+#include "../Tarkov/GameWorld/RegisteredPlayers.h"
 
 
 // init values
@@ -678,7 +679,7 @@ void MapControl::RenderImage(ImTextureID imageTexture, glm::vec3 centerPoint, bo
         imagePos = { 0,0 };
 
         // Get local map position
-        glm::vec3 localpointMap = getMapPosition(mainGame.localLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
+        glm::vec3 localpointMap = getMapPosition(registeredPlayers.getLocalStateSnapshot()->location, currentMap::configX, currentMap::configY, currentMap::configScale);
 
         // Get window size
         const ImGuiViewport* viewport = ImGui::GetMainViewport();

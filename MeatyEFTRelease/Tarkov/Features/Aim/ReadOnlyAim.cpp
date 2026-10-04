@@ -52,10 +52,10 @@ AimReferencePoint ReadOnlyAim::resolveAimReference() const
     return {};
 }
 
-std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
 {
     if (!Utils::valid_pointer(entity.instance) ||
-        entity.instance == mainGame.localPlayerPtr ||
+        entity.instance == localState.instance ||
         entity.isLocal ||
         entity.isBTR ||
         entity.isInBTR ||
@@ -67,10 +67,10 @@ std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity,
         return std::nullopt;
     }
 
-    if (!mainGame.localGroupId.empty() && entity.groupId == mainGame.localGroupId)
+    if (!localState.groupId.empty() && entity.groupId == localState.groupId)
         return std::nullopt;
 
-    const glm::vec3 worldDelta = entity.location - mainGame.localLocation;
+    const glm::vec3 worldDelta = entity.location - localState.location;
 
     const float worldDistanceSq = glm::dot(worldDelta, worldDelta);
     const float maxDistanceSq = maxDistance * maxDistance;
@@ -184,7 +184,7 @@ bool ReadOnlyAim::getClosestBoneToAimReference(const Player& entity, const glm::
     return foundBone;
 }
 
-std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player>& snapshot, TargetMode mode, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player>& snapshot, TargetMode mode, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
 {
     std::optional<TargetResult> bestTarget;
 
@@ -194,6 +194,7 @@ std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player
             maxDistance,
             fovRadiusPx,
             aimRef,
+            localState,
             prediction,
             useClosestBoneToFireport);
         if (!candidate.has_value())
@@ -228,7 +229,7 @@ std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player
     return bestTarget;
 }
 
-std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vector<Player>& snapshot,uint64_t instance, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vector<Player>& snapshot,uint64_t instance, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
 {
     if (!instance)
         return std::nullopt;
@@ -241,6 +242,7 @@ std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vect
             maxDistance,
             fovRadiusPx,
             aimRef,
+            localState,
             prediction,
             useClosestBoneToFireport);
     }
@@ -303,6 +305,7 @@ void ReadOnlyAim::aimTask()
     const glm::vec2 aimRef = aimRefPoint.pos;
 
     const PlayerSnapshot snapshotHandle = registeredPlayers.getCacheSnapshot();
+    const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
     const PlayerCollection& snapshot = *snapshotHandle;
     if (snapshot.empty()) {
         clearTargetState(keyIsHeld);
@@ -336,7 +339,7 @@ void ReadOnlyAim::aimTask()
             prediction.enabled = true;
             prediction.sourcePosition = fireport.valid
                 ? fireport.worldOrigin
-                : mainGame.localLocation;
+                : localState->location;
             prediction.ballistics = localPlayer->observedHandsInfo.ballistics;
         }
     }
@@ -347,6 +350,7 @@ void ReadOnlyAim::aimTask()
         maxDistance,
         fovRadius,
         aimRef,
+        *localState,
         prediction,
         useClosestBoneToFireport);
 
@@ -376,6 +380,7 @@ void ReadOnlyAim::aimTask()
                     maxDistance,
                     fovRadius,
                     aimRef,
+                    *localState,
                     prediction,
                     useClosestBoneToFireport);
     }

@@ -102,7 +102,6 @@ void RegisteredPlayers::checkExfil()
 
         if (isProtectedGroupMember)
         {
-            cachedPlayer.isDead = false;
             cachedPlayer.hasExfiled = false;
             cachedPlayer.consecutiveRosterMisses = 0;
             cachedPlayer.rosterMissingSince = {};

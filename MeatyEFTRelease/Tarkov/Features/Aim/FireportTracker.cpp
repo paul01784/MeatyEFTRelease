@@ -213,7 +213,7 @@ bool FireportTracker::refreshMuzzleTransform(uint64_t localPlayer, uint64_t hand
     return muzzleTransform_ && muzzleTransform_->IsValid();
 }
 
-void FireportTracker::update(uint64_t localPlayer)
+void FireportTracker::update(uint64_t localPlayer, uint64_t handsController)
 {
     FireportPose pose{};
 
@@ -226,7 +226,7 @@ void FireportTracker::update(uint64_t localPlayer)
         return;
     }
 
-    const uint64_t handsCtrl = mainGame.localPlayerHands;
+    const uint64_t handsCtrl = handsController;
     if (!Utils::valid_pointer(handsCtrl)) {
         clearCachedMuzzle();
         cachedHandsController_ = 0;

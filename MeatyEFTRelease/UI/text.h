@@ -349,7 +349,7 @@ std::string FormatShortValue(int value)
 
 std::string GetRadarHeightIndicator(float worldHeight)
 {
-	const float heightDifference = worldHeight - mainGame.localLocation.y;
+	const float heightDifference = worldHeight - registeredPlayers.getLocalStateSnapshot()->location.y;
 
 	if (heightDifference > 8.0f)
 		return ICON_FK_ANGLE_DOUBLE_UP;
@@ -642,7 +642,7 @@ void DrawRadarPlayerLoadoutPanel(const PlayerCollection& players)
 
 		const int distance = selectedPlayer->distance > 0
 			? selectedPlayer->distance
-			: static_cast<int>(glm::distance(mainGame.localLocation, selectedPlayer->location));
+			: static_cast<int>(glm::distance(registeredPlayers.getLocalStateSnapshot()->location, selectedPlayer->location));
 		const std::string distanceText = std::to_string(distance) + " m";
 		const float distanceX =
 			ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(distanceText.c_str()).x;
@@ -668,7 +668,8 @@ void DrawRadarPlayerLoadoutPanel(const PlayerCollection& players)
 				playerMeta += "  |  LEVEL " + std::to_string(selectedPlayer->DT_lvl);
 			if (selectedPlayer->isFriend)
 				playerMeta += "  |  FRIEND";
-			else if (!mainGame.localGroupId.empty() && selectedPlayer->groupId == mainGame.localGroupId)
+			else if (const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
+				!localState->groupId.empty() && selectedPlayer->groupId == localState->groupId)
 				playerMeta += "  |  GROUP";
 			ImGui::TextColored(labelColour, "%s", playerMeta.c_str());
 
@@ -802,23 +803,24 @@ void DrawRadarPlayerMarkers(float x, float y, float zoomLevel, const Player& pla
 	std::string hString;
 	std::string hStringVal;
 
-	if (height > (mainGame.localLocation.y + 2.f)) // 2.f per level?!
+	const float localHeight = registeredPlayers.getLocalStateSnapshot()->location.y;
+	if (height > (localHeight + 2.f)) // 2.f per level?!
 	{
-		if (height > (mainGame.localLocation.y + 4.f))
+		if (height > (localHeight + 4.f))
 			hString = ICON_FK_ANGLE_DOUBLE_UP;
 		else
 			hString = ICON_FK_ANGLE_UP;
 	}
-	if (height < (mainGame.localLocation.y - 2.f))
+	if (height < (localHeight - 2.f))
 	{
-		if (height < (mainGame.localLocation.y - 4.f))
+		if (height < (localHeight - 4.f))
 			hString = ICON_FK_ANGLE_DOUBLE_DOWN;
 		else
 			hString = ICON_FK_ANGLE_DOWN;
 	}
-	if (height != mainGame.localLocation.y)
+	if (height != localHeight)
 	{
-		const int correctedNumber = static_cast<int>(height - mainGame.localLocation.y);
+		const int correctedNumber = static_cast<int>(height - localHeight);
 		hStringVal = std::to_string(correctedNumber);
 	}
 
@@ -1655,7 +1657,7 @@ void DrawRadarLootClusterPanel(
 	if (ImGui::Begin("##radar_loot_cluster_panel", nullptr, panelFlags))
 	{
 		ImGui::TextColored(accentColour, ICON_FA_CUBES_STACKED "  NEARBY LOOT");
-		const int distance = static_cast<int>(glm::distance(mainGame.localLocation, state.worldCenter));
+		const int distance = static_cast<int>(glm::distance(registeredPlayers.getLocalStateSnapshot()->location, state.worldCenter));
 		const std::string entryCountText =
 			std::to_string(state.entries.size()) + " | 2 m | " +
 			std::to_string(distance) + " m";
@@ -1944,7 +1946,7 @@ void drawGroupLine(glm::vec3 position, Player player)
 	std::string groupid = player.groupId;
 
 	//skip people that is same as localgroup ie. friendly people
-	if (groupid == mainGame.localGroupId)
+	if (groupid == registeredPlayers.getLocalStateSnapshot()->groupId)
 		return;
 
 	//filter out no groups here
@@ -1993,27 +1995,28 @@ void DrawQuest(float x, float y, float zoom, QuestLocation qloc)
 	//local height
 	float height = qloc.pos.y;
 
-	if (height > (mainGame.localLocation.y + 2.f)) // 2.f per level?!
+	const float localHeight = registeredPlayers.getLocalStateSnapshot()->location.y;
+	if (height > (localHeight + 2.f)) // 2.f per level?!
 	{
 
-		if (height > (mainGame.localLocation.y + 4.f))
+		if (height > (localHeight + 4.f))
 			hString = ICON_FK_ANGLE_DOUBLE_UP;
 		else
 			hString = ICON_FK_ANGLE_UP;
 
 	}
-	if (height < (mainGame.localLocation.y - 2.f))
+	if (height < (localHeight - 2.f))
 	{
 
-		if (height < (mainGame.localLocation.y - 4.f))
+		if (height < (localHeight - 4.f))
 			hString = ICON_FK_ANGLE_DOUBLE_DOWN;
 		else
 			hString = ICON_FK_ANGLE_DOWN;
 
 	}
-	if (height != mainGame.localLocation.y)
+	if (height != localHeight)
 	{
-		int correctedNumber = static_cast<int>(height - mainGame.localLocation.y);
+		int correctedNumber = static_cast<int>(height - localHeight);
 		hStringVal = std::to_string(correctedNumber); // height difference
 	}
 

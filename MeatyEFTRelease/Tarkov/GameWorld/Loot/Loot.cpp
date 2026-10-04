@@ -778,7 +778,7 @@ std::optional<glm::vec3> loot::focusClosestLootItem(const uint64_t instance, con
         if (item.pendingResolve || item.failed || !item.hasValidPosition)
             continue;
 
-        const glm::vec3 difference = item.worldLocation - mainGame.localLocation;
+        const glm::vec3 difference = item.worldLocation - registeredPlayers.getLocalStateSnapshot()->location;
         const float distanceSquared =
             difference.x * difference.x +
             difference.y * difference.y +
@@ -2209,7 +2209,7 @@ void loot::updateExistingLootItems(std::vector<LootEntity>& workingCache)
             item.distance = static_cast<int>(
                 std::trunc(
                     glm::distance(
-                        mainGame.localLocation,
+                        registeredPlayers.getLocalStateSnapshot()->location,
                         item.worldLocation
                     )
                 )
@@ -2571,7 +2571,7 @@ void loot::lootTask()
         if (!mem.IsDmaOperational())
             return;
 
-        if (!Utils::valid_pointer(mainGame.localPlayerPtr))
+        if (!Utils::valid_pointer(registeredPlayers.getLocalStateSnapshot()->instance))
             return;
 
         const bool filteredLootEnabled =

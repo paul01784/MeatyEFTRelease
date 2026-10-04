@@ -15,40 +15,6 @@
 #include <unordered_map>
 #include <vector>
 
-namespace MapNames
-{
-    inline const std::unordered_map<std::string_view, std::string_view> idToNameId =
-    {
-        { "55f2d3fd4bdc2d5f408b4567", "factory4_day" },
-        { "56f40101d2720b2a4d8b45d6", "bigmap" },
-        { "5704e3c2d2720bac5b8b4567", "Woods" },
-        { "5704e4dad2720bb55b8b4567", "Lighthouse" },
-        { "5704e554d2720bac5b8b456e", "Shoreline" },
-        { "5704e5fad2720bc05b8b4567", "RezervBase" },
-        { "5714dbc024597771384a510d", "Interchange" },
-        { "5714dc692459777137212e12", "TarkovStreets" },
-        { "59fc81d786f774390775787e", "factory4_night" },
-        { "5b0fc42d86f7744a585f9105", "laboratory" },
-        { "653e6760052c01c1c805532f", "Sandbox" },
-        { "65b8d6f5cdde2479cb2a3125", "Sandbox_high" },
-        { "65cc8f81a9aac3e77d0cfd3e", "Terminal" },
-        { "6733700029c367a3d40b02af", "Labyrinth" },
-        { "68236e8153654e8c1200798a", "Sandbox_start" },
-        { "69af492a4819ea4ba10a69c5", "Icebreaker" },
-        { "6a294a5b5eb5f9a1700417b7", "laboratory_dark" }
-    };
-
-    inline std::string_view GetNameFromId(std::string_view id)
-    {
-        const auto it = idToNameId.find(id);
-
-        if (it == idToNameId.end())
-            return "Unknown";
-
-        return it->second;
-    }
-}
-
 void DrawRadarMainText(int x, int y, ImVec4 color, const char* str)
 {
     const float fontSize = 36.0f;
@@ -99,6 +65,7 @@ void drawPlayers()
 {
     const PlayerSnapshot cacheSnapshot = registeredPlayers.getCacheSnapshot();
     const PlayerCollection& cache = *cacheSnapshot;
+    const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
 
     BeginRadarPlayerPanelFrame();
 
@@ -225,12 +192,12 @@ void drawPlayers()
                 int aimLineLen = 100;
                 if (player.isFriend)
                     aimLineLen = radarGlobals::friendAimLine;
-                else if (player.groupId != mainGame.localGroupId)
+                else if (player.groupId != localState->groupId)
                     aimLineLen = radarGlobals::enemyAimLine;
                 else
                     aimLineLen = radarGlobals::friendAimLine;
 
-                if (mainGame.localGroupId == "" && !player.isFriend)
+                if (localState->groupId.empty() && !player.isFriend)
                     aimLineLen = radarGlobals::enemyAimLine;
 
                 if (radarGlobals::drawAimLineTargets &&
@@ -265,10 +232,12 @@ void drawPlayers()
 
 void drawLocalPlayer()
 {
-    if (!Utils::valid_pointer(mainGame.localPlayerHands) ||
-        (mainGame.localLocation.x == 0.0f &&
-            mainGame.localLocation.y == 0.0f &&
-            mainGame.localLocation.z == 0.0f))
+    const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
+
+    if (!Utils::valid_pointer(localState->handsController) ||
+        (localState->location.x == 0.0f &&
+            localState->location.y == 0.0f &&
+            localState->location.z == 0.0f))
     {
         return;
     }
@@ -299,15 +268,15 @@ void drawLocalPlayer()
     }
 
     //localPlayer position on map
-    glm::vec3 position = mapControl.getMapPosition(mainGame.localLocation, currentMap::configX, currentMap::configY, currentMap::configScale);
+    glm::vec3 position = mapControl.getMapPosition(localState->location, currentMap::configX, currentMap::configY, currentMap::configScale);
 
 
 
-    drawAimLine(glm::vec2(position.x, position.y), mainGame.localRotation, radarGlobals::localAimLine, coloursGlobals::playerLocal,
+    drawAimLine(glm::vec2(position.x, position.y), localState->rotation, radarGlobals::localAimLine, coloursGlobals::playerLocal,
 		GetRadarPlayerMarkerRadius(PlayerMarkerType::Local)
     );
 
-	const float markerRotation = static_cast<float>((PI / 180.0) * mainGame.localRotation.x);
+	const float markerRotation = static_cast<float>((PI / 180.0) * localState->rotation.x);
 	DrawRadarPlayerMarkerShape(ImGui::GetWindowDrawList(), ImVec2(position.x, position.y), markerRotation,
 		PlayerMarkerType::Local, coloursGlobals::playerLocal, GetRadarMarkerScale());
 
@@ -334,6 +303,7 @@ void drawWidgetTopLoot()
     if ((radarGlobals::minimalView && appGlobals::runRadar.load()) || !appMenu::widgetTopLoot)
         return;
 
+    const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
     const std::string windowNameMain = "Top Loot";
     static ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoCollapse |
@@ -480,7 +450,7 @@ void drawWidgetTopLoot()
                             continue;
 
                         const glm::vec3 difference =
-                            item->worldLocation - mainGame.localLocation;
+                            item->worldLocation - localState->location;
 
                         const float distSq =
                             difference.x * difference.x +
@@ -834,8 +804,7 @@ void drawQuests()
 
     for (const auto& loc : locations)
     {
-        // Convert id to name
-        std::string mapName(MapNames::GetNameFromId(loc.mapNameId));
+        const std::string mapName = TrimEFT(loc.mapNameId);
 
         // Map filter
         if (!(Utils::Text::containsIgnoreCase(mapName, currentMapId) ||

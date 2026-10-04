@@ -1044,9 +1044,6 @@ std::string WatchListManager::ResolveProfileId(const Player& player)
     if (!player.profileId.empty())
         return player.profileId;
 
-    if (!player.DT_profileId.empty())
-        return player.DT_profileId;
-
     return {};
 }
 
@@ -1055,9 +1052,6 @@ std::string WatchListManager::ResolveAccountId(const Player& player)
     if (!player.accountId.empty())
         return player.accountId;
 
-    if (!player.DT_accountId.empty())
-        return player.DT_accountId;
-
     return {};
 }
 
@@ -1065,9 +1059,6 @@ std::string WatchListManager::ResolvePlayerName(const Player& player)
 {
     if (!player.name.empty())
         return player.name;
-
-    if (!player.DT_nickname.empty())
-        return player.DT_nickname;
 
     return "Unknown Player";
 }

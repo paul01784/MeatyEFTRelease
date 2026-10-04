@@ -68,7 +68,6 @@ protected:
     {
         player.equipInited = false;
         player.lastEquipmentUpdate = {};
-        player.lastHandsUpdate = {};
         player.playerBoneMatrixPtr = 0;
         player.bonePointersNeedResolve = true;
         player.invalidBones = false;

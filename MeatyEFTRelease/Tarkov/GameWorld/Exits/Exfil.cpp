@@ -5,6 +5,7 @@
 #include "../../../memory/Memory.h"
 #include "../../../memory/ScatterReadBatch.h"
 #include "../MainGame.h"
+#include "../RegisteredPlayers.h"
 #include "../../../Core/Utilities.h"
 #include "../../Unity/UnityContainers.h"
 #include "../../Unity/UnityOffsets.h"
@@ -46,7 +47,7 @@ void Exfil::exfilTask()
 			return;
 
 		//update exfil status on timer pass & local hands good
-		if (!Utils::valid_pointer(mainGame.localPlayerHands))
+		if (!Utils::valid_pointer(registeredPlayers.getLocalStateSnapshot()->handsController))
 			return;
 
 		auto now = std::chrono::steady_clock::now();
@@ -129,7 +130,7 @@ void Exfil::loadStaticTransits()
 		transit.locationWorld = definition.worldPosition;
 		transit.extractName = "Transit to " + std::string(definition.destinationName);
 		transit.status = "Transit";
-		transit.distance = getDistance(mainGame.localLocation, transit.locationWorld);
+		transit.distance = getDistance(registeredPlayers.getLocalStateSnapshot()->location, transit.locationWorld);
 		transit.type = ExfilType::Transit;
 		transit.transitId = definition.id;
 
@@ -211,7 +212,7 @@ void Exfil::tryLoadMemoryExfils()
 			}
 		};
 
-		const uint64_t exfilOffset = mainGame.localIsSavage
+		const uint64_t exfilOffset = registeredPlayers.getLocalStateSnapshot()->isSavage
 			? sdk::ExfiltrationController::ScavExfiltrationPoints
 			: sdk::ExfiltrationController::ExfiltrationPoints;
 		const uint64_t exfilArrayAddr = mem.Read<uint64_t>(exfilController + exfilOffset);
@@ -320,7 +321,7 @@ void Exfil::updateStatus()
 					exfilCache.status = statusText;
 			}
 
-			exfilCache.distance = getDistance(mainGame.localLocation, exfilCache.locationWorld);
+			exfilCache.distance = getDistance(registeredPlayers.getLocalStateSnapshot()->location, exfilCache.locationWorld);
 		}
 
 
@@ -337,18 +338,19 @@ std::string Exfil::getLocalEligibilityId() const
 {
 	try
 	{
-		if (!Utils::valid_pointer(mainGame.localplayerProfile))
+		const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
+		if (!Utils::valid_pointer(localState->profile))
 			return {};
 
 		uint64_t eligibilityIdPtr = 0;
 
-		if (mainGame.localIsSavage)
+		if (localState->isSavage)
 		{
-			eligibilityIdPtr = mem.Read<uint64_t>(mainGame.localplayerProfile + sdk::Profile::Id);
+			eligibilityIdPtr = mem.Read<uint64_t>(localState->profile + sdk::Profile::Id);
 		}
 		else
 		{
-			const uint64_t playerInfo = mem.Read<uint64_t>(mainGame.localplayerProfile + sdk::Profile::Info);
+			const uint64_t playerInfo = mem.Read<uint64_t>(localState->profile + sdk::Profile::Info);
 
 			if (!Utils::valid_pointer(playerInfo))
 				return {};
@@ -371,14 +373,15 @@ bool Exfil::isEligibleForLocalPlayer(const uint64_t exfilPointAddr, const std::s
 {
 	try
 	{
-		const uint64_t eligibleCollection = mem.Read<uint64_t>(exfilPointAddr + (mainGame.localIsSavage
+		const bool localIsSavage = registeredPlayers.getLocalStateSnapshot()->isSavage;
+		const uint64_t eligibleCollection = mem.Read<uint64_t>(exfilPointAddr + (localIsSavage
 			? sdk::ScavExfiltrationPoint::EligibleIds
 			: sdk::ExfiltrationPoint::EligibleEntryPoints));
 
 		if (!Utils::valid_pointer(eligibleCollection))
 			return false;
 
-		if (mainGame.localIsSavage)
+		if (localIsSavage)
 		{
 			const UnityList<uint64_t> eligibleIds = UnityList<uint64_t>::Create(eligibleCollection, DmaCacheMode::Cached, kMaxExfilRequirements);
 

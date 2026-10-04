@@ -434,28 +434,44 @@ bool MainGame::updatePlayerList()
     }
 
     std::unordered_set<uint64_t> uniquePlayers;
+    std::vector<uint64_t> validPlayers;
     uniquePlayers.reserve(tempBuffer.size());
+    validPlayers.reserve(tempBuffer.size());
 
     for (const uint64_t player : tempBuffer)
     {
-        if (!Utils::valid_pointer(player) || !uniquePlayers.insert(player).second)
+        if (Utils::valid_pointer(player) && uniquePlayers.insert(player).second)
+            validPlayers.push_back(player);
+    }
+
+    if (validPlayers.empty())
+        return false;
+
+    if (validPlayers.size() != tempBuffer.size())
+    {
+        static auto lastFilteredRosterLog = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+
+        if (lastFilteredRosterLog == std::chrono::steady_clock::time_point{} || now - lastFilteredRosterLog >= std::chrono::seconds(5))
         {
-            return false;
+            lastFilteredRosterLog = now;
+            LOGS.logWarn("[PLAYERS][LIST] Filtered " + std::to_string(tempBuffer.size() - validPlayers.size()) +
+                " invalid or duplicate roster entries");
         }
     }
 
     std::copy(
-        tempBuffer.begin(),
-        tempBuffer.end(),
+        validPlayers.begin(),
+        validPlayers.end(),
         std::begin(mainGame.player_buffer));
 
     // Clear old entries left after the new shorter list
-    for (int i = registeredPlayersCount; i < bufferCapacity; ++i)
+    for (std::size_t i = validPlayers.size(); i < static_cast<std::size_t>(bufferCapacity); ++i)
         mainGame.player_buffer[i] = 0;
 
     mainGame.registeredPlayers = registeredPlayers;
     mainGame.registeredPlayersList = registeredPlayersList;
-    mainGame.registeredPlayersCount = registeredPlayersCount;
+    mainGame.registeredPlayersCount = static_cast<int>(validPlayers.size());
 
     return true;
 }
@@ -704,6 +720,7 @@ void MainGame::mainThread(std::stop_token stopToken)
         TaskManager fastWorker;
         TaskManager liveWorker;
         TaskManager backgroundWorker;
+        TaskManager slowPlayerWorker;
 
         // Fast worker: latency-sensitive camera, aim, input and raid liveness.
         fastWorker.addTask(
@@ -766,9 +783,10 @@ void MainGame::mainThread(std::stop_token stopToken)
             []()
             {
                 const bool fireportNeeded = aimGlobals::aimEnabled || espGlobals::drawFireportLine;
+                const PlayerLocalStateSnapshot localState = ::registeredPlayers.getLocalStateSnapshot();
 
-                if (fireportNeeded && Utils::valid_pointer(mainGame.localPlayerPtr))
-                    g_fireport.update(mainGame.localPlayerPtr);
+                if (fireportNeeded && Utils::valid_pointer(localState->instance))
+                    g_fireport.update(localState->instance, localState->handsController);
                 else
                     g_fireport.clear();
             },
@@ -831,13 +849,13 @@ void MainGame::mainThread(std::stop_token stopToken)
             &globals::taskLoot,
             { TaskPriority::Background, DmaPriority::Background, true, 50.0 });
 
-        backgroundWorker.addTask(
+        slowPlayerWorker.addTask(
             "PlayerEquipmentTask",
             std::bind(&RegisteredPlayers::playerEquipment, &::registeredPlayers),
             &globals::taskPlayersEquipment,
             { TaskPriority::Background, DmaPriority::Background, true, 150.0 });
 
-        backgroundWorker.addTask(
+        slowPlayerWorker.addTask(
             "PlayerMetadataTask",
             std::bind(&RegisteredPlayers::playerMetadataTask, &::registeredPlayers),
             &globals::taskPlayerMetadata,
@@ -861,7 +879,7 @@ void MainGame::mainThread(std::stop_token stopToken)
             &globals::taskWishManager,
             { TaskPriority::Background, DmaPriority::Background, false, 450.0 });
 
-        LOGS.logInfo("[MAIN][MANAGER] Starting Fast, Live and Background workers");
+        LOGS.logInfo("[MAIN][MANAGER] Starting Fast, Live, Background and Slow Player workers");
         LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log Start");
         watchListManager.logRaidStart(this->selectedLocation.c_str());
 
@@ -886,6 +904,15 @@ void MainGame::mainThread(std::stop_token stopToken)
                 backgroundWorker.run(workerStop);
             });
 
+        std::jthread slowPlayerWorkerThread(
+            [&](std::stop_token workerStop)
+            {
+                SetThreadPriority(
+                    GetCurrentThread(),
+                    THREAD_PRIORITY_BELOW_NORMAL);
+                slowPlayerWorker.run(workerStop);
+            });
+
         LOGS.logNotice(NoticeColour::GREEN, "Raid started, loading radar");
 
         while (!stopToken.stop_requested() &&
@@ -901,10 +928,12 @@ void MainGame::mainThread(std::stop_token stopToken)
         fastWorkerThread.request_stop();
         liveWorkerThread.request_stop();
         backgroundWorkerThread.request_stop();
+        slowPlayerWorkerThread.request_stop();
 
         fastWorkerThread.join();
         liveWorkerThread.join();
         backgroundWorkerThread.join();
+        slowPlayerWorkerThread.join();
         cameraManagerTest.reset();
 
         exfil.clearCache();
@@ -912,7 +941,7 @@ void MainGame::mainThread(std::stop_token stopToken)
         wishListData.clear();
         explosiveManager.reset();
 
-        LOGS.logInfo("[MAIN][MANAGER] Fast, Live and Background workers stopped");
+        LOGS.logInfo("[MAIN][MANAGER] Fast, Live, Background and Slow Player workers stopped");
         watchListManager.logRaidEnd();
         LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log End");
 

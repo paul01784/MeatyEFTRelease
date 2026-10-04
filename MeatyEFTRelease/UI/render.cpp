@@ -522,6 +522,32 @@ void renderRadarPlayerCounts()
         }
     }
 }
+
+void renderRosterMismatchWarning()
+{
+    const PlayerRosterStatus status = registeredPlayers.getRosterStatus();
+    if (!status.possibleMissingEntities)
+        return;
+
+    ImFont* font = GetSelectedRadarFont();
+    if (font == nullptr)
+        font = ImGui::GetFont();
+
+    const std::string text = "POSSIBLE MISSING ENTITIES  Registered: " + std::to_string(status.registeredCount) +
+        " | Alive cache: " + std::to_string(status.aliveCachedCount);
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    constexpr float fontSize = 15.0f;
+    const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+    const ImVec2 boxSize(textSize.x + 24.0f, textSize.y + 14.0f);
+    const ImVec2 boxMin(viewport->WorkPos.x + (viewport->WorkSize.x - boxSize.x) * 0.5f, viewport->WorkPos.y + 8.0f);
+    const ImVec2 boxMax(boxMin.x + boxSize.x, boxMin.y + boxSize.y);
+    const ImVec2 textPosition(boxMin.x + 12.0f, boxMin.y + 7.0f);
+    ImDrawList* drawList = ImGui::GetForegroundDrawList(viewport);
+
+    drawList->AddRectFilled(boxMin, boxMax, IM_COL32(48, 32, 3, 238), 5.0f);
+    drawList->AddRect(boxMin, boxMax, IM_COL32(255, 184, 46, 255), 5.0f, 0, 2.0f);
+    drawList->AddText(font, fontSize, textPosition, IM_COL32(255, 220, 128, 255), text.c_str());
+}
 } // namespace
 
 // select what window to not close on run
@@ -1289,6 +1315,11 @@ static void renderMenuSettings()
                     ApplyRadarWindowSettings(static_cast<HWND>(viewport->PlatformHandleRaw));
                     configManager.SaveConfig();
                 }
+
+                saveIfChanged(menuLayout::ToggleRow("Use Meaty JSON mirror", "useMeatyJsonMirror", &globals::useMeatyJsonMirror));
+                ImGui::TextWrapped(
+                    "When disabled, item and task JSON is downloaded directly from Tarkov.dev. "
+                    "The selected source is used the next time the local JSON cache needs refreshing.");
             }
 
             if (menuLayout::Section("WebRadar"))
@@ -2736,9 +2767,11 @@ static void renderDebugWindow()
 
                     const bool dmaReady = mem.IsDmaOperational();
                     const bool worldReady = Utils::valid_pointer(mainGame.gameWorld) && Utils::valid_pointer(mainGame.localGameWorld);
-                    const bool localReady = Utils::valid_pointer(mainGame.localPlayerPtr);
+                    const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
+                    const bool localReady = Utils::valid_pointer(localState->instance);
                     const bool schedulerRunning = appGlobals::runThreads.load(std::memory_order_acquire);
                     const PlayerSnapshot playerSnapshot = registeredPlayers.getCacheSnapshot();
+                    const PlayerRosterStatus rosterStatus = registeredPlayers.getRosterStatus();
 
                     ImGui::SeparatorText("Health");
 
@@ -2763,8 +2796,8 @@ static void renderDebugWindow()
                                 connection.processId, static_cast<unsigned long long>(connection.targetBaseAddress),
                                 mainGame.selectedLocation.empty() ? "no map" : mainGame.selectedLocation.c_str());
 
-                    ImGui::Text("Registered: %d | Buffered: %d | Cached: %zu", mainGame.registeredPlayersCount,
-                                CountNonZeroEntries(mainGame.player_buffer, static_cast<int>(std::size(mainGame.player_buffer))), playerSnapshot->size());
+                    ImGui::Text("Registered: %zu | Alive cached: %zu | Cached: %zu", rosterStatus.registeredCount,
+                                rosterStatus.aliveCachedCount, playerSnapshot->size());
 
                     if (ImGui::CollapsingHeader("Preloaded module and Unity pointers"))
                     {
@@ -2861,19 +2894,20 @@ static void renderDebugWindow()
                 if (ImGui::BeginTabItem("Local"))
                 {
                     const PlayerSnapshot snapshot = registeredPlayers.getCacheSnapshot();
+                    const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
                     const Player* localPlayer = nullptr;
 
                     for (const Player& player : *snapshot)
                     {
-                        if (player.isLocal || (Utils::valid_pointer(mainGame.localPlayerPtr) && player.instance == mainGame.localPlayerPtr))
+                        if (player.isLocal || (Utils::valid_pointer(localState->instance) && player.instance == localState->instance))
                         {
                             localPlayer = &player;
                             break;
                         }
                     }
 
-                    const bool localPointerReady = Utils::valid_pointer(mainGame.localPlayerPtr);
-                    const bool handsReady = Utils::valid_pointer(mainGame.localPlayerHands);
+                    const bool localPointerReady = Utils::valid_pointer(localState->instance);
+                    const bool handsReady = Utils::valid_pointer(localState->handsController);
 
                     ImGui::SeparatorText("Status");
 
@@ -2885,7 +2919,7 @@ static void renderDebugWindow()
                                        handsReady ? "READY" : "WAITING");
 
                     ImGui::SameLine();
-                    ImGui::Text("| Scoped: %s", mainGame.localIsScoped ? "YES" : "NO");
+                    ImGui::Text("| Scoped: %s", localState->isScoped ? "YES" : "NO");
 
                     if (localPlayer)
                     {
@@ -2911,20 +2945,21 @@ static void renderDebugWindow()
 
                     if (ImGui::CollapsingHeader("MainGame local values", ImGuiTreeNodeFlags_DefaultOpen))
                     {
-                        ImGui::Text("Position: %.3f, %.3f, %.3f", mainGame.localLocation.x, mainGame.localLocation.y, mainGame.localLocation.z);
+                        const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
+                        ImGui::Text("Position: %.3f, %.3f, %.3f", localState->location.x, localState->location.y, localState->location.z);
 
-                        ImGui::Text("Rotation: %.3f, %.3f", mainGame.localRotation.x, mainGame.localRotation.y);
+                        ImGui::Text("Rotation: %.3f, %.3f", localState->rotation.x, localState->rotation.y);
 
-                        ImGui::Text("Group: %s | Savage: %s | Scoped: %s", mainGame.localGroupId.empty() ? "-" : mainGame.localGroupId.c_str(),
-                                    mainGame.localIsSavage ? "YES" : "NO", mainGame.localIsScoped ? "YES" : "NO");
+                        ImGui::Text("Group: %s | Savage: %s | Scoped: %s", localState->groupId.empty() ? "-" : localState->groupId.c_str(),
+                                    localState->isSavage ? "YES" : "NO", localState->isScoped ? "YES" : "NO");
                     }
 
                     if (ImGui::CollapsingHeader("Pointers"))
                     {
-                        DebugTextPtr("Local Player", mainGame.localPlayerPtr);
-                        DebugTextPtr("Local Hands", mainGame.localPlayerHands);
+                        DebugTextPtr("Local Player", localState->instance);
+                        DebugTextPtr("Local Hands", localState->handsController);
                         DebugTextPtr("Local PWA", mainGame.localPlayerPWA);
-                        DebugTextPtr("Local Profile", mainGame.localplayerProfile);
+                        DebugTextPtr("Local Profile", localState->profile);
 
                         if (localPlayer)
                         {
@@ -4230,7 +4265,8 @@ static void renderDebugWindow()
 
                 ImGui::TextUnformatted("Local Player World Position");
 
-                ImGui::Text("x: %.2f  y: %.2f  z: %.2f", mainGame.localLocation.x, mainGame.localLocation.y, mainGame.localLocation.z);
+                const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
+                ImGui::Text("x: %.2f  y: %.2f  z: %.2f", localState->location.x, localState->location.y, localState->location.z);
 
                 ImGui::Separator();
 
@@ -4707,6 +4743,7 @@ static void renderMainScreen()
 
         renderMenuIcons();
         renderBottomInfo();
+        renderRosterMismatchWarning();
         renderRadarNotice();
     }
     ImGui::End();

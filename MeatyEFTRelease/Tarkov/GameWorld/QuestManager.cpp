@@ -5,6 +5,7 @@
 #include "../SDK/EftOffsets.h"
 #include "../Unity/UnityContainers.h"
 #include "MainGame.h"
+#include "RegisteredPlayers.h"
 #include "../../Core/Utilities.h"
 #include "../../Web/TarkovDev/TarkovDevClient.h"
 
@@ -485,7 +486,7 @@ void QuestManager::initQuestManager()
 
     try
     {
-        const uint64_t localProfile = mainGame.localplayerProfile;
+        const uint64_t localProfile = registeredPlayers.getLocalStateSnapshot()->profile;
 
         if (!Utils::valid_pointer(localProfile))
         {
@@ -648,7 +649,7 @@ void QuestManager::initQuestManager()
         {
             std::lock_guard<std::mutex> lock(g_questCacheMutex);
 
-            if (mainGame.localplayerProfile == localProfile)
+            if (registeredPlayers.getLocalStateSnapshot()->profile == localProfile)
             {
                 questDataActive = std::move(newQuestDataActive);
                 masterItems = std::move(newMasterItems);
@@ -719,7 +720,7 @@ void QuestManager::updateAndPruneActiveQuests()
         if (activeSnapshot.empty())
             return;
 
-        const uint64_t localProfile = mainGame.localplayerProfile;
+        const uint64_t localProfile = registeredPlayers.getLocalStateSnapshot()->profile;
 
         if (!Utils::valid_pointer(localProfile))
             return;
@@ -876,10 +877,11 @@ void QuestManager::clearForRaidEnd()
 
 uint64_t QuestManager::findLiveQuestPtrById(const std::string& wantedQuestId)
 {
-    if (!Utils::valid_pointer(mainGame.localplayerProfile))
+    const uint64_t localProfile = registeredPlayers.getLocalStateSnapshot()->profile;
+    if (!Utils::valid_pointer(localProfile))
         return 0;
 
-    const uint64_t questData = mem.Read<uint64_t>(mainGame.localplayerProfile + sdk::Profile::QuestsData);
+    const uint64_t questData = mem.Read<uint64_t>(localProfile + sdk::Profile::QuestsData);
     if (!Utils::valid_pointer(questData))
         return 0;
 

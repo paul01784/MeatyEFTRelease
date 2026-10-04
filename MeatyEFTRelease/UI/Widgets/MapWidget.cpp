@@ -5,6 +5,7 @@
 #include "../globals.h"
 #include "../maps.h"
 #include "../../Tarkov/GameWorld/MainGame.h"
+#include "../../Tarkov/GameWorld/RegisteredPlayers.h"
 
 #include <chrono>
 
@@ -56,7 +57,7 @@ void renderMapDetails()
     float map_orgH = 0.0f;
     PDIRECT3DTEXTURE9 texture = NULL;
 
-    const float height = mainGame.localLocation.y;
+    const float height = registeredPlayers.getLocalStateSnapshot()->location.y;
 
     if (mainGame.selectedLocation.empty())
         return;

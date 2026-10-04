@@ -27,40 +27,6 @@
 #include "globals.h"
 #include "../Tarkov/GameWorld/Exits/Exfil.h"
 
-namespace MapNamesRender
-{
-    inline const std::unordered_map<std::string_view, std::string_view> idToNameId =
-    {
-        { "55f2d3fd4bdc2d5f408b4567", "factory4_day" },
-        { "56f40101d2720b2a4d8b45d6", "bigmap" },
-        { "5704e3c2d2720bac5b8b4567", "Woods" },
-        { "5704e4dad2720bb55b8b4567", "Lighthouse" },
-        { "5704e554d2720bac5b8b456e", "Shoreline" },
-        { "5704e5fad2720bc05b8b4567", "RezervBase" },
-        { "5714dbc024597771384a510d", "Interchange" },
-        { "5714dc692459777137212e12", "TarkovStreets" },
-        { "59fc81d786f774390775787e", "factory4_night" },
-        { "5b0fc42d86f7744a585f9105", "laboratory" },
-        { "653e6760052c01c1c805532f", "Sandbox" },
-        { "65b8d6f5cdde2479cb2a3125", "Sandbox_high" },
-        { "65cc8f81a9aac3e77d0cfd3e", "Terminal" },
-        { "6733700029c367a3d40b02af", "Labyrinth" },
-        { "68236e8153654e8c1200798a", "Sandbox_start" },
-        { "69af492a4819ea4ba10a69c5", "Icebreaker" },
-        { "6a294a5b5eb5f9a1700417b7", "laboratory_dark" }
-    };
-
-    inline std::string_view GetNameFromId(std::string_view id)
-    {
-        const auto it = idToNameId.find(id);
-
-        if (it == idToNameId.end())
-            return "Unknown";
-
-        return it->second;
-    }
-}
-
 namespace fuserRender
 {
     inline thread_local CameraManagerSnapshot g_frameManagedCameraSnapshot;
@@ -118,16 +84,7 @@ namespace fuserRender
         g_frameQuestSnapshot = GetQuestPublishedSnapshot();
         g_frameExfilSnapshot = exfil.getCacheExfilSnapshot();
         g_frameFireportSnapshot = g_fireport.getSnapshot();
-        g_frameLocalLocation = mainGame.localLocation;
-
-        for (const Player& player : *g_framePlayerSnapshot)
-        {
-            if (player.isLocal)
-            {
-                g_frameLocalLocation = player.location;
-                break;
-            }
-        }
+        g_frameLocalLocation = registeredPlayers.getLocalStateSnapshot()->location;
     }
 
     static inline void ReleaseFrameSnapshots()
@@ -695,6 +652,26 @@ namespace fuserRender
         }
     }
 
+    static inline void RenderRosterMismatchWarning()
+    {
+        const PlayerRosterStatus status = registeredPlayers.getRosterStatus();
+        if (!status.possibleMissingEntities)
+            return;
+
+        const std::string text = "POSSIBLE MISSING ENTITIES  Registered: " + std::to_string(status.registeredCount) +
+            " | Alive cache: " + std::to_string(status.aliveCachedCount);
+        constexpr float fontSize = 18.0f;
+        constexpr float boxHeight = 34.0f;
+        const float screenCenterX = ScreenWidth() * 0.5f;
+        const float boxWidth = (static_cast<float>(text.size()) * fontSize * 0.56f) + 28.0f;
+        const float boxX = screenCenterX - (boxWidth * 0.5f);
+        constexpr float boxY = 12.0f;
+
+        g_DxWindow.DrawFilledRect(boxX, boxY, boxWidth, boxHeight, glm::vec4(0.19f, 0.13f, 0.01f, 0.93f));
+        g_DxWindow.DrawRect(boxX, boxY, boxWidth, boxHeight, glm::vec4(1.0f, 0.72f, 0.18f, 1.0f), 2.0f);
+        g_DxWindow.DrawString(text, screenCenterX, boxY + 7.0f, fontSize, glm::vec4(1.0f, 0.86f, 0.50f, 1.0f), true, true);
+    }
+
     static inline void RenderCrosshair()
     {
         if (!FrameCameraValid())
@@ -819,8 +796,7 @@ namespace fuserRender
 
         for (const auto& loc : locations)
         {
-            // Convert id to name
-            std::string mapName(MapNamesRender::GetNameFromId(loc.mapNameId));
+            const std::string mapName = TrimEFT(loc.mapNameId);
 
             if (!(Utils::Text::containsIgnoreCase(mapName, currentMapId) ||
                 Utils::Text::containsIgnoreCase(currentMapId, mapName)))
@@ -1830,6 +1806,11 @@ namespace fuserRender
         SafeRenderStage("RenderLocalLookedAtAlert", []()
             {
                 RenderLocalLookedAtAlert();
+            });
+
+        SafeRenderStage("RenderRosterMismatchWarning", []()
+            {
+                RenderRosterMismatchWarning();
             });
     }
 

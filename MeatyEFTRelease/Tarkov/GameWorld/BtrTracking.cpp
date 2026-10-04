@@ -296,7 +296,6 @@ void RegisteredPlayers::updateBtrPassengerStates()
             player.playerBoneMatrixPtr = 0;
             player.bonePointersNeedResolve = true;
             player.invalidBones = true;
-            player.bonePtrRefreshTick = 0;
             std::fill(player.bonePtrs.begin(), player.bonePtrs.end(), 0ULL);
             std::fill(player.bonePositions.begin(), player.bonePositions.end(), glm::vec3(0.0f));
             player.boneTransformCache.clear();

@@ -380,7 +380,7 @@ void WebRadar::PublishFrame() {
         }
 
         const PlayerSnapshot players = registeredPlayers.getCacheSnapshot();
-        std::string localGroupId = mainGame.localGroupId;
+        std::string localGroupId = registeredPlayers.getLocalStateSnapshot()->groupId;
 
         if (localGroupId.empty()) {
             const auto local = std::find_if(players->begin(), players->end(), [](const Player& player) { return player.isLocal; });
@@ -394,12 +394,8 @@ void WebRadar::PublishFrame() {
             if (player.isLocal || friendly) {
                 if (!player.profileId.empty())
                     m_protectedProfileIds.insert(player.profileId);
-                if (!player.DT_profileId.empty())
-                    m_protectedProfileIds.insert(player.DT_profileId);
                 if (ShouldRenderCorpseOwnerLabel(player.name))
                     m_protectedNames.insert(NormalizeName(player.name));
-                if (ShouldRenderCorpseOwnerLabel(player.DT_nickname))
-                    m_protectedNames.insert(NormalizeName(player.DT_nickname));
                 if (player.P_CorpseClass != 0)
                     m_protectedCorpsePointers.insert(player.P_CorpseClass);
             }

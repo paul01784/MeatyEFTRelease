@@ -15,6 +15,7 @@ float globals::appWindowAlpha = 0.7f;
 float globals::appRadarMaxFPS = 60.f;
 bool globals::appMaximizeWindow = true;
 bool globals::appHideTitlebar = false;
+bool globals::useMeatyJsonMirror = true;
 std::string globals::dogTagAPIKey = "";
 
 std::string globals::radarSubText = "";

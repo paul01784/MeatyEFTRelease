@@ -1,6 +1,7 @@
 #include "TarkovDevClient.h"
 
 #include "../../Tarkov/QuestPlanner/TaskZonePatches.h"
+#include "../../UI/globals.h"
 
 #include "../UI/debug.h"
 
@@ -12,6 +13,7 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 
 #include <nlohmann/json.hpp>
@@ -40,10 +42,15 @@ const std::vector<long long> LevelXpThresholds = {
 };
 
 namespace {
-    constexpr const char* TASKS_URL = "https://json.tarkov.dev/pvp-season/tasks";
-    constexpr const char* ITEMS_URL = "https://json.tarkov.dev/pvp-season/items";
-    constexpr const char* TASKS_EN_URL = "https://json.tarkov.dev/pvp-season/tasks_en";
-    constexpr const char* ITEMS_EN_URL = "https://json.tarkov.dev/pvp-season/items_en";
+    constexpr const char* MEATY_TASKS_URL = "https://meaty-tarkov-json.meatyradar.co.uk/pvp-season/tasks";
+    constexpr const char* MEATY_ITEMS_URL = "https://meaty-tarkov-json.meatyradar.co.uk/pvp-season/items";
+    constexpr const char* MEATY_TASKS_EN_URL = "https://meaty-tarkov-json.meatyradar.co.uk/pvp-season/tasks_en";
+    constexpr const char* MEATY_ITEMS_EN_URL = "https://meaty-tarkov-json.meatyradar.co.uk/pvp-season/items_en";
+
+    constexpr const char* TARKOV_DEV_TASKS_URL = "https://json.tarkov.dev/pvp-season/tasks";
+    constexpr const char* TARKOV_DEV_ITEMS_URL = "https://json.tarkov.dev/pvp-season/items";
+    constexpr const char* TARKOV_DEV_TASKS_EN_URL = "https://json.tarkov.dev/pvp-season/tasks_en";
+    constexpr const char* TARKOV_DEV_ITEMS_EN_URL = "https://json.tarkov.dev/pvp-season/items_en";
 
     // Separate cache names prevent old regular-mode JSON from being reused after
     // switching this client to the PvP-season feeds.
@@ -150,44 +157,18 @@ namespace {
     }
 
     json* FindMutableCollection(json& root, bool tasks) {
-        if (root.is_array())
-            return &root;
-
-        const auto findInObject = [tasks](json& object) -> json* {
-                if (!object.is_object())
-                    return nullptr;
-
-                if (tasks) {
-                    const auto it = object.find("tasks");
-                    if (it != object.end() &&
-                        (it->is_array() || it->is_object())) {
-                        return &(*it);
-                    }
-                }
-                else {
-                    const auto itemsIt = object.find("items");
-                    if (itemsIt != object.end() &&
-                        (itemsIt->is_array() || itemsIt->is_object())) {
-                        return &(*itemsIt);
-                    }
-
-                    const auto oldItemsIt = object.find("itemsByType");
-                    if (oldItemsIt != object.end() &&
-                        (oldItemsIt->is_array() || oldItemsIt->is_object())) {
-                        return &(*oldItemsIt);
-                    }
-                }
-
-                return nullptr;
-            };
+        if (!root.is_object())
+            return nullptr;
 
         const auto dataIt = root.find("data");
-        if (dataIt != root.end()) {
-            if (json* collection = findInObject(*dataIt))
-                return collection;
-        }
+        if (dataIt == root.end() || !dataIt->is_object())
+            return nullptr;
 
-        return findInObject(root);
+        const auto collectionIt = dataIt->find(tasks ? "tasks" : "items");
+        if (collectionIt == dataIt->end() || !collectionIt->is_object())
+            return nullptr;
+
+        return &(*collectionIt);
     }
 
     struct TaskZonePatchStats {
@@ -291,27 +272,19 @@ namespace {
                 }
             };
 
-        if (taskCollection.is_array()) {
-            for (auto& task : taskCollection)
-                patchTask(task);
-        }
-        else if (taskCollection.is_object()) {
-            for (auto it = taskCollection.begin();
-                it != taskCollection.end();
-                ++it) {
-                patchTask(it.value());
-            }
+        if (!taskCollection.is_object())
+            return stats;
+
+        for (auto it = taskCollection.begin();
+            it != taskCollection.end();
+            ++it) {
+            patchTask(it.value());
         }
 
         return stats;
     }
 
     bool CopyCollectionToArray(const json& collection, json& destination) {
-        if (collection.is_array()) {
-            destination = collection;
-            return true;
-        }
-
         if (!collection.is_object())
             return false;
 
@@ -321,58 +294,94 @@ namespace {
             if (!it.value().is_object())
                 continue;
 
-            json entry = it.value();
-
-            if ((!entry.contains("id") || !entry["id"].is_string()) &&
-                !it.key().empty()) {
-                entry["id"] = it.key();
-            }
-
-            destination.emplace_back(std::move(entry));
+            destination.emplace_back(it.value());
         }
 
         return true;
     }
 
+    std::string ResolveMapNameId(std::string mapId) {
+        static constexpr std::pair<std::string_view, std::string_view> mapNameIds[] = {
+            { "55f2d3fd4bdc2d5f408b4567", "factory4_day" },
+            { "56f40101d2720b2a4d8b45d6", "bigmap" },
+            { "5704e3c2d2720bac5b8b4567", "Woods" },
+            { "5704e4dad2720bb55b8b4567", "Lighthouse" },
+            { "5704e554d2720bac5b8b456e", "Shoreline" },
+            { "5704e5fad2720bc05b8b4567", "RezervBase" },
+            { "5714dbc024597771384a510d", "Interchange" },
+            { "5714dc692459777137212e12", "TarkovStreets" },
+            { "59fc81d786f774390775787e", "factory4_night" },
+            { "5b0fc42d86f7744a585f9105", "laboratory" },
+            { "653e6760052c01c1c805532f", "Sandbox" },
+            { "65b8d6f5cdde2479cb2a3125", "Sandbox_high" },
+            { "65cc8f81a9aac3e77d0cfd3e", "Terminal" },
+            { "6733700029c367a3d40b02af", "Labyrinth" },
+            { "68236e8153654e8c1200798a", "Sandbox_start" },
+            { "69af492a4819ea4ba10a69c5", "Icebreaker" },
+            { "6a294a5b5eb5f9a1700417b7", "laboratory_dark" }
+        };
+
+        for (const auto& [id, nameId] : mapNameIds) {
+            if (mapId == id)
+                return std::string(nameId);
+        }
+
+        return mapId;
+    }
+
+    void NormalizeTaskMapReferences(json& taskCollection) {
+        if (!taskCollection.is_object())
+            return;
+
+        for (auto taskIt = taskCollection.begin(); taskIt != taskCollection.end(); ++taskIt) {
+            json& task = taskIt.value();
+            if (!task.is_object())
+                continue;
+
+            const auto objectivesIt = task.find("objectives");
+            if (objectivesIt == task.end() || !objectivesIt->is_array())
+                continue;
+
+            for (auto& objective : *objectivesIt) {
+                if (!objective.is_object())
+                    continue;
+
+                const auto mapsIt = objective.find("maps");
+                if (mapsIt != objective.end() && mapsIt->is_array()) {
+                    for (auto& map : *mapsIt) {
+                        if (map.is_string())
+                            map = ResolveMapNameId(map.get<std::string>());
+                    }
+                }
+
+                const auto zonesIt = objective.find("zones");
+                if (zonesIt == objective.end() || !zonesIt->is_array())
+                    continue;
+
+                for (auto& zone : *zonesIt) {
+                    if (!zone.is_object())
+                        continue;
+
+                    const auto mapIt = zone.find("map");
+                    if (mapIt != zone.end() && mapIt->is_string())
+                        *mapIt = ResolveMapNameId(mapIt->get<std::string>());
+                }
+            }
+        }
+    }
+
     void CaptureItemCategories(const json& root) {
         tarkovDevItemCategoriesById = json::object();
 
-        const json* payload = &root;
         const auto dataIt = root.find("data");
-        if (dataIt != root.end() && dataIt->is_object())
-            payload = &(*dataIt);
-
-        if (!payload->is_object())
+        if (dataIt == root.end() || !dataIt->is_object())
             return;
 
-        const auto categoriesIt = payload->find("itemCategories");
-        if (categoriesIt == payload->end())
+        const auto categoriesIt = dataIt->find("itemCategories");
+        if (categoriesIt == dataIt->end() || !categoriesIt->is_object())
             return;
 
-        if (categoriesIt->is_object()) {
-            for (auto it = categoriesIt->begin(); it != categoriesIt->end(); ++it) {
-                if (!it.value().is_object())
-                    continue;
-
-                json category = it.value();
-                if ((!category.contains("id") || !category["id"].is_string()) &&
-                    !it.key().empty()) {
-                    category["id"] = it.key();
-                }
-
-                tarkovDevItemCategoriesById[it.key()] = std::move(category);
-            }
-        }
-        else if (categoriesIt->is_array()) {
-            for (const auto& category : *categoriesIt) {
-                if (!category.is_object())
-                    continue;
-
-                const auto idIt = category.find("id");
-                if (idIt != category.end() && idIt->is_string())
-                    tarkovDevItemCategoriesById[idIt->get<std::string>()] = category;
-            }
-        }
+        tarkovDevItemCategoriesById = *categoriesIt;
     }
 
     void ApplyTranslationLookup(json& value, const json& translations, bool translateString = true) {
@@ -463,6 +472,7 @@ namespace {
 
         if (tasks) {
             localPatchStats = ApplyPlantingZonePatches(*collection);
+            NormalizeTaskMapReferences(*collection);
 
             if (patchStats)
                 *patchStats = localPatchStats;
@@ -524,42 +534,18 @@ namespace {
     }
 
     std::string ReadReferenceId(const json& value) {
-        if (value.is_string())
-            return value.get<std::string>();
-
-        if (!value.is_object())
-            return {};
-
-        std::string id = ReadString(value, "id");
-        if (id.empty())
-            id = ReadString(value, "nameId");
-
-        return id;
+        return value.is_string() ? value.get<std::string>() : std::string{};
     }
 
     std::string ReadCategoryName(const json& category) {
-        const json* resolved = &category;
-
-        if (category.is_string()) {
-            const std::string categoryId = category.get<std::string>();
-            const auto categoryIt = tarkovDevItemCategoriesById.find(categoryId);
-
-            if (categoryIt == tarkovDevItemCategoriesById.end() ||
-                !categoryIt->is_object()) {
-                return {};
-            }
-
-            resolved = &(*categoryIt);
-        }
-
-        if (!resolved->is_object())
+        if (!category.is_string())
             return {};
 
-        std::string name = ReadString(*resolved, "name");
-        if (name.empty())
-            name = ReadString(*resolved, "normalizedName");
+        const auto categoryIt = tarkovDevItemCategoriesById.find(category.get<std::string>());
+        if (categoryIt == tarkovDevItemCategoriesById.end() || !categoryIt->is_object())
+            return {};
 
-        return name;
+        return ReadString(*categoryIt, "name");
     }
 
     long ReadLong(const json& object, const char* key, long fallback = 0) {
@@ -594,33 +580,8 @@ namespace {
         }
     }
 
-    std::string ReadMapId(const json& map) {
-        std::string value = ReadString(map, "nameId");
-        if (value.empty())
-            value = ReadString(map, "id");
-        return value;
-    }
-
     long ReadMarketPrice(const json& item) {
-        long price = ReadLong(item, "avg24hPrice", 0);
-        if (price > 0)
-            return price;
-
-        const auto fleaIt = item.find("fleaMarket");
-        if (fleaIt != item.end() && fleaIt->is_object()) {
-            price = ReadLong(*fleaIt, "avg24hPrice", 0);
-            if (price > 0)
-                return price;
-        }
-
-        const auto fleaDataIt = item.find("fleaMarketData");
-        if (fleaDataIt != item.end() && fleaDataIt->is_object()) {
-            price = ReadLong(*fleaDataIt, "avg24hPrice", 0);
-            if (price > 0)
-                return price;
-        }
-
-        return 0;
+        return ReadLong(item, "avg24hPrice", 0);
     }
 
     long ReadBestTraderSellPrice(const json& item) {
@@ -633,17 +594,11 @@ namespace {
                 return;
 
             for (const auto& offer : *offersIt) {
-                long price = ReadLong(offer, "priceRUB", 0);
-
-                if (price <= 0 && ReadString(offer, "currency") == "RUB")
-                    price = ReadLong(offer, "price", 0);
-
-                bestPrice = std::max(bestPrice, price);
+                bestPrice = std::max(bestPrice, ReadLong(offer, "priceRUB", 0));
             }
         };
 
         readOffers("sellToTrader");
-        readOffers("sellFor");
         return bestPrice;
     }
 
@@ -846,6 +801,12 @@ std::optional<PlayerProfileStats> TarkovDevProfileClient::FetchProfile(long long
 }
 
 bool TarkovDev::Initialize(bool forceRefresh, bool pauseRefresh) {
+    LOGS.logInfo(
+        std::string("[TDEV][SOURCE] Using ") +
+        (globals::useMeatyJsonMirror
+            ? "Meaty JSON mirror"
+            : "Tarkov.dev direct"));
+
     const bool tasksOk = !loadDataset(Dataset::Tasks, forceRefresh, pauseRefresh).empty();
     if (tasksOk)
         buildTasksList();
@@ -870,7 +831,9 @@ std::string TarkovDev::loadJsonItems(bool forceRefresh) {
 std::string TarkovDev::loadTranslationDataset(Dataset dataset, bool forceRefresh, bool pauseRefresh) {
     const bool isTasks = dataset == Dataset::Tasks;
     const char* label = isTasks ? "TASKS_EN" : "ITEMS_EN";
-    const char* url = isTasks ? TASKS_EN_URL : ITEMS_EN_URL;
+    const char* url = globals::useMeatyJsonMirror
+        ? (isTasks ? MEATY_TASKS_EN_URL : MEATY_ITEMS_EN_URL)
+        : (isTasks ? TARKOV_DEV_TASKS_EN_URL : TARKOV_DEV_ITEMS_EN_URL);
     const std::filesystem::path cacheFile = isTasks ? TASKS_EN_CACHE_FILE : ITEMS_EN_CACHE_FILE;
 
     const auto tryCache = [&](bool requireFresh) -> std::string {
@@ -958,7 +921,9 @@ std::string TarkovDev::loadDataset(Dataset dataset, bool forceRefresh, bool paus
     json& destination = isTasks ? tarkovDevDataTasks : tarkovDevDataItems;
 
     const char* label = isTasks ? "TASKS" : "MARKET";
-    const char* url = isTasks ? TASKS_URL : ITEMS_URL;
+    const char* url = globals::useMeatyJsonMirror
+        ? (isTasks ? MEATY_TASKS_URL : MEATY_ITEMS_URL)
+        : (isTasks ? TARKOV_DEV_TASKS_URL : TARKOV_DEV_ITEMS_URL);
     const std::filesystem::path cacheFile = isTasks ? TASKS_CACHE_FILE : ITEMS_CACHE_FILE;
     const std::chrono::hours cacheMaxAge = isTasks ? TASKS_CACHE_MAX_AGE : ITEMS_CACHE_MAX_AGE;
 
@@ -1127,9 +1092,6 @@ void TarkovDev::buildTasksList() {
                 objective.type = ReadString(objectiveJson, "type");
                 objective.description = ReadString(objectiveJson, "description");
 
-                if (objective.type.empty())
-                    objective.type = ReadString(objectiveJson, "__typename");
-
                 objective.count = static_cast<int>(ReadLong(objectiveJson, "count", 1));
                 objective.optional = objectiveJson.value("optional", false);
                 objective.foundInRaid = objectiveJson.value("foundInRaid", false);
@@ -1165,9 +1127,9 @@ void TarkovDev::buildTasksList() {
                     objective.maps.reserve(mapsIt->size());
 
                     for (const auto& mapJson : *mapsIt) {
-                        const std::string mapId = ReadReferenceId(mapJson);
-                        if (!mapId.empty())
-                            objective.maps.emplace_back(mapId);
+                        std::string mapNameId = ReadReferenceId(mapJson);
+                        if (!mapNameId.empty())
+                            objective.maps.emplace_back(std::move(mapNameId));
                     }
                 }
 
@@ -1257,19 +1219,6 @@ void TarkovDev::buildItemList() {
                         categoryName) == item.bsgCategory.end()) {
                     item.bsgCategory.emplace_back(std::move(categoryName));
                 }
-            }
-        }
-
-        const auto categoryIt = itemJson.find("category");
-        if (categoryIt != itemJson.end()) {
-            std::string categoryName = ReadCategoryName(*categoryIt);
-
-            if (!categoryName.empty() &&
-                std::find(
-                    item.bsgCategory.begin(),
-                    item.bsgCategory.end(),
-                    categoryName) == item.bsgCategory.end()) {
-                item.bsgCategory.emplace_back(std::move(categoryName));
             }
         }
 

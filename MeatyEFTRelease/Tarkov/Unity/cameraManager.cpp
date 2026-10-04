@@ -1322,22 +1322,26 @@ bool CameraManager::readCameraSample(std::uint64_t nativeCamera, std::uint64_t m
         return false;
 
     glm::mat4 matrix{};
-    Memory::ScatterReadRequest request{
-        matrixAddress, &matrix, sizeof(matrix)
+    glm::mat4 view{};
+    Memory::ScatterReadRequest requests[] =
+    {
+        { matrixAddress, &matrix, sizeof(matrix) },
+        { nativeCamera + UnityOffsets::Camera_WorldToCameraMatrixOffset, &view, sizeof(view) }
     };
-    DWORD bytesRead[1]{};
-    const auto result = mem.TryReadScatter(&request, 1, DmaCacheMode::Uncached, "Camera matrix", bytesRead);
+    DWORD bytesRead[std::size(requests)]{};
+    const auto result = mem.TryReadScatter(requests, std::size(requests), DmaCacheMode::Uncached, "Camera matrices", bytesRead);
     if (result == Memory::TryScatterReadResult::Busy)
     {
         if (busy)
             *busy = true;
         return false;
     }
-    if (result != Memory::TryScatterReadResult::Success || bytesRead[0] != sizeof(matrix) || !viewProjectionLooksValid(matrix))
+    if (result != Memory::TryScatterReadResult::Success ||
+        bytesRead[0] != sizeof(matrix) ||
+        !viewProjectionLooksValid(matrix))
         return false;
 
-    glm::mat4 view{};
-    if (readUncached(nativeCamera + UnityOffsets::Camera_WorldToCameraMatrixOffset, view) && matrixLooksValid(view))
+    if (bytesRead[1] == sizeof(view) && matrixLooksValid(view))
     {
         if (!viewProjectionMatchesView(matrix, view))
             return false;

@@ -4,12 +4,10 @@
 #include "PlayerClassifier.h"
 #include "PlayerPosition.h"
 
-#include "../../../Web/MeatyAPI/DogTagAPI.h"
 #include "../../../UI/debug.h"
 #include "../../../UI/globals.h"
 #include "../../../memory/Memory.h"
 #include "../../../memory/ScatterReadBatch.h"
-#include "DogTagCache.h"
 #include "../MainGame.h"
 #include "../../Unity/UnityContainers.h"
 #include "../../Unity/UnityOffsets.h"
@@ -167,74 +165,6 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool forceResolve)
 
     return hasAnyBonePointer;
 }
-
-void RegisteredPlayers::readDogTagComponent(Player& player, bool force)
-{
-    if (!player.equipInited)
-        return;
-
-    if (player._slots.empty())
-        return;
-
-    if (!player.isPlayer)
-        return;
-
-    if (player.hasProfileData)
-        return;
-
-    for (auto& slot : player._slots)
-    {
-        std::string slotName = TrimEFT(slot.name);
-
-        if (slotName != "Dogtag")
-            continue;
-
-        uint64_t dogtagItem = mem.Read<uint64_t>(slot.addr + sdk::Slot::ContainedItem);
-        if (!Utils::valid_pointer(dogtagItem))
-        {
-            //std::cout << "[DogTag] Fail: invalid dogtag item ptr\n";
-            break;
-        }
-
-        uint64_t dogtagComp = mem.Read<uint64_t>(dogtagItem + sdk::BarterOtherOffsets::Dogtag);
-        if (!Utils::valid_pointer(dogtagComp))
-        {
-            //std::cout << "[DogTag] Fail: invalid dogtag component ptr\n";
-            break;
-        }
-
-        //std::cout << "[DogTag] Read Data:\n";
-        //std::cout << "  Nickname: " << player.DT_nickname << "\n";
-        //std::cout << "  ProfileID: " << player.DT_profileId << "\n";
-        //std::cout << "  AccountID: " << player.DT_accountId << "\n";
-        //std::cout << "  Level: " << player.DT_lvl << "\n";
-        //std::cout << "  Side: " << player.DT_Side << "\n";
-
-        if (!player.DT_nickname.empty() ||
-            player.DT_lvl > 0 ||
-            player.DT_Side > 0 ||
-            !player.DT_profileId.empty())
-        {
-            player.hasProfileData = true;
-
-            std::cout << "[DogTag] SUCCESS: valid dogtag data\n";
-
-            if (!player.DT_nickname.empty())
-            {
-                player.name = player.DT_nickname;
-                std::cout << "[DogTag] Name updated from dogtag\n";
-            }
-        }
-        else
-        {
-            std::cout << "[DogTag] Fail: all fields empty/invalid\n";
-        }
-
-        break;
-    }
-}
-
-
 
 namespace
 {

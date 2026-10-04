@@ -52,6 +52,7 @@ public:
 private:
     std::optional<TargetResult> buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx,
                                                   const glm::vec2& aimRef,
+                                                  const PlayerLocalState& localState,
                                                   const AimPredictionContext& prediction,
                                                   bool useClosestBoneToFireport) const;
 
@@ -62,12 +63,14 @@ private:
 
     std::optional<TargetResult> findBestTarget(const std::vector<Player>& snapshot, TargetMode mode,
                                                float maxDistance, float fovRadiusPx, const glm::vec2& aimRef,
+                                               const PlayerLocalState& localState,
                                                const AimPredictionContext& prediction,
                                                bool useClosestBoneToFireport) const;
 
     std::optional<TargetResult> refreshTargetByInstance(const std::vector<Player>& snapshot, uint64_t instance,
                                                         float maxDistance, float fovRadiusPx,
                                                         const glm::vec2& aimRef,
+                                                        const PlayerLocalState& localState,
                                                         const AimPredictionContext& prediction,
                                                         bool useClosestBoneToFireport) const;
 
