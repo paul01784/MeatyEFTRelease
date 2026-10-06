@@ -1,4 +1,5 @@
 #include "Exfil.h"
+#include "ExfilNames.h"
 
 #include "../../../UI/debug.h"
 #include "../../../UI/globals.h"
@@ -158,6 +159,17 @@ void Exfil::tryLoadMemoryExfils()
 			if (!Utils::valid_pointer(exfilPointAddr))
 				return;
 
+			const bool alreadyKnown = std::any_of(
+				exfilList.begin(),
+				exfilList.end(),
+				[exfilPointAddr](const exfilsMemory& existing)
+				{
+					return existing.instance == exfilPointAddr;
+				});
+
+			if (alreadyKnown)
+				return;
+
 			try
 			{
 				if (type == ExfilType::Regular && (localEligibilityId.empty() || !isEligibleForLocalPlayer(exfilPointAddr, localEligibilityId)))
@@ -173,25 +185,16 @@ void Exfil::tryLoadMemoryExfils()
 				if (!Utils::valid_pointer(namePtr))
 					return;
 
-				const std::string exfilName = TrimEFT(mem.readUnityString(namePtr, 256));
+				const std::string memoryExfilName = TrimEFT(mem.readUnityString(namePtr, 256));
 
-				if (exfilName.empty())
+				if (memoryExfilName.empty())
 					return;
+
+				const std::string_view displayExfilName = ExfilNames::ToDisplayName(memoryExfilName);
 
 				const uint64_t transformInternal = mem.ReadChain(exfilPointAddr, TransformChain);
 
 				if (!Utils::valid_pointer(transformInternal))
-					return;
-
-				const bool alreadyKnown = std::any_of(
-					exfilList.begin(),
-					exfilList.end(),
-					[exfilPointAddr](const exfilsMemory& existing)
-					{
-						return existing.instance == exfilPointAddr;
-					});
-
-				if (alreadyKnown)
 					return;
 
 				UnityTransform transform(transformInternal);
@@ -200,8 +203,8 @@ void Exfil::tryLoadMemoryExfils()
 				exfilNew.instance = exfilPointAddr;
 				exfilNew.locationWorld = transform.UpdatePosition();
 				exfilNew.extractName = type == ExfilType::Secret
-					? "Secret: " + exfilName
-					: exfilName;
+					? "Secret: " + std::string(displayExfilName)
+					: std::string(displayExfilName);
 				exfilNew.type = type;
 
 				exfilList.emplace_back(std::move(exfilNew));

@@ -548,6 +548,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="Tarkov\Unity\CameraTypes.h" />
     <ClInclude Include="Tarkov\GameWorld\Player\DogTagCache.h" />
     <ClInclude Include="Tarkov\GameWorld\Exits\Exfil.h" />
+    <ClInclude Include="Tarkov\GameWorld\Exits\ExfilNames.h" />
     <ClInclude Include="Tarkov\GameWorld\Explosives\ExplosiveManager.h" />
     <ClInclude Include="Tarkov\GameWorld\Exits\TransitLocations.h" />
     <ClInclude Include="Tarkov\GameWorld\Loot\Loot.h" />

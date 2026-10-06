@@ -113,8 +113,8 @@ namespace sdk
         inline constexpr std::uint64_t Profile = 0x9C0; // <Profile>k__BackingField: EFT.Profile
         inline constexpr std::uint64_t _inventoryController = 0xA38; // _inventoryController: PlayerInventoryController
         inline constexpr std::uint64_t _handsController = 0xA40; // _handsController: AbstractHandsController
-        inline constexpr std::uint64_t _playerLookRaycastTransform = 0xAD8; // _playerLookRaycastTransform: UnityEngine.Transform
-        inline constexpr std::uint64_t PlayerBones = 0xB40; // <PlayerBones>k__BackingField: PlayerBones
+        inline constexpr std::uint64_t _playerLookRaycastTransform = 0xAE0; // _playerLookRaycastTransform: UnityEngine.Transform
+        inline constexpr std::uint64_t PlayerBones = 0xB48; // <PlayerBones>k__BackingField: PlayerBones
     }
 
     // SimpleCharacterController
@@ -312,8 +312,8 @@ namespace sdk
     // EFT.ProfileInfo
     namespace PlayerInfo
     {
-        inline constexpr std::uint64_t EntryPoint = 0x28; // EntryPoint: string
-        inline constexpr std::uint64_t Side = 0x48; // <Side>k__BackingField: EFT.EPlayerSide
+        inline constexpr std::uint64_t EntryPoint = 0x30; // EntryPoint: string
+        inline constexpr std::uint64_t Side = 0x50; // <Side>k__BackingField: EFT.EPlayerSide
     }
 
     // EFT.MovementContext
@@ -325,9 +325,9 @@ namespace sdk
     // EFT.Animations.ProceduralWeaponAnimation
     namespace ProceduralWeaponAnimation
     {
-        inline constexpr std::uint64_t HandsContainer = 0x38; // HandsContainer: EFT.Animations.PlayerSpring
-        inline constexpr std::uint64_t _isAiming = 0x16D; // _isAiming: bool
-        inline constexpr std::uint64_t _optics = 0x1C8; // _optics: genericinst
+        inline constexpr std::uint64_t HandsContainer = 0x40; // HandsContainer: EFT.Animations.PlayerSpring
+        inline constexpr std::uint64_t _isAiming = 0x175; // _isAiming: bool
+        inline constexpr std::uint64_t _optics = 0x1D0; // _optics: genericinst
     }
 
     // SightNBone
@@ -363,8 +363,8 @@ namespace sdk
     // EFT.CameraControl.OpticCameraManager
     namespace OpticCameraManager
     {
-        inline constexpr std::uint64_t Camera = 0x70; // <Camera>k__BackingField: UnityEngine.Camera
-        inline constexpr std::uint64_t CurrentOpticSight = 0x78; // <CurrentOpticSight>k__BackingField: EFT.CameraControl.OpticSight
+        inline constexpr std::uint64_t Camera = 0x68; // <Camera>k__BackingField: UnityEngine.Camera
+        inline constexpr std::uint64_t CurrentOpticSight = 0x70; // <CurrentOpticSight>k__BackingField: EFT.CameraControl.OpticSight
     }
 
     // EFT.CameraControl.OpticSight
