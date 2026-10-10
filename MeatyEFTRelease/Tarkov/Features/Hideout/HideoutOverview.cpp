@@ -604,3 +604,4 @@ void HideoutOverview::RunScan(std::uint64_t request, std::uint64_t context)
     result.message = result.zones.empty() ? "HideoutController was found, but no valid zones were read." : "Hideout scan complete.";
     Publish(std::move(result), request);
 }
+

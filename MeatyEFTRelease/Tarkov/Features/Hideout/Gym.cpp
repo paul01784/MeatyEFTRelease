@@ -30,7 +30,6 @@ namespace
     constexpr auto kTransformResolveInterval = std::chrono::milliseconds(100);
     constexpr std::int32_t kDirectQteChunkObjects = 24;
     constexpr std::int32_t kMaxTransformIndex = 1'000'000;
-    constexpr std::uint64_t kIl2CppClassStaticFields = 0xB8;
 
 #pragma pack(push, 8)
     // Keep the EFT/Unity active-object list layout that was working before
@@ -66,35 +65,6 @@ namespace
     static_assert(offsetof(GymComponentEntry, component) == 0x8);
     static_assert(sizeof(GymComponentEntry) == 0x10);
 
-#pragma pack(push, 1)
-    struct GymCirclePrimaryFields
-    {
-        float speed{};
-        GymVec2 successRange{};
-        float minScale{};
-        std::int32_t targetInput{};
-        std::uint32_t padding{};
-        std::uint64_t dynamicImage{};
-        std::uint64_t dynamicInnerBorder{};
-        std::uint64_t dynamicOuterBorder{};
-    };
-
-    struct GymCircleResultFields
-    {
-        double successStartScale{};
-        double successEndScale{};
-        bool isSuccess{};
-        std::uint8_t padding[7]{};
-    };
-#pragma pack(pop)
-
-    static_assert(offsetof(GymCirclePrimaryFields, successRange) == sdk::ShrinkingCircleQTE::SuccessRange - sdk::ShrinkingCircleQTE::Speed);
-    static_assert(offsetof(GymCirclePrimaryFields, minScale) == sdk::ShrinkingCircleQTE::MinScale - sdk::ShrinkingCircleQTE::Speed);
-    static_assert(offsetof(GymCirclePrimaryFields, targetInput) == sdk::ShrinkingCircleQTE::TargetInput - sdk::ShrinkingCircleQTE::Speed);
-    static_assert(offsetof(GymCirclePrimaryFields, dynamicImage) == sdk::ShrinkingCircleQTE::DynamicCircleImage - sdk::ShrinkingCircleQTE::Speed);
-    static_assert(offsetof(GymCirclePrimaryFields, dynamicInnerBorder) == sdk::ShrinkingCircleQTE::DynamicCircleInnerBorder - sdk::ShrinkingCircleQTE::Speed);
-    static_assert(offsetof(GymCircleResultFields, successEndScale) == sdk::ShrinkingCircleQTE::SuccessEndScale - sdk::ShrinkingCircleQTE::SuccessStartScale);
-    static_assert(offsetof(GymCircleResultFields, isSuccess) == sdk::ShrinkingCircleQTE::IsSuccess - sdk::ShrinkingCircleQTE::SuccessStartScale);
 }
 
 Gym::~Gym()
@@ -370,22 +340,36 @@ bool Gym::Update()
     if (!state.shrinkingCircleValid)
         return finish(false);
 
-    GymCirclePrimaryFields primary{};
-    GymCircleResultFields result{};
+    float speed = 0.0f;
+    GymVec2 successRange{};
+    float minScale = 0.0f;
+    std::int32_t targetInput = 0;
+    std::uint64_t dynamicImage = 0;
+    std::uint64_t dynamicInnerBorder = 0;
+    double successStartScale = 0.0;
+    double successEndScale = 0.0;
+    bool isSuccess = false;
     ScatterReadBatch circleRead(mem, kGymReadMode, "Gym live circle");
-    const bool queuedPrimary = circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::Speed, primary);
-    const bool queuedResult = circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::SuccessStartScale, result);
-    if (queuedPrimary && queuedResult && circleRead.Execute())
+    bool queued = circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::Speed, speed);
+    queued &= circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::SuccessRange, successRange);
+    queued &= circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::MinScale, minScale);
+    queued &= circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::TargetInput, targetInput);
+    queued &= circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::DynamicCircleImage, dynamicImage);
+    queued &= circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::DynamicCircleInnerBorder, dynamicInnerBorder);
+    queued &= circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::SuccessStartScale, successStartScale);
+    queued &= circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::SuccessEndScale, successEndScale);
+    queued &= circleRead.Add(shrinkingCircle + sdk::ShrinkingCircleQTE::IsSuccess, isSuccess);
+    if (queued && circleRead.Execute())
     {
-        state.speed = primary.speed;
-        state.successRange = primary.successRange;
-        state.minScale = primary.minScale;
-        state.targetInput = primary.targetInput;
-        state.dynamicCircleImage = primary.dynamicImage;
-        state.dynamicCircleInnerBorder = primary.dynamicInnerBorder;
-        state.successStartScale = result.successStartScale;
-        state.successEndScale = result.successEndScale;
-        state.isSuccess = result.isSuccess;
+        state.speed = speed;
+        state.successRange = successRange;
+        state.minScale = minScale;
+        state.targetInput = targetInput;
+        state.dynamicCircleImage = dynamicImage;
+        state.dynamicCircleInnerBorder = dynamicInnerBorder;
+        state.successStartScale = successStartScale;
+        state.successEndScale = successEndScale;
+        state.isSuccess = isSuccess;
     }
 
     (void)ResolveCircleTransform(shrinkingCircle, state.dynamicCircleInnerBorder, state.dynamicCircleImage, state);
@@ -752,7 +736,7 @@ std::uint64_t Gym::ResolveTypeInfoTable() const
         return 0;
 
     std::uint64_t typeInfoTable = 0;
-    (void)mem.TryRead(gameAssembly + UnityOffsets::GameWorld, typeInfoTable, kGymReadMode);
+    (void)mem.TryRead(gameAssembly + sdk::Runtime::TypeInfoTableRva, typeInfoTable, kGymReadMode);
 
     if (!Utils::valid_pointer(typeInfoTable))
         return 0;
@@ -760,12 +744,12 @@ std::uint64_t Gym::ResolveTypeInfoTable() const
     return typeInfoTable;
 }
 
-std::uint64_t Gym::ResolveClass(std::uint64_t typeInfoTable, std::int32_t typeIndex) const
+std::uint64_t Gym::ResolveClass(std::uint64_t typeInfoTable, std::uint64_t typeIndex) const
 {
-    if (!Utils::valid_pointer(typeInfoTable) || typeIndex < 0)
+    if (!Utils::valid_pointer(typeInfoTable))
         return 0;
 
-    const std::uint64_t entryAddress = typeInfoTable + (static_cast<std::uint64_t>(typeIndex) * sizeof(std::uint64_t));
+    const std::uint64_t entryAddress = typeInfoTable + typeIndex * sizeof(std::uint64_t);
     std::uint64_t klass = 0;
     (void)mem.TryRead(entryAddress, klass, kGymReadMode);
 
@@ -784,7 +768,7 @@ std::uint64_t Gym::ResolveOverlayStaticFields(std::uint64_t overlayClass, std::u
         return 0;
 
     std::uint64_t fallbackStaticFields = 0;
-    (void)mem.TryRead(overlayClass + kIl2CppClassStaticFields, fallbackStaticFields, kGymReadMode);
+    (void)mem.TryRead(overlayClass + sdk::Runtime::Il2CppClassStaticFields, fallbackStaticFields, kGymReadMode);
 
     if (Utils::valid_pointer(fallbackStaticFields))
     {
@@ -792,7 +776,7 @@ std::uint64_t Gym::ResolveOverlayStaticFields(std::uint64_t overlayClass, std::u
         (void)mem.TryRead(fallbackStaticFields + sdk::HideoutAreaQTEOverlay::QteController, controller, kGymReadMode);
         if (IsObjectOfClass(controller, qteControllerClass))
         {
-            resolvedOffset = kIl2CppClassStaticFields;
+            resolvedOffset = sdk::Runtime::Il2CppClassStaticFields;
             return fallbackStaticFields;
         }
     }
@@ -802,7 +786,7 @@ std::uint64_t Gym::ResolveOverlayStaticFields(std::uint64_t overlayClass, std::u
 
     for (std::uint64_t offset = 0x80; offset <= 0xE0; offset += 0x08)
     {
-        if (offset == kIl2CppClassStaticFields)
+        if (offset == sdk::Runtime::Il2CppClassStaticFields)
             continue;
 
         std::uint64_t staticFields = 0;
@@ -823,7 +807,7 @@ std::uint64_t Gym::ResolveOverlayStaticFields(std::uint64_t overlayClass, std::u
 
     if (Utils::valid_pointer(fallbackStaticFields))
     {
-        resolvedOffset = kIl2CppClassStaticFields;
+        resolvedOffset = sdk::Runtime::Il2CppClassStaticFields;
         return fallbackStaticFields;
     }
 
@@ -1164,3 +1148,4 @@ void Gym::DumpState() const
         << (state.shrinkingCircleValid ? "true" : "false") << '\n'
         << "=============================\n";
 }
+

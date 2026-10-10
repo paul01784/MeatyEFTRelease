@@ -6,6 +6,8 @@
 #include "Tarkov/GameWorld/MainGame.h"
 #include "Web/MeatyAPI/DogTagAPI.h"
 #include "memory/Memory.h"
+#include "Core/Offsets/EftOffsetService.h"
+#include "Core/Offsets/UnityOffsetService.h"
 
 #include "UI/SplashWindow.h"
 #include "UI/resource.h"
@@ -186,6 +188,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                     LOGS.logWarn("[MAIN][CONFIG] Failed to load lootFilters.json");
                 }
 
+                splash.SetStatus(L"Loading EFT offsets...");
+                EftOffsetService::Instance().Load();
+                UnityOffsetService::Instance().Load();
+
                 splash.SetStatus(L"Configuring services...");
 
                 g_DogTagAPI.setApiKey(globals::dogTagAPIKey);
@@ -333,3 +339,4 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
     return 0;
 }
+

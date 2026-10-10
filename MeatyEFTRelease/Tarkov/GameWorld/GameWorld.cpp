@@ -39,7 +39,6 @@ constexpr std::uint64_t kGomLastActiveNode = 0x20;
 constexpr std::uint64_t kGomActiveNodes = 0x28;
 
 constexpr std::uint64_t kGameWorldSingletonClassBss = 0x5D71168;
-constexpr std::uint64_t kIl2CppClassStaticFields = 0xB8;
 constexpr std::uint64_t kGameWorldSingletonInstance = 0x10;
 
 bool plausibleGameObjectName(const std::string& name)
@@ -210,6 +209,33 @@ bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::
     return true;
 }
 
+bool tryResolveRaidFromTypeInfo(std::uint64_t gom, RaidState& raid, std::string& debug_out, RaidPendingState* pending_out)
+{
+    const std::uint64_t gameAssembly = mem.GetTarkovPointerSnapshot().gameAssemblyBase;
+    std::uint64_t typeInfoTable = 0;
+    std::uint64_t ownerClass = 0;
+    std::uint64_t staticFields = 0;
+    std::uint64_t localPlayer = 0;
+    std::uint64_t localGameWorld = 0;
+
+    if (!Utils::valid_pointer(gameAssembly) ||
+        !mem.TryRead(gameAssembly + sdk::Runtime::TypeInfoTableRva, typeInfoTable, DmaCacheMode::Uncached) || !Utils::valid_pointer(typeInfoTable) ||
+        !mem.TryRead(typeInfoTable + sdk::GamePlayerOwner::TypeIndex * sizeof(std::uint64_t), ownerClass, DmaCacheMode::Uncached) || !Utils::valid_pointer(ownerClass) ||
+        !mem.TryRead(ownerClass + sdk::Runtime::Il2CppClassStaticFields, staticFields, DmaCacheMode::Uncached) || !Utils::valid_pointer(staticFields) ||
+        !mem.TryRead(staticFields + sdk::GamePlayerOwner::MyPlayer, localPlayer, DmaCacheMode::Uncached) || !Utils::valid_pointer(localPlayer) ||
+        !mem.TryRead(localPlayer + sdk::Player::GameWorld, localGameWorld, DmaCacheMode::Uncached) || !Utils::valid_pointer(localGameWorld))
+        return false;
+
+    if (fillRaidFromLocalGameWorld(gom, localGameWorld, localPlayer, localGameWorld, raid, debug_out, pending_out))
+    {
+        debug_out = "TypeInfo " + debug_out;
+        return true;
+    }
+
+    debug_out = "TypeInfo GameWorld: " + debug_out;
+    return false;
+}
+
 bool tryResolveRaidFromBss(std::uint64_t gom, RaidState& raid, std::string& debug_out, RaidPendingState* pending_out)
 {
     const std::uint64_t gameAssembly = mem.GetTarkovPointerSnapshot().gameAssemblyBase;
@@ -219,7 +245,7 @@ bool tryResolveRaidFromBss(std::uint64_t gom, RaidState& raid, std::string& debu
 
     if (!Utils::valid_pointer(gameAssembly) ||
         !mem.TryRead(gameAssembly + kGameWorldSingletonClassBss, gameWorldClass, DmaCacheMode::Uncached) || !Utils::valid_pointer(gameWorldClass) ||
-        !mem.TryRead(gameWorldClass + kIl2CppClassStaticFields, staticFields, DmaCacheMode::Uncached) || !Utils::valid_pointer(staticFields) ||
+        !mem.TryRead(gameWorldClass + sdk::Runtime::Il2CppClassStaticFields, staticFields, DmaCacheMode::Uncached) || !Utils::valid_pointer(staticFields) ||
         !mem.TryRead(staticFields + kGameWorldSingletonInstance, localGameWorld, DmaCacheMode::Uncached) || !Utils::valid_pointer(localGameWorld))
     {
         const std::uint64_t fingerprint = gameAssembly ^
@@ -280,6 +306,9 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     debug_out.clear();
 
     
+    if (tryResolveRaidFromTypeInfo(gom, raid, debug_out, pending_out))
+        return true;
+
     if (tryResolveRaidFromBss(gom, raid, debug_out, pending_out))
         return true;
 
@@ -867,3 +896,4 @@ void applyRaidStateToMainGame(const RaidState& raid)
         mainGame.registeredPlayersCount = static_cast<int>(n);
     }
 }
+

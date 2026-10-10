@@ -4,13 +4,13 @@
 
 namespace UnityOffsets
 {
-    constexpr uint64_t GameObjectManager = 0x1A233A0;
-    constexpr uint64_t AllCamera = 0x19F3080; //0x19EACC0;
 
-    // Compatibility values required only by the unchanged gym/hideout feature.
-    constexpr uint64_t GameWorld = 0x5F0F268;
-    constexpr uint64_t GameObjectManager_LastActiveNodeOffset = 0x20;
-    constexpr uint64_t GameObjectManager_ActiveNodesOffset = 0x28;
+    inline uint64_t GameObjectManager = 0x1A233A0;
+    inline uint64_t AllCamera = 0x19F3080;
+
+    // Compatibility values required only by the gym/hideout feature
+    inline uint64_t GameObjectManager_LastActiveNodeOffset = 0x20;
+    inline uint64_t GameObjectManager_ActiveNodesOffset = 0x28;
     constexpr uint64_t ComponentArray_SizeOffset = 0x10;
     constexpr uint64_t ComponentArray_CapacityOffset = 0x18;
     constexpr uint64_t ManagedObject_NativePointerOffset = 0x10;
@@ -32,12 +32,12 @@ namespace UnityOffsets
     constexpr uint64_t Hierarchy_RootPositionOffset = 0xB0;
     constexpr uint64_t Camera_WorldToCameraMatrixOffset = 0xA8;
     constexpr uint64_t Camera_ProjectionMatrixOffset = 0xE8;
-    constexpr uint64_t Camera_CullingMatrixOffset = 0x128;
+    inline uint64_t Camera_CullingMatrixOffset = 0x128;
     constexpr uint64_t Camera_NonJitteredProjectionSetOffset = 0x57C;
     constexpr uint64_t Camera_NonJitteredProjectionMatrixOffset = 0x780;
-    constexpr uint64_t Camera_ViewMatrixOffset = Camera_CullingMatrixOffset;
-    constexpr uint64_t Camera_FOVOffset = 0x1A8;
-    constexpr uint64_t Camera_AspectRatioOffset = 0x518;
+    inline uint64_t Camera_ViewMatrixOffset = 0x128;
+    inline uint64_t Camera_FOVOffset = 0x1A8;
+    inline uint64_t Camera_AspectRatioOffset = 0x518;
     constexpr uint64_t Camera_ZoomLevelOffset = 0xE8;
 
     constexpr uint64_t NativeObject_GameObjectOffset = 0x58;
@@ -65,3 +65,4 @@ static std::vector<uint64_t> TransformChain = {
     UnityOffsets::Component_ObjectClassOffset,
     0x10 // Transform Internal
 };
+

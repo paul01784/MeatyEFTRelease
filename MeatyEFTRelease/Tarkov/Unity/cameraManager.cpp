@@ -1438,3 +1438,4 @@ bool CameraManager::worldSegmentToScreen(const CameraManagerState& state, const 
 
     return project(state.viewMatrix);
 }
+

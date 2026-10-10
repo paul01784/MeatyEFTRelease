@@ -67,6 +67,9 @@
     <Filter Include="Core\Render">
       <UniqueIdentifier>{D856D2C1-3793-48A6-88D9-6D00A9BC2E9A}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Core\Offsets">
+      <UniqueIdentifier>{9A2F075E-1488-4E70-9D02-B069315076D1}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Tarkov\SDK">
       <UniqueIdentifier>{CE30CBB0-156E-4A3C-9042-DC53679A0C12}</UniqueIdentifier>
     </Filter>
@@ -480,6 +483,12 @@
     <ClInclude Include="Tarkov\SDK\EftOffsets.h">
       <Filter>Tarkov\SDK</Filter>
     </ClInclude>
+    <ClInclude Include="Core\Offsets\EftOffsetService.h">
+      <Filter>Core\Offsets</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Offsets\UnityOffsetService.h">
+      <Filter>Core\Offsets</Filter>
+    </ClInclude>
     <ClInclude Include="Tarkov\Unity\GameObjectManager.h">
       <Filter>Tarkov\Unity</Filter>
     </ClInclude>
@@ -638,6 +647,12 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Core\Offsets\EftOffsetService.cpp">
+      <Filter>Core\Offsets</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\Offsets\UnityOffsetService.cpp">
+      <Filter>Core\Offsets</Filter>
+    </ClCompile>
     <ClCompile Include="UI\debug.cpp">
       <Filter>UI</Filter>
     </ClCompile>
@@ -835,6 +850,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="UI\fonts\FONT-AWESOME-LICENSE.txt" />
+    <None Include="Tarkov\SDK\EftOffsetDefinitions.inc">
+      <Filter>Tarkov\SDK</Filter>
+    </None>
     <None Include="external\glm\detail\func_common.inl" />
     <None Include="external\glm\detail\func_common_simd.inl" />
     <None Include="external\glm\detail\func_exponential.inl" />

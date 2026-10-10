@@ -33,6 +33,8 @@
 #include "../Tarkov/Features/Hideout/HideoutOverview.h"
 #include "../Tarkov/Features/Hideout/Gym.h"
 #include "../Core/KeyManager/KeyManager.h"
+#include "../Core/Offsets/EftOffsetService.h"
+#include "../Core/Offsets/UnityOffsetService.h"
 #include "../resource.h"
 
 #include <cctype>
@@ -1213,6 +1215,7 @@ static void renderMenuSettings()
         Hideout,
         Appearance,
         Keybinds,
+        Updates,
         Advanced
     };
 
@@ -1256,6 +1259,7 @@ static void renderMenuSettings()
     navigationItem(ICON_FA_DUMBBELL, "Hideout", SettingsPage::Hideout);
     navigationItem(ICON_FA_PALETTE, "Appearance", SettingsPage::Appearance);
     navigationItem(ICON_FA_KEY, "Keybinds", SettingsPage::Keybinds);
+    navigationItem(ICON_FA_ARROWS_ROTATE, "Updates", SettingsPage::Updates);
     navigationItem(ICON_FA_SLIDERS, "Advanced", SettingsPage::Advanced);
     ImGui::EndChild();
     ImGui::BeginChild("##settingsContent", ImVec2(0.0f, 0.0f), false);
@@ -1456,6 +1460,212 @@ static void renderMenuSettings()
             ImGui::TextColored(statusColour, "Status: %s", apiKeyStatus.c_str());
             if (!apiKeyError.empty())
                 ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "%s", apiKeyError.c_str());
+        }
+    }
+    else if (activePage == SettingsPage::Updates)
+    {
+        auto& offsetService = EftOffsetService::Instance();
+        auto& unityOffsetService = UnityOffsetService::Instance();
+        const bool eftResolving = offsetService.IsResolving();
+        const bool unityResolving = unityOffsetService.IsResolving();
+        const bool resolving = eftResolving || unityResolving;
+        const bool dmaConnected = memoryGlobals::dmaConnected.load(std::memory_order_acquire);
+        const bool dmaWorking = mem.IsInitRunning();
+
+        if (menuLayout::Section("Full offset scan"))
+        {
+            ImGui::BeginDisabled(resolving || dmaConnected || dmaWorking);
+            if (ImGui::Button("Resolve all offsets", ImVec2(200.0f, 30.0f)))
+                ImGui::OpenPopup("Resolve all offsets?");
+            ImGui::EndDisabled();
+
+            if (resolving)
+                ImGui::TextUnformatted("Running full offset scan...");
+            else if (dmaConnected || dmaWorking)
+                ImGui::TextDisabled("Disconnect DMA first");
+
+            ImGui::SetNextWindowSize(ImVec2(540.0f, 0.0f), ImGuiCond_Appearing);
+            if (ImGui::BeginPopupModal("Resolve all offsets?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::TextWrapped(
+                    "Make sure EscapeFromTarkov.exe is in a fully loaded active raid. Meaty will first resolve and live-validate the Unity offsets. "
+                    "It will then open a fresh session, signature-resolve the IL2CPP TypeInfo table, resolve all wanted SDK fields, update "
+                    "configs/offsets.json and load everything into memory.");
+                ImGui::Spacing();
+                if (ImGui::Button("Resolve", ImVec2(120.0f, 28.0f)))
+                {
+                    offsetService.StartResolve();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(120.0f, 28.0f)))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            const std::string status = offsetService.Status();
+            const std::string error = offsetService.LastError();
+            ImGui::TextWrapped("Full scan: %s", status.c_str());
+            if (!error.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.30f, 1.0f), "%s", error.c_str());
+
+            const std::string unityStatus = unityOffsetService.Status();
+            const std::string unityError = unityOffsetService.LastError();
+            ImGui::TextWrapped("Unity stage: %s", unityStatus.c_str());
+            if (!unityError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.30f, 1.0f), "%s", unityError.c_str());
+            ImGui::TextDisabled("File: %s", offsetService.FilePath().string().c_str());
+        }
+
+        if (menuLayout::Section("Loaded active-raid offsets"))
+        {
+            const auto unityEntries = unityOffsetService.Entries();
+            if (unityEntries.empty())
+                ImGui::TextDisabled("No active-raid offsets are loaded. Built-in Unity defaults remain active.");
+            else
+            {
+                std::vector<std::string> groups;
+                for (const auto& entry : unityEntries)
+                    if (std::find(groups.begin(), groups.end(), entry.group) == groups.end())
+                        groups.push_back(entry.group);
+
+                for (const auto& group : groups)
+                {
+                    const auto count = std::count_if(unityEntries.begin(), unityEntries.end(), [&](const auto& entry) { return entry.group == group; });
+                    const std::string label = group + " (" + std::to_string(count) + ")###unityOffsetGroup_" + group;
+                    if (!ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen))
+                        continue;
+
+                    const std::string tableId = "##unityOffsetTable_" + group;
+                    if (ImGui::BeginTable(tableId.c_str(), 5,
+                                          ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_RowBg |
+                                              ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                        ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                        ImGui::TableSetupColumn("Validation", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                        ImGui::TableSetupColumn("Method", ImGuiTableColumnFlags_WidthStretch, 1.8f);
+                        ImGui::TableHeadersRow();
+                        for (const auto& entry : unityEntries)
+                        {
+                            if (entry.group != group)
+                                continue;
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted(entry.name.c_str());
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("0x%llX", static_cast<unsigned long long>(entry.value));
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(entry.kind.c_str());
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TextColored(entry.runtimeValidated ? ImVec4(0.25f, 1.0f, 0.40f, 1.0f) : ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
+                                               "%s", entry.runtimeValidated ? "Validated" : "Loaded");
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::TextWrapped("%s", entry.method.c_str());
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TreePop();
+                }
+            }
+        }
+
+        if (menuLayout::Section("Loaded EFT SDK offsets"))
+        {
+            static ImGuiTextFilter offsetFilter;
+            static int setAllClassesOpen = -1;
+            offsetFilter.Draw("Filter class, group or field", -FLT_MIN);
+            const auto entries = offsetService.Entries();
+
+            if (ImGui::Button("Expand all", ImVec2(105.0f, 26.0f)))
+                setAllClassesOpen = 1;
+            ImGui::SameLine();
+            if (ImGui::Button("Collapse all", ImVec2(105.0f, 26.0f)))
+                setAllClassesOpen = 0;
+            ImGui::SameLine();
+            ImGui::TextDisabled("%zu resolved values", entries.size());
+
+            struct OffsetClassGroup
+            {
+                std::string className;
+                std::vector<const EftOffsetView*> entries;
+            };
+            std::vector<OffsetClassGroup> classes;
+            for (const auto& entry : entries)
+            {
+                const std::string key = entry.group + "." + entry.name;
+                const std::string target = entry.typeIndex ? entry.className : entry.className + "::" + entry.fieldName;
+                if (!offsetFilter.PassFilter(key.c_str()) && !offsetFilter.PassFilter(target.c_str()))
+                    continue;
+
+                auto group = std::find_if(classes.begin(), classes.end(), [&](const OffsetClassGroup& value)
+                {
+                    return value.className == entry.className;
+                });
+                if (group == classes.end())
+                {
+                    classes.push_back({entry.className, {}});
+                    group = std::prev(classes.end());
+                }
+                group->entries.push_back(&entry);
+            }
+
+            for (const auto& offsetClass : classes)
+            {
+                if (setAllClassesOpen >= 0)
+                    ImGui::SetNextItemOpen(setAllClassesOpen == 1, ImGuiCond_Always);
+                else if (offsetFilter.IsActive())
+                    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+
+                const std::string classLabel = offsetClass.className + " (" + std::to_string(offsetClass.entries.size()) + ")###eftOffsetClass_" + offsetClass.className;
+                if (!ImGui::TreeNodeEx(classLabel.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
+                    continue;
+
+                const std::string tableId = "##eftOffsetTable_" + offsetClass.className;
+                if (ImGui::BeginTable(tableId.c_str(), 4,
+                                      ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_RowBg |
+                                          ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn("Offset", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                    ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.35f);
+                    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                    ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                    ImGui::TableHeadersRow();
+                    for (const auto* entry : offsetClass.entries)
+                    {
+                        const std::string key = entry->group + "." + entry->name;
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(key.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextUnformatted(entry->typeIndex ? "TypeInfo table index" : entry->fieldName.c_str());
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("0x%llX", static_cast<unsigned long long>(entry->value));
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextUnformatted(entry->typeIndex ? "Type" : entry->staticField ? "Static" : "Field");
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::TreePop();
+            }
+            setAllClassesOpen = -1;
+
+            if (ImGui::TreeNode("Raw offsets.json"))
+            {
+                const std::string json = offsetService.JsonText();
+                if (json.empty())
+                    ImGui::TextDisabled("No offsets.json is loaded yet.");
+                else
+                {
+                    if (ImGui::Button("Copy JSON", ImVec2(110.0f, 26.0f)))
+                        ImGui::SetClipboardText(json.c_str());
+                    ImGui::BeginChild("##offsetJson", ImVec2(0.0f, 260.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+                    ImGui::TextUnformatted(json.c_str());
+                    ImGui::EndChild();
+                }
+                ImGui::TreePop();
+            }
         }
     }
     else if (activePage == SettingsPage::Settings)

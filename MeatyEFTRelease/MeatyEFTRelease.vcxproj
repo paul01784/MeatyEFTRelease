@@ -578,6 +578,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="Tarkov\GameWorld\GameWorld.h" />
     <ClInclude Include="Tarkov\Features\Aim\ReadOnlyAim.h" />
     <ClInclude Include="Tarkov\SDK\EftOffsets.h" />
+    <ClInclude Include="Core\Offsets\EftOffsetService.h" />
+    <ClInclude Include="Core\Offsets\UnityOffsetService.h" />
     <ClInclude Include="Web\TarkovDev\TarkovDevClient.h" />
     <ClInclude Include="Tarkov\QuestPlanner\TaskZonePatches.h" />
     <ClInclude Include="Tarkov\Unity\Transform.h" />
@@ -660,6 +662,8 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClCompile Include="Web\TarkovDev\TarkovDevClient.cpp" />
     <ClCompile Include="Tarkov\Unity\Transform.cpp" />
     <ClCompile Include="Core\Utilities.cpp" />
+    <ClCompile Include="Core\Offsets\EftOffsetService.cpp" />
+    <ClCompile Include="Core\Offsets\UnityOffsetService.cpp" />
     <ClCompile Include="Core\KeyManager\KeyManager.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Player\WatchList.cpp" />
     <ClCompile Include="Tarkov\GameWorld\Loot\WishList.cpp" />
@@ -686,6 +690,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <Font Include="UI\fonts\forkawesome-webfont.ttf" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="Tarkov\SDK\EftOffsetDefinitions.inc" />
     <None Include="external\glm\detail\func_common.inl" />
     <None Include="UI\fonts\FONT-AWESOME-LICENSE.txt" />
     <None Include="external\glm\detail\func_common_simd.inl" />

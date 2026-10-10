@@ -134,7 +134,7 @@ private:
     void PublishLastHideoutScan(GymSnapshot& state) const;
 
     [[nodiscard]] std::uint64_t ResolveTypeInfoTable() const;
-    [[nodiscard]] std::uint64_t ResolveClass(std::uint64_t typeInfoTable, std::int32_t typeIndex) const;
+    [[nodiscard]] std::uint64_t ResolveClass(std::uint64_t typeInfoTable, std::uint64_t typeIndex) const;
 
     [[nodiscard]] std::uint64_t ResolveOverlayStaticFields(std::uint64_t overlayClass, std::uint64_t qteControllerClass,
                                                            std::uint64_t& resolvedOffset) const;
@@ -197,3 +197,4 @@ private:
 };
 
 extern Gym GYM;
+
