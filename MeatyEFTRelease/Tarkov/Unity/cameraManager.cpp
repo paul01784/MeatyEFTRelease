@@ -1163,6 +1163,14 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
 
         state.fpsFov = fov;
         state.fpsAspect = aspect;
+        // Backup/canted sights (e.g. a DeltaPoint piggybacked on a Bravo4/HAMR)
+        // take over the view without updating OpticCameraManager: the game keeps
+        // rendering the wide FPS view while the cached magnified route (still
+        // readable, still "valid") no longer describes what the player sees.
+        // A live FPS FOV far above scoped levels with magnification still cached
+        // means the route is stale — fall back to FPS projection instead of
+        // projecting through the dead optic matrix (which empties every view).
+        const bool routeMatchesView = !(state.magnification > 1.5f && fov > 45.0f);
         if (fov > 1.0f && fov < 180.0f && aspect > 0.1f && aspect < 5.0f)
         {
             const float halfFovRadians = fov * (3.14159265358979323846f / 360.0f);
@@ -1172,7 +1180,7 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
             {
                 state.opticScaleX = scaleX;
                 state.opticScaleY = scaleY;
-                state.usingOptic = true;
+                state.usingOptic = routeMatchesView;
             }
         }
     }
