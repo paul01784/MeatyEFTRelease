@@ -372,7 +372,12 @@ void WebRadar::PublishFrame() {
 
     if (raidActive) {
         frame["raid"] = true;
-        frame["map"] = mainGame.selectedLocation;
+        std::string webMap = mainGame.selectedLocation;
+        if (webMap == "laboratory_event")
+            webMap = "laboratory";
+        else if (webMap == "factory_event")
+            webMap = "factory4_day";
+        frame["map"] = webMap;
 
         if (!m_lastRaidActive) {
             ClearLootSnapshot();

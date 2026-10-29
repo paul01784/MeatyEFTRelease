@@ -1889,12 +1889,12 @@ uint64_t RegisteredPlayers::getPlayerBoneMatrixPtr(const uint64_t instance)
     if (mainGame.onlineRaid)
         return mem.ReadChain(
             instance,
-            { sdk::ObservedPlayerView::PlayerBody, 0x30, 0x30, 0x10 },
+            { sdk::ObservedPlayerView::PlayerBody, 0x40, 0x30, 0x10 },
             DmaCacheMode::Uncached);
     else
         return mem.ReadChain(
             instance,
-            { sdk::Player::_playerBody, 0x30, 0x30, 0x10 },
+            { sdk::Player::_playerBody, 0x40, 0x30, 0x10 },
             DmaCacheMode::Uncached);
 }
 
