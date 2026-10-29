@@ -76,7 +76,7 @@ void renderMapDetails()
         map_orgH = customs_orgH;
         texture = customs_texture;
     }
-    else if (mainGame.selectedLocation == "factory4_day" || mainGame.selectedLocation == "factory4_night") // Factory
+    else if (mainGame.selectedLocation == "factory4_day" || mainGame.selectedLocation == "factory4_night" || mainGame.selectedLocation == "factory_event") // Factory
     {
         if (!setCurrentMapSpecs)
         {
@@ -114,7 +114,7 @@ void renderMapDetails()
         else
             texture = interchange_texture2;
     }
-    else if (mainGame.selectedLocation == "laboratory" || mainGame.selectedLocation == "laboratory_dark")
+    else if (mainGame.selectedLocation == "laboratory" || mainGame.selectedLocation == "laboratory_dark" || mainGame.selectedLocation == "laboratory_event")
     {
         if (!setCurrentMapSpecs)
         {
