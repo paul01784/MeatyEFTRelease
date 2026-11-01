@@ -232,7 +232,7 @@ bool loadMaps(std::string mapToLoad)
         IM_ASSERT(customs_ret);
     }
 
-    if (mapToLoad == "factory4_day" || mapToLoad == "factory4_night")
+    if (mapToLoad == "factory4_day" || mapToLoad == "factory4_night" || mapToLoad == "factory_event")
     {
         //factory
 
@@ -282,7 +282,7 @@ bool loadMaps(std::string mapToLoad)
         IM_ASSERT(interchange_2);
     }
 
-    if (mapToLoad == "laboratory" || mapToLoad == "laboratory_dark")
+    if (mapToLoad == "laboratory" || mapToLoad == "laboratory_dark" || mapToLoad == "laboratory_event")
     {
         //labs
         //ground floor

@@ -98,7 +98,7 @@ void ObservedPlayer::configureControllerAddresses(Player& player) const noexcept
 
 bool ObservedPlayer::tryResolveBoneMatrix(const Player& player, uint64_t& matrixPointer) const
 {
-    return PlayerMemoryAccess::tryReadChain(player.instance, { sdk::ObservedPlayerView::PlayerBody, 0x30, 0x30, 0x10 }, matrixPointer, DmaCacheMode::Uncached);
+    return PlayerMemoryAccess::tryReadChain(player.instance, { sdk::ObservedPlayerView::PlayerBody, 0x40, 0x30, 0x10 }, matrixPointer, DmaCacheMode::Uncached);
 }
 
 std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_view className) const
@@ -112,7 +112,7 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
     initialize(player);
     initializeSnapshot(player);
 
-    PlayerMemoryAccess::tryReadChain(instance, { sdk::ObservedPlayerView::PlayerBody, 0x30, 0x30, 0x10 }, player.playerBoneMatrixPtr, DmaCacheMode::Uncached);
+    PlayerMemoryAccess::tryReadChain(instance, { sdk::ObservedPlayerView::PlayerBody, 0x40, 0x30, 0x10 }, player.playerBoneMatrixPtr, DmaCacheMode::Uncached);
 
     if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::ObservedPlayerController, player.P_ObservedPlayerController) ||
         !PlayerMemoryAccess::tryReadPointer(player.P_ObservedPlayerController + sdk::ObservedPlayerController::HealthController, player.P_ObservedHealthController))

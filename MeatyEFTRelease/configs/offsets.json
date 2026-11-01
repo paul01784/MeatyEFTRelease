@@ -1,0 +1,377 @@
+{
+  "schemaVersion": 2,
+  "generatedAtUtc": "29-10-2026T17:46:50Z",
+  "target": {
+    "process": "EscapeFromTarkov.exe",
+    "module": "GameAssembly.dll"
+  },
+  "unity": {
+    "rvas": {
+      "UnityPlayer.dll": {
+        "gameObjectManager": "0x1A233A0",
+        "allCameras": "0x19F3080"
+      }
+    },
+    "layouts": {
+      "GameObjectManager": {
+        "lastActiveNode": "0x20",
+        "activeNodes": "0x28"
+      },
+      "Camera": {
+        "viewMatrix": "0x128",
+        "fov": "0x1A8",
+        "aspectRatio": "0x518"
+      }
+    },
+    "resolution": {
+      "GameObjectManager": {
+        "method": "Loaded from offsets.json",
+        "runtimeValidated": false
+      },
+      "AllCameras": {
+        "method": "Loaded from offsets.json",
+        "runtimeValidated": false
+      },
+      "LastActiveNode": {
+        "method": "Loaded from offsets.json",
+        "runtimeValidated": false
+      },
+      "ActiveNodes": {
+        "method": "Loaded from offsets.json",
+        "runtimeValidated": false
+      },
+      "ViewMatrix": {
+        "method": "Loaded from offsets.json",
+        "runtimeValidated": false
+      },
+      "FOV": {
+        "method": "Loaded from offsets.json",
+        "runtimeValidated": false
+      },
+      "AspectRatio": {
+        "method": "Loaded from offsets.json",
+        "runtimeValidated": false
+      }
+    }
+  },
+  "bootstrap": {
+    "typeInfoTableRva": "0x5FB0F48",
+    "il2CppClassStaticFields": "0xB8"
+  },
+  "offsets": {
+    "GamePlayerOwner": {
+      "TypeIndex": "0x2215",
+      "MyPlayer": "0x8"
+    },
+    "GameWorld": {
+      "Location": "0xE8",
+      "SynchronizableObjectLogicProcessor": "0x278"
+    },
+    "ClientLocalGameWorld": {
+      "btrController": "0x28",
+      "ExfiltrationController": "0x68",
+      "LootList": "0x1B0",
+      "RegisteredPlayers": "0x1D0",
+      "MainPlayer": "0x230",
+      "Grenades": "0x2B8"
+    },
+    "ExfiltrationController": {
+      "ExfiltrationPoints": "0x20",
+      "ScavExfiltrationPoints": "0x28",
+      "MSecretExfiltrationPoints": "0x30"
+    },
+    "ExfiltrationPoint": {
+      "Status": "0x58",
+      "Settings": "0x98",
+      "EligibleEntryPoints": "0xC0"
+    },
+    "ScavExfiltrationPoint": {
+      "EligibleIds": "0xF8"
+    },
+    "ExitSettings": {
+      "Name": "0x18"
+    },
+    "SynchronizableObject": {
+      "Type": "0x68"
+    },
+    "SynchronizableObjectLogicProcessor": {
+      "_activeSynchronizableObjects": "0x10",
+      "_staticSynchronizableObjects": "0x18"
+    },
+    "TripwireSynchronizableObject": {
+      "_tripwireState": "0xE4",
+      "FromPosition": "0x14C",
+      "ToPosition": "0x158"
+    },
+    "BtrController": {
+      "BtrView": "0x50"
+    },
+    "BTRView": {
+      "turret": "0x60",
+      "previousPosition": "0xB4"
+    },
+    "BTRTurretView": {
+      "attachedBot": "0x60"
+    },
+    "Player": {
+      "CharacterController": "0x40",
+      "MovementContext": "0x60",
+      "RibcageScaleCurrent": "0x150",
+      "_playerBody": "0x1A0",
+      "ProceduralWeaponAnimation": "0x3C0",
+      "GameWorld": "0x690",
+      "Corpse": "0x728",
+      "Location": "0x928",
+      "Profile": "0x9C0",
+      "_inventoryController": "0xA38",
+      "_handsController": "0xA40",
+      "_playerLookRaycastTransform": "0xAE0",
+      "PlayerBones": "0xB48"
+    },
+    "SimpleCharacterController": {
+      "Velocity": "0xF0"
+    },
+    "FirearmController": {
+      "Firearms": "0xD0",
+      "GunBaseTransform": "0x148",
+      "Fireport": "0x150"
+    },
+    "Firearms": {
+      "Fireport": "0xD8"
+    },
+    "BifacialTransform": {
+      "Original": "0x10"
+    },
+    "PlayerBones": {
+      "WeaponRootThird": "0x40",
+      "Ribcage": "0x148",
+      "Fireport": "0x1D0"
+    },
+    "ItemHandsController": {
+      "HandsHierarchy": "0x68",
+      "Item": "0x70"
+    },
+    "TransformLinks": {
+      "Self": "0x28"
+    },
+    "PlayerSpring": {
+      "Fireport": "0x88"
+    },
+    "ObservedPlayerView": {
+      "ObservedPlayerController": "0x28",
+      "Voice": "0x40",
+      "Side": "0xB4",
+      "IsAI": "0xC0",
+      "PlayerBody": "0xF8"
+    },
+    "ObservedPlayerController": {
+      "InventoryController": "0x10",
+      "MovementController": "0xF0",
+      "HealthController": "0x100",
+      "HandsController": "0x140"
+    },
+    "ObservedMovementController": {
+      "ObservedPlayerStateContext": "0xB0"
+    },
+    "ObservedPlayerStateContext": {
+      "Rotation": "0x28",
+      "Velocity": "0xF8"
+    },
+    "ObservedPlayerHands": {
+      "Item": "0x58"
+    },
+    "ObservedHealthController": {
+      "HealthStatus": "0x10",
+      "PlayerCorpse": "0x48"
+    },
+    "InventoryController": {
+      "Inventory": "0x100"
+    },
+    "Inventory": {
+      "Equipment": "0x18"
+    },
+    "InventoryEquipment": {
+      "_cachedSlots": "0x90"
+    },
+    "Slot": {
+      "ContainedItem": "0x48",
+      "ID": "0x58"
+    },
+    "Weapon": {
+      "Chambers": "0xB0",
+      "MagazineSlotCache": "0xC8"
+    },
+    "Magazine": {
+      "Cartridges": "0xA8"
+    },
+    "Item": {
+      "StackObjectsCount": "0x24",
+      "Version": "0x28",
+      "Template": "0x60"
+    },
+    "StackSlot": {
+      "MaxCount": "0x10",
+      "items": "0x18"
+    },
+    "BarterOtherOffsets": {
+      "Dogtag": "0x80"
+    },
+    "DogtagComponent": {
+      "AccountId": "0x20",
+      "ProfileId": "0x28",
+      "Nickname": "0x30",
+      "Level": "0x3C",
+      "KillerAccountId": "0x50",
+      "KillerProfileId": "0x58",
+      "KillerName": "0x60"
+    },
+    "Profile": {
+      "Id": "0x10",
+      "Info": "0x48",
+      "QuestsData": "0x98",
+      "WishlistManager": "0x138"
+    },
+    "WishlistManager": {
+      "_wishlistItems": "0x30"
+    },
+    "QuestsData": {
+      "Id": "0x10",
+      "Status": "0x1C",
+      "CompletedConditions": "0x28"
+    },
+    "PlayerInfo": {
+      "EntryPoint": "0x30",
+      "Side": "0x50"
+    },
+    "MovementContext": {
+      "_rotation": "0xC0"
+    },
+    "ProceduralWeaponAnimation": {
+      "HandsContainer": "0x40",
+      "_isAiming": "0x175",
+      "_optics": "0x1D0"
+    },
+    "SightNBone": {
+      "Mod": "0x10",
+      "Bone": "0x18"
+    },
+    "SightComponent": {
+      "_template": "0x20",
+      "ScopeSelectedModes": "0x30",
+      "SelectedScope": "0x38",
+      "ScopeZoomValue": "0x3C"
+    },
+    "SightInterface": {
+      "Zooms": "0x1B8"
+    },
+    "CameraManager": {
+      "Instance": "0x0",
+      "OpticCameraManager": "0x10",
+      "Camera": "0x70"
+    },
+    "OpticCameraManager": {
+      "Camera": "0x68",
+      "CurrentOpticSight": "0x70"
+    },
+    "OpticSight": {
+      "LensRenderer": "0x30",
+      "ScopeTransform": "0x40"
+    },
+    "InteractiveLootItem": {
+      "Item": "0xF0"
+    },
+    "LootItemMod": {
+      "Slots": "0x80"
+    },
+    "LootableContainer": {
+      "InteractingPlayer": "0x160",
+      "ItemOwner": "0x178"
+    },
+    "LootableContainerItemOwner": {
+      "RootItem": "0xD0"
+    },
+    "ItemTemplate": {
+      "ShortName": "0x18",
+      "QuestItem": "0x34",
+      "_id": "0xE0"
+    },
+    "ModTemplate": {
+      "Velocity": "0x188"
+    },
+    "AmmoTemplate": {
+      "InitialSpeed": "0x1A4",
+      "BallisticCoefficient": "0x1B8",
+      "BulletMassGrams": "0x25C",
+      "BulletDiameterMillimeters": "0x260"
+    },
+    "WeaponTemplate": {
+      "Velocity": "0x25C"
+    },
+    "Throwable": {
+      "_isDestroyed": "0x4D"
+    },
+    "HideoutController": {
+      "Areas": "0x80"
+    },
+    "HideoutArea": {
+      "Levels": "0x48",
+      "Data": "0x70"
+    },
+    "HideoutAreaData": {
+      "CurrentLevel": "0xA8",
+      "Status": "0xC8"
+    },
+    "HideoutAreaLevel": {
+      "Stage": "0xA0"
+    },
+    "HideoutStage": {
+      "Requirements": "0x18"
+    },
+    "HideoutRelatedRequirements": {
+      "Data": "0x10"
+    },
+    "HideoutRequirement": {
+      "Fulfilled": "0x18"
+    },
+    "HideoutItemRequirement": {
+      "TemplateId": "0x48",
+      "UserItemsCount": "0x54",
+      "RequiredCount": "0x5C"
+    },
+    "HideoutAreaRequirement": {
+      "AreaType": "0x38",
+      "RequiredLevel": "0x3C"
+    },
+    "HideoutSkillRequirement": {
+      "SkillName": "0x38",
+      "SkillLevel": "0x40"
+    },
+    "HideoutTraderUnlockRequirement": {
+      "TraderId": "0x40"
+    },
+    "HideoutTraderLoyaltyRequirement": {
+      "LoyaltyLevel": "0x40",
+      "TraderId": "0x48"
+    },
+    "HideoutAreaQTEOverlay": {
+      "TypeIndex": "0x2645",
+      "QteController": "0x0"
+    },
+    "QTEController": {
+      "TypeIndex": "0x266C",
+      "SpawnedQtes": "0x90"
+    },
+    "ShrinkingCircleQTE": {
+      "TypeIndex": "0x2678",
+      "Speed": "0x20",
+      "SuccessRange": "0x24",
+      "MinScale": "0x2C",
+      "TargetInput": "0x30",
+      "DynamicCircleImage": "0x38",
+      "DynamicCircleInnerBorder": "0x40",
+      "SuccessStartScale": "0x90",
+      "SuccessEndScale": "0x98",
+      "IsSuccess": "0xA0"
+    }
+  }
+}
