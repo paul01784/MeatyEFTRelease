@@ -319,8 +319,7 @@ void RegisteredPlayers::updateEntity()
                 player.isBTR ||
                 player.isInBTR ||
                 player.isDead ||
-                player.hasExfiled ||
-                player.isZombie)
+                player.hasExfiled)
             {
                 resetAimLineTarget(player);
                 continue;

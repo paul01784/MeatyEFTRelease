@@ -134,7 +134,9 @@ private:
 
     std::chrono::steady_clock::time_point nextLootDiscovery{};
     std::chrono::steady_clock::time_point lastDogTagUpdate{};
+    std::chrono::steady_clock::time_point nextLootInitializationRun{};
     std::atomic_bool immediateRefreshRequested{ false };
+    std::atomic_bool lootInitializationPending{ false };
 
     size_t corpseRefreshCursor = 0;
     size_t dogTagRefreshCursor = 0;

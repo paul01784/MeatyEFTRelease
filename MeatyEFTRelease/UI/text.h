@@ -477,6 +477,9 @@ bool IsRadarPlayerEquipmentSlotVisible(const Player& player, const slots& slot)
 
 bool IsGenericRadarAiScav(const Player& player)
 {
+    if (player.isZombie)
+        return false;
+
 	if (!player.isAi || player.isPlayer || player.isPlayerScav ||
 		player.isBoss || player.isBlackDivision || player.isCultist)
 	{

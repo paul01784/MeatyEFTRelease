@@ -873,13 +873,18 @@ void from_json(const nlohmann::json& j, FerrumConfig& k)
 void to_json(nlohmann::json& j, const memoryGlobals& k) {
     j = nlohmann::json{
         {"dmaAutoConnect", k.dmaAutoConnect},
-        {"dmaCloseAll", k.dmaCloseAll}
+        {"dmaCloseAll", k.dmaCloseAll},
+        {"lootInitSpeed", k.lootInitSpeed},
+        {"lootUpdateSpeed", k.lootUpdateSpeed}
     };
 }
 
 void from_json(const nlohmann::json& j, memoryGlobals& k) {
-    j.at("dmaAutoConnect").get_to(k.dmaAutoConnect);
-    j.at("dmaCloseAll").get_to(k.dmaCloseAll);
+    k.dmaAutoConnect = j.value("dmaAutoConnect", k.dmaAutoConnect);
+    k.dmaCloseAll = j.value("dmaCloseAll", k.dmaCloseAll);
+    k.lootInitSpeed = std::clamp(j.value("lootInitSpeed", k.lootInitSpeed), 1, 5);
+    k.lootUpdateSpeed = std::clamp(j.value("lootUpdateSpeed", k.lootUpdateSpeed), 1, 5);
+    k.applyLootUpdateSpeed();
 }
 
 ConfigManager configManager("config.json", "lootFilters.json");

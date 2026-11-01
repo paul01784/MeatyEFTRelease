@@ -15,8 +15,7 @@ namespace AimLineTargeting
     inline bool IsValidTarget(const Player& player)
     {
         return !player.isDead &&
-            !player.hasExfiled &&
-            !player.isZombie;
+            !player.hasExfiled;
     }
 
     inline bool HasValidLocation(const glm::vec3& location)

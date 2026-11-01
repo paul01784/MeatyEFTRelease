@@ -27,6 +27,7 @@ namespace
 
     AIRole getAiRole(const std::string& voice)
     {
+        if (containsIgnoreCase(voice, "Zombie")) return { "Zombie", PlayerType::AIScav };
         if (containsIgnoreCase(voice, "BossSanitar")) return { "Sanitar", PlayerType::AIBoss };
         if (containsIgnoreCase(voice, "BossBully")) return { "Reshala", PlayerType::AIBoss };
         if (containsIgnoreCase(voice, "BossGluhar")) return { "Gluhar", PlayerType::AIBoss };
@@ -45,8 +46,6 @@ namespace
         if (containsIgnoreCase(voice, "vsrf")) return { "VSRF", PlayerType::AIRaider };
         if (containsIgnoreCase(voice, "civilian")) return { "Civilian", PlayerType::AIScav };
         if (containsIgnoreCase(voice, "Arena_Guard")) return { "Arena Guard", PlayerType::AIScav };
-        if (containsIgnoreCase(voice, "BossZombieTagilla")) return { "Zombie Tagilla", PlayerType::AIBoss };
-        if (containsIgnoreCase(voice, "Zombie")) return { "Zombie", PlayerType::AIScav };
         if (containsIgnoreCase(voice, "usec")) return { "Usec", PlayerType::AIRaider };
         if (containsIgnoreCase(voice, "bear")) return { "Bear", PlayerType::AIRaider };
         if (containsIgnoreCase(voice, "scav")) return { "Scav", PlayerType::AIScav };
@@ -159,6 +158,7 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
         if (PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::Voice, voicePointer))
             voice = PlayerMemoryAccess::readString(voicePointer);
 
+        player.isZombie = containsIgnoreCase(voice, "Zombie");
         const AIRole role = getAiRole(voice);
 		player.type = role.Type;
         player.name = role.Name.empty() ? "Ai" : role.Name;

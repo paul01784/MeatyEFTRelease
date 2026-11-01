@@ -168,9 +168,28 @@ namespace
     constexpr size_t MAX_OBJECT_NAME_LENGTH = 64;
     constexpr size_t MAX_CLASS_NAME_LENGTH = 64;
 
-    constexpr std::chrono::milliseconds LOOT_DISCOVERY_INTERVAL{
-        1000
-    };
+    std::chrono::milliseconds getLootInitializationInterval()
+    {
+        switch (std::clamp(memoryGlobals::lootInitSpeed, 1, 5))
+        {
+        case 2: return std::chrono::milliseconds(500);
+        case 3: return std::chrono::milliseconds(300);
+        case 4: return std::chrono::milliseconds(200);
+        case 5: return std::chrono::milliseconds(100);
+        default: return std::chrono::milliseconds(3000);
+        }
+    }
+
+    size_t getLootResolveLimit(const size_t totalLootPointers)
+    {
+        const int speed = std::clamp(memoryGlobals::lootInitSpeed, 1, 5);
+        if (speed <= 1)
+            return MAX_LOOT_RESOLVE_PER_TICK;
+
+        const size_t targetPasses = speed == 2 ? 80 : speed == 3 ? 60 : 40;
+        const size_t scaledLimit = (totalLootPointers + targetPasses - 1) / targetPasses;
+        return std::clamp(scaledLimit, MAX_LOOT_RESOLVE_PER_TICK, size_t{ 256 });
+    }
 
     const std::unordered_set<std::string> skipNames =
     {
@@ -686,7 +705,9 @@ void loot::clearCache()
 
     nextLootDiscovery = {};
     lastDogTagUpdate = {};
+    nextLootInitializationRun = {};
     immediateRefreshRequested.store(false, std::memory_order_release);
+    lootInitializationPending.store(false, std::memory_order_release);
     publishCacheSnapshotLocked();
     corpseRefreshCursor = 0;
     dogTagRefreshCursor = 0;
@@ -2311,8 +2332,7 @@ void loot::updateCorpseRequirements(std::vector<LootEntity>& workingCache)
         CorpseLootState& corpseState = item.getCorpseState();
         corpseState.value = calculateCorpseValue(corpseState);
 
-        if (now - item.lastCorpseEquipmentUpdate <
-            std::chrono::seconds(20))
+        if (now - item.lastCorpseEquipmentUpdate < memoryGlobals::getLootUpdateInterval())
         {
             continue;
         }
@@ -2610,7 +2630,10 @@ void loot::lootTask()
             !espGlobals::drawQuestHelper &&
             !filteredLootEnabled &&
             !containerLootEnabled)
+        {
+            lootInitializationPending.store(false, std::memory_order_release);
             return;
+        }
 
         const auto now = std::chrono::steady_clock::now();
         if (now < lootBackoffUntil)
@@ -2631,7 +2654,7 @@ void loot::lootTask()
                 if (lootFailStreak >= 5)
                     lootBackoffUntil = now + std::chrono::seconds(20);
 
-                nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
+                nextLootDiscovery = now + memoryGlobals::getLootUpdateInterval();
                 return;
             }
 
@@ -2655,7 +2678,7 @@ void loot::lootTask()
                     lootBackoffUntil =
                         now + std::chrono::seconds(20);
 
-                nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
+                nextLootDiscovery = now + memoryGlobals::getLootUpdateInterval();
                 return;
             }
 
@@ -2677,7 +2700,7 @@ void loot::lootTask()
                     lootBackoffUntil =
                         now + std::chrono::seconds(15);
 
-                nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
+                nextLootDiscovery = now + memoryGlobals::getLootUpdateInterval();
                 return;
             }
 
@@ -2693,6 +2716,7 @@ void loot::lootTask()
 
             if (lootBufferScanCursor >= static_cast<size_t>(lootCount))
             {
+                lootInitializationPending.store(false, std::memory_order_release);
                 
                 if (!stagedLootPointers.empty())
                 {
@@ -2703,8 +2727,12 @@ void loot::lootTask()
 
                 lootBufferScanCursor = 0;
             }
+            else
+            {
+                lootInitializationPending.store(true, std::memory_order_release);
+            }
 
-            nextLootDiscovery = now + LOOT_DISCOVERY_INTERVAL;
+            nextLootDiscovery = now + (lootBufferScanCursor > 0 ? getLootInitializationInterval() : memoryGlobals::getLootUpdateInterval());
         }
 
         unexpectedFailureStreak = 0;
@@ -2767,8 +2795,9 @@ void loot::lootTask()
         for (const uint64_t pointer : resolvePointerSet)
             pointersToResolve.emplace_back(pointer);
 
-        if (pointersToResolve.size() > MAX_LOOT_RESOLVE_PER_TICK)
-            pointersToResolve.resize(MAX_LOOT_RESOLVE_PER_TICK);
+        const size_t resolveLimit = getLootResolveLimit(livePointers.size());
+        if (pointersToResolve.size() > resolveLimit)
+            pointersToResolve.resize(resolveLimit);
 
         if (!pointersToResolve.empty())
         {
@@ -2803,8 +2832,19 @@ void loot::lootTask()
             );
         }
 
+        bool initializationPending = resolvePointerSet.size() > pointersToResolve.size();
+        if (!initializationPending)
+        {
+            initializationPending = std::any_of(workingCache.begin(), workingCache.end(), [&](const LootEntity& item)
+                {
+                    return item.pendingResolve && !item.failed && livePointers.contains(item.instance);
+                });
+        }
+        lootInitializationPending.store(initializationPending, std::memory_order_release);
+
         updateLootableContainerStates(workingCache);
-        updateCorpseRequirements(workingCache);
+        if (completedLootDiscovery)
+            updateCorpseRequirements(workingCache);
         updateExistingLootItems(workingCache);
         if (completedLootDiscovery)
             cleanupMissingLoot(workingCache, livePointers);
@@ -2877,12 +2917,22 @@ void loot::requestImmediateRefresh() noexcept
 
 void loot::immediateRefreshTask()
 {
-    if (!immediateRefreshRequested.load(std::memory_order_acquire))
+    const bool immediateRefresh = immediateRefreshRequested.load(std::memory_order_acquire);
+    const bool acceleratedInitialization = memoryGlobals::lootInitSpeed > 1 && lootInitializationPending.load(std::memory_order_acquire);
+
+    if (!immediateRefresh && !acceleratedInitialization)
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!immediateRefresh && now < nextLootInitializationRun)
         return;
 
     if (mem.ShouldDeferDmaWork(DmaPriority::Background))
         return;
 
     lootTask();
+
+    if (acceleratedInitialization)
+        nextLootInitializationRun = std::chrono::steady_clock::now() + getLootInitializationInterval();
 }
 

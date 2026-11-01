@@ -1054,7 +1054,7 @@ void AtlasVisibilityService::visibilityTask()
 
     for (const Player& player : *snapshot)
     {
-        if (player.isLocal || player.isBTR || player.isDead || player.hasExfiled || player.isZombie || !Utils::valid_pointer(player.instance))
+        if (player.isLocal || player.isBTR || player.isDead || player.hasExfiled || !Utils::valid_pointer(player.instance))
         {
             if (!player.isLocal)
                 edits.push_back({ player.instance, false });

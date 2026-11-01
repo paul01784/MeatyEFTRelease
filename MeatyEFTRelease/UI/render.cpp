@@ -2279,6 +2279,24 @@ static void renderMenuSettings()
     }
     else
     {
+        if (menuLayout::Section("Advanced DMA Settings"))
+        {
+            bool changed = false;
+            changed |= menuLayout::SliderIntRow("Loot Init Speed", "lootInitSpeed", &memoryGlobals::lootInitSpeed, 1, 5, "%d");
+            changed |= menuLayout::SliderIntRow("Loot Update Speed", "lootUpdateSpeed", &memoryGlobals::lootUpdateSpeed, 1, 5, "%d");
+
+            memoryGlobals::lootInitSpeed = std::clamp(memoryGlobals::lootInitSpeed, 1, 5);
+            memoryGlobals::lootUpdateSpeed = std::clamp(memoryGlobals::lootUpdateSpeed, 1, 5);
+
+            if (changed)
+            {
+                memoryGlobals::applyLootUpdateSpeed();
+                Loot.requestImmediateRefresh();
+                configManager.SaveConfig();
+            }
+
+        }
+
         if (menuLayout::Section("Static visibility (Factory)"))
         {
             bool changed = false;

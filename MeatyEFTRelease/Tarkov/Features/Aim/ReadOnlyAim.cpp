@@ -85,7 +85,6 @@ std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity,
         entity.isLocal ||
         entity.isBTR ||
         entity.isInBTR ||
-        entity.isZombie ||
         entity.isFriend ||
         entity.isDead ||
         entity.hasExfiled)

@@ -3,7 +3,7 @@
 // EFT_ALIAS for an existing compatibility name. The same entry automatically
 // participates in storage, resolution, offsets.json and the Updates table.
 // EFT_FIELD: group, public name, fully-qualified class, dumped field, fallback, static, required
-EFT_TYPE(GamePlayerOwner, TypeIndex, "EFT.GamePlayerOwner", 0x21E9, true)
+EFT_TYPE(GamePlayerOwner, TypeIndex, "EFT.GamePlayerOwner", 0x2215, true)
 EFT_FIELD(GamePlayerOwner, MyPlayer, "EFT.GamePlayerOwner", "_myPlayer", 0x8, true, true)
 
 EFT_FIELD(GameWorld, Location, "EFT.GameWorld", "<LocationId>k__BackingField", 0xE8, false, true)
@@ -106,7 +106,7 @@ EFT_FIELD(DogtagComponent, KillerName, "EFT.InventoryLogic.DogtagComponent", "Ki
 EFT_FIELD(Profile, Id, "EFT.Profile", "Id", 0x10, false, true)
 EFT_FIELD(Profile, Info, "EFT.Profile", "Info", 0x48, false, true)
 EFT_FIELD(Profile, QuestsData, "EFT.Profile", "QuestsData", 0x98, false, true)
-EFT_FIELD(Profile, WishlistManager, "EFT.Profile", "WishlistManager", 0x130, false, true)
+EFT_FIELD(Profile, WishlistManager, "EFT.Profile", "WishlistManager", 0x138, false, true)
 EFT_FIELD(WishlistManager, _wishlistItems, "EFT.WishlistManager", "_wishlistItems", 0x30, false, true)
 EFT_FIELD(QuestsData, Id, "EFT.Quests.QuestStatusData", "Id", 0x10, false, true)
 EFT_FIELD(QuestsData, Status, "EFT.Quests.QuestStatusData", "Status", 0x1C, false, true)
@@ -173,11 +173,11 @@ EFT_FIELD(HideoutTraderUnlockRequirement, TraderId, "EFT.Hideout.TraderUnlockReq
 EFT_FIELD(HideoutTraderLoyaltyRequirement, LoyaltyLevel, "EFT.Hideout.TraderLoyaltyRequirement", "LoyaltyLevel", 0x40, false, true)
 EFT_FIELD(HideoutTraderLoyaltyRequirement, TraderId, "EFT.Hideout.TraderLoyaltyRequirement", "TraderId", 0x48, false, true)
 
-EFT_TYPE(HideoutAreaQTEOverlay, TypeIndex, "EFT.Hideout.HideoutAreaQTEOverlay", 0x2615, true)
+EFT_TYPE(HideoutAreaQTEOverlay, TypeIndex, "EFT.Hideout.HideoutAreaQTEOverlay", 0x2645, true)
 EFT_FIELD(HideoutAreaQTEOverlay, QteController, "EFT.Hideout.HideoutAreaQTEOverlay", "QteController", 0x0, true, true)
-EFT_TYPE(QTEController, TypeIndex, "EFT.Hideout.QTEController", 0x263C, true)
+EFT_TYPE(QTEController, TypeIndex, "EFT.Hideout.QTEController", 0x266C, true)
 EFT_FIELD(QTEController, SpawnedQtes, "EFT.Hideout.QTEController", "_spawnedQtes", 0x90, false, true)
-EFT_TYPE(ShrinkingCircleQTE, TypeIndex, "EFT.Hideout.ShrinkingCircleQTE", 0x2648, true)
+EFT_TYPE(ShrinkingCircleQTE, TypeIndex, "EFT.Hideout.ShrinkingCircleQTE", 0x2678, true)
 EFT_FIELD(ShrinkingCircleQTE, Speed, "EFT.Hideout.ShrinkingCircleQTE", "_speed", 0x20, false, true)
 EFT_FIELD(ShrinkingCircleQTE, SuccessRange, "EFT.Hideout.ShrinkingCircleQTE", "_successRange", 0x24, false, true)
 EFT_FIELD(ShrinkingCircleQTE, MinScale, "EFT.Hideout.ShrinkingCircleQTE", "_minScale", 0x2C, false, true)

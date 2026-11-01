@@ -97,6 +97,11 @@ struct memoryGlobals {
     static bool dmaAutoConnect;
     static bool dmaCloseAll;
     static bool dmaShowStats;
+    static int lootInitSpeed;
+    static int lootUpdateSpeed;
+
+    static void applyLootUpdateSpeed();
+    [[nodiscard]] static std::chrono::milliseconds getLootUpdateInterval();
 };
 
 struct radarGlobals {

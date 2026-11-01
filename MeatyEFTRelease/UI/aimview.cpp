@@ -557,7 +557,6 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
 
     for (const Player& player : cache) {
         if (!Utils::valid_pointer(player.instance) ||
-            player.isZombie ||
             player.isLocal ||
             player.hasExfiled ||
             player.isDead ||

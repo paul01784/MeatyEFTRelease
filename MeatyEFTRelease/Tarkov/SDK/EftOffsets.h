@@ -18,7 +18,7 @@ namespace sdk
     namespace Runtime
     {
 
-        inline std::uint64_t TypeInfoTableRva = 0x5F589D8;
+        inline std::uint64_t TypeInfoTableRva = 0x5FB0F48;
         inline std::uint64_t Il2CppClassStaticFields = 0xB8;
     }
 }

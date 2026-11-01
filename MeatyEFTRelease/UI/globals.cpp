@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.43";
+std::string globals::appVersion = "1.0.44";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -87,6 +87,26 @@ std::atomic_bool memoryGlobals::processFound{ false };
 bool memoryGlobals::dmaAutoConnect = false;
 bool memoryGlobals::dmaCloseAll = true;
 bool memoryGlobals::dmaShowStats = true;
+int memoryGlobals::lootInitSpeed = 3;
+int memoryGlobals::lootUpdateSpeed = 3;
+
+std::chrono::milliseconds memoryGlobals::getLootUpdateInterval()
+{
+    switch (std::clamp(lootUpdateSpeed, 1, 5))
+    {
+    case 1: return std::chrono::seconds(10);
+    case 2: return std::chrono::seconds(6);
+    case 4: return std::chrono::seconds(2);
+    case 5: return std::chrono::seconds(1);
+    default: return std::chrono::seconds(3);
+    }
+}
+
+void memoryGlobals::applyLootUpdateSpeed()
+{
+    lootUpdateSpeed = std::clamp(lootUpdateSpeed, 1, 5);
+    globals::taskLoot = static_cast<double>(getLootUpdateInterval().count());
+}
 
 
 bool radarGlobals::minimalView = false;
