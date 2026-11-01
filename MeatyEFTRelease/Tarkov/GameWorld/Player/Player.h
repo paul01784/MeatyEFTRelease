@@ -202,7 +202,9 @@ public:
 	bool isFriend;
 	bool friendGroupOverride;
 	bool isBTR;
+	uint64_t btrController;
 	uint64_t btrView;
+	uint64_t btrTurret;
 	bool isInBTR;
 	uint64_t btrPassengerVehicle{ 0 };
 	glm::vec3 btrPreviousPosition{};
@@ -306,6 +308,7 @@ public:
 		profileId(""),
 		side(""),
 		voice(""),
+		playerSide(static_cast<EPlayerSide>(0)),
 		hasProfileData(0),
 		profileDataMode(-1),
 		attemptedProfileDataModes(0),
@@ -330,7 +333,9 @@ public:
 		isFriend(false),
 		friendGroupOverride(false),
 		isBTR(false),
+		btrController(0),
 		btrView(0),
+		btrTurret(0),
 		isInBTR(false),
 		isDead(false),
 		hasExfiled(false),

@@ -3,8 +3,10 @@
 #include "DxRenderWindow.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <atomic>
 #include <iomanip>
@@ -36,7 +38,25 @@ namespace fuserRender
     inline thread_local QuestPublishedSnapshot g_frameQuestSnapshot;
     inline thread_local ExfilCacheSnapshot g_frameExfilSnapshot;
     inline thread_local FireportPoseSnapshot g_frameFireportSnapshot;
+    inline thread_local std::shared_ptr<const AppearanceConfig> g_frameAppearanceSnapshot;
     inline thread_local glm::vec3 g_frameLocalLocation{};
+
+    struct FuserLootRenderEntry
+    {
+        const LootEntity* loot = nullptr;
+        MarkerCategory category = MarkerCategory::Loot;
+        std::string baseLabel;
+        std::string corpseOwnerName;
+        std::string markerText;
+        std::string detailText;
+        int lastDistance = (std::numeric_limits<int>::min)();
+        bool corpseHasWantedEquipment = false;
+    };
+
+    inline thread_local LootCacheSnapshot g_renderableLootSourceSnapshot;
+    inline thread_local std::vector<FuserLootRenderEntry> g_renderableLoot;
+    inline thread_local bool g_renderableLootShowsValue = false;
+    inline thread_local int g_renderableLootPriceSource = -1;
 
     static inline bool ProjectWorldToScreen(
         const glm::vec3& world,
@@ -52,13 +72,6 @@ namespace fuserRender
                 *screen,
                 espGlobals::gameRes.x,
                 espGlobals::gameRes.y);
-    }
-
-    static inline bool ProjectSkeletonWorldToScreen(
-        const glm::vec3& world,
-        glm::vec2* screen)
-    {
-        return ProjectWorldToScreen(world, screen);
     }
 
     static inline bool FrameCameraValid()
@@ -84,6 +97,7 @@ namespace fuserRender
         g_frameQuestSnapshot = GetQuestPublishedSnapshot();
         g_frameExfilSnapshot = exfil.getCacheExfilSnapshot();
         g_frameFireportSnapshot = g_fireport.getSnapshot();
+        g_frameAppearanceSnapshot = appearanceManager.GetSnapshot();
         g_frameLocalLocation = registeredPlayers.getLocalStateSnapshot()->location;
     }
 
@@ -96,6 +110,16 @@ namespace fuserRender
         g_frameQuestSnapshot.reset();
         g_frameExfilSnapshot.reset();
         g_frameFireportSnapshot.reset();
+        g_frameAppearanceSnapshot.reset();
+    }
+
+    static inline const MarkerStyle& FrameMarkerStyle(MarkerCategory category)
+    {
+        static const MarkerStyle fallback{};
+        const size_t index = static_cast<size_t>(category);
+        return g_frameAppearanceSnapshot && index < g_frameAppearanceSnapshot->markers.size()
+            ? g_frameAppearanceSnapshot->markers[index]
+            : fallback;
     }
 
     //exception tracking
@@ -228,7 +252,7 @@ namespace fuserRender
 
     static inline void RenderStyledWorldMarker(MarkerCategory category, const glm::vec2& screenPosition, const std::string& label, const glm::vec4& markerColour)
     {
-        const MarkerStyle style = appearanceManager.GetStyle(category);
+        const MarkerStyle& style = FrameMarkerStyle(category);
         const MarkerViewStyle& view = style.fuser;
         glm::vec4 fillColour = markerColour;
         fillColour.a = std::clamp(fillColour.a * style.fillOpacity, 0.0f, 1.0f);
@@ -256,7 +280,7 @@ namespace fuserRender
 
     static inline void RenderStyledWorldLabel(MarkerCategory category, const glm::vec2& screenPosition, const std::string& label, const glm::vec4& markerColour, bool centered = true)
     {
-        const MarkerStyle style = appearanceManager.GetStyle(category);
+        const MarkerStyle& style = FrameMarkerStyle(category);
         const glm::vec4 textColour = GetMarkerTextColour(style, markerColour);
         g_DxWindow.DrawString(label, screenPosition.x, screenPosition.y, style.fuser.fontSize, textColour, centered, style.textOutline,
             style.textOutlineColour, L"", style.textShadow, style.shadowOffset);
@@ -579,6 +603,57 @@ namespace fuserRender
         return text;
     }
 
+    static inline void RefreshRenderableLootCache()
+    {
+        const bool showLootValue = lootGlobals::showLootValue;
+        const int priceSource = lootGlobals::lootValuePriceSource;
+        if (g_renderableLootSourceSnapshot.get() == g_frameLootSnapshot.get() &&
+            g_renderableLootShowsValue == showLootValue &&
+            g_renderableLootPriceSource == priceSource)
+        {
+            return;
+        }
+
+        g_renderableLootSourceSnapshot = g_frameLootSnapshot;
+        g_renderableLootShowsValue = showLootValue;
+        g_renderableLootPriceSource = priceSource;
+        g_renderableLoot.clear();
+
+        if (!g_renderableLootSourceSnapshot)
+            return;
+
+        g_renderableLoot.reserve(g_renderableLootSourceSnapshot->size());
+        for (const LootEntity& loot : *g_renderableLootSourceSnapshot)
+        {
+            if (loot.pendingResolve || loot.failed || !loot.hasValidPosition || !loot.wanted)
+                continue;
+
+            FuserLootRenderEntry entry{};
+            entry.loot = &loot;
+
+            if (loot.isCorpse())
+            {
+                entry.category = MarkerCategory::Corpse;
+                entry.corpseOwnerName = CleanText(GetRenderableCorpseOwnerLabel(loot));
+                entry.corpseHasWantedEquipment = loot.getCorpseState().hasWantedEquipment();
+                entry.markerText = "Corpse";
+
+                const std::string corpseValue = FormatLootPrice(loot.getCorpseValue());
+                if (!corpseValue.empty())
+                    entry.markerText += " (" + corpseValue + ")";
+            }
+            else
+            {
+                entry.category = loot.isQuestItem()
+                    ? MarkerCategory::Quest
+                    : (loot.isContainer() ? MarkerCategory::Container : MarkerCategory::Loot);
+                entry.baseLabel = GetLootDisplayName(loot);
+            }
+
+            g_renderableLoot.emplace_back(std::move(entry));
+        }
+    }
+
     static inline float ScreenWidth()
     {
         const int w = g_DxWindow.GetWindowWidth();
@@ -687,7 +762,7 @@ namespace fuserRender
         const float screenH = ScreenHeight();
         const float centerX = screenW * 0.5f;
         const float centerY = screenH * 0.5f;
-        const MarkerStyle style = appearanceManager.GetStyle(MarkerCategory::Crosshair);
+        const MarkerStyle& style = FrameMarkerStyle(MarkerCategory::Crosshair);
         const float size = style.fuser.size;
         const float thickness = style.markerOutlineThickness;
 
@@ -743,20 +818,49 @@ namespace fuserRender
             !espGlobals::drawFireportLine)
             return;
 
-
         const FireportPose& pose = *g_frameFireportSnapshot;
-        if (!pose.valid || !pose.screenStartOk || !pose.screenEndOk)
+        if (!IsFireportPoseFresh(pose, kFireportVisualMaxAge))
+            return;
+
+        const glm::vec3 endpoint =
+            pose.worldOrigin +
+            pose.worldForward * kFireportProjectionDistanceM;
+        glm::vec2 endpointScreen{};
+        const bool endpointVisible = CameraManager::worldToScreen(
+            *g_frameManagedCameraSnapshot,
+            endpoint,
+            endpointScreen,
+            espGlobals::gameRes.x,
+            espGlobals::gameRes.y,
+            0.0f);
+
+        CameraScreenSegment segment{};
+        const bool segmentVisible = CameraManager::worldSegmentToScreen(
+            *g_frameManagedCameraSnapshot,
+            pose.worldOrigin,
+            endpoint,
+            espGlobals::gameRes.x,
+            espGlobals::gameRes.y,
+            segment);
+        if (!segmentVisible && !endpointVisible)
             return;
 
         static const glm::vec4 kFireportLine{1.0f, 0.86f, 0.24f, 0.95f};
-        g_DxWindow.DrawLine(
-            pose.screenStart.x,
-            pose.screenStart.y,
-            pose.screenEnd.x,
-            pose.screenEnd.y,
-            kFireportLine,
-            2.0f
-        );
+        if (segmentVisible)
+        {
+            g_DxWindow.DrawLine(
+                segment.start.x,
+                segment.start.y,
+                segment.end.x,
+                segment.end.y,
+                kFireportLine,
+                2.0f);
+        }
+
+        // In ADS the fireport ray can align with the optic camera and its
+        // projected line collapses to a point. Keep its endpoint visible.
+        if (endpointVisible)
+            g_DxWindow.DrawCircle(endpointScreen.x, endpointScreen.y, 3.0f, kFireportLine, 2.0f);
     }
 
     static inline void RenderAimFovRing()
@@ -769,13 +873,32 @@ namespace fuserRender
             return;
 
         const FireportPose& pose = *g_frameFireportSnapshot;
-        if (!pose.valid || !pose.aimRefOk)
+        if (!IsFireportPoseFresh(pose, kFireportAimMaxAge) ||
+            !FrameCameraValid())
             return;
 
-        const MarkerStyle style = appearanceManager.GetStyle(MarkerCategory::FovCircle);
+        const glm::vec3 endpoint =
+            pose.worldOrigin +
+            pose.worldForward * kFireportProjectionDistanceM;
+        glm::vec2 screenEnd{};
+        if (!CameraManager::worldToScreen(
+            *g_frameManagedCameraSnapshot,
+            endpoint,
+            screenEnd,
+            espGlobals::gameRes.x,
+            espGlobals::gameRes.y) ||
+            screenEnd.x < 0.0f ||
+            screenEnd.x > espGlobals::gameRes.x ||
+            screenEnd.y < 0.0f ||
+            screenEnd.y > espGlobals::gameRes.y)
+        {
+            return;
+        }
+
+        const MarkerStyle& style = FrameMarkerStyle(MarkerCategory::FovCircle);
         g_DxWindow.DrawCircle(
-            pose.screenEnd.x,
-            pose.screenEnd.y,
+            screenEnd.x,
+            screenEnd.y,
             aimGlobals::aimFOV,
             coloursGlobals::fovCircle,
             style.markerOutlineThickness
@@ -1064,8 +1187,6 @@ namespace fuserRender
 
     static inline void DrawPlayerSkeleton(
         const Player& player,
-        const std::vector<glm::vec2>& bones,
-        const std::vector<bool>& visibleBones,
         const glm::vec4& colour)
     {
         auto drawBoneLine = [&](int a, int b)
@@ -1076,47 +1197,30 @@ namespace fuserRender
                 const size_t firstBone = static_cast<size_t>(a);
                 const size_t secondBone = static_cast<size_t>(b);
 
-                if (firstBone >= bones.size() ||
-                    secondBone >= bones.size() ||
+                if (!g_frameManagedCameraSnapshot ||
                     firstBone >= player.bonePositions.size() ||
-                    secondBone >= player.bonePositions.size() ||
-                    firstBone >= visibleBones.size() ||
-                    secondBone >= visibleBones.size())
+                    secondBone >= player.bonePositions.size())
                 {
                     return;
                 }
 
-                std::vector<CameraScreenSegment> segments;
-                if (g_frameManagedCameraSnapshot &&
-                    CameraManager::worldSegmentToScreen(
-                        *g_frameManagedCameraSnapshot,
-                        player.bonePositions[firstBone],
-                        player.bonePositions[secondBone],
-                        espGlobals::gameRes.x,
-                        espGlobals::gameRes.y,
-                        segments))
+                CameraScreenSegment segment{};
+                if (!CameraManager::worldSegmentToScreen(
+                    *g_frameManagedCameraSnapshot,
+                    player.bonePositions[firstBone],
+                    player.bonePositions[secondBone],
+                    espGlobals::gameRes.x,
+                    espGlobals::gameRes.y,
+                    segment))
                 {
-                    for (const CameraScreenSegment& segment : segments)
-                    {
-                        g_DxWindow.DrawLine(
-                            segment.start.x,
-                            segment.start.y,
-                            segment.end.x,
-                            segment.end.y,
-                            colour,
-                            1.0f);
-                    }
                     return;
                 }
-
-                if (!visibleBones[firstBone] || !visibleBones[secondBone])
-                    return;
 
                 g_DxWindow.DrawLine(
-                    bones[firstBone].x,
-                    bones[firstBone].y,
-                    bones[secondBone].x,
-                    bones[secondBone].y,
+                    segment.start.x,
+                    segment.start.y,
+                    segment.end.x,
+                    segment.end.y,
                     colour,
                     1.0f
                 );
@@ -1135,38 +1239,6 @@ namespace fuserRender
 
         drawBoneLine(boneListIndexes::Pelvis, boneListIndexes::RThigh);
         drawBoneLine(boneListIndexes::RThigh, boneListIndexes::RFoot);
-    }
-
-    static inline bool GetPlayerBoneScreenPositions(
-        const Player& player,
-        std::vector<glm::vec2>& outBones,
-        std::vector<bool>& outVisibleBones)
-    {
-        if (player.bonePositions.empty())
-            return false;
-
-        outBones.clear();
-        outBones.resize(player.bonePositions.size());
-        outVisibleBones.assign(player.bonePositions.size(), false);
-
-        size_t projectedBoneCount = 0;
-
-        for (size_t i = 0; i < player.bonePositions.size(); ++i)
-        {
-            glm::vec2 screenPos{};
-
-            if (!ProjectSkeletonWorldToScreen(player.bonePositions[i], &screenPos))
-                continue;
-
-            if (!std::isfinite(screenPos.x) || !std::isfinite(screenPos.y))
-                continue;
-
-            outBones[i] = screenPos;
-            outVisibleBones[i] = true;
-            ++projectedBoneCount;
-        }
-
-        return projectedBoneCount >= 2;
     }
 
     static inline bool HasBones(
@@ -1268,67 +1340,57 @@ namespace fuserRender
         }
     }
 
-    static inline const Player* FindPassengerBtr(const Player& passenger, const PlayerCollection& players)
+    struct BtrPassengerColours
     {
-        if (!passenger.isInBTR || passenger.isBTR || passenger.btrPassengerVehicle == 0)
-            return nullptr;
+        std::array<glm::vec4, 4> values{};
+        size_t count = 0;
+    };
 
-        for (const Player& candidate : players)
-        {
-            if (!candidate.isBTR ||
-                candidate.isDead ||
-                candidate.hasExfiled ||
-                !Utils::valid_pointer(candidate.instance) ||
-                candidate.instance != passenger.btrPassengerVehicle)
-            {
-                continue;
-            }
-
-            return &candidate;
-        }
-
-        return nullptr;
-    }
-
-    static inline std::vector<glm::vec4> GetBtrPassengerColours(const Player& btr, const PlayerCollection& players, float opacityMultiplier)
+    static inline BtrPassengerColours GetBtrPassengerColours(const Player& btr, const PlayerCollection& players, float opacityMultiplier)
     {
-        std::vector<const Player*> passengers;
-        passengers.reserve(4);
+        std::array<const Player*, 4> passengers{};
+        size_t passengerCount = 0;
 
         for (const Player& player : players)
         {
             if (player.isDead ||
                 player.hasExfiled ||
                 !Utils::valid_pointer(player.instance) ||
-                FindPassengerBtr(player, players) != &btr)
+                !player.isInBTR ||
+                player.isBTR ||
+                player.btrPassengerVehicle != btr.instance)
             {
                 continue;
             }
 
-            passengers.push_back(&player);
+            size_t insertionIndex = 0;
+            while (insertionIndex < passengerCount && passengers[insertionIndex]->instance < player.instance)
+                ++insertionIndex;
+
+            if (insertionIndex >= passengers.size())
+                continue;
+
+            const size_t moveEnd = std::min(passengerCount, passengers.size() - 1);
+            for (size_t index = moveEnd; index > insertionIndex; --index)
+                passengers[index] = passengers[index - 1];
+
+            passengers[insertionIndex] = &player;
+            passengerCount = std::min(passengerCount + 1, passengers.size());
         }
 
-        std::sort(
-            passengers.begin(),
-            passengers.end(),
-            [](const Player* left, const Player* right)
-            {
-                return left->instance < right->instance;
-            });
-
-        std::vector<glm::vec4> colours;
-        colours.reserve(std::min<size_t>(4, passengers.size()));
-        for (size_t index = 0; index < passengers.size() && index < 4; ++index)
+        BtrPassengerColours colours{};
+        colours.count = passengerCount;
+        for (size_t index = 0; index < passengerCount; ++index)
         {
             glm::vec4 colour = PlayerAppearance::resolveColour(*passengers[index]);
             colour.a = std::clamp(colour.a * opacityMultiplier, 0.0f, 1.0f);
-            colours.push_back(colour);
+            colours.values[index] = colour;
         }
 
         return colours;
     }
 
-    static inline void RenderFuserBtrMarker(const glm::vec2& screenPosition, const glm::vec4& colour, const std::vector<glm::vec4>& passengerColours)
+    static inline void RenderFuserBtrMarker(const glm::vec2& screenPosition, const glm::vec4& colour, const BtrPassengerColours& passengerColours)
     {
         const float centerX = screenPosition.x;
         const float centerY = screenPosition.y;
@@ -1342,7 +1404,7 @@ namespace fuserRender
             true,
             true);
 
-        const size_t passengerCount = std::min<size_t>(4, passengerColours.size());
+        const size_t passengerCount = passengerColours.count;
         const float passengerSpacing = 8.0f;
         const float passengerStartX = centerX -
             ((static_cast<float>(passengerCount) - 1.0f) * passengerSpacing * 0.5f);
@@ -1353,7 +1415,7 @@ namespace fuserRender
                 (static_cast<float>(index) * passengerSpacing);
             const float passengerY = centerY;
             g_DxWindow.DrawFilledCircle(passengerX, passengerY, 3.5f, glm::vec4(0.0f, 0.0f, 0.0f, 0.96f * colour.a));
-            g_DxWindow.DrawFilledCircle(passengerX, passengerY, 2.4f, passengerColours[index]);
+            g_DxWindow.DrawFilledCircle(passengerX, passengerY, 2.4f, passengerColours.values[index]);
         }
     }
 
@@ -1364,6 +1426,19 @@ namespace fuserRender
 
             if (cache.empty())
                 return;
+
+            static thread_local std::vector<uint64_t> activeBtrInstances;
+            activeBtrInstances.clear();
+            if (activeBtrInstances.capacity() == 0)
+                activeBtrInstances.reserve(2);
+
+            for (const Player& candidate : cache)
+            {
+                if (!candidate.isBTR || candidate.isDead || candidate.hasExfiled || !Utils::valid_pointer(candidate.instance))
+                    continue;
+
+                activeBtrInstances.push_back(candidate.instance);
+            }
 
             for (const auto& player : cache)
             {
@@ -1384,8 +1459,11 @@ namespace fuserRender
 
                 const int displayDistance = static_cast<int>(frameDistance);
 
-                if (FindPassengerBtr(player, cache) != nullptr)
-                    continue;
+                if (player.isInBTR && !player.isBTR && player.btrPassengerVehicle != 0)
+                {
+                    if (std::find(activeBtrInstances.begin(), activeBtrInstances.end(), player.btrPassengerVehicle) != activeBtrInstances.end())
+                        continue;
+                }
 
                 glm::vec2 screenPos{};
                 const bool rootVisible = ProjectWorldToScreen(
@@ -1598,13 +1676,7 @@ namespace fuserRender
                         continue;
                     }
 
-                    std::vector<glm::vec2> boneScreenPositions;
-                    std::vector<bool> visibleBones;
-
-                    if (!GetPlayerBoneScreenPositions(player, boneScreenPositions, visibleBones))
-                        continue;
-
-                    DrawPlayerSkeleton(player, boneScreenPositions, visibleBones, playerColour);
+                    DrawPlayerSkeleton(player, playerColour);
                 }
             }
         
@@ -1612,22 +1684,13 @@ namespace fuserRender
 
     static inline void RenderLoot()
     {
-        const LootCacheCollection& lootList = *g_frameLootSnapshot;
+        RefreshRenderableLootCache();
 
-        for (const auto& loot : lootList)
+        for (FuserLootRenderEntry& entry : g_renderableLoot)
         {
+            const LootEntity& loot = *entry.loot;
             const bool isCorpse = loot.isCorpse();
-            const bool isQuestItem = loot.isQuestItem();
             if (!espGlobals::drawLoot && !isCorpse)
-                continue;
-
-            if (loot.pendingResolve || loot.failed)
-                continue;
-
-            if (!loot.hasValidPosition)
-                continue;
-
-            if (!loot.wanted)
                 continue;
 
             if (isCorpse && !espGlobals::drawCorpse)
@@ -1649,42 +1712,18 @@ namespace fuserRender
             if (lootColour.a <= 0.001f)
                 continue;
 
-            const std::string corpseOwnerName = isCorpse
-                ? CleanText(GetRenderableCorpseOwnerLabel(loot))
-                : "";
-            const bool corpseHasWantedEquipment =
-                isCorpse && loot.getCorpseState().hasWantedEquipment();
-
-            std::string lootText;
-            std::string corpseDetailText;
-
-            if (isCorpse)
+            if (entry.lastDistance != distance)
             {
-                lootText = "Corpse";
-
-                const std::string corpseValue = FormatLootPrice(loot.getCorpseValue());
-                if (!corpseValue.empty())
-                    lootText += " (" + corpseValue + ")";
-
-                if (!corpseOwnerName.empty())
-                    corpseDetailText = corpseOwnerName + " [" + std::to_string(distance) + "m]";
+                entry.lastDistance = distance;
+                if (isCorpse && !entry.corpseOwnerName.empty())
+                    entry.detailText = entry.corpseOwnerName + " [" + std::to_string(distance) + "m]";
+                else if (isCorpse)
+                    entry.detailText = "[" + std::to_string(distance) + "m]";
                 else
-                    corpseDetailText = "[" + std::to_string(distance) + "m]";
-            }
-            else
-            {
-                lootText =
-                    GetLootDisplayName(loot) +
-                    " " +
-                    std::to_string(distance) +
-                    "m";
+                    entry.markerText = entry.baseLabel + " " + std::to_string(distance) + "m";
             }
 
-            const MarkerCategory lootCategory = isCorpse
-                ? MarkerCategory::Corpse
-                : (isQuestItem ? MarkerCategory::Quest : (loot.isContainer() ? MarkerCategory::Container : MarkerCategory::Loot));
-
-            if (corpseHasWantedEquipment)
+            if (entry.corpseHasWantedEquipment)
             {
                 g_DxWindow.DrawString(
                     "*",
@@ -1697,13 +1736,13 @@ namespace fuserRender
                 );
             }
 
-            RenderStyledWorldMarker(lootCategory, screenPos, lootText, lootColour);
+            RenderStyledWorldMarker(entry.category, screenPos, entry.markerText, lootColour);
 
             if (isCorpse)
             {
-                const MarkerStyle corpseStyle = appearanceManager.GetStyle(MarkerCategory::Corpse);
+                const MarkerStyle& corpseStyle = FrameMarkerStyle(MarkerCategory::Corpse);
                 const float detailY = screenPos.y + corpseStyle.fuser.size + 4.0f + corpseStyle.fuser.fontSize + 3.0f;
-                RenderStyledWorldLabel(MarkerCategory::Corpse, glm::vec2(screenPos.x, detailY), corpseDetailText, lootColour);
+                RenderStyledWorldLabel(MarkerCategory::Corpse, glm::vec2(screenPos.x, detailY), entry.detailText, lootColour);
             }
         }
     }

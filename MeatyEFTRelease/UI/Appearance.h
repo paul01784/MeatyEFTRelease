@@ -102,6 +102,7 @@ public:
 
     bool LoadOrCreateFromLegacy();
     bool Save() const;
+    std::shared_ptr<const AppearanceConfig> GetSnapshot() const noexcept;
     AppearanceConfig GetConfig() const;
     MarkerStyle GetStyle(MarkerCategory category) const;
     PlayerMarkerStyle GetPlayerMarkerStyle(PlayerMarkerType type) const;

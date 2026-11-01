@@ -1382,9 +1382,9 @@ bool CameraManager::worldToScreen(const CameraManagerState& state, const glm::ve
     return project(state.viewMatrix);
 }
 
-bool CameraManager::worldSegmentToScreen(const CameraManagerState& state, const glm::vec3& worldStart, const glm::vec3& worldEnd, float viewportWidth, float viewportHeight, std::vector<CameraScreenSegment>& segments)
+bool CameraManager::worldSegmentToScreen(const CameraManagerState& state, const glm::vec3& worldStart, const glm::vec3& worldEnd, float viewportWidth, float viewportHeight, CameraScreenSegment& segment)
 {
-    segments.clear();
+    segment = {};
     if (!state.valid || !std::isfinite(viewportWidth) || !std::isfinite(viewportHeight) || viewportWidth <= 0.0f || viewportHeight <= 0.0f)
         return false;
 
@@ -1427,12 +1427,10 @@ bool CameraManager::worldSegmentToScreen(const CameraManagerState& state, const 
 
         const glm::vec2 firstNdc = glm::vec2(clippedFirst) / clippedFirst.w;
         const glm::vec2 lastNdc = glm::vec2(clippedLast) / clippedLast.w;
-        CameraScreenSegment segment{};
         segment.start = {viewportWidth * 0.5f * (1.0f + firstNdc.x), viewportHeight * 0.5f * (1.0f - firstNdc.y)};
         segment.end = {viewportWidth * 0.5f * (1.0f + lastNdc.x), viewportHeight * 0.5f * (1.0f - lastNdc.y)};
         if (!std::isfinite(segment.start.x) || !std::isfinite(segment.start.y) || !std::isfinite(segment.end.x) || !std::isfinite(segment.end.y))
             return false;
-        segments.push_back(segment);
         return true;
     };
 

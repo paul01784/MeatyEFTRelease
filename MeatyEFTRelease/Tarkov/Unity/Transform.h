@@ -9,6 +9,13 @@
 
 #include <iostream>
 
+enum class TransformPoseReadResult : std::uint8_t
+{
+    Success,
+    Busy,
+    Failed
+};
+
 class UnityTransform
 {
 public:
@@ -47,6 +54,9 @@ public:
     glm::vec3& UpdatePosition(std::span<TrsX> vertices = {});
     glm::quat  GetRotation(std::span<TrsX> vertices = {});
     bool UpdateWorldPose(glm::vec3& position, glm::quat& rotation);
+    [[nodiscard]] TransformPoseReadResult TryUpdateWorldPose(
+        glm::vec3& position,
+        glm::quat& rotation);
 
     glm::vec3 GetRootPosition(); 
     glm::vec3 GetLocalPosition();

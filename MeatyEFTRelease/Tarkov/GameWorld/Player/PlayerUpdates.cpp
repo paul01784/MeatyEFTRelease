@@ -10,6 +10,7 @@
 #include "../../../UI/globals.h"
 #include "../../../memory/Memory.h"
 #include "../../../memory/ScatterReadBatch.h"
+#include "../Loot/Loot.h"
 #include "../MainGame.h"
 #include "../../Unity/cameraManager.h"
 
@@ -239,6 +240,7 @@ void RegisteredPlayers::updateEntity()
             if (Utils::valid_pointer(player.P_CorpseClass))
             {
                 player.isDead = true;
+                Loot.requestImmediateRefresh();
                 player.distance = getDistance(player.location, mainGame.localLocation);
                 PlayerAppearance::updateColour(player);
                 continue;

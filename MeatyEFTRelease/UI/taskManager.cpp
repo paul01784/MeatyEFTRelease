@@ -128,7 +128,10 @@ void TaskManager::run(std::stop_token stopToken)
             (std::max)(0.0, task.options.phaseOffsetMs));
 
         task.nextRun = startedAt +
-            std::chrono::duration_cast<Clock::duration>(interval + phase);
+            std::chrono::duration_cast<Clock::duration>(
+                (task.options.runOnStart
+                    ? decltype(interval)::zero()
+                    : interval) + phase);
     }
 
     while (!stopToken.stop_requested() && appGlobals::runThreads.load(std::memory_order_acquire))

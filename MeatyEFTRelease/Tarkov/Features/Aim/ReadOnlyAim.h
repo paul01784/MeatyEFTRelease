@@ -54,7 +54,8 @@ private:
                                                   const glm::vec2& aimRef,
                                                   const PlayerLocalState& localState,
                                                   const AimPredictionContext& prediction,
-                                                  bool useClosestBoneToFireport) const;
+                                                  bool useClosestBoneToFireport,
+                                                  bool enforceFov = true) const;
 
     bool getSelectedBonePosition(const Player& entity, boneListIndexes selectedBone, glm::vec3& outPosition) const;
 
@@ -75,12 +76,14 @@ private:
                                                         bool useClosestBoneToFireport) const;
 
     void clearTargetState(bool keyIsHeld);
+    void pauseTargetState(bool keyIsHeld);
 
 private:
     mutable std::shared_mutex m_targetMutex;
 
     std::optional<TargetResult> m_liveTarget;
     std::optional<TargetResult> m_activeTarget;
+    std::uint64_t m_lockedInstance = 0;
 
     bool m_wasKeyHeld = false;
     glm::vec2 m_moveRemainder{};

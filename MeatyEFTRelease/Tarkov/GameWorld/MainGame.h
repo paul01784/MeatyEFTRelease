@@ -1,8 +1,14 @@
 #pragma once
 #include <shared_mutex>
 #include <array>
+#include <atomic>
+#include <memory>
 #include <stop_token>
+#include <vector>
 #include <glm/glm.hpp>
+
+using RegisteredPlayerArray = std::vector<std::uint64_t>;
+using RegisteredPlayerArraySnapshot = std::shared_ptr<const RegisteredPlayerArray>;
 
 class MainGame {
 
@@ -17,6 +23,7 @@ public:
 	static uint64_t registeredPlayersList;
 	static int registeredPlayersCount;
 	static uint64_t player_buffer[327];
+	static std::atomic<RegisteredPlayerArraySnapshot> registeredPlayerArraySnapshot;
 
 	static bool btrAllocated;
 
@@ -47,6 +54,7 @@ public:
 	bool updatePlayerList();
 	void getPlayerListDetails();
 	bool getGameWorldDetails(std::stop_token stopToken = {});
+	[[nodiscard]] static RegisteredPlayerArraySnapshot getRegisteredPlayerArraySnapshot() noexcept;
 
 	void keyManagerTask();
 

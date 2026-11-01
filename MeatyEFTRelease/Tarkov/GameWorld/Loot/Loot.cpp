@@ -686,6 +686,7 @@ void loot::clearCache()
 
     nextLootDiscovery = {};
     lastDogTagUpdate = {};
+    immediateRefreshRequested.store(false, std::memory_order_release);
     publishCacheSnapshotLocked();
     corpseRefreshCursor = 0;
     dogTagRefreshCursor = 0;
@@ -1947,6 +1948,7 @@ void loot::classifyCorpseLootItems(std::vector<LootEntity>& items)
 
         scanCorpseEquipment(item.m_interactiveClass, item, false);
         item.getCorpseState().value = calculateCorpseValue(item.getCorpseState());
+        g_dogTagCache.ReadFromCorpse(item.m_interactiveClass);
     }
 }
 
@@ -2615,7 +2617,8 @@ void loot::lootTask()
             return;
 
         bool completedLootDiscovery = false;
-        const bool discoveryDue = nextLootDiscovery == std::chrono::steady_clock::time_point{} || now >= nextLootDiscovery;
+        const bool forceDiscovery = immediateRefreshRequested.exchange(false, std::memory_order_acq_rel);
+        const bool discoveryDue = forceDiscovery || nextLootDiscovery == std::chrono::steady_clock::time_point{} || now >= nextLootDiscovery;
 
         if (discoveryDue)
         {
@@ -2865,5 +2868,21 @@ void loot::lootTask()
                 "[LOOT] Unknown exception while updating; retaining the current cache");
         }
     }
+}
+
+void loot::requestImmediateRefresh() noexcept
+{
+    immediateRefreshRequested.store(true, std::memory_order_release);
+}
+
+void loot::immediateRefreshTask()
+{
+    if (!immediateRefreshRequested.load(std::memory_order_acquire))
+        return;
+
+    if (mem.ShouldDeferDmaWork(DmaPriority::Background))
+        return;
+
+    lootTask();
 }
 

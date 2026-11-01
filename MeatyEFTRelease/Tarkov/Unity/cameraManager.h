@@ -115,7 +115,7 @@ public:
 
     [[nodiscard]] static bool worldToScreen(const CameraManagerState& state, const glm::vec3& world, glm::vec2& screen, float viewportWidth, float viewportHeight, float edgeBufferPixels = kScreenEdgeBufferPixels);
 
-    [[nodiscard]] static bool worldSegmentToScreen(const CameraManagerState& state, const glm::vec3& worldStart, const glm::vec3& worldEnd, float viewportWidth, float viewportHeight, std::vector<CameraScreenSegment>& segments);
+    [[nodiscard]] static bool worldSegmentToScreen(const CameraManagerState& state, const glm::vec3& worldStart, const glm::vec3& worldEnd, float viewportWidth, float viewportHeight, CameraScreenSegment& segment);
 
 private:
     struct CameraListView

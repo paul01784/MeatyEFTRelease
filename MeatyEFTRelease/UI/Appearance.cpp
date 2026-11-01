@@ -301,22 +301,27 @@ bool AppearanceManager::Save() const
 
 AppearanceConfig AppearanceManager::GetConfig() const
 {
-    const std::shared_ptr<const AppearanceConfig> snapshot = snapshot_.load(std::memory_order_acquire);
+    const std::shared_ptr<const AppearanceConfig> snapshot = GetSnapshot();
     return snapshot ? *snapshot : Defaults();
+}
+
+std::shared_ptr<const AppearanceConfig> AppearanceManager::GetSnapshot() const noexcept
+{
+    return snapshot_.load(std::memory_order_acquire);
 }
 
 MarkerStyle AppearanceManager::GetStyle(MarkerCategory category) const
 {
-    const AppearanceConfig config = GetConfig();
+    const std::shared_ptr<const AppearanceConfig> snapshot = GetSnapshot();
     const size_t index = CategoryIndex(category);
-    return index < config.markers.size() ? config.markers[index] : MarkerStyle{};
+    return snapshot && index < snapshot->markers.size() ? snapshot->markers[index] : MarkerStyle{};
 }
 
 PlayerMarkerStyle AppearanceManager::GetPlayerMarkerStyle(PlayerMarkerType type) const
 {
-    const AppearanceConfig config = GetConfig();
+    const std::shared_ptr<const AppearanceConfig> snapshot = GetSnapshot();
     const size_t index = static_cast<size_t>(type);
-    return index < config.playerMarkers.size() ? config.playerMarkers[index] : PlayerMarkerStyle{};
+    return snapshot && index < snapshot->playerMarkers.size() ? snapshot->playerMarkers[index] : PlayerMarkerStyle{};
 }
 
 void AppearanceManager::Apply(const AppearanceConfig& config)

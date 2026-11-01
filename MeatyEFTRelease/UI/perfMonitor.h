@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -76,7 +77,7 @@ public:
             ++metric.sampleCount;
         }
 
-        if (durationMs < kSlowTaskMs)
+        if (durationMs < kSlowTaskMs || !consoleLoggingEnabled_.load(std::memory_order_relaxed))
             return;
 
         static std::mutex logMutex;
@@ -112,6 +113,16 @@ public:
             message += " (" + detail + ")";
 
         LOGS.logWarn(message);
+    }
+
+    [[nodiscard]] bool IsConsoleLoggingEnabled() const noexcept
+    {
+        return consoleLoggingEnabled_.load(std::memory_order_relaxed);
+    }
+
+    void SetConsoleLoggingEnabled(bool enabled) noexcept
+    {
+        consoleLoggingEnabled_.store(enabled, std::memory_order_relaxed);
     }
 
     std::vector<PerfSample> GetRecent() const
@@ -228,6 +239,7 @@ private:
     double peakMs_ = 0.0;
     std::string peakName_;
     std::string peakDetail_;
+    std::atomic_bool consoleLoggingEnabled_{ false };
 };
 
 class PerfScope

@@ -123,7 +123,9 @@ void RegisteredPlayers::tryFindBTR()
         }
 
         PlayerClassifier::get(PlayerKind::Btr).initialize(cachePlayer);
+        cachePlayer.btrController = btrController;
         cachePlayer.btrView = btrView;
+        cachePlayer.btrTurret = btrTurret;
 
         glm::vec3 btrPosition{};
 

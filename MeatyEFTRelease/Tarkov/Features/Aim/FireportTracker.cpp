@@ -7,6 +7,7 @@
 #include "../../../UI/globals.h"
 #include "../../../memory/Memory.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -23,7 +24,13 @@ FireportTracker g_fireport;
 namespace {
 
 constexpr auto kFallbackPathRefreshInterval = std::chrono::seconds(3);
-constexpr auto kFailedPathRefreshInterval = std::chrono::seconds(2);
+constexpr auto kFailedPathRefreshInterval = std::chrono::milliseconds(50);
+constexpr std::uint32_t kPoseFailuresBeforeRebuild = 12;
+constexpr auto kOutlierWindow = std::chrono::milliseconds(75);
+constexpr float kMaximumOriginJumpM = 1.5f;
+constexpr float kMaximumDirectionJumpRadians = 0.78539816339f;
+constexpr float kOriginFilterTimeConstantSeconds = 0.012f;
+constexpr float kDirectionFilterTimeConstantSeconds = 0.010f;
 
 bool isGoodVec3(const glm::vec3& v)
 {
@@ -69,10 +76,33 @@ bool onScreen(const glm::vec2& p, float w, float h)
     return std::isfinite(p.x) && std::isfinite(p.y) && p.x >= 0.f && p.x <= w && p.y >= 0.f && p.y <= h;
 }
 
+float smoothingAlpha(float deltaSeconds, float timeConstantSeconds)
+{
+    if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f)
+        return 1.0f;
+
+    return std::clamp(
+        1.0f - std::exp(-deltaSeconds / timeConstantSeconds),
+        0.0f,
+        1.0f);
+}
+
 } // namespace
+
+bool IsFireportPoseFresh(
+    const FireportPose& pose,
+    std::chrono::milliseconds maximumAge,
+    std::chrono::steady_clock::time_point now) noexcept
+{
+    return pose.valid &&
+        pose.publishedAt != std::chrono::steady_clock::time_point{} &&
+        now >= pose.publishedAt &&
+        (now - pose.publishedAt) <= maximumAge;
+}
 
 void FireportTracker::clear() noexcept
 {
+    consecutivePoseFailures_ = 0;
     const FireportPoseSnapshot current = publishedPose_.load(std::memory_order_acquire);
 
     if (current && !current->valid)
@@ -104,6 +134,83 @@ void FireportTracker::clearCachedMuzzle() noexcept
     muzzleTransform_.reset();
     cachedPath_ = nullptr;
     cachedPathIsFallback_ = false;
+}
+
+void FireportTracker::holdLastValidOrInvalidate(
+    std::chrono::steady_clock::time_point now,
+    bool forceInvalid)
+{
+    const FireportPoseSnapshot current = getSnapshot();
+    if (!forceInvalid &&
+        current &&
+        IsFireportPoseFresh(*current, kFireportVisualMaxAge, now))
+    {
+        return;
+    }
+
+    if (current && current->valid)
+        publish(FireportPose{});
+}
+
+bool FireportTracker::filterPose(
+    FireportPose& pose,
+    std::chrono::steady_clock::time_point now,
+    bool resetFilter) const
+{
+    const FireportPoseSnapshot previous = getSnapshot();
+    if (resetFilter ||
+        !previous ||
+        !IsFireportPoseFresh(*previous, kFireportVisualMaxAge, now) ||
+        previous->pathUsed != pose.pathUsed)
+    {
+        return true;
+    }
+
+    const float deltaSeconds = std::chrono::duration<float>(
+        now - previous->publishedAt).count();
+    const glm::vec3 originDelta = pose.worldOrigin - previous->worldOrigin;
+    const float originJump = glm::length(originDelta);
+    const float directionDot = std::clamp(
+        glm::dot(previous->worldForward, pose.worldForward),
+        -1.0f,
+        1.0f);
+    const float directionJump = std::acos(directionDot);
+
+    if ((now - previous->publishedAt) <= kOutlierWindow &&
+        (originJump > kMaximumOriginJumpM ||
+            directionJump > kMaximumDirectionJumpRadians))
+    {
+        return false;
+    }
+
+    const float originAlpha = smoothingAlpha(
+        deltaSeconds,
+        kOriginFilterTimeConstantSeconds);
+    float directionAlpha = smoothingAlpha(
+        deltaSeconds,
+        kDirectionFilterTimeConstantSeconds);
+
+    // Filter small sample noise while remaining responsive to deliberate
+    // weapon and camera movement.
+    const float directionResponse = std::clamp(
+        directionJump / 0.10471975512f,
+        0.0f,
+        1.0f);
+    directionAlpha = std::clamp(
+        directionAlpha + directionResponse * 0.35f,
+        0.0f,
+        1.0f);
+
+    pose.worldOrigin = previous->worldOrigin + originDelta * originAlpha;
+    const glm::vec3 filteredDirection =
+        previous->worldForward * (1.0f - directionAlpha) +
+        pose.worldForward * directionAlpha;
+    const float filteredLength = glm::length(filteredDirection);
+    if (!std::isfinite(filteredLength) || filteredLength < 1e-4f)
+        return false;
+
+    pose.worldForward = filteredDirection / filteredLength;
+    return true;
 }
 
 bool FireportTracker::refreshMuzzleTransform(uint64_t localPlayer, uint64_t handsController, std::chrono::steady_clock::time_point now)
@@ -222,6 +329,7 @@ void FireportTracker::update(uint64_t localPlayer, uint64_t handsController)
         cachedLocalPlayer_ = 0;
         cachedHandsController_ = 0;
         nextPathRefresh_ = {};
+        consecutivePoseFailures_ = 0;
         publish(std::move(pose));
         return;
     }
@@ -231,11 +339,16 @@ void FireportTracker::update(uint64_t localPlayer, uint64_t handsController)
         clearCachedMuzzle();
         cachedHandsController_ = 0;
         nextPathRefresh_ = {};
+        consecutivePoseFailures_ = 0;
         publish(std::move(pose));
         return;
     }
 
     const auto now = std::chrono::steady_clock::now();
+    const bool identityChanged =
+        (cachedLocalPlayer_ != 0 && cachedLocalPlayer_ != localPlayer) ||
+        (cachedHandsController_ != 0 && cachedHandsController_ != handsCtrl);
+    const char* previousPath = cachedPath_;
     const bool pathRefreshDue = cachedLocalPlayer_ != localPlayer || cachedHandsController_ != handsCtrl || ((!muzzleTransform_ || cachedPathIsFallback_) && now >= nextPathRefresh_);
 
     if (pathRefreshDue)
@@ -245,16 +358,28 @@ void FireportTracker::update(uint64_t localPlayer, uint64_t handsController)
 
     if (!muzzleTransform_)
     {
-        publish(std::move(pose));
+        ++consecutivePoseFailures_;
+        holdLastValidOrInvalidate(now, identityChanged);
         return;
     }
 
     glm::quat rotation{};
-    if (!muzzleTransform_->UpdateWorldPose(pose.worldOrigin, rotation))
+    const TransformPoseReadResult poseRead =
+        muzzleTransform_->TryUpdateWorldPose(pose.worldOrigin, rotation);
+    if (poseRead != TransformPoseReadResult::Success)
     {
-        clearCachedMuzzle();
-        nextPathRefresh_ = now + kFailedPathRefreshInterval;
-        publish(std::move(pose));
+        if (poseRead == TransformPoseReadResult::Failed)
+        {
+            ++consecutivePoseFailures_;
+            if (!muzzleTransform_->IsValid() ||
+                consecutivePoseFailures_ >= kPoseFailuresBeforeRebuild)
+            {
+                clearCachedMuzzle();
+                nextPathRefresh_ = now + kFailedPathRefreshInterval;
+            }
+        }
+
+        holdLastValidOrInvalidate(now, identityChanged);
         return;
     }
 
@@ -263,15 +388,29 @@ void FireportTracker::update(uint64_t localPlayer, uint64_t handsController)
 
     if (directionLength < 1e-4f || !isGoodVec3(pose.worldOrigin) || !isGoodVec3(pose.worldForward))
     {
-        clearCachedMuzzle();
-        nextPathRefresh_ = now + kFailedPathRefreshInterval;
-        publish(std::move(pose));
+        ++consecutivePoseFailures_;
+        if (consecutivePoseFailures_ >= kPoseFailuresBeforeRebuild)
+        {
+            clearCachedMuzzle();
+            nextPathRefresh_ = now + kFailedPathRefreshInterval;
+        }
+        holdLastValidOrInvalidate(now, identityChanged);
         return;
     }
 
     pose.worldForward /= directionLength;
     pose.pathUsed = cachedPath_;
     pose.valid = true;
+
+    const bool pathChanged = previousPath != cachedPath_;
+    if (!filterPose(pose, now, identityChanged || pathChanged))
+    {
+        ++consecutivePoseFailures_;
+        holdLastValidOrInvalidate(now, identityChanged);
+        return;
+    }
+
+    consecutivePoseFailures_ = 0;
 
     if (pose.valid) {
         const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();

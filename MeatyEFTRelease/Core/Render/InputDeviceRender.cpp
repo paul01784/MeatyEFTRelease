@@ -688,8 +688,9 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
 
             ImGui::SeparatorText("Fireport Reference");
             const FireportPose fireport = g_fireport.snapshot();
+            const AimReferencePoint fireportReference = readOnlyAim.resolveAimReference();
 
-            if (fireport.aimRefOk && fireport.pathUsed)
+            if (fireportReference.valid && fireport.pathUsed)
             {
                 ImGui::TextColored(
                     ImVec4(0.35f, 0.90f, 0.45f, 1.0f),

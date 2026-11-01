@@ -3,6 +3,7 @@
 #include "debug.h"
 #include "globals.h"
 #include "perfMonitor.h"
+#include "SupportDiagnostics.h"
 
 #include "../external/glm/glm.hpp"
 #include "../external/glm/gtc/matrix_access.hpp"
@@ -2290,35 +2291,6 @@ static void renderMenuSettings()
             ImGui::TextDisabled("%s", atlasVisibility.getStatusText().c_str());
             saveIfChanged(changed);
         }
-
-        if (menuLayout::Section("Task intervals"))
-        {
-            const auto timing = [](const char* label, double& value, double minValue, double maxValue, double speed)
-            {
-                const double before = value;
-                ImGui::SetNextItemWidth(240.0f);
-                ImGui::DragScalar(label, ImGuiDataType_Double, &value, static_cast<float>(speed), &minValue, &maxValue, "%.0f ms",
-                                  ImGuiSliderFlags_AlwaysClamp);
-                return before != value;
-            };
-            (void)timing("Camera", globals::taskCamera, 1.0, 100.0, 0.5);
-            (void)timing("Players", globals::taskPlayers, 5.0, 500.0, 1.0);
-            (void)timing("Player bone update", globals::taskPlayerPositions, 5.0, 100.0, 0.5);
-            (void)timing("Static visibility", globals::taskStaticVisibility, 50.0, 1000.0, 25.0);
-            (void)timing("Fireport", globals::taskFireport, 5.0, 100.0, 1.0);
-            (void)timing("Full skeleton", globals::taskPlayersBones, 5.0, 500.0, 1.0);
-            (void)timing("Loot", globals::taskLoot, 100.0, 30000.0, 100.0);
-            (void)timing("Equipment", globals::taskPlayersEquipment, 100.0, 30000.0, 100.0);
-            (void)timing("Player metadata", globals::taskPlayerMetadata, 50.0, 5000.0, 25.0);
-            (void)timing("Grenades", globals::taskGrenades, 10.0, 5000.0, 10.0);
-            (void)timing("Tripwires", globals::taskTripWire, 10.0, 5000.0, 10.0);
-
-            ImGui::Spacing();
-            if (ImGui::Button("Reset task intervals to defaults"))
-                globals::resetTaskIntervals();
-            ImGui::SameLine();
-            ImGui::TextDisabled("Session only; these values are not saved.");
-        }
     }
 
     menuLayout::PopContentInset();
@@ -2480,12 +2452,14 @@ static void renderDebugWindow()
 {
     enum class DebugPage : int
     {
+        Overview,
         Console,
         Performance,
         Memory,
-        Map
+        Map,
+        Support
     };
-    static DebugPage activePage = DebugPage::Console;
+    static DebugPage activePage = DebugPage::Overview;
     std::string windowNameMain = "Debug";
     static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse;
 
@@ -2503,13 +2477,81 @@ static void renderDebugWindow()
                 activePage = page;
             ImGui::SameLine();
         };
+        nav(ICON_FA_HEART_PULSE, "Overview", DebugPage::Overview);
         nav(ICON_FA_TERMINAL, "Console", DebugPage::Console);
         nav(ICON_FA_GAUGE, "Performance", DebugPage::Performance);
-        nav(ICON_FA_DATABASE, "Memory", DebugPage::Memory);
+        nav(ICON_FA_DATABASE, "Modules", DebugPage::Memory);
         nav(ICON_FA_MAP, "Map", DebugPage::Map);
+        nav(ICON_FA_HEADSET, "Support", DebugPage::Support);
         ImGui::EndChild();
         ImGui::BeginChild("##debugContent", ImVec2(0.0f, 0.0f), false);
         menuLayout::PushContentInset();
+        if (activePage == DebugPage::Overview)
+        {
+            static SupportHealthSnapshot health;
+            static auto lastHealthRefresh = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+
+            if (lastHealthRefresh == std::chrono::steady_clock::time_point{} || now - lastHealthRefresh >= std::chrono::milliseconds(500))
+            {
+                health = CaptureSupportHealthSnapshot();
+                lastHealthRefresh = now;
+            }
+
+            const bool healthy = health.errorCount == 0 && health.warningCount == 0;
+            const ImVec4 headlineColour = health.errorCount > 0   ? ImVec4(1.0f, 0.30f, 0.30f, 1.0f)
+                                          : health.warningCount > 0 ? ImVec4(1.0f, 0.72f, 0.20f, 1.0f)
+                                                                    : ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+
+            ImGui::TextColored(headlineColour, healthy ? "All active systems look healthy" : "%zu error(s), %zu warning(s)", health.errorCount,
+                               health.warningCount);
+            ImGui::TextDisabled("This page is a quick health check. Modules contains the detailed live views; Support creates a complete report.");
+            ImGui::Spacing();
+
+            if (ImGui::BeginTable("##debugHealthOverview", 3,
+                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableSetupColumn("Module", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+                ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+                ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
+
+                for (const SupportHealthItem& item : health.items)
+                {
+                    ImVec4 colour(0.60f, 0.62f, 0.68f, 1.0f);
+                    if (item.level == SupportHealthLevel::Good)
+                        colour = ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+                    else if (item.level == SupportHealthLevel::Warning)
+                        colour = ImVec4(1.0f, 0.72f, 0.20f, 1.0f);
+                    else if (item.level == SupportHealthLevel::Error)
+                        colour = ImVec4(1.0f, 0.30f, 0.30f, 1.0f);
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(item.module.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextColored(colour, "%s", item.status.c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextUnformatted(item.detail.c_str());
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Where to look next");
+            if (ImGui::Button("Open module diagnostics"))
+                activePage = DebugPage::Memory;
+            ImGui::SameLine();
+            if (ImGui::Button("Open performance timings"))
+                activePage = DebugPage::Performance;
+            ImGui::SameLine();
+            if (ImGui::Button("Create support report"))
+                activePage = DebugPage::Support;
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Slow DMA and task timings are retained in Performance without being printed as warning spam.");
+        }
         if (activePage == DebugPage::Console)
         {
             static bool showInfo = true;
@@ -2559,6 +2601,13 @@ static void renderDebugWindow()
             ImGui::Checkbox("Pause", &pauseConsole);
             ImGui::SameLine();
             ImGui::Checkbox("Auto-scroll", &autoScroll);
+
+            bool logSlowTimings = PerfMonitor::Instance().IsConsoleLoggingEnabled();
+            if (ImGui::Checkbox("Print slow timings", &logSlowTimings))
+                PerfMonitor::Instance().SetConsoleLoggingEnabled(logSlowTimings);
+
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Off by default. Timing events are still captured in Performance and support reports.");
 
             consoleFilter.Draw("Filter", 260.0f);
             ImGui::SameLine();
@@ -2776,7 +2825,7 @@ static void renderDebugWindow()
                 };
 
                 drawTimingRow("Frame interval", fuserPerformance.frameInterval);
-                drawTimingRow("Build snapshots", fuserPerformance.build);
+                drawTimingRow("Build draw list", fuserPerformance.build);
                 drawTimingRow("Direct2D draw", fuserPerformance.draw);
                 drawTimingRow("Swap-chain present", fuserPerformance.present);
 
@@ -3905,7 +3954,10 @@ static void renderDebugWindow()
                     ImGui::Text("Enabled: %s | Worker: %s | Camera: %s | Device: %s", aimGlobals::aimEnabled ? "YES" : "NO",
                                 appGlobals::runThreads.load(std::memory_order_acquire) ? "RUNNING" : "IDLE", cameraReady ? "READY" : "MISSING",
                                 deviceReady ? "CONNECTED" : "DISCONNECTED");
-                    ImGui::Text("Reference: FIREPORT at %.1f, %.1f | %s", aimReference.pos.x, aimReference.pos.y, referenceReady ? "VALID" : "INVALID");
+                    if (referenceReady)
+                        ImGui::Text("Reference: FIREPORT at %.1f, %.1f | VALID", aimReference.pos.x, aimReference.pos.y);
+                    else
+                        ImGui::Text("Reference: FIREPORT | INVALID (not used)");
 
                     if (aimGlobals::aimEnabled && !referenceReady)
                     {
@@ -4521,6 +4573,104 @@ static void renderDebugWindow()
             {
                 ImGui::TextUnformatted("NOTE : Only visible when in raid");
             }
+        }
+        if (activePage == DebugPage::Support)
+        {
+            static bool includeRecentLogs = true;
+            static bool includePlayerIdentity = false;
+            static SupportReportResult lastReport;
+            static SupportHealthSnapshot supportHealth;
+            static auto lastSupportRefresh = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+
+            if (lastSupportRefresh == std::chrono::steady_clock::time_point{} || now - lastSupportRefresh >= std::chrono::milliseconds(500))
+            {
+                supportHealth = CaptureSupportHealthSnapshot();
+                lastSupportRefresh = now;
+            }
+
+            ImGui::SeparatorText("Support snapshot");
+            ImGui::TextWrapped("Export captures the current connection, DMA counters, module pointers, world and local-player state, every cached player pointer, "
+                               "camera matrices, aim state, feature counts, input-device diagnostics, performance history and optional recent logs.");
+            ImGui::TextDisabled("Two files are created: readable text for people and structured JSON for automated analysis. API keys are never exported.");
+            ImGui::Spacing();
+
+            const ImVec4 summaryColour = supportHealth.errorCount > 0   ? ImVec4(1.0f, 0.30f, 0.30f, 1.0f)
+                                          : supportHealth.warningCount > 0 ? ImVec4(1.0f, 0.72f, 0.20f, 1.0f)
+                                                                          : ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+            ImGui::TextColored(summaryColour, "Current health: %zu error(s), %zu warning(s)", supportHealth.errorCount, supportHealth.warningCount);
+
+            if (ImGui::BeginTable("##supportHealth", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableSetupColumn("Module", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+                ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+                ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
+
+                for (const SupportHealthItem& item : supportHealth.items)
+                {
+                    ImVec4 colour(0.60f, 0.62f, 0.68f, 1.0f);
+                    if (item.level == SupportHealthLevel::Good)
+                        colour = ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+                    else if (item.level == SupportHealthLevel::Warning)
+                        colour = ImVec4(1.0f, 0.72f, 0.20f, 1.0f);
+                    else if (item.level == SupportHealthLevel::Error)
+                        colour = ImVec4(1.0f, 0.30f, 0.30f, 1.0f);
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(item.module.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextColored(colour, "%s", item.status.c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextUnformatted(item.detail.c_str());
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Export options");
+            ImGui::Checkbox("Include the retained console log", &includeRecentLogs);
+            ImGui::Checkbox("Include player names, profile IDs and account IDs", &includePlayerIdentity);
+            if (includePlayerIdentity)
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.20f, 1.0f), "Share carefully");
+            }
+
+            if (ImGui::Button("Export support report", ImVec2(190.0f, 32.0f)))
+                lastReport = ExportSupportReport({ includeRecentLogs, includePlayerIdentity });
+
+            ImGui::SameLine();
+            if (ImGui::Button("Copy last summary", ImVec2(160.0f, 32.0f)) && !lastReport.summary.empty())
+                ImGui::SetClipboardText(lastReport.summary.c_str());
+
+            ImGui::SameLine();
+            if (ImGui::Button("Copy report folder", ImVec2(165.0f, 32.0f)))
+                ImGui::SetClipboardText(GetSupportReportDirectory().string().c_str());
+
+            ImGui::TextDisabled("Report folder: %s", GetSupportReportDirectory().string().c_str());
+
+            if (lastReport.success)
+            {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.45f, 1.0f), "Export complete");
+                ImGui::TextWrapped("Text: %s", lastReport.textPath.string().c_str());
+                ImGui::TextWrapped("JSON: %s", lastReport.jsonPath.string().c_str());
+            }
+            else if (!lastReport.error.empty())
+            {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(1.0f, 0.30f, 0.30f, 1.0f), "Export failed: %s", lastReport.error.c_str());
+            }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("How to use the report");
+            ImGui::BulletText("Reproduce the problem and export while it is visible.");
+            ImGui::BulletText("Prefer the JSON file when correlating pointers, failures and timings.");
+            ImGui::BulletText("Use the text file for Discord or quick human inspection.");
+            ImGui::BulletText("Export before reconnecting or leaving the raid so the failing state is preserved.");
         }
         menuLayout::PopContentInset();
         ImGui::EndChild();

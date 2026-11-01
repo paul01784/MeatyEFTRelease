@@ -22,44 +22,23 @@ std::string globals::radarSubText = "";
 
 double globals::taskPlayers = 20;
 double globals::taskPlayerPositions = 10;
-double globals::taskPlayersBones = 33;
+double globals::taskPlayersBones = 20;
 double globals::taskStaticVisibility = 250;
 double globals::taskGrenades = 100;
 double globals::taskPlayersEquipment = 2000;
 double globals::taskPlayerMetadata = 250;
 double globals::taskExfil = 5000;
-double globals::taskLoot = 250;
+double globals::taskLoot = 3000;
+double globals::taskCorpseLootRefresh = 100;
 double globals::taskQuest = 7000;
 double globals::taskWishManager = 1000;
 double globals::taskTripWire = 100;
 double globals::taskKeyManager = 25;
 double globals::taskCamera = 1;
-double globals::taskFireport = 16;
+double globals::taskFireport = 8;
 double globals::taskMemoryManager = 100;
 double globals::taskRaidMonitor = 800;
 double globals::taskAim = 1;
-
-void globals::resetTaskIntervals()
-{
-    taskPlayers = 20;
-    taskPlayerPositions = 10;
-    taskPlayersBones = 33;
-    taskStaticVisibility = 250;
-    taskGrenades = 100;
-    taskPlayersEquipment = 2000;
-    taskPlayerMetadata = 250;
-    taskExfil = 5000;
-    taskLoot = 250;
-    taskQuest = 7000;
-    taskWishManager = 1000;
-    taskTripWire = 100;
-    taskKeyManager = 25;
-    taskCamera = 1;
-    taskFireport = 16;
-    taskMemoryManager = 100;
-    taskRaidMonitor = 800;
-    taskAim = 1;
-}
 
 // App menu settings/status
 bool appMenu::appSettings = false;

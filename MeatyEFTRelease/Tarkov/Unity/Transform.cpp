@@ -418,17 +418,26 @@ bool UnityTransform::UpdateWorldPose(
     glm::vec3& position,
     glm::quat& rotation)
 {
+    return TryUpdateWorldPose(position, rotation) ==
+        TransformPoseReadResult::Success;
+}
+
+TransformPoseReadResult UnityTransform::TryUpdateWorldPose(
+    glm::vec3& position,
+    glm::quat& rotation)
+{
     position = _position;
     rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 
     if (!_valid || _parentChain.empty() ||
         !Utils::valid_pointer(VerticesAddr))
     {
-        return false;
+        return TransformPoseReadResult::Failed;
     }
 
     std::vector<TrsX> transforms(_parentChain.size());
     std::vector<Memory::ScatterReadRequest> requests;
+    std::vector<DWORD> bytesRead(_parentChain.size());
     requests.reserve(_parentChain.size());
 
     for (size_t i = 0; i < _parentChain.size(); ++i)
@@ -438,7 +447,7 @@ bool UnityTransform::UpdateWorldPose(
         if (transformIndex < 0 || transformIndex >= kMaxTransformIndex)
         {
             _valid = false;
-            return false;
+            return TransformPoseReadResult::Failed;
         }
 
         requests.push_back(
@@ -449,13 +458,27 @@ bool UnityTransform::UpdateWorldPose(
             });
     }
 
-    if (!mem.ReadScatter(
+    const Memory::TryScatterReadResult readResult = mem.TryReadScatter(
         requests.data(),
         requests.size(),
         ToCacheMode(_useCache),
-        "Transform pose"))
+        "Transform pose",
+        bytesRead);
+
+    if (readResult == Memory::TryScatterReadResult::Busy)
     {
-        return false;
+        return TransformPoseReadResult::Busy;
+    }
+
+    if (readResult != Memory::TryScatterReadResult::Success)
+    {
+        return TransformPoseReadResult::Failed;
+    }
+
+    for (size_t index = 0; index < bytesRead.size(); ++index)
+    {
+        if (bytesRead[index] != sizeof(TrsX))
+            return TransformPoseReadResult::Failed;
     }
 
     glm::vec3 worldPosition = transforms.front().t;
@@ -470,16 +493,22 @@ bool UnityTransform::UpdateWorldPose(
         worldRotation = parent.q * worldRotation;
     }
 
-    if (IsAbnormal(worldPosition) || IsAbnormal(worldRotation))
+    const float rotationLength = glm::length(worldRotation);
+    if (IsAbnormal(worldPosition) ||
+        IsAbnormal(worldRotation) ||
+        !std::isfinite(rotationLength) ||
+        rotationLength < 1e-4f)
     {
         _valid = false;
-        return false;
+        return TransformPoseReadResult::Failed;
     }
+
+    worldRotation /= rotationLength;
 
     _position = worldPosition;
     position = worldPosition;
     rotation = worldRotation;
-    return true;
+    return TransformPoseReadResult::Success;
 }
 
 glm::vec3 UnityTransform::GetRootPosition()

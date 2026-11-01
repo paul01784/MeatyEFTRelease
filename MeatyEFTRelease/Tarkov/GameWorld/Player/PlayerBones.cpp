@@ -264,6 +264,15 @@ namespace
             static_cast<int>(boneListIndexes::RFoot);
     }
 
+    static void InvalidateOptionalBonePositions(Player& player)
+    {
+        for (size_t boneIndex = 0; boneIndex < player.bonePositions.size(); ++boneIndex)
+        {
+            if (!IsMinimalBoneSlot(static_cast<int>(boneIndex)))
+                player.bonePositions[boneIndex] = glm::vec3(0.0f);
+        }
+    }
+
     static bool IsUsableBonePosition(
         const glm::vec3& position)
     {
@@ -1572,15 +1581,25 @@ void RegisteredPlayers::boneTask()
                 pending.snapshot.bonePtrs = player.bonePtrs;
                 pending.snapshot.transformCache = player.boneTransformCache;
 
+                const bool playerRootOnScreen = !player.isLocal && IsPlayerRootOnScreen(player);
+
+                if (!player.isLocal && !playerRootOnScreen)
+                    InvalidateOptionalBonePositions(player);
+
                 pending.readFullBoneList =
                     runFullBonePass &&
-                    !player.isLocal &&
+                    playerRootOnScreen &&
                     player.distance <= drawPlayerDistance + kFullBoneUpdateDistanceMargin &&
-                    IsPlayerRootOnScreen(player);
+                    !player.isLocal;
 
                 pendingScans.emplace_back(std::move(pending));
             }
         }
+
+        std::stable_sort(pendingScans.begin(), pendingScans.end(), [](const PendingBoneScan& first, const PendingBoneScan& second)
+            {
+                return first.snapshot.distance < second.snapshot.distance;
+            });
 
         if (pendingScans.empty())
         {

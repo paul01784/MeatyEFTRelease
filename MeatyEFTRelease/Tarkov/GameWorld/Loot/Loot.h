@@ -45,6 +45,8 @@ public:
     loot();
 
     void lootTask();
+    void immediateRefreshTask();
+    void requestImmediateRefresh() noexcept;
     void clearCache();
 
     void setLootWanted(uint64_t instance, bool wanted, const glm::vec4& colour);
@@ -132,6 +134,7 @@ private:
 
     std::chrono::steady_clock::time_point nextLootDiscovery{};
     std::chrono::steady_clock::time_point lastDogTagUpdate{};
+    std::atomic_bool immediateRefreshRequested{ false };
 
     size_t corpseRefreshCursor = 0;
     size_t dogTagRefreshCursor = 0;

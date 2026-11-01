@@ -46,13 +46,39 @@ namespace
 AimReferencePoint ReadOnlyAim::resolveAimReference() const
 {
     const FireportPose pose = g_fireport.snapshot();
-    if (pose.aimRefOk)
-        return {pose.screenEnd, true};
+    if (!IsFireportPoseFresh(pose, kFireportAimMaxAge))
+        return {};
 
-    return {};
+    const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
+    if (!cameraSnapshot || !cameraSnapshot->valid)
+        return {};
+
+    const glm::vec3 endpoint =
+        pose.worldOrigin +
+        pose.worldForward * kFireportProjectionDistanceM;
+    glm::vec2 screen{};
+    if (!CameraManager::worldToScreen(
+        *cameraSnapshot,
+        endpoint,
+        screen,
+        espGlobals::gameRes.x,
+        espGlobals::gameRes.y))
+    {
+        return {};
+    }
+
+    if (screen.x < 0.0f ||
+        screen.x > espGlobals::gameRes.x ||
+        screen.y < 0.0f ||
+        screen.y > espGlobals::gameRes.y)
+    {
+        return {};
+    }
+
+    return {screen, true};
 }
 
-std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport, bool enforceFov) const
 {
     if (!Utils::valid_pointer(entity.instance) ||
         entity.instance == localState.instance ||
@@ -118,7 +144,7 @@ std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity,
     const float screenDistanceSq = glm::dot(screenDelta, screenDelta);
     const float fovRadiusSq = fovRadiusPx * fovRadiusPx;
 
-    if (!std::isfinite(screenDistanceSq) || screenDistanceSq > fovRadiusSq)
+    if (!std::isfinite(screenDistanceSq) || (enforceFov && screenDistanceSq > fovRadiusSq))
         return std::nullopt;
 
     TargetResult result{};
@@ -244,7 +270,8 @@ std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vect
             aimRef,
             localState,
             prediction,
-            useClosestBoneToFireport);
+            useClosestBoneToFireport,
+            false);
     }
 
     return std::nullopt;
@@ -255,7 +282,23 @@ void ReadOnlyAim::clearTargetState(bool keyIsHeld)
     std::unique_lock lock(m_targetMutex);
     m_liveTarget.reset();
     m_activeTarget.reset();
+    m_lockedInstance = 0;
     m_wasKeyHeld = keyIsHeld;
+    m_moveRemainder = {};
+    m_lastMoveTime = {};
+}
+
+void ReadOnlyAim::pauseTargetState(bool keyIsHeld)
+{
+    if (!keyIsHeld)
+    {
+        clearTargetState(false);
+        return;
+    }
+
+    std::unique_lock lock(m_targetMutex);
+    m_liveTarget.reset();
+    m_wasKeyHeld = true;
     m_moveRemainder = {};
     m_lastMoveTime = {};
 }
@@ -291,14 +334,14 @@ void ReadOnlyAim::aimTask()
 
     const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
     if (!cameraSnapshot || !cameraSnapshot->valid) {
-        clearTargetState(keyIsHeld);
+        pauseTargetState(keyIsHeld);
         return;
     }
 
     const AimReferencePoint aimRefPoint = resolveAimReference();
     if (!aimRefPoint.valid)
     {
-        clearTargetState(keyIsHeld);
+        pauseTargetState(keyIsHeld);
         return;
     }
 
@@ -308,7 +351,7 @@ void ReadOnlyAim::aimTask()
     const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
     const PlayerCollection& snapshot = *snapshotHandle;
     if (snapshot.empty()) {
-        clearTargetState(keyIsHeld);
+        pauseTargetState(keyIsHeld);
         return;
     }
 
@@ -337,7 +380,9 @@ void ReadOnlyAim::aimTask()
             const FireportPose fireport = g_fireport.snapshot();
 
             prediction.enabled = true;
-            prediction.sourcePosition = fireport.valid
+            prediction.sourcePosition = IsFireportPoseFresh(
+                fireport,
+                kFireportAimMaxAge)
                 ? fireport.worldOrigin
                 : localState->location;
             prediction.ballistics = localPlayer->observedHandsInfo.ballistics;
@@ -354,11 +399,11 @@ void ReadOnlyAim::aimTask()
         prediction,
         useClosestBoneToFireport);
 
-    std::optional<TargetResult> previousActiveTarget;
+    std::uint64_t lockedInstance = 0;
     bool wasKeyHeld = false;
     {
         std::shared_lock lock(m_targetMutex);
-        previousActiveTarget = m_activeTarget;
+        lockedInstance = m_lockedInstance;
         wasKeyHeld = m_wasKeyHeld;
     }
 
@@ -367,22 +412,32 @@ void ReadOnlyAim::aimTask()
 
     if (!keyIsHeld) {
         newActiveTarget.reset();
+        lockedInstance = 0;
     } else if (!targetLockEnabled) {
         newActiveTarget = liveTarget;
+        lockedInstance = 0;
     } else {
-        if (keyJustPressed || !previousActiveTarget.has_value())
+        if (keyJustPressed)
+            lockedInstance = liveTarget ? liveTarget->player.instance : 0;
+        else if (lockedInstance == 0 && liveTarget)
+            lockedInstance = liveTarget->player.instance;
+
+        if (lockedInstance != 0)
+        {
             newActiveTarget = liveTarget;
-        else
-            newActiveTarget =
-                refreshTargetByInstance(
-                    snapshot,
-                    previousActiveTarget->player.instance,
-                    maxDistance,
-                    fovRadius,
-                    aimRef,
-                    *localState,
-                    prediction,
-                    useClosestBoneToFireport);
+            if (!newActiveTarget || newActiveTarget->player.instance != lockedInstance)
+            {
+                newActiveTarget = refreshTargetByInstance(
+                        snapshot,
+                        lockedInstance,
+                        maxDistance,
+                        fovRadius,
+                        aimRef,
+                        *localState,
+                        prediction,
+                        useClosestBoneToFireport);
+            }
+        }
     }
 
     std::optional<TargetResult> targetToMove;
@@ -390,6 +445,7 @@ void ReadOnlyAim::aimTask()
         std::unique_lock lock(m_targetMutex);
         m_liveTarget = liveTarget;
         m_activeTarget = newActiveTarget;
+        m_lockedInstance = lockedInstance;
         m_wasKeyHeld = keyIsHeld;
         targetToMove = m_activeTarget;
     }

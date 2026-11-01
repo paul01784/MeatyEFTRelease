@@ -74,6 +74,7 @@ uint64_t MainGame::localGameWorld = NULL;
 uint64_t MainGame::registeredPlayers = NULL;
 uint64_t MainGame::registeredPlayersList = NULL;
 int MainGame::registeredPlayersCount = 0;
+std::atomic<RegisteredPlayerArraySnapshot> MainGame::registeredPlayerArraySnapshot{ std::make_shared<const RegisteredPlayerArray>() };
 
 bool MainGame::btrAllocated = FALSE;
 
@@ -97,6 +98,16 @@ uint64_t MainGame::localplayerProfile = NULL;
 std::array<uint64_t, 2> MainGame::active_objects;
 std::array<uint64_t, 2> MainGame::tagged_objects;
 
+RegisteredPlayerArraySnapshot MainGame::getRegisteredPlayerArraySnapshot() noexcept
+{
+    RegisteredPlayerArraySnapshot snapshot = registeredPlayerArraySnapshot.load(std::memory_order_acquire);
+    if (snapshot)
+        return snapshot;
+
+    static const RegisteredPlayerArraySnapshot empty = std::make_shared<const RegisteredPlayerArray>();
+    return empty;
+}
+
 void MainGame::clearCache() {
 
     appGlobals::runThreads.store(false, std::memory_order_release);
@@ -112,6 +123,7 @@ void MainGame::clearCache() {
     this->registeredPlayersList = NULL;
     this->registeredPlayersCount = 0;
     std::fill(std::begin(this->player_buffer), std::end(this->player_buffer), 0);
+    registeredPlayerArraySnapshot.store(std::make_shared<const RegisteredPlayerArray>(), std::memory_order_release);
     this->selectedLocation = "";
     this->onlineRaid = FALSE;
     this->localPlayerPtr = NULL;
@@ -267,6 +279,8 @@ bool MainGame::updatePlayerList()
                 std::end(mainGame.player_buffer),
                 0
             );
+
+            registeredPlayerArraySnapshot.store(std::make_shared<const RegisteredPlayerArray>(), std::memory_order_release);
         };
 
     auto TryReadValue = [&](uint64_t address, auto& out) -> bool
@@ -433,6 +447,8 @@ bool MainGame::updatePlayerList()
         return false;
     }
 
+    registeredPlayerArraySnapshot.store(std::make_shared<const RegisteredPlayerArray>(tempBuffer), std::memory_order_release);
+
     std::unordered_set<uint64_t> uniquePlayers;
     std::vector<uint64_t> validPlayers;
     uniquePlayers.reserve(tempBuffer.size());
@@ -523,6 +539,10 @@ void MainGame::getPlayerListDetails()
                 mainGame.registeredPlayersList + 0x20,
                 mainGame.player_buffer,
                 sizeof(uint64_t) * mainGame.registeredPlayersCount);
+
+            registeredPlayerArraySnapshot.store(
+                std::make_shared<const RegisteredPlayerArray>(mainGame.player_buffer, mainGame.player_buffer + mainGame.registeredPlayersCount),
+                std::memory_order_release);
 
             size_t validCount = 0;
             for (size_t i = 0; i < mainGame.registeredPlayersCount; ++i)
@@ -773,12 +793,6 @@ void MainGame::mainThread(std::stop_token stopToken)
             { TaskPriority::Critical, DmaPriority::Critical, false, 0.0 });
 
         fastWorker.addTask(
-            "readOnlyAim",
-            std::bind(&ReadOnlyAim::aimTask, &readOnlyAim),
-            &globals::taskAim,
-            { TaskPriority::Critical, DmaPriority::Critical, false, 0.0 });
-
-        fastWorker.addTask(
             "fireportTask",
             []()
             {
@@ -791,7 +805,13 @@ void MainGame::mainThread(std::stop_token stopToken)
                     g_fireport.clear();
             },
             &globals::taskFireport,
-            { TaskPriority::High, DmaPriority::High, false, 4.0 });
+            { TaskPriority::Critical, DmaPriority::High, false, 0.0 });
+
+        fastWorker.addTask(
+            "readOnlyAim",
+            std::bind(&ReadOnlyAim::aimTask, &readOnlyAim),
+            &globals::taskAim,
+            { TaskPriority::Critical, DmaPriority::Critical, false, 0.0 });
 
         fastWorker.addTask(
             "keyManager",
@@ -847,7 +867,13 @@ void MainGame::mainThread(std::stop_token stopToken)
             "lootTask",
             std::bind(&loot::lootTask, &Loot),
             &globals::taskLoot,
-            { TaskPriority::Background, DmaPriority::Background, true, 50.0 });
+            { TaskPriority::Background, DmaPriority::Background, true, 50.0, true });
+
+        backgroundWorker.addTask(
+            "corpseLootRefreshTask",
+            std::bind(&loot::immediateRefreshTask, &Loot),
+            &globals::taskCorpseLootRefresh,
+            { TaskPriority::Normal, DmaPriority::Background, false, 0.0 });
 
         slowPlayerWorker.addTask(
             "PlayerEquipmentTask",

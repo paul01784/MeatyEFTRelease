@@ -32,6 +32,7 @@ struct globals {
     static double taskPlayerMetadata;
     static double taskExfil;
     static double taskLoot;
+    static double taskCorpseLootRefresh;
     static double taskQuest;
     static double taskWishManager;
     static double taskTripWire;
@@ -41,8 +42,6 @@ struct globals {
     static double taskMemoryManager;
     static double taskRaidMonitor;
     static double taskAim;
-
-    static void resetTaskIntervals();
 
 };
 

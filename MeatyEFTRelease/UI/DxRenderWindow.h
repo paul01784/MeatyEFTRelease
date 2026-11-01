@@ -256,6 +256,13 @@ private:
         float textOffsetY = 0.0f;
     };
 
+    struct CachedTextLayout
+    {
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+        DWRITE_TEXT_METRICS metrics{};
+        std::uint64_t lastUsed = 0;
+    };
+
     static bool IsDrawCommandSafe(const DrawCommand& cmd) noexcept;
 
 private:
@@ -282,7 +289,8 @@ private:
     void ReleaseDrawStorageUnlocked();
 
     void RenderDrawCommands(const std::vector<DrawCommand>& commands, const DxWindowConfig& cfg, float scale);
-    void RenderTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale);
+    void RenderTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale, const glm::vec2* positionOverride = nullptr,
+        const glm::vec4* outlineColourOverride = nullptr, bool forceCentered = false);
     void RenderMarkerWithTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale);
 
     DxWindowConfig GetConfigSnapshot() const;
@@ -297,6 +305,9 @@ private:
         std::atomic<double>& peak) noexcept;
 
     IDWriteTextFormat* GetTextFormat(const std::wstring& fontName, float size, bool bold, bool italic);
+    IDWriteTextLayout* GetTextLayout(const std::wstring& text, const std::wstring& fontName, float size, bool bold, bool italic,
+        DWRITE_TEXT_METRICS& metrics);
+    ID2D1PathGeometry* GetMarkerGeometry(MarkerShape shape);
 
     static std::wstring Utf8ToWide(const std::string& text);
     static D2D1_COLOR_F ToD2DColour(const glm::vec4& colour);
@@ -359,6 +370,10 @@ private:
     Microsoft::WRL::ComPtr<IDWriteFactory> m_dwriteFactory;
 
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IDWriteTextFormat>> m_textFormatCache;
+    std::unordered_map<std::wstring, CachedTextLayout> m_textLayoutCache;
+    std::uint64_t m_textLayoutUseCounter = 0;
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> m_triangleMarkerGeometry;
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> m_diamondMarkerGeometry;
 };
 
 extern DxRenderWindow g_DxWindow;

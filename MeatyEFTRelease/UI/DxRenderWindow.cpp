@@ -29,6 +29,7 @@ namespace
 {
     constexpr const wchar_t* DX_RENDER_WINDOW_CLASS_NAME = L"DxRenderWindowClass";
     constexpr std::size_t MAX_TEXT_FORMAT_CACHE = 128;
+    constexpr std::size_t MAX_TEXT_LAYOUT_CACHE = 2048;
     constexpr std::size_t MAX_RETAINED_DRAW_COMMAND_CAPACITY = 32768;
 
     constexpr float MAX_DRAW_COORD = 250000.0f;
@@ -995,6 +996,10 @@ void DxRenderWindow::CleanupDeviceResources()
     CleanupRenderTargets();
 
     m_textFormatCache.clear();
+    m_textLayoutCache.clear();
+    m_textLayoutUseCounter = 0;
+    m_triangleMarkerGeometry.Reset();
+    m_diamondMarkerGeometry.Reset();
 
     m_swapChain.Reset();
     m_dxgiFactory.Reset();
@@ -1198,16 +1203,7 @@ bool DxRenderWindow::RenderFrame()
         ? glm::vec4(0.0f, 0.0f, 0.0f, 0.0f)
         : cfg.backgroundColour;
 
-    const float clear[4] =
-    {
-        std::clamp(clearColour.r, 0.0f, 1.0f),
-        std::clamp(clearColour.g, 0.0f, 1.0f),
-        std::clamp(clearColour.b, 0.0f, 1.0f),
-        std::clamp(clearColour.a, 0.0f, 1.0f)
-    };
-
     m_d3dContext->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), nullptr);
-    m_d3dContext->ClearRenderTargetView(m_renderTargetView.Get(), clear);
 
     m_d2dRenderTarget->BeginDraw();
     m_d2dRenderTarget->Clear(ToD2DColour(clearColour));
@@ -1447,9 +1443,6 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
 
     for (const DrawCommand& cmd : commands)
     {
-        if (!IsDrawCommandSafe(cmd))
-            continue;
-
         switch (cmd.type)
         {
         case DrawCommandType::Line:
@@ -1530,11 +1523,9 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
     m_d2dRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
 }
 
-void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale)
+void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale, const glm::vec2* positionOverride,
+    const glm::vec4* outlineColourOverride, bool forceCentered)
 {
-    if (!IsDrawCommandSafe(cmd))
-        return;
-
     if (!m_d2dRenderTarget || !m_solidBrush || !m_dwriteFactory || cmd.text.empty())
         return;
 
@@ -1553,32 +1544,15 @@ void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowCon
     const float scaledSize = baseSize * scale;
     const float finalSize = std::clamp(std::isfinite(scaledSize) ? scaledSize : 12.0f, 1.0f, MAX_FONT_SIZE);
 
-    IDWriteTextFormat* format = GetTextFormat(fontName, finalSize, cfg.defaultFont.bold, cfg.defaultFont.italic);
-    if (!format)
-        return;
-
-    ComPtr<IDWriteTextLayout> layout;
-    HRESULT hr = m_dwriteFactory->CreateTextLayout(
-        wideText.c_str(),
-        static_cast<UINT32>(wideText.size()),
-        format,
-        4096.0f,
-        4096.0f,
-        layout.GetAddressOf()
-    );
-
-    if (FAILED(hr) || !layout)
-        return;
-
     DWRITE_TEXT_METRICS metrics{};
-    hr = layout->GetMetrics(&metrics);
-    if (FAILED(hr))
+    IDWriteTextLayout* layout = GetTextLayout(wideText, fontName, finalSize, cfg.defaultFont.bold, cfg.defaultFont.italic, metrics);
+    if (!layout)
         return;
 
-    float drawX = cmd.x;
-    float drawY = cmd.y;
+    float drawX = positionOverride ? positionOverride->x : cmd.x;
+    float drawY = positionOverride ? positionOverride->y : cmd.y;
 
-    if (cmd.centered && std::isfinite(metrics.widthIncludingTrailingWhitespace))
+    if ((cmd.centered || forceCentered) && std::isfinite(metrics.widthIncludingTrailingWhitespace))
         drawX -= metrics.widthIncludingTrailingWhitespace * 0.5f;
 
     const float renderOffsetX = std::clamp(
@@ -1596,13 +1570,15 @@ void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowCon
     if (!IsSafeCoord(drawX) || !IsSafeCoord(drawY))
         return;
 
+    const glm::vec4& outlineColour = outlineColourOverride ? *outlineColourOverride : cmd.outlineColour;
+
     if (cmd.shadowed)
     {
         const float shadowOffset = std::max(1.0f, cmd.shadowOffset * scale);
-        m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+        m_solidBrush->SetColor(ToD2DColour(outlineColour));
         m_d2dRenderTarget->DrawTextLayout(
             D2D1::Point2F(drawX + shadowOffset, drawY + shadowOffset),
-            layout.Get(),
+            layout,
             m_solidBrush.Get(),
             D2D1_DRAW_TEXT_OPTIONS_NONE);
     }
@@ -1618,13 +1594,13 @@ void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowCon
             D2D1::Point2F(0.0f, outlineOffset)
         };
 
-        m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+        m_solidBrush->SetColor(ToD2DColour(outlineColour));
 
         for (const D2D1_POINT_2F& offset : offsets)
         {
             m_d2dRenderTarget->DrawTextLayout(
                 D2D1::Point2F(drawX + offset.x, drawY + offset.y),
-                layout.Get(),
+                layout,
                 m_solidBrush.Get(),
                 D2D1_DRAW_TEXT_OPTIONS_NONE
             );
@@ -1634,7 +1610,7 @@ void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowCon
     m_solidBrush->SetColor(ToD2DColour(cmd.textColour));
     m_d2dRenderTarget->DrawTextLayout(
         D2D1::Point2F(drawX, drawY),
-        layout.Get(),
+        layout,
         m_solidBrush.Get(),
         D2D1_DRAW_TEXT_OPTIONS_NONE
     );
@@ -1642,9 +1618,6 @@ void DxRenderWindow::RenderTextCommand(const DrawCommand& cmd, const DxWindowCon
 
 void DxRenderWindow::RenderMarkerWithTextCommand(const DrawCommand& cmd, const DxWindowConfig& cfg, float scale)
 {
-    if (!IsDrawCommandSafe(cmd))
-        return;
-
     if (!m_d2dRenderTarget || !m_solidBrush)
         return;
 
@@ -1701,59 +1674,36 @@ void DxRenderWindow::RenderMarkerWithTextCommand(const DrawCommand& cmd, const D
             m_d2dRenderTarget->DrawRectangle(markerRect, m_solidBrush.Get(), thickness);
         }
     }
-    else if (m_d2dFactory)
+    else
     {
-        Microsoft::WRL::ComPtr<ID2D1PathGeometry> geometry;
-        Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
-        if (SUCCEEDED(m_d2dFactory->CreatePathGeometry(geometry.GetAddressOf())) &&
-            SUCCEEDED(geometry->Open(sink.GetAddressOf())))
+        ID2D1PathGeometry* geometry = GetMarkerGeometry(cmd.markerShape);
+        if (geometry)
         {
-            if (cmd.markerShape == MarkerShape::Triangle)
+            const float renderOffsetX = std::clamp(std::isfinite(cfg.renderOffsetX) ? cfg.renderOffsetX : 0.0f, -500.0f, 500.0f);
+            const float renderOffsetY = std::clamp(std::isfinite(cfg.renderOffsetY) ? cfg.renderOffsetY : 0.0f, -500.0f, 500.0f);
+            const D2D1_MATRIX_3X2_F markerTransform = D2D1::Matrix3x2F::Scale(half, half) *
+                D2D1::Matrix3x2F::Translation(cmd.x + renderOffsetX, cmd.y + renderOffsetY);
+            m_d2dRenderTarget->SetTransform(markerTransform);
+
+            if (hasFill)
             {
-                sink->BeginFigure(D2D1::Point2F(cmd.x, cmd.y - half), D2D1_FIGURE_BEGIN_FILLED);
-                const D2D1_POINT_2F points[] = {D2D1::Point2F(cmd.x + half, cmd.y + half), D2D1::Point2F(cmd.x - half, cmd.y + half)};
-                sink->AddLines(points, ARRAYSIZE(points));
+                m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
+                m_d2dRenderTarget->FillGeometry(geometry, m_solidBrush.Get());
             }
-            else
+            if (Clamp01Safe(cmd.outlineColour.a, 0.0f) > 0.0f)
             {
-                sink->BeginFigure(D2D1::Point2F(cmd.x, cmd.y - half), D2D1_FIGURE_BEGIN_FILLED);
-                const D2D1_POINT_2F points[] = {D2D1::Point2F(cmd.x + half, cmd.y), D2D1::Point2F(cmd.x, cmd.y + half), D2D1::Point2F(cmd.x - half, cmd.y)};
-                sink->AddLines(points, ARRAYSIZE(points));
+                m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+                m_d2dRenderTarget->DrawGeometry(geometry, m_solidBrush.Get(), thickness / half);
             }
-            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
-            if (SUCCEEDED(sink->Close()))
-            {
-                if (hasFill)
-                {
-                    m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
-                    m_d2dRenderTarget->FillGeometry(geometry.Get(), m_solidBrush.Get());
-                }
-                if (Clamp01Safe(cmd.outlineColour.a, 0.0f) > 0.0f)
-                {
-                    m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
-                    m_d2dRenderTarget->DrawGeometry(geometry.Get(), m_solidBrush.Get(), thickness);
-                }
-            }
+
+            m_d2dRenderTarget->SetTransform(D2D1::Matrix3x2F::Translation(renderOffsetX, renderOffsetY));
         }
     }
 
     if (!cmd.text.empty())
     {
-        DrawCommand textCmd{};
-        textCmd.type = DrawCommandType::Text;
-        textCmd.text = cmd.text;
-        textCmd.x = cmd.x;
-        textCmd.y = cmd.y + half + (cmd.textOffsetY * scale);
-        textCmd.fontSize = cmd.fontSize;
-        textCmd.fontName = cmd.fontName;
-        textCmd.textColour = cmd.textColour;
-        textCmd.outlineColour = cmd.colour;
-        textCmd.centered = true;
-        textCmd.outlined = cmd.outlined;
-        textCmd.shadowed = cmd.shadowed;
-        textCmd.shadowOffset = cmd.shadowOffset;
-
-        RenderTextCommand(textCmd, cfg, scale);
+        const glm::vec2 textPosition(cmd.x, cmd.y + half + (cmd.textOffsetY * scale));
+        RenderTextCommand(cmd, cfg, scale, &textPosition, &cmd.colour, true);
     }
 }
 
@@ -1866,6 +1816,108 @@ IDWriteTextFormat* DxRenderWindow::GetTextFormat(const std::wstring& fontName, f
     IDWriteTextFormat* raw = format.Get();
     m_textFormatCache.emplace(key, std::move(format));
     return raw;
+}
+
+IDWriteTextLayout* DxRenderWindow::GetTextLayout(const std::wstring& text, const std::wstring& fontName, float size, bool bold, bool italic,
+    DWRITE_TEXT_METRICS& metrics)
+{
+    if (!m_dwriteFactory || text.empty())
+        return nullptr;
+
+    const int sizeKey = static_cast<int>(std::round(size * 10.0f));
+    std::wstring key;
+    key.reserve(fontName.size() + text.size() + 32);
+    key.append(fontName);
+    key.push_back(L'\0');
+    key.append(std::to_wstring(sizeKey));
+    key.push_back(bold ? L'b' : L'n');
+    key.push_back(italic ? L'i' : L'r');
+    key.push_back(L'\0');
+    key.append(text);
+
+    auto existing = m_textLayoutCache.find(key);
+    if (existing != m_textLayoutCache.end())
+    {
+        existing->second.lastUsed = ++m_textLayoutUseCounter;
+        metrics = existing->second.metrics;
+        return existing->second.layout.Get();
+    }
+
+    IDWriteTextFormat* format = GetTextFormat(fontName, size, bold, italic);
+    if (!format)
+        return nullptr;
+
+    CachedTextLayout cached{};
+    HRESULT hr = m_dwriteFactory->CreateTextLayout(
+        text.c_str(),
+        static_cast<UINT32>(text.size()),
+        format,
+        4096.0f,
+        4096.0f,
+        cached.layout.GetAddressOf());
+    if (FAILED(hr) || !cached.layout)
+        return nullptr;
+
+    hr = cached.layout->GetMetrics(&cached.metrics);
+    if (FAILED(hr))
+        return nullptr;
+
+    if (m_textLayoutCache.size() >= MAX_TEXT_LAYOUT_CACHE)
+    {
+        const auto oldest = std::min_element(
+            m_textLayoutCache.begin(),
+            m_textLayoutCache.end(),
+            [](const auto& left, const auto& right)
+            {
+                return left.second.lastUsed < right.second.lastUsed;
+            });
+        if (oldest != m_textLayoutCache.end())
+            m_textLayoutCache.erase(oldest);
+    }
+
+    cached.lastUsed = ++m_textLayoutUseCounter;
+    metrics = cached.metrics;
+    IDWriteTextLayout* raw = cached.layout.Get();
+    m_textLayoutCache.emplace(std::move(key), std::move(cached));
+    return raw;
+}
+
+ID2D1PathGeometry* DxRenderWindow::GetMarkerGeometry(MarkerShape shape)
+{
+    if (!m_d2dFactory)
+        return nullptr;
+
+    ComPtr<ID2D1PathGeometry>& cachedGeometry = shape == MarkerShape::Triangle
+        ? m_triangleMarkerGeometry
+        : m_diamondMarkerGeometry;
+    if (cachedGeometry)
+        return cachedGeometry.Get();
+
+    ComPtr<ID2D1PathGeometry> geometry;
+    ComPtr<ID2D1GeometrySink> sink;
+    if (FAILED(m_d2dFactory->CreatePathGeometry(geometry.GetAddressOf())) ||
+        FAILED(geometry->Open(sink.GetAddressOf())))
+    {
+        return nullptr;
+    }
+
+    sink->BeginFigure(D2D1::Point2F(0.0f, -1.0f), D2D1_FIGURE_BEGIN_FILLED);
+    if (shape == MarkerShape::Triangle)
+    {
+        const D2D1_POINT_2F points[] = {D2D1::Point2F(1.0f, 1.0f), D2D1::Point2F(-1.0f, 1.0f)};
+        sink->AddLines(points, ARRAYSIZE(points));
+    }
+    else
+    {
+        const D2D1_POINT_2F points[] = {D2D1::Point2F(1.0f, 0.0f), D2D1::Point2F(0.0f, 1.0f), D2D1::Point2F(-1.0f, 0.0f)};
+        sink->AddLines(points, ARRAYSIZE(points));
+    }
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    if (FAILED(sink->Close()))
+        return nullptr;
+
+    cachedGeometry = std::move(geometry);
+    return cachedGeometry.Get();
 }
 
 std::wstring DxRenderWindow::Utf8ToWide(const std::string& text)

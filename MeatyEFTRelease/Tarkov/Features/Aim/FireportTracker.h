@@ -8,6 +8,8 @@
 #include "../../Unity/Transform.h"
 
 inline constexpr float kFireportProjectionDistanceM = 100.0f;
+inline constexpr std::chrono::milliseconds kFireportAimMaxAge{ 750 };
+inline constexpr std::chrono::milliseconds kFireportVisualMaxAge{ 1500 };
 
 struct FireportPose
 {
@@ -27,6 +29,12 @@ struct FireportPose
 
 using FireportPoseSnapshot = std::shared_ptr<const FireportPose>;
 
+[[nodiscard]] bool IsFireportPoseFresh(
+    const FireportPose& pose,
+    std::chrono::milliseconds maximumAge,
+    std::chrono::steady_clock::time_point now =
+        std::chrono::steady_clock::now()) noexcept;
+
 class FireportTracker
 {
 public:
@@ -45,6 +53,13 @@ private:
         uint64_t handsController,
         std::chrono::steady_clock::time_point now);
     void clearCachedMuzzle() noexcept;
+    void holdLastValidOrInvalidate(
+        std::chrono::steady_clock::time_point now,
+        bool forceInvalid = false);
+    bool filterPose(
+        FireportPose& pose,
+        std::chrono::steady_clock::time_point now,
+        bool resetFilter) const;
 
     std::atomic<FireportPoseSnapshot> publishedPose_;
     std::atomic<std::uint64_t> publishedVersion_{ 0 };
@@ -54,6 +69,7 @@ private:
     const char* cachedPath_ = nullptr;
     bool cachedPathIsFallback_ = false;
     std::chrono::steady_clock::time_point nextPathRefresh_{};
+    std::uint32_t consecutivePoseFailures_ = 0;
 };
 
 extern FireportTracker g_fireport;

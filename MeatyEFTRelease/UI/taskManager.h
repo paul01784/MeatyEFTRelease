@@ -24,6 +24,7 @@ struct TaskOptions
     DmaPriority dmaPriority = DmaPriority::Normal;
     bool deferWhenDmaBusy = false;
     double phaseOffsetMs = 0.0;
+    bool runOnStart = false;
 };
 
 struct TimedTask

@@ -829,29 +829,26 @@ bool AimViewWidget::DrawPlayerSkeleton(ImDrawList* drawList, const Player& playe
             if (cameraSnapshot && first < player.bonePositions.size() &&
                 second < player.bonePositions.size())
             {
-                std::vector<CameraScreenSegment> segments;
+                CameraScreenSegment segment{};
                 if (CameraManager::worldSegmentToScreen(
                     *cameraSnapshot,
                     player.bonePositions[first],
                     player.bonePositions[second],
                     sourceResolution_.x,
                     sourceResolution_.y,
-                    segments))
+                    segment))
                 {
-                    for (const CameraScreenSegment& segment : segments)
-                    {
-                        ImVec2 mappedStart{};
-                        ImVec2 mappedEnd{};
-                        (void)MapScreenPoint(
-                            ImVec2(segment.start.x, segment.start.y),
-                            mappedStart,
-                            100000.0f);
-                        (void)MapScreenPoint(
-                            ImVec2(segment.end.x, segment.end.y),
-                            mappedEnd,
-                            100000.0f);
-                        DrawPixels(mappedStart, mappedEnd);
-                    }
+                    ImVec2 mappedStart{};
+                    ImVec2 mappedEnd{};
+                    (void)MapScreenPoint(
+                        ImVec2(segment.start.x, segment.start.y),
+                        mappedStart,
+                        100000.0f);
+                    (void)MapScreenPoint(
+                        ImVec2(segment.end.x, segment.end.y),
+                        mappedEnd,
+                        100000.0f);
+                    DrawPixels(mappedStart, mappedEnd);
                     return;
                 }
             }
