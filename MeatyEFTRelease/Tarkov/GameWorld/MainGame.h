@@ -2,6 +2,7 @@
 #include <shared_mutex>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <stop_token>
 #include <vector>
@@ -50,9 +51,7 @@ public:
 
 	void mainThread(std::stop_token stopToken = {});
 	bool checkIfRaidStarted();
-	void updateLocalPlayerPtr();
-	bool updatePlayerList();
-	void getPlayerListDetails();
+	bool updatePlayerList(bool waitForDma = false);
 	bool getGameWorldDetails(std::stop_token stopToken = {});
 	[[nodiscard]] static RegisteredPlayerArraySnapshot getRegisteredPlayerArraySnapshot() noexcept;
 
@@ -82,6 +81,7 @@ private:
 
 	BattleModeSavedState battleModeSavedState{};
 	bool battleModeEnabled = false;
+	std::uint8_t emptyPlayerListConfirmations = 0;
 
 	void SetBattleMode(bool enabled);
 };

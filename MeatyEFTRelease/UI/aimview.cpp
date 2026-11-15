@@ -31,38 +31,34 @@ static std::string CleanText(std::string text)
     return text;
 }
 
-static bool HasBones(const Player& player, std::initializer_list<int> indexes)
+static bool HasBone(const Player& player, int index)
 {
-    const size_t count = player.bonePositions.size();
-
-    if (count == 0)
+    if (index < 0)
         return false;
 
+    const size_t boneIndex = static_cast<size_t>(index);
+    if (boneIndex >= player.bonePositions.size() ||
+        boneIndex >= player.bonePtrs.size() ||
+        !Utils::valid_pointer(player.bonePtrs[boneIndex]))
+    {
+        return false;
+    }
+
+    const glm::vec3& position = player.bonePositions[boneIndex];
+    return std::isfinite(position.x) &&
+        std::isfinite(position.y) &&
+        std::isfinite(position.z) &&
+        (std::fabs(position.x) >= 0.001f ||
+            std::fabs(position.y) >= 0.001f ||
+            std::fabs(position.z) >= 0.001f);
+}
+
+static bool HasBones(const Player& player, std::initializer_list<int> indexes)
+{
     for (int index : indexes)
     {
-        if (index < 0)
+        if (!HasBone(player, index))
             return false;
-
-        if (static_cast<size_t>(index) >= count)
-            return false;
-
-        const size_t boneIndex = static_cast<size_t>(index);
-        if (boneIndex >= player.bonePtrs.size() ||
-            !Utils::valid_pointer(player.bonePtrs[boneIndex]))
-        {
-            return false;
-        }
-
-        const glm::vec3& position = player.bonePositions[boneIndex];
-        if (!std::isfinite(position.x) ||
-            !std::isfinite(position.y) ||
-            !std::isfinite(position.z) ||
-            (std::fabs(position.x) < 0.001f &&
-                std::fabs(position.y) < 0.001f &&
-                std::fabs(position.z) < 0.001f))
-        {
-            return false;
-        }
     }
 
     return true;
@@ -561,7 +557,8 @@ void AimViewWidget::DrawPlayers(ImDrawList* drawList) {
             player.hasExfiled ||
             player.isDead ||
             player.isInBTR ||
-            player.isBTR) {
+            player.isBTR ||
+            !player.minimalBonePoseValid) {
             continue;
         }
 
@@ -696,30 +693,8 @@ bool AimViewWidget::DrawPlayerSkeleton(ImDrawList* drawList, const Player& playe
     if (!drawList)
         return false;
 
-    if (!HasBones(
-        player,
-        {
-            boneListIndexes::Head,
-            boneListIndexes::Pelvis,
-
-            boneListIndexes::LForearm,
-            boneListIndexes::LPalm,
-
-            boneListIndexes::RForearm,
-            boneListIndexes::RPalm,
-
-            boneListIndexes::LThigh,
-            boneListIndexes::LFoot,
-
-            boneListIndexes::RThigh,
-            boneListIndexes::RFoot
-        }
-    )) {
-        return false;
-    }
-
     const auto ProjectBone = [&](int boneIndex, ImVec2& output ) -> bool {
-            if (boneIndex < 0)
+            if (!HasBone(player, boneIndex))
                 return false;
 
             const size_t index = static_cast<size_t>(boneIndex);
@@ -759,48 +734,16 @@ bool AimViewWidget::DrawPlayerSkeleton(ImDrawList* drawList, const Player& playe
     ImVec2 rightThigh{};
     ImVec2 rightFoot{};
 
-    if (!ProjectBone(
-        boneListIndexes::Head,
-        head
-    ) ||
-        !ProjectBone(
-            boneListIndexes::Pelvis,
-            pelvis
-        ) ||
-        !ProjectBone(
-            boneListIndexes::LForearm,
-            leftForearm
-        ) ||
-        !ProjectBone(
-            boneListIndexes::LPalm,
-            leftPalm
-        ) ||
-        !ProjectBone(
-            boneListIndexes::RForearm,
-            rightForearm
-        ) ||
-        !ProjectBone(
-            boneListIndexes::RPalm,
-            rightPalm
-        ) ||
-        !ProjectBone(
-            boneListIndexes::LThigh,
-            leftThigh
-        ) ||
-        !ProjectBone(
-            boneListIndexes::LFoot,
-            leftFoot
-        ) ||
-        !ProjectBone(
-            boneListIndexes::RThigh,
-            rightThigh
-        ) ||
-        !ProjectBone(
-            boneListIndexes::RFoot,
-            rightFoot
-        )) {
-        return false;
-    }
+    const bool headValid = ProjectBone(boneListIndexes::Head, head);
+    const bool pelvisValid = ProjectBone(boneListIndexes::Pelvis, pelvis);
+    const bool leftForearmValid = ProjectBone(boneListIndexes::LForearm, leftForearm);
+    const bool leftPalmValid = ProjectBone(boneListIndexes::LPalm, leftPalm);
+    const bool rightForearmValid = ProjectBone(boneListIndexes::RForearm, rightForearm);
+    const bool rightPalmValid = ProjectBone(boneListIndexes::RPalm, rightPalm);
+    const bool leftThighValid = ProjectBone(boneListIndexes::LThigh, leftThigh);
+    const bool leftFootValid = ProjectBone(boneListIndexes::LFoot, leftFoot);
+    const bool rightThighValid = ProjectBone(boneListIndexes::RThigh, rightThigh);
+    const bool rightFootValid = ProjectBone(boneListIndexes::RFoot, rightFoot);
 
     constexpr float lineThickness = 1.0f;
 
@@ -822,7 +765,7 @@ bool AimViewWidget::DrawPlayerSkeleton(ImDrawList* drawList, const Player& playe
         };
 
     const auto DrawBoneLine = [&](int firstIndex, int secondIndex,
-        const ImVec2& fallbackStart, const ImVec2& fallbackEnd) {
+        const ImVec2& fallbackStart, const ImVec2& fallbackEnd) -> bool {
             const size_t first = static_cast<size_t>(firstIndex);
             const size_t second = static_cast<size_t>(secondIndex);
             if (cameraSnapshot && first < player.bonePositions.size() &&
@@ -848,50 +791,59 @@ bool AimViewWidget::DrawPlayerSkeleton(ImDrawList* drawList, const Player& playe
                         mappedEnd,
                         100000.0f);
                     DrawPixels(mappedStart, mappedEnd);
-                    return;
+                    return true;
                 }
             }
 
             DrawPixels(fallbackStart, fallbackEnd);
+            return true;
         };
 
-    DrawBoneLine(
-        boneListIndexes::Head, boneListIndexes::Pelvis, head, pelvis
-    );
+    bool skeletonDrawn = false;
 
-    DrawBoneLine(
-        boneListIndexes::Head, boneListIndexes::LForearm, head, leftForearm
-    );
+    if (headValid && pelvisValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::Head, boneListIndexes::Pelvis, head, pelvis);
 
-    DrawBoneLine(
-        boneListIndexes::LForearm, boneListIndexes::LPalm, leftForearm, leftPalm
-    );
+    if (headValid && leftForearmValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::Head, boneListIndexes::LForearm, head, leftForearm);
 
-    DrawBoneLine(
-        boneListIndexes::Head, boneListIndexes::RForearm, head, rightForearm
-    );
+    if (leftForearmValid && leftPalmValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::LForearm, boneListIndexes::LPalm, leftForearm, leftPalm);
 
-    DrawBoneLine(
-        boneListIndexes::RForearm, boneListIndexes::RPalm, rightForearm, rightPalm
-    );
+    if (headValid && rightForearmValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::Head, boneListIndexes::RForearm, head, rightForearm);
 
-    DrawBoneLine(
-        boneListIndexes::Pelvis, boneListIndexes::LThigh, pelvis, leftThigh
-    );
+    if (rightForearmValid && rightPalmValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::RForearm, boneListIndexes::RPalm, rightForearm, rightPalm);
 
-    DrawBoneLine(
-        boneListIndexes::LThigh, boneListIndexes::LFoot, leftThigh, leftFoot
-    );
+    if (pelvisValid && leftThighValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::Pelvis, boneListIndexes::LThigh, pelvis, leftThigh);
 
-    DrawBoneLine(
-        boneListIndexes::Pelvis, boneListIndexes::RThigh, pelvis, rightThigh
-    );
+    if (leftThighValid && leftFootValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::LThigh, boneListIndexes::LFoot, leftThigh, leftFoot);
 
-    DrawBoneLine(
-        boneListIndexes::RThigh, boneListIndexes::RFoot, rightThigh, rightFoot
-    );
+    if (pelvisValid && rightThighValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::Pelvis, boneListIndexes::RThigh, pelvis, rightThigh);
 
-    outHeadPosition = head;
+    if (rightThighValid && rightFootValid)
+        skeletonDrawn |= DrawBoneLine(boneListIndexes::RThigh, boneListIndexes::RFoot, rightThigh, rightFoot);
+
+    if (!skeletonDrawn)
+        return false;
+
+    if (headValid)
+        outHeadPosition = head;
+    else if (pelvisValid)
+        outHeadPosition = pelvis;
+    else if (leftForearmValid)
+        outHeadPosition = leftForearm;
+    else if (rightForearmValid)
+        outHeadPosition = rightForearm;
+    else if (leftThighValid)
+        outHeadPosition = leftThigh;
+    else
+        outHeadPosition = rightThigh;
+
     return true;
 }
 

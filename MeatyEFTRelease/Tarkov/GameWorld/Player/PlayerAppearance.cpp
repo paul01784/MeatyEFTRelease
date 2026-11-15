@@ -32,7 +32,7 @@ namespace PlayerAppearance
         if (player.isBoss)
             return PlayerMarkerType::Boss;
 
-        if (player.isPlayerScav && !player.isAi && player.isPlayer)
+        if (player.isPlayerScav && !player.isAi)
             return PlayerMarkerType::PlayerScav;
 
         if (player.isPlayer && !player.isPlayerScav && !player.isAi)
@@ -54,7 +54,7 @@ namespace PlayerAppearance
         if (player.isAi && !player.isPlayerScav && !player.isPlayer)
             colour = coloursGlobals::playerAI;
 
-        if (player.isPlayerScav && !player.isAi && player.isPlayer)
+        if (player.isPlayerScav && !player.isAi)
             colour = coloursGlobals::playerScav;
 
         if (player.isBoss)

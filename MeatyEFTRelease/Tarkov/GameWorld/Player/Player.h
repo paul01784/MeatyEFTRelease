@@ -170,8 +170,9 @@ public:
 	bool velocityValid{ false };
 	std::chrono::steady_clock::time_point lastVelocityUpdate{};
 	
-	std::chrono::steady_clock::time_point lastDogTagLookup;
 	bool foundDogTagCache;
+	bool dogTagCacheLookupAttempted{ false };
+	bool dogTagApiLookupAttempted{ false };
 
 	PlayerProfileStats profileStats;
 	bool hasProfileData;
@@ -241,7 +242,7 @@ public:
 
 
 	std::chrono::steady_clock::time_point lastEquipmentUpdate{};
-	std::chrono::milliseconds equipmentUpdateInterval{20000};
+	std::chrono::milliseconds equipmentUpdateInterval{10000};
 	bool equipInited;
 	std::vector<slots> _slots;
 	int playerValue;
@@ -267,10 +268,6 @@ public:
 	// Bone related stuff
 
 	uint64_t playerBoneMatrixPtr;
-	uint64_t internalTransformPtr{ 0 };
-	glm::vec3 internalTransformPosition{};
-	bool internalTransformPositionValid{ false };
-	bool usingInternalTransformFallback{ false };
 	bool usingCameraPositionFallback{ false };
 
 	inline static constexpr std::array<allPlayerBones, 13> boneList = {
@@ -285,6 +282,12 @@ public:
 	
 
 	bool bonePointersNeedResolve;
+	bool minimalBonePointersReady{ false };
+	bool fullBonePointersReady{ false };
+	bool minimalBonePoseValid{ false };
+	bool fullBonePoseValid{ false };
+	std::uint8_t consecutiveBadBoneSamples{ 0 };
+	std::chrono::steady_clock::time_point nextBonePointerResolve{};
 
 
 	// Default constructor
@@ -316,7 +319,6 @@ public:
 		DT_lvl(0),
 		kd(0),
 		hours(0),
-		lastDogTagLookup{},
 		foundDogTagCache(false),
 		colour(glm::vec4(0.0f, 0.0f, 0.0f, 0.0f)),
 		rotation(glm::vec2(0.0f, 0.0f)),
@@ -339,7 +341,7 @@ public:
 		isInBTR(false),
 		isDead(false),
 		hasExfiled(false),
-		equipmentUpdateInterval{ 5000 },
+		equipmentUpdateInterval{ 10000 },
 		P_Profile(0),
 		P_Info(0),
 		P_PWA(0),

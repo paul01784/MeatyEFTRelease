@@ -50,9 +50,10 @@ void RegisteredPlayers::playerMetadataTask()
     using Clock = std::chrono::steady_clock;
     using Milliseconds = std::chrono::milliseconds;
 
-    static constexpr Milliseconds kHeldItemRefreshInterval{ 3000 };
-    static constexpr Milliseconds kPredictionHeldItemRefreshInterval{ 250 };
+    static constexpr Milliseconds kLocalHeldItemRefreshInterval{ 100 };
+    static constexpr Milliseconds kRemoteHeldItemRefreshInterval{ 5000 };
     static constexpr Milliseconds kFailedReadRetryInterval{ 500 };
+    static constexpr Milliseconds kLocalFailedReadRetryInterval{ 100 };
 
     struct MetadataJob
     {
@@ -94,11 +95,9 @@ void RegisteredPlayers::playerMetadataTask()
 
             if (job.updateHands)
             {
-                const Milliseconds refreshInterval =
-                    player.isLocal &&
-                    aimGlobals::predictionEnabled
-                    ? kPredictionHeldItemRefreshInterval
-                    : kHeldItemRefreshInterval;
+                const Milliseconds refreshInterval = player.isLocal
+                    ? kLocalHeldItemRefreshInterval
+                    : kRemoteHeldItemRefreshInterval;
 
                 job.player.nextHeldItemRefresh =
                     now + refreshInterval;
@@ -110,13 +109,10 @@ void RegisteredPlayers::playerMetadataTask()
         job.lookupDogTag =
             player.isPlayer &&
             !player.profileId.empty() &&
-            !player.foundDogTagCache &&
-            player.name.contains("PMC") &&
-            now - player.lastDogTagLookup >
-                std::chrono::seconds(5);
+            !player.dogTagCacheLookupAttempted;
 
         if (job.lookupDogTag)
-            job.player.lastDogTagLookup = now;
+            job.player.dogTagCacheLookupAttempted = true;
 
         const int profileMode = std::clamp(radarGlobals::tarkovDevDataMode, 0, 1);
         const unsigned int profileModeBit = 1u << static_cast<unsigned int>(profileMode);
@@ -251,7 +247,9 @@ void RegisteredPlayers::playerMetadataTask()
                     else
                     {
                         player.itemInHand.clear();
-                        player.nextHeldItemRefresh = now + kFailedReadRetryInterval;
+                        player.nextHeldItemRefresh = now + (player.isLocal
+                            ? kLocalFailedReadRetryInterval
+                            : kFailedReadRetryInterval);
                     }
                 }
 
@@ -280,10 +278,10 @@ void RegisteredPlayers::playerMetadataTask()
 
                 if (job.lookupDogTag)
                 {
-                    player.lastDogTagLookup = job.player.lastDogTagLookup;
                     player.name = std::move(job.player.name);
                     player.accountId = std::move(job.player.accountId);
                     player.foundDogTagCache = job.player.foundDogTagCache;
+                    player.dogTagCacheLookupAttempted = true;
                 }
 
                 if (job.lookupProfile)

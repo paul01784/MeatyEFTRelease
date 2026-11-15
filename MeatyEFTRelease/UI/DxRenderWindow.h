@@ -154,6 +154,7 @@ public:
     // Basic drawing
     void DrawLine(float x1, float y1, float x2, float y2, const glm::vec4& colour, float thickness = 1.0f);
     void DrawRect(float x, float y, float w, float h, const glm::vec4& colour, float thickness = 1.0f);
+    void DrawScreenRect(float x, float y, float w, float h, const glm::vec4& colour, float thickness = 1.0f);
     void DrawFilledRect(float x, float y, float w, float h, const glm::vec4& colour);
 
     void DrawBox(
@@ -215,6 +216,7 @@ private:
     {
         Line,
         Rect,
+        ScreenRect,
         FilledRect,
         Box,
         Circle,

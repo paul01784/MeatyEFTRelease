@@ -37,7 +37,7 @@ void RegisteredPlayers::rebuildPlayerCacheIndexLocked()
 namespace
 {
     constexpr std::uint64_t RosterCountMask = 0xFFFFULL;
-    constexpr unsigned int AliveRosterCountShift = 16;
+    constexpr unsigned int CachedRosterCountShift = 16;
     constexpr unsigned int RosterWarningShift = 32;
     constexpr std::chrono::seconds RosterMismatchDelay{ 7 };
 
@@ -47,11 +47,11 @@ namespace
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    static std::uint64_t PackRosterState(std::size_t registeredCount, std::size_t aliveCachedCount, bool possibleMissingEntities) noexcept
+    static std::uint64_t PackRosterState(std::size_t registeredCount, std::size_t cachedRegisteredCount, bool possibleMissingEntities) noexcept
     {
         const std::uint64_t registered = (std::min)(static_cast<std::uint64_t>(registeredCount), RosterCountMask);
-        const std::uint64_t aliveCached = (std::min)(static_cast<std::uint64_t>(aliveCachedCount), RosterCountMask);
-        return registered | (aliveCached << AliveRosterCountShift) | (static_cast<std::uint64_t>(possibleMissingEntities) << RosterWarningShift);
+        const std::uint64_t cachedRegistered = (std::min)(static_cast<std::uint64_t>(cachedRegisteredCount), RosterCountMask);
+        return registered | (cachedRegistered << CachedRosterCountShift) | (static_cast<std::uint64_t>(possibleMissingEntities) << RosterWarningShift);
     }
 
 }
@@ -183,8 +183,9 @@ void RegisteredPlayers::resetCacheLocked()
     this->playerGroups.clear();
     boneResolveCursor = 0;
     nextFullBoneUpdate = {};
-    lastBoneRefreshLog = {};
-    boneRefreshesSinceLastLog = 0;
+    nextGuaranteedRosterRefresh = {};
+    nextGuaranteedEntityRefresh = {};
+    nextGuaranteedBoneRefresh = {};
     registeredPlayers.groupIDSet = false;
 }
 
@@ -247,7 +248,7 @@ PlayerRosterStatus RegisteredPlayers::getRosterStatus() const noexcept
 
     PlayerRosterStatus status{};
     status.registeredCount = static_cast<std::size_t>(state & RosterCountMask);
-    status.aliveCachedCount = static_cast<std::size_t>((state >> AliveRosterCountShift) & RosterCountMask);
+    status.cachedRegisteredCount = static_cast<std::size_t>((state >> CachedRosterCountShift) & RosterCountMask);
     status.possibleMissingEntities = ((state >> RosterWarningShift) & 1ULL) != 0;
     return status;
 }
@@ -265,13 +266,13 @@ PlayerLocalStateSnapshot RegisteredPlayers::getLocalStateSnapshot() const noexce
 
 void RegisteredPlayers::publishCacheSnapshotLocked(bool motionUpdated)
 {
-    const std::size_t aliveCachedCount = static_cast<std::size_t>(std::count_if(playerCache.begin(), playerCache.end(), [&](const Player& player)
+    const std::size_t cachedRegisteredCount = static_cast<std::size_t>(std::count_if(playerCache.begin(), playerCache.end(), [&](const Player& player)
         {
-            return registeredPlayerScratch.contains(player.instance) && !player.isDead && !player.hasExfiled;
+            return registeredPlayerScratch.contains(player.instance);
         }));
     const std::size_t registeredCount = registeredPlayerScratch.size();
     const auto now = std::chrono::steady_clock::now();
-    const bool rosterMismatch = registeredCount > aliveCachedCount;
+    const bool rosterMismatch = registeredCount > cachedRegisteredCount;
 
     if (!rosterMismatch)
         rosterMismatchSince = {};
@@ -279,7 +280,7 @@ void RegisteredPlayers::publishCacheSnapshotLocked(bool motionUpdated)
         rosterMismatchSince = now;
 
     const bool possibleMissingEntities = rosterMismatch && now - rosterMismatchSince >= RosterMismatchDelay;
-    publishedRosterState.store(PackRosterState(registeredCount, aliveCachedCount, possibleMissingEntities), std::memory_order_release);
+    publishedRosterState.store(PackRosterState(registeredCount, cachedRegisteredCount, possibleMissingEntities), std::memory_order_release);
 
     const PlayerSnapshot snapshot =
         std::make_shared<const PlayerCollection>(playerCache);
@@ -293,6 +294,7 @@ void RegisteredPlayers::publishCacheSnapshotLocked(bool motionUpdated)
     if (localPlayer != playerCache.end())
     {
         localState->location = localPlayer->location;
+        localState->velocity = localPlayer->velocity;
         localState->rotation = localPlayer->rotation;
         localState->groupId = localPlayer->groupId;
         localState->instance = localPlayer->instance;
@@ -300,6 +302,7 @@ void RegisteredPlayers::publishCacheSnapshotLocked(bool motionUpdated)
         localState->profile = localPlayer->P_Profile;
         localState->isSavage = localPlayer->isPlayerScav;
         localState->isScoped = localPlayer->isAiming;
+        localState->velocityValid = localPlayer->velocityValid;
     }
 
     const std::int64_t nowTicks = SteadyClockTicks();

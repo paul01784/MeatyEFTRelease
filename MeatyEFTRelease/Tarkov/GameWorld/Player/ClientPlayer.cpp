@@ -9,7 +9,8 @@
 
 namespace
 {
-    constexpr std::chrono::milliseconds corpseReadInterval{ 100 };
+    constexpr std::chrono::milliseconds corpseReadInterval{ 20 };
+    constexpr std::chrono::milliseconds corpseFailedReadRetryInterval{ 20 };
     constexpr std::chrono::milliseconds handsReadInterval{ 2000 };
     constexpr std::chrono::milliseconds failedReadRetryInterval{ 2500 };
 }
@@ -66,30 +67,37 @@ std::optional<Player> ClientPlayer::tryCreate(uint64_t instance, std::string_vie
 		player.type = PlayerType::AIScav;
     }
 
-    PlayerMemoryAccess::tryReadChain(instance, { sdk::Player::_playerBody, 0x40, 0x30, 0x10 }, player.playerBoneMatrixPtr, DmaCacheMode::Uncached);
     player.P_CorpseAddr = instance + sdk::Player::Corpse;
 
-    if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::Profile, player.P_Profile) ||
-        !PlayerMemoryAccess::tryReadPointer(player.P_Profile + sdk::Profile::Info, player.P_Info) ||
-        !PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::_playerBody, player.P_Body))
+    if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::Profile, player.P_Profile, DmaCacheMode::Uncached) ||
+        !PlayerMemoryAccess::tryReadPointer(player.P_Profile + sdk::Profile::Info, player.P_Info, DmaCacheMode::Uncached) ||
+        !PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::_playerBody, player.P_Body, DmaCacheMode::Uncached))
     {
         return std::nullopt;
     }
 
-    PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::ProceduralWeaponAnimation, player.P_PWA);
+    PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::ProceduralWeaponAnimation, player.P_PWA, DmaCacheMode::Uncached);
     configureControllerAddresses(player);
 
-    if (!PlayerMemoryAccess::tryRead(player.P_Info + sdk::PlayerInfo::Side, player.playerSide) ||
-        !PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::MovementContext, player.P_MovementContext))
+    if (!PlayerMemoryAccess::tryRead(player.P_Info + sdk::PlayerInfo::Side, player.playerSide, DmaCacheMode::Uncached))
+        return std::nullopt;
+
+    const uint32_t sideValue = static_cast<uint32_t>(player.playerSide);
+    if (sideValue != static_cast<uint32_t>(EPlayerSide::Usec) &&
+        sideValue != static_cast<uint32_t>(EPlayerSide::Bear) &&
+        sideValue != static_cast<uint32_t>(EPlayerSide::Savage))
     {
         return std::nullopt;
     }
+
+    if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::MovementContext, player.P_MovementContext, DmaCacheMode::Uncached))
+        return std::nullopt;
 
     player.P_RotationAddress = player.P_MovementContext + sdk::MovementContext::_rotation;
 
     uint64_t characterController = 0;
 
-    if (PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::CharacterController, characterController))
+    if (PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::CharacterController, characterController, DmaCacheMode::Uncached))
         player.P_VelocityAddress = characterController + sdk::SimpleCharacterController::Velocity;
 
     if (!Utils::valid_pointer(player.P_CorpseAddr) ||
@@ -107,6 +115,7 @@ void ClientPlayer::prepareRefresh(const Player& player, PlayerRuntimeRead& read,
 {
     read = {};
     read.instance = player.instance;
+    read.cacheEntryId = player.cacheEntryId;
     read.kind = player.getKind();
     read.rotationAddress = player.P_RotationAddress;
     read.corpseAddress = player.P_CorpseAddr;
@@ -127,7 +136,7 @@ void ClientPlayer::queueRefresh(ScatterReadBatch& batch, PlayerRuntimeRead& read
 {
     read.rotationQueued = batch.AddBytes(read.rotationAddress, &read.rotationRaw, sizeof(glm::vec2));
 
-    if (context.predictionEnabled && !read.isLocal && Utils::valid_pointer(read.velocityAddress))
+    if ((read.isLocal || context.predictionEnabled) && Utils::valid_pointer(read.velocityAddress))
         read.velocityQueued = batch.Add(read.velocityAddress, read.velocity);
 
     if (read.corpseDue)
@@ -166,7 +175,7 @@ void ClientPlayer::applyRefresh(Player& player, const PlayerRuntimeRead& read, b
     }
 
     if (read.corpseDue)
-        player.nextCorpseRead = executed && read.corpseQueued ? context.now + corpseReadInterval : context.now + failedReadRetryInterval;
+        player.nextCorpseRead = executed && read.corpseQueued ? context.now + corpseReadInterval : context.now + corpseFailedReadRetryInterval;
 
     if (read.handsDue)
         player.nextHandsControllerRead = executed && read.handsQueued ? context.now + handsReadInterval : context.now + failedReadRetryInterval;

@@ -146,7 +146,12 @@ private:
     [[nodiscard]] static bool matrixLooksValid(const glm::highp_mat4& matrix);
     [[nodiscard]] static bool viewProjectionLooksValid(const glm::highp_mat4& matrix);
     [[nodiscard]] static bool viewProjectionMatchesView(const glm::highp_mat4& viewProjection, const glm::highp_mat4& view);
-    [[nodiscard]] static bool readCameraSample(std::uint64_t nativeCamera, std::uint64_t matrixAddress, CameraMatrixSample& sample, bool* busy = nullptr);
+    [[nodiscard]] static bool readCameraSample(
+        std::uint64_t nativeCamera,
+        std::uint64_t matrixAddress,
+        CameraMatrixSample& sample,
+        bool* busy = nullptr,
+        bool waitForDma = false);
 
     void publish(CameraManagerState&& state);
 

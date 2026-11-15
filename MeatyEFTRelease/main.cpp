@@ -177,7 +177,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 {
                     LOGS.logWarn("[MAIN][CONFIG] Failed to load config.json");
 
-                    if (!configManager.SaveConfig())
+                    if (!configManager.RecoverConfigAfterLoadFailure())
                     {
                         LOGS.logWarn("[MAIN][CONFIG] Failed to save config.json");
                     }

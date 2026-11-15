@@ -16,6 +16,8 @@
 #include <fstream>
 #include <cstring>
 #include <chrono>
+#include "LootIdFallback.h"
+#include "LootTransformFallback.h"
 
 uint64_t cbSize = 0x80000;
 //callback for VfsFileListU
@@ -248,12 +250,15 @@ DWORD Memory::BuildReadFlags(DmaCacheMode cacheMode)
 	return flags;
 }
 
-DWORD Memory::BuildScatterFlags(DmaCacheMode cacheMode)
+DWORD Memory::BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode, bool zeroPadOnFail)
 {
-	DWORD flags =
-		VMMDLL_FLAG_ZEROPAD_ON_FAIL |
-		VMMDLL_FLAG_NOPAGING |
-		VMMDLL_FLAG_SCATTER_PREPAREEX_NOMEMZERO;
+	DWORD flags = VMMDLL_FLAG_SCATTER_PREPAREEX_NOMEMZERO;
+
+	if (zeroPadOnFail)
+		flags |= VMMDLL_FLAG_ZEROPAD_ON_FAIL;
+
+	if (pagingMode == DmaPagingMode::NoPaging)
+		flags |= VMMDLL_FLAG_NOPAGING;
 
 	if (cacheMode == DmaCacheMode::Uncached)
 		flags |= VMMDLL_FLAG_NOCACHE;
@@ -3159,6 +3164,43 @@ std::string Memory::readUnicodeString(uintptr_t address, SIZE_T charCount, DmaCa
 // Scatter
 // ------------------------------------------------------------
 
+bool Memory::TryReadLootTransformFallback(uint64_t gameObject, uint64_t& output)
+{
+    try {
+        std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
+        if (!vHandle || !current_process.PID) return false;
+        const std::array<uint64_t,4> offsets = {
+            UnityOffsets::GameObject_ComponentsOffset, 0x8,
+            UnityOffsets::Component_ObjectClassOffset, 0x10
+        };
+        return LootTransformFallback::Resolve(gameObject, offsets, output,
+            [&](uint64_t address, void* buffer, size_t size) {
+                DWORD bytes = 0;
+                const BOOL ok = VMMDLL_MemReadEx(vHandle, current_process.PID, address,
+                    static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, VMMDLL_FLAG_NOCACHE);
+                const bool complete = ok && bytes == size;
+                RecordDirectRead(size, bytes, complete);
+                return complete;
+            }, [](uint64_t pointer) { return IsValidPointer(pointer); });
+    } catch (...) { return false; }
+}
+bool Memory::TryReadLootIdFallback(uint64_t fieldAddress, std::string& output)
+{
+    try {
+        std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
+        if (!vHandle || !current_process.PID) return false;
+        return LootIdFallback::Resolve(fieldAddress, output,
+            [&](uint64_t address, void* buffer, size_t size) {
+                DWORD bytes = 0;
+                // Allow the paging path that succeeded in ID probes. No zero padding.
+                const BOOL ok = VMMDLL_MemReadEx(vHandle, current_process.PID, address,
+                    static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, VMMDLL_FLAG_NOCACHE);
+                const bool complete = ok && bytes == size;
+                RecordDirectRead(size, bytes, complete);
+                return complete;
+            }, [](uint64_t pointer) { return IsValidPointer(pointer); });
+    } catch (...) { return false; }
+}
 bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc)
 {
 	if (!requests || requestCount == 0)
@@ -3220,7 +3262,7 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 				chunk.push_back({
 					request.address + requestOffset,
 					static_cast<std::byte*>(request.buffer) + requestOffset,
-					bytesToQueue
+					bytesToQueue, request.diagnosticBase, request.diagnosticOffset + requestOffset, request.diagnosticExpression
 					});
 
 				chunkBytes += bytesToQueue;
@@ -3267,7 +3309,7 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 		return false;
 	}
 
-	bool prepared = true;
+    bool prepared = true;
 	uint64_t failedAddress = 0;
 
 	for (size_t index = 0; index < requestCount; ++index)
@@ -3300,7 +3342,8 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 	VMMDLL_Scatter_CloseHandle(handle);
 
 	const double executeMs = ElapsedMilliseconds(executeStarted);
-	lock.unlock();
+    lock.unlock();
+
 
 	const std::string_view label = callingFunc.empty()
 		? std::string_view("Scatter Read Batch")
@@ -3336,7 +3379,7 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 	return executed;
 }
 
-Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc, std::span<DWORD> bytesRead)
+Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc, std::span<DWORD> bytesRead, DmaPagingMode pagingMode, bool zeroPadOnFail, DmaLockMode lockMode)
 {
 	std::fill(bytesRead.begin(), bytesRead.end(), 0);
 	if (!bytesRead.empty() && bytesRead.size() < requestCount)
@@ -3364,10 +3407,16 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 		totalBytes += requests[i].size;
 	}
 
-	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::try_to_lock);
+	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::defer_lock);
 
-	if (!lock.owns_lock())
+	if (lockMode == DmaLockMode::Wait)
+	{
+		lock.lock();
+	}
+	else if (!lock.try_lock())
+	{
 		return TryScatterReadResult::Busy;
+	}
 
 	if (!vHandle || !current_process.PID)
 		return TryScatterReadResult::Failed;
@@ -3375,7 +3424,7 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 	const VMMDLL_SCATTER_HANDLE handle = VMMDLL_Scatter_Initialize(
 		vHandle,
 		current_process.PID,
-		BuildScatterFlags(cacheMode)
+		BuildScatterFlags(cacheMode, pagingMode, zeroPadOnFail)
 	);
 
 	if (!handle)

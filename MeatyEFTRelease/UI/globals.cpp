@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.44";
+std::string globals::appVersion = "1.0.45";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -21,8 +21,8 @@ std::string globals::dogTagAPIKey = "";
 std::string globals::radarSubText = "";
 
 double globals::taskPlayers = 20;
-double globals::taskPlayerPositions = 10;
-double globals::taskPlayersBones = 20;
+double globals::taskPlayerPositions = 8;
+double globals::taskPlayersBones = 16;
 double globals::taskStaticVisibility = 250;
 double globals::taskGrenades = 100;
 double globals::taskPlayersEquipment = 2000;

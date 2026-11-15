@@ -208,15 +208,81 @@ HideoutOverviewSnapshot HideoutOverview::GetSnapshot() const
 
 std::vector<std::string> HideoutOverview::GetNeededItemIds() const
 {
-    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    const std::vector<HideoutNeededItem> selectedItems = GetSelectedNeededItems();
     std::vector<std::string> ids;
-    ids.reserve(snapshot_.neededItems.size());
-    for (const HideoutNeededItem& item : snapshot_.neededItems)
+    ids.reserve(selectedItems.size());
+    for (const HideoutNeededItem& item : selectedItems)
     {
         if (!item.itemTemplateId.empty() && item.stillNeeded > 0)
             ids.push_back(item.itemTemplateId);
     }
     return ids;
+}
+
+std::vector<HideoutNeededItem> HideoutOverview::GetSelectedNeededItems() const
+{
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    std::map<std::string, HideoutNeededItem> selectedById;
+    std::unordered_map<std::string, std::int32_t> marketPrices;
+    marketPrices.reserve(snapshot_.neededItems.size());
+    for (const HideoutNeededItem& item : snapshot_.neededItems)
+        marketPrices.emplace(item.itemTemplateId, item.marketPrice);
+
+    for (const HideoutZoneInfo& zone : snapshot_.zones)
+    {
+        if (!selectedAreaTypes_.contains(zone.areaType))
+            continue;
+
+        for (const HideoutRequirementInfo& requirement : zone.requirements)
+        {
+            if ((requirement.kind != HideoutRequirementKind::Item && requirement.kind != HideoutRequirementKind::Tool) || requirement.itemTemplateId.empty())
+                continue;
+
+            const std::int32_t stillNeeded = (std::max)(0, requirement.requiredCount - requirement.currentCount);
+            if (stillNeeded <= 0)
+                continue;
+
+            HideoutNeededItem& item = selectedById[requirement.itemTemplateId];
+            item.itemTemplateId = requirement.itemTemplateId;
+            item.itemName = requirement.itemName;
+            item.currentCount = (std::max)(item.currentCount, requirement.currentCount);
+            item.requiredCount = (std::max)(item.requiredCount, requirement.requiredCount);
+            item.stillNeeded = (std::max)(item.stillNeeded, stillNeeded);
+            item.marketPrice = marketPrices[requirement.itemTemplateId];
+            const std::string zoneName = HideoutAreaName(zone.areaType);
+            if (std::find(item.zones.begin(), item.zones.end(), zoneName) == item.zones.end())
+                item.zones.push_back(zoneName);
+        }
+    }
+
+    std::vector<HideoutNeededItem> result;
+    result.reserve(selectedById.size());
+    for (auto& [id, item] : selectedById)
+        result.push_back(std::move(item));
+    std::sort(result.begin(), result.end(), [](const HideoutNeededItem& left, const HideoutNeededItem& right)
+    {
+        const std::int64_t leftValue = static_cast<std::int64_t>(left.stillNeeded) * left.marketPrice;
+        const std::int64_t rightValue = static_cast<std::int64_t>(right.stillNeeded) * right.marketPrice;
+        return leftValue != rightValue ? leftValue > rightValue : left.itemName < right.itemName;
+    });
+    return result;
+}
+
+std::vector<std::int32_t> HideoutOverview::GetSelectedAreaTypes() const
+{
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    std::vector<std::int32_t> result(selectedAreaTypes_.begin(), selectedAreaTypes_.end());
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+void HideoutOverview::SetAreaSelected(const std::int32_t areaType, const bool selected)
+{
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    if (selected)
+        selectedAreaTypes_.insert(areaType);
+    else
+        selectedAreaTypes_.erase(areaType);
 }
 
 void HideoutOverview::WorkerLoop(std::stop_token stopToken)

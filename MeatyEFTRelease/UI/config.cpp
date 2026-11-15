@@ -6,8 +6,10 @@
 #include "render.h"
 #include "globals.h"
 #include "config.h"
+#include "SafeConfigFile.h"
 #include "Appearance.h"
 #include "../Tarkov/GameWorld/Loot/Loot.h"
+#include "../Tarkov/GameWorld/QuestManager.h"
 #include "../Web/TarkovDev/TarkovDevClient.h"
 #include "../Core/Utilities.h"
 #include "DxRenderWindow.h"
@@ -895,7 +897,7 @@ ConfigManager::ConfigManager(const std::string& configFilename, const std::strin
 }
 
 
-bool ConfigManager::LoadLootFilterConfig() {
+bool ConfigManager::LoadLootFilterConfig() try {
     fs::path exeDir = fs::current_path();
     fs::path configDir = exeDir / "configs";
     fs::path configFile = configDir / filename_lootFilter;
@@ -909,10 +911,9 @@ bool ConfigManager::LoadLootFilterConfig() {
         return false;
     }
 
-    nlohmann::json j;
-    file >> j;
-
     try {
+        nlohmann::json j;
+        file >> j;
         if (j.contains("lootFilters")) {
             lootFilters = j.at("lootFilters").get<std::vector<LootFilters>>();
         }
@@ -925,7 +926,9 @@ bool ConfigManager::LoadLootFilterConfig() {
     }
 }
 
-bool ConfigManager::LoadConfig()
+catch (...) { return false; }
+
+bool ConfigManager::LoadConfig() try
 {
     const fs::path exeDir = fs::current_path();
     const fs::path configDir = exeDir / "configs";
@@ -1046,6 +1049,12 @@ bool ConfigManager::LoadConfig()
             }
         }
 
+        if (j.contains("questManager") && j["questManager"].is_object())
+        {
+            questManager.setMemoryQuestsEnabled(
+                j["questManager"].value("enableMemoryQuests", true));
+        }
+
         if (j.contains("makcu") &&
             j["makcu"].is_object())
         {
@@ -1106,8 +1115,26 @@ bool ConfigManager::LoadConfig()
     }
 }
 
-bool ConfigManager::SaveConfig()
+catch (...) { return false; }
+
+bool ConfigManager::RecoverConfigAfterLoadFailure()
 {
+    configSaveBlocked_ = true;
+    try {
+        const auto path = fs::current_path() / "configs" / filename_;
+        fs::path backup;
+        if (!SafeConfigFile::PreserveFailed(path, backup)) {
+            LOGS.logWarn("[CONFIG] Could not preserve unreadable config; config saving is disabled for this session");
+            return false;
+        }
+        if (!backup.empty()) LOGS.logWarn("[CONFIG] Preserved failed configuration: " + backup.string());
+        configSaveBlocked_ = false;
+        return SaveConfig();
+    } catch (...) { return false; }
+}
+bool ConfigManager::SaveConfig() try
+{
+    if (configSaveBlocked_) return false;
     fs::path exeDir = fs::current_path();
     fs::path configDir = exeDir / "configs";
     fs::path configFile = configDir / filename_;
@@ -1143,18 +1170,18 @@ bool ConfigManager::SaveConfig()
     j["makcu"] = makcu_;
     j["ferrum"] = ferrum_;
     j["memoryGlobals"] = memoryGlobals_;
+    j["questManager"] = {
+        {"enableMemoryQuests", questManager.areMemoryQuestsEnabled()}
+    };
 
-    std::ofstream file(configFile);
-    if (!file.is_open())
-        return false;
-
-    file << j.dump(4);
-    file.close();
+    if (!SafeConfigFile::WriteAtomically(configFile, j.dump(4))) return false;
     appearanceManager.Save();
     return true;
 }
 
-bool ConfigManager::SaveLootFilterConfig() {
+catch (...) { return false; }
+
+bool ConfigManager::SaveLootFilterConfig() try {
     fs::path exeDir = fs::current_path();
     fs::path configDir = exeDir / "configs";
     fs::path configFile = configDir / filename_lootFilter;
@@ -1166,14 +1193,9 @@ bool ConfigManager::SaveLootFilterConfig() {
     nlohmann::json j;
     j["lootFilters"] = lootFilters;
 
-    std::ofstream file(configFile);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    file << j.dump(4);
-    return true;
+    return SafeConfigFile::WriteAtomically(configFile, j.dump(4));
 }
+catch (...) { return false; }
 
 bool ConfigManager::refreshFilterLootPrices() {
 

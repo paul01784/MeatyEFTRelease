@@ -284,8 +284,9 @@ namespace
                 { "exfiled", player.hasExfiled },
                 { "consecutive_roster_misses", player.consecutiveRosterMisses },
                 { "roster_missing_age_ms", AgeMilliseconds(player.rosterMissingSince) },
-                { "last_dog_tag_lookup_age_ms", AgeMilliseconds(player.lastDogTagLookup) },
-                { "dog_tag_cache_found", player.foundDogTagCache }
+                { "dog_tag_cache_lookup_attempted", player.dogTagCacheLookupAttempted },
+                { "dog_tag_cache_found", player.foundDogTagCache },
+                { "dogtag_api_lookup_attempted", player.dogTagApiLookupAttempted }
             } },
             { "btr_state", {
                 { "controller", PointerText(player.btrController) },
@@ -348,11 +349,12 @@ namespace
             { "bones", {
                 { "invalid", player.invalidBones },
                 { "pointers_need_resolve", player.bonePointersNeedResolve },
+                { "minimal_pointers_ready", player.minimalBonePointersReady },
+                { "full_pointers_ready", player.fullBonePointersReady },
+                { "minimal_pose_valid", player.minimalBonePoseValid },
+                { "full_pose_valid", player.fullBonePoseValid },
+                { "consecutive_bad_samples", player.consecutiveBadBoneSamples },
                 { "matrix", PointerText(player.playerBoneMatrixPtr) },
-                { "internal_transform", PointerText(player.internalTransformPtr) },
-                { "internal_transform_position", Vec3Json(player.internalTransformPosition) },
-                { "internal_transform_position_valid", player.internalTransformPositionValid },
-                { "using_internal_transform_fallback", player.usingInternalTransformFallback },
                 { "using_camera_position_fallback", player.usingCameraPositionFallback },
                 { "entries", std::move(bones) },
                 { "transform_cache", std::move(transformCache) }
@@ -530,7 +532,7 @@ SupportHealthSnapshot CaptureSupportHealthSnapshot()
         snapshot,
         "Player roster",
         roster.possibleMissingEntities ? "Mismatch" : "Healthy",
-        std::to_string(roster.aliveCachedCount) + " alive cached / " + std::to_string(roster.registeredCount) + " registered",
+        std::to_string(roster.cachedRegisteredCount) + " registered cached / " + std::to_string(roster.registeredCount) + " registered",
         roster.possibleMissingEntities ? SupportHealthLevel::Warning : inRaid ? SupportHealthLevel::Good : SupportHealthLevel::Inactive);
 
     AddHealthItem(
@@ -699,7 +701,7 @@ SupportReportResult ExportSupportReport(const SupportReportOptions& options)
             { "workers_running", appGlobals::runThreads.load(std::memory_order_acquire) },
             { "selected_location", mainGame.selectedLocation },
             { "registered_count", roster.registeredCount },
-            { "alive_cached_count", roster.aliveCachedCount },
+            { "cached_registered_count", roster.cachedRegisteredCount },
             { "possible_missing_entities", roster.possibleMissingEntities }
         };
 
@@ -1031,8 +1033,8 @@ SupportReportResult ExportSupportReport(const SupportReportOptions& options)
         text << "UnityPlayer: " << PointerText(pointers.unityPlayerBase) << " | GameAssembly: " << PointerText(pointers.gameAssemblyBase) << "\n";
         text << "GOM slot: " << PointerText(pointers.gameObjectManagerSlot) << " | GOM: " << PointerText(pointers.gameObjectManager) << "\n";
         text << "GameWorld: " << PointerText(mainGame.gameWorld) << " | LocalGameWorld: " << PointerText(mainGame.localGameWorld) << "\n";
-        text << "Registered list: " << PointerText(mainGame.registeredPlayersList) << " | " << roster.aliveCachedCount << "/" << roster.registeredCount
-             << " alive/registered\n";
+        text << "Registered list: " << PointerText(mainGame.registeredPlayersList) << " | " << roster.cachedRegisteredCount << "/" << roster.registeredCount
+             << " cached/registered\n";
 
         text << "\nREGISTERED PLAYER ARRAY\n";
         text << "Container: " << PointerText(mainGame.registeredPlayers) << " | list: " << PointerText(mainGame.registeredPlayersList)
@@ -1074,8 +1076,7 @@ SupportReportResult ExportSupportReport(const SupportReportOptions& options)
                  << " hands_addr=" << PointerText(player.P_HandsControllerAddr) << " hands=" << PointerText(player.P_HandsController) << "\n";
             text << "  observed=" << PointerText(player.P_ObservedPlayerController) << " health=" << PointerText(player.P_ObservedHealthController)
                  << " movement=" << PointerText(player.P_MovementContext) << " rotation=" << PointerText(player.P_RotationAddress)
-                 << " velocity=" << PointerText(player.P_VelocityAddress) << " bones=" << PointerText(player.playerBoneMatrixPtr)
-                 << " internal_transform=" << PointerText(player.internalTransformPtr) << "\n";
+                 << " velocity=" << PointerText(player.P_VelocityAddress) << " bones=" << PointerText(player.playerBoneMatrixPtr) << "\n";
         }
 
         if (btrVehicleCount != 0 || btrPassengerCount != 0)

@@ -35,6 +35,8 @@ public:
     [[nodiscard]] std::string Status() const;
     [[nodiscard]] std::string LastError() const;
     [[nodiscard]] std::string JsonText() const;
+    [[nodiscard]] bool HasResolveLog() const;
+    [[nodiscard]] std::string ResolveLog() const;
     [[nodiscard]] std::filesystem::path FilePath() const;
     [[nodiscard]] std::vector<EftOffsetView> Entries() const;
 
@@ -44,6 +46,9 @@ private:
 
     void ResolveWorker();
     void SetStatus(std::string status, std::string error = {});
+    void BeginResolveLog();
+    void AppendResolveLog(const std::string& message);
+    void FinishResolveLog();
 
     std::atomic_bool resolving_{false};
     mutable std::mutex mutex_;
@@ -51,5 +56,8 @@ private:
     std::string status_ = "Using built-in offsets";
     std::string lastError_;
     std::string jsonText_;
+    std::string resolveLog_;
+    bool resolveLogActive_{};
+    bool resolveLogReady_{};
 };
 

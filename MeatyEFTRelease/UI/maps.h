@@ -29,6 +29,8 @@ public:
     ImVec2 cursorPosImageSpace;
     ImVec2 minBounds_;
     ImVec2 maxBounds_;
+    glm::vec2 followAnchorWorld;
+    bool followSmoothingInitialized;
 };
 
 // Define object to MapControl storage

@@ -1,7 +1,7 @@
 #include "../../../UI/includes.h"
 #include "../RegisteredPlayers.h"
 #include "PlayerClassifier.h"
-#include "PlayerLookup.h"
+#include "PlayerMemoryAccess.h"
 
 #include "../../../Core/Utilities.h"
 #include "../../../memory/Memory.h"
@@ -12,14 +12,11 @@
 
 #include <algorithm>
 #include <chrono>
-#include <sstream>
 #include <unordered_set>
 
 namespace
 {
-    constexpr std::size_t maximumNewPlayersPerTick = 4;
-    constexpr std::uint32_t maximumAllocationFailures = 5;
-    constexpr std::chrono::seconds allocationRetryCooldown{ 2 };
+    constexpr std::chrono::milliseconds allocationRetryCooldown{ 500 };
 }
 
 void RegisteredPlayers::playersTask()
@@ -37,24 +34,43 @@ void RegisteredPlayers::playersTask()
 
         applyPendingPlayerEdits();
 
-        if (!mem.IsDmaOperational() || !mainGame.updatePlayerList())
+        if (!mem.IsDmaOperational())
             return;
 
-        std::vector<uint64_t> registeredAddresses;
-        std::unordered_set<uint64_t> uniqueAddresses;
-        registeredAddresses.reserve(mainGame.registeredPlayersCount);
-        uniqueAddresses.reserve(mainGame.registeredPlayersCount);
+        const auto rosterNow = std::chrono::steady_clock::now();
+        constexpr auto kMaximumRosterRefreshGap = std::chrono::milliseconds(75);
+        if (nextGuaranteedRosterRefresh == std::chrono::steady_clock::time_point{})
+            nextGuaranteedRosterRefresh = rosterNow + kMaximumRosterRefreshGap;
 
-        for (int index = 0; index < mainGame.registeredPlayersCount; ++index)
+        const bool guaranteeFreshRoster = rosterNow >= nextGuaranteedRosterRefresh;
+        bool rosterUpdated = false;
+        if (guaranteeFreshRoster)
         {
-            const uint64_t instance = mainGame.player_buffer[index];
-
-            if (Utils::valid_pointer(instance) && uniqueAddresses.insert(instance).second)
-                registeredAddresses.emplace_back(instance);
+            const ScopedDmaPriority priority(DmaPriority::High);
+            rosterUpdated = mainGame.updatePlayerList(true);
+            nextGuaranteedRosterRefresh = rosterNow + kMaximumRosterRefreshGap;
+        }
+        else
+        {
+            rosterUpdated = mainGame.updatePlayerList(false);
+            if (rosterUpdated)
+                nextGuaranteedRosterRefresh = rosterNow + kMaximumRosterRefreshGap;
         }
 
-        if (registeredAddresses.empty())
+        if (!rosterUpdated)
+        {
+            updateEntity();
+            updateBtrPassengerStates();
+            publishCacheSnapshot();
             return;
+        }
+
+        const RegisteredPlayerArraySnapshot roster = MainGame::getRegisteredPlayerArraySnapshot();
+        if (!roster)
+            return;
+
+        std::unordered_set<uint64_t> uniqueAddresses(roster->begin(), roster->end());
+        const std::vector<uint64_t> registeredAddresses(roster->begin(), roster->end());
 
         const auto now = std::chrono::steady_clock::now();
 
@@ -70,21 +86,20 @@ void RegisteredPlayers::playersTask()
                     });
             }
 
-            pruneInvalidCachedPlayersLocked();
             rebuildPlayerCacheIndexLocked();
         }
 
-        std::vector<Player> pendingPlayers;
-        pendingPlayers.reserve((std::min)(maximumNewPlayersPerTick, registeredAddresses.size()));
-        nextPlayerAllocationCursor %= registeredAddresses.size();
-
-        std::size_t inspected = 0;
-        std::size_t attempts = 0;
-
-        for (; inspected < registeredAddresses.size() && attempts < maximumNewPlayersPerTick; ++inspected)
+        if (registeredAddresses.empty())
         {
-            const std::size_t index = (nextPlayerAllocationCursor + inspected) % registeredAddresses.size();
-            const uint64_t instance = registeredAddresses[index];
+            publishCacheSnapshot();
+            return;
+        }
+
+        std::vector<Player> pendingPlayers;
+        pendingPlayers.reserve(registeredAddresses.size());
+
+        for (const uint64_t instance : registeredAddresses)
+        {
             bool isCached = false;
             bool shouldRetry = true;
 
@@ -93,15 +108,12 @@ void RegisteredPlayers::playersTask()
                 isCached = playerCacheIndex.contains(instance);
 
                 if (const auto failure = failedAllocations.find(instance); failure != failedAllocations.end())
-                {
-                    shouldRetry = failure->second.attempts < maximumAllocationFailures || now - failure->second.lastAttempt >= allocationRetryCooldown;
-                }
+                    shouldRetry = now - failure->second.lastAttempt >= allocationRetryCooldown;
             }
 
             if (isCached || !shouldRetry)
                 continue;
 
-            ++attempts;
             const bool isLocal = instance == mainGame.localPlayerPtr;
             auto player = buildEntity(instance, isLocal);
 
@@ -123,10 +135,6 @@ void RegisteredPlayers::playersTask()
             pendingPlayers.emplace_back(std::move(*player));
         }
 
-        nextPlayerAllocationCursor = (nextPlayerAllocationCursor + (std::max)(std::size_t{ 1 }, inspected)) % registeredAddresses.size();
-
-        std::vector<uint64_t> addedInstances;
-
         {
             std::lock_guard<std::mutex> lock(playerMutex);
             rebuildPlayerCacheIndexLocked();
@@ -140,23 +148,11 @@ void RegisteredPlayers::playersTask()
                 if (nextCacheEntryId == 0)
                     nextCacheEntryId = 1;
 
-                addedInstances.emplace_back(player.instance);
                 playerCacheIndex[player.instance] = playerCache.size();
                 playerCache.emplace_back(std::move(player));
             }
 
             tryFindBTR();
-
-            for (uint64_t instance : addedInstances)
-            {
-                Player* player = PlayerLookup::findByInstance(playerCache, instance);
-
-                if (!player || player->isBTR || player->isDead || player->hasExfiled)
-                    continue;
-
-                player->bonePointersNeedResolve = true;
-                getBonePtrs(*player, true);
-            }
         }
 
         updateEntity();
@@ -186,77 +182,44 @@ void RegisteredPlayers::playersTask()
     publishCacheSnapshot();
 }
 
-bool RegisteredPlayers::pruneInvalidCachedPlayersLocked()
-{
-    bool removed = false;
-
-    for (auto player = playerCache.begin(); player != playerCache.end();)
-    {
-        const bool currentlyRegistered = registeredPlayerScratch.contains(player->instance);
-        bool valid = Utils::valid_pointer(player->instance) && !player->className.empty();
-
-        if (valid && currentlyRegistered)
-        {
-            switch (player->getKind())
-            {
-            case PlayerKind::Local:
-            case PlayerKind::Client:
-                valid = Utils::valid_pointer(player->P_Profile) && Utils::valid_pointer(player->P_Info) &&
-                    Utils::valid_pointer(player->P_Body) && Utils::valid_pointer(player->P_MovementContext) &&
-                    Utils::valid_pointer(player->P_RotationAddress) && Utils::valid_pointer(player->P_InventoryControllerAddr) &&
-                    Utils::valid_pointer(player->P_HandsControllerAddr);
-                break;
-            case PlayerKind::Observed:
-                valid = Utils::valid_pointer(player->P_ObservedPlayerController) && Utils::valid_pointer(player->P_ObservedHealthController) &&
-                    Utils::valid_pointer(player->P_MovementContext) && Utils::valid_pointer(player->P_RotationAddress) &&
-                    Utils::valid_pointer(player->P_InventoryControllerAddr) && Utils::valid_pointer(player->P_HandsControllerAddr);
-                break;
-            case PlayerKind::Btr:
-                valid = Utils::valid_pointer(player->btrView);
-                break;
-            case PlayerKind::Unknown:
-            default:
-                valid = false;
-                break;
-            }
-        }
-
-        if (valid)
-        {
-            ++player;
-            continue;
-        }
-
-        const std::uint64_t instance = player->instance;
-        std::ostringstream message;
-        message << "[PLAYERS][CACHE] Removing invalid cached entity " << player->name << " at 0x" << std::hex << instance;
-        LOGS.logWarn(message.str());
-        failedAllocations.erase(instance);
-        player = playerCache.erase(player);
-        removed = true;
-    }
-
-    return removed;
-}
-
 std::optional<Player> RegisteredPlayers::buildEntity(uint64_t instance, bool isLocal)
 {
     if (!mem.vHandle || !Utils::valid_pointer(instance))
         return std::nullopt;
 
-    std::string className;
-
-    try
-    {
-        className = ReadName(instance, 64, false);
-    }
-    catch (...)
-    {
+    uint64_t classNamePointer = 0;
+    if (!PlayerMemoryAccess::tryReadChain(instance, { 0x0, 0x10 }, classNamePointer, DmaCacheMode::Uncached))
         return std::nullopt;
-    }
+
+    const std::string className = PlayerMemoryAccess::readUtf8(classNamePointer, 64, DmaCacheMode::Uncached);
 
     if (className.empty())
         return std::nullopt;
 
-    return PlayerClassifier::classify(className, isLocal).tryCreate(instance, className);
+    auto player = PlayerClassifier::classify(className, isLocal).tryCreate(instance, className);
+    if (!player.has_value())
+        return std::nullopt;
+
+    uint64_t handsController = 0;
+    if (Utils::valid_pointer(player->P_HandsControllerAddr) &&
+        PlayerMemoryAccess::tryReadPointer(
+            player->P_HandsControllerAddr,
+            handsController,
+            DmaCacheMode::Uncached))
+    {
+        player->P_HandsController = handsController;
+        player->lastHeldItemHandsController = handsController;
+
+        try
+        {
+            player->observedHandsInfo.update(*player);
+        }
+        catch (...)
+        {
+            player->observedHandsInfo.reset();
+        }
+    }
+
+    player->nextHeldItemRefresh = {};
+    return player;
 }

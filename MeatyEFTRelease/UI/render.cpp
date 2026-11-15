@@ -42,6 +42,7 @@
 #include <chrono>
 #include <limits>
 #include <sstream>
+#include <unordered_set>
 
 namespace
 {
@@ -537,7 +538,7 @@ void renderRosterMismatchWarning()
         font = ImGui::GetFont();
 
     const std::string text = "POSSIBLE MISSING ENTITIES  Registered: " + std::to_string(status.registeredCount) +
-        " | Alive cache: " + std::to_string(status.aliveCachedCount);
+        " | Cached: " + std::to_string(status.cachedRegisteredCount);
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     constexpr float fontSize = 15.0f;
     const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
@@ -1480,6 +1481,13 @@ static void renderMenuSettings()
                 ImGui::OpenPopup("Resolve all offsets?");
             ImGui::EndDisabled();
 
+            if (offsetService.HasResolveLog())
+            {
+                ImGui::SameLine();
+                if (ImGui::Button("View resolve log", ImVec2(160.0f, 30.0f)))
+                    ImGui::OpenPopup("Full offset scan log");
+            }
+
             if (resolving)
                 ImGui::TextUnformatted("Running full offset scan...");
             else if (dmaConnected || dmaWorking)
@@ -1501,6 +1509,22 @@ static void renderMenuSettings()
                 ImGui::SameLine();
                 if (ImGui::Button("Cancel", ImVec2(120.0f, 28.0f)))
                     ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+
+            ImGui::SetNextWindowSize(ImVec2(780.0f, 520.0f), ImGuiCond_Appearing);
+            if (ImGui::BeginPopupModal("Full offset scan log", nullptr, ImGuiWindowFlags_NoResize))
+            {
+                const std::string resolveLog = offsetService.ResolveLog();
+                if (ImGui::Button("Copy log", ImVec2(120.0f, 28.0f)))
+                    ImGui::SetClipboardText(resolveLog.c_str());
+                ImGui::SameLine();
+                if (ImGui::Button("Close", ImVec2(120.0f, 28.0f)))
+                    ImGui::CloseCurrentPopup();
+                ImGui::Spacing();
+                ImGui::BeginChild("##fullOffsetScanLog", ImVec2(0.0f, 0.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+                ImGui::TextUnformatted(resolveLog.c_str());
+                ImGui::EndChild();
                 ImGui::EndPopup();
             }
 
@@ -1802,6 +1826,9 @@ static void renderMenuSettings()
                               memoryGlobals::processFound.load(std::memory_order_acquire) && !mem.IsInitRunning();
         const GymSnapshot state = GYM.GetSnapshot();
         const HideoutOverviewSnapshot overview = HIDEOUT_OVERVIEW.GetSnapshot();
+        const std::vector<std::int32_t> selectedHideoutAreaTypes = HIDEOUT_OVERVIEW.GetSelectedAreaTypes();
+        const std::unordered_set<std::int32_t> selectedHideoutAreas(selectedHideoutAreaTypes.begin(), selectedHideoutAreaTypes.end());
+        const std::vector<HideoutNeededItem> selectedHideoutItems = HIDEOUT_OVERVIEW.GetSelectedNeededItems();
         const bool inHideout = state.hideoutAreaValid || Utils::valid_pointer(overview.hideoutController);
         const bool inputDeviceReady = inputDevice.IsConnected();
         const bool resolverReady = state.hideoutAreaValid && state.typeInfoValid && state.overlayClassValid && state.qteControllerClassValid &&
@@ -1960,15 +1987,72 @@ static void renderMenuSettings()
                                 if (filterChanged)
                                     configManager.SaveConfig();
 
-                                ImGui::TextDisabled("Uses %zu item types from the latest completed Hideout scan.", overview.neededItems.size());
+                                ImGui::TextDisabled("Uses %zu item types from %zu selected areas.", selectedHideoutItems.size(), selectedHideoutAreaTypes.size());
                                 if (overview.neededItems.empty())
                                     ImGui::TextDisabled("Run Scan Hideout to populate this filter.");
                             }
 
-                            ImGui::TextDisabled("Shared stash counts are de-duplicated by item ID. Need uses the largest shortage across zone upgrades, matching the game's reusable inventory view.");
-                            if (overview.neededItems.empty())
+                            ImGui::SeparatorText("Areas included in the parts filter");
+                            ImGui::TextDisabled("Tick only the upgrades you want to collect parts for. Area choices remain until the app closes.");
+                            if (ImGui::Button("Select all with missing parts"))
                             {
-                                ImGui::TextColored(ImVec4(0.20f, 1.00f, 0.35f, 1.00f), "No missing item or tool requirements were found for the next zone levels.");
+                                for (const HideoutZoneInfo& zone : overview.zones)
+                                {
+                                    const bool hasMissingParts = std::any_of(zone.requirements.begin(), zone.requirements.end(), [](const HideoutRequirementInfo& requirement)
+                                    {
+                                        return (requirement.kind == HideoutRequirementKind::Item || requirement.kind == HideoutRequirementKind::Tool) &&
+                                            requirement.requiredCount > requirement.currentCount;
+                                    });
+                                    if (hasMissingParts)
+                                        HIDEOUT_OVERVIEW.SetAreaSelected(zone.areaType, true);
+                                }
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Clear selection"))
+                            {
+                                for (const std::int32_t areaType : selectedHideoutAreaTypes)
+                                    HIDEOUT_OVERVIEW.SetAreaSelected(areaType, false);
+                            }
+
+                            if (ImGui::BeginTable("##hideoutAreaFilterSelection", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame))
+                            {
+                                int areaColumn = 0;
+                                for (const HideoutZoneInfo& zone : overview.zones)
+                                {
+                                    const int missingPartTypes = static_cast<int>(std::count_if(zone.requirements.begin(), zone.requirements.end(), [](const HideoutRequirementInfo& requirement)
+                                    {
+                                        return (requirement.kind == HideoutRequirementKind::Item || requirement.kind == HideoutRequirementKind::Tool) &&
+                                            requirement.requiredCount > requirement.currentCount;
+                                    }));
+                                    if (missingPartTypes == 0)
+                                        continue;
+
+                                    if (areaColumn % 3 == 0)
+                                        ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(areaColumn % 3);
+                                    bool selected = selectedHideoutAreas.contains(zone.areaType);
+                                    ImGui::PushID(zone.areaType);
+                                    if (ImGui::Checkbox("##selected", &selected))
+                                        HIDEOUT_OVERVIEW.SetAreaSelected(zone.areaType, selected);
+                                    ImGui::SameLine();
+                                    ImGui::Text("%s", HideoutAreaName(zone.areaType));
+                                    ImGui::SameLine();
+                                    ImGui::TextDisabled("(%d)", missingPartTypes);
+                                    ImGui::PopID();
+                                    ++areaColumn;
+                                }
+                                ImGui::EndTable();
+                            }
+
+                            ImGui::SeparatorText("Selected upgrade parts");
+                            ImGui::TextDisabled("Shared stash counts are de-duplicated by item ID. Need uses the largest shortage across the selected area upgrades.");
+                            if (selectedHideoutAreaTypes.empty())
+                            {
+                                ImGui::TextDisabled("Select one or more areas above to populate the parts filter.");
+                            }
+                            else if (selectedHideoutItems.empty())
+                            {
+                                ImGui::TextColored(ImVec4(0.20f, 1.00f, 0.35f, 1.00f), "No missing item or tool requirements were found for the selected upgrades.");
                             }
                             else if (ImGui::BeginTable("##hideoutNeededItems", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                                                                                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY, ImVec2(0.0f, 360.0f)))
@@ -1981,7 +2065,7 @@ static void renderMenuSettings()
                                 ImGui::TableSetupColumn("Est. total", ImGuiTableColumnFlags_WidthFixed, 96.0f);
                                 ImGui::TableSetupColumn("Used by", ImGuiTableColumnFlags_WidthStretch);
                                 ImGui::TableHeadersRow();
-                                for (const HideoutNeededItem& item : overview.neededItems)
+                                for (const HideoutNeededItem& item : selectedHideoutItems)
                                 {
                                     const std::int64_t total = static_cast<std::int64_t>(item.stillNeeded) * item.marketPrice;
                                     ImGui::TableNextRow();
@@ -3073,8 +3157,8 @@ static void renderDebugWindow()
                                 connection.processId, static_cast<unsigned long long>(connection.targetBaseAddress),
                                 mainGame.selectedLocation.empty() ? "no map" : mainGame.selectedLocation.c_str());
 
-                    ImGui::Text("Registered: %zu | Alive cached: %zu | Cached: %zu", rosterStatus.registeredCount,
-                                rosterStatus.aliveCachedCount, playerSnapshot->size());
+                    ImGui::Text("Registered: %zu | Registered cached: %zu | Total cached: %zu", rosterStatus.registeredCount,
+                                rosterStatus.cachedRegisteredCount, playerSnapshot->size());
 
                     if (ImGui::CollapsingHeader("Preloaded module and Unity pointers"))
                     {
@@ -3860,7 +3944,7 @@ static void renderDebugWindow()
                                        cameraHealthy ? "READY" : "NEEDS ATTENTION");
                     ImGui::SameLine();
                     ImGui::Text("| Screen projection: %s | Matrix: %s", cameraState.usingOptic ? "OPTIC" : "FPS", cameraState.valid ? "READY" : "INVALID");
-                    ImGui::Text("FPS path: %s | Optic path: %s | ADS: %s | Magnified: %s | 1x+ optic requested: %s", fpsReady ? "READY" : "MISSING", opticReady ? "READY" : "MISSING",
+                    ImGui::Text("FPS path: %s | Optic path: %s | ADS: %s | Magnified: %s | Magnified optic requested: %s", fpsReady ? "READY" : "MISSING", opticReady ? "READY" : "MISSING",
                                 cameraState.ads ? "YES" : "NO", cameraState.scoped ? "YES" : "NO", cameraState.opticRequested ? "YES" : "NO");
                     ImGui::Text("AllCameras cache: FPS %s | Optic %s | Using: FPS %s / Optic %s",
                                 Utils::valid_pointer(cameraState.allCamerasFpsCamera) ? "CACHED" : "MISSING",
@@ -3899,7 +3983,7 @@ static void renderDebugWindow()
                     {
                         DebugTextBool("ADS", cameraState.ads);
                         DebugTextBool("Magnified scope", cameraState.scoped);
-                        DebugTextBool("1x+ optic requested", cameraState.opticRequested);
+                        DebugTextBool("Magnified optic requested", cameraState.opticRequested);
                         DebugTextBool("Optic matrix sampled", opticSampleReady);
                         DebugTextBool("Optic screen projection", cameraState.usingOptic);
                         DebugTextBool("Stacked sight resolved", cameraState.stackedSightResolved);

@@ -1,7 +1,6 @@
 #include "LocalPlayer.h"
 
 #include "../MainGame.h"
-#include "../QuestManager.h"
 #include "../../SDK/EftOffsets.h"
 
 PlayerKind LocalPlayer::getKind() const noexcept
@@ -44,6 +43,8 @@ std::optional<Player> LocalPlayer::tryCreate(uint64_t instance, std::string_view
         return std::nullopt;
 
     initialize(*player);
+    player->name = "LocalPlayer";
+    player->isAi = false;
 
     const bool isSavage = (static_cast<uint32_t>(player->playerSide) & static_cast<uint32_t>(EPlayerSide::Savage)) != 0;
     mainGame.localIsSavage = isSavage;
@@ -51,14 +52,6 @@ std::optional<Player> LocalPlayer::tryCreate(uint64_t instance, std::string_view
     player->isPlayer = !isSavage;
     player->isPlayerScav = isSavage;
 	player->type = isSavage ? PlayerType::PScav : PlayerType::PMC;
-
-    try
-    {
-        questManager.initQuestManager();
-    }
-    catch (...)
-    {
-    }
 
     return player;
 }

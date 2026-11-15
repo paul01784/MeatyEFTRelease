@@ -6,6 +6,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 enum class HideoutScanState
@@ -115,6 +116,9 @@ public:
 
     [[nodiscard]] HideoutOverviewSnapshot GetSnapshot() const;
     [[nodiscard]] std::vector<std::string> GetNeededItemIds() const;
+    [[nodiscard]] std::vector<HideoutNeededItem> GetSelectedNeededItems() const;
+    [[nodiscard]] std::vector<std::int32_t> GetSelectedAreaTypes() const;
+    void SetAreaSelected(std::int32_t areaType, bool selected);
 
 private:
     void WorkerLoop(std::stop_token stopToken);
@@ -125,6 +129,7 @@ private:
 
     mutable std::mutex snapshotMutex_;
     HideoutOverviewSnapshot snapshot_{};
+    std::unordered_set<std::int32_t> selectedAreaTypes_;
 
     std::mutex workerMutex_;
     std::jthread worker_;

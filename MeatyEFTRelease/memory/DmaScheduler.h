@@ -76,7 +76,7 @@ public:
         const std::size_t priority = ToIndex(GetCurrentDmaPriority());
         std::lock_guard stateLock(stateMutex_);
 
-        if (locked_ || HasWaiterAbove(priority))
+        if (locked_ || waiters_[priority] != 0 || HasWaiterAbove(priority))
             return false;
 
         locked_ = true;

@@ -15,6 +15,7 @@
 #include "../../Unity/cameraManager.h"
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -71,6 +72,17 @@ namespace
         player.aimLineTargetIsLocal = false;
         player.aimLineTargetLocation = {};
         player.aimLineTargetSince = {};
+    }
+
+    void clearDeadPlayerPose(Player& player)
+    {
+        std::fill(
+            player.bonePositions.begin(),
+            player.bonePositions.end(),
+            glm::vec3(0.0f));
+        player.minimalBonePoseValid = false;
+        player.fullBonePoseValid = false;
+        player.invalidBones = true;
     }
 
     bool isUsableWorldPosition(const glm::vec3& position)
@@ -153,6 +165,9 @@ void RegisteredPlayers::updateEntity()
         return;
 
     const PlayerRefreshContext context{ std::chrono::steady_clock::now(), aimGlobals::predictionEnabled };
+    constexpr auto kMaximumRefreshGap = std::chrono::milliseconds(75);
+    const bool guaranteeFreshRead = nextGuaranteedEntityRefresh == std::chrono::steady_clock::time_point{} ||
+        context.now >= nextGuaranteedEntityRefresh;
     std::vector<PlayerRuntimeRead> reads;
 
     {
@@ -161,7 +176,7 @@ void RegisteredPlayers::updateEntity()
 
         for (const Player& player : playerCache)
         {
-            if (!Utils::valid_pointer(player.instance) || (!player.isBTR && (player.isDead || player.hasExfiled)))
+            if (!Utils::valid_pointer(player.instance) || player.isBTR || player.isDead || player.hasExfiled)
                 continue;
 
             PlayerRuntimeRead read{};
@@ -190,7 +205,20 @@ void RegisteredPlayers::updateEntity()
         }
 
         if (queuedAnything)
-            executed = batch.Execute();
+        {
+            if (guaranteeFreshRead)
+            {
+                const ScopedDmaPriority priority(DmaPriority::High);
+                executed = batch.ExecuteNoPaging();
+            }
+            else
+            {
+                executed = batch.TryExecuteNoPaging();
+            }
+
+            if (executed || guaranteeFreshRead)
+                nextGuaranteedEntityRefresh = context.now + kMaximumRefreshGap;
+        }
     }
 
     {
@@ -200,16 +228,13 @@ void RegisteredPlayers::updateEntity()
         {
             Player* player = PlayerLookup::findByInstance(playerCache, read.instance);
 
-            if (player)
+            if (player && player->cacheEntryId == read.cacheEntryId)
                 PlayerClassifier::get(read.kind).applyRefresh(*player, read, executed, context);
         }
     }
 
     if (!executed)
-    {
-        LOGS.logError("[PLAYERS][UPDATE] Player scatter execute failed");
         return;
-    }
 
     {
         std::lock_guard<std::mutex> lock(playerMutex);
@@ -232,6 +257,8 @@ void RegisteredPlayers::updateEntity()
 
             if (player.isDead || player.hasExfiled)
             {
+                if (player.isDead)
+                    clearDeadPlayerPose(player);
                 player.distance = getDistance(player.location, mainGame.localLocation);
                 PlayerAppearance::updateColour(player);
                 continue;
@@ -240,6 +267,7 @@ void RegisteredPlayers::updateEntity()
             if (Utils::valid_pointer(player.P_CorpseClass))
             {
                 player.isDead = true;
+                clearDeadPlayerPose(player);
                 Loot.requestImmediateRefresh();
                 player.distance = getDistance(player.location, mainGame.localLocation);
                 PlayerAppearance::updateColour(player);
@@ -250,7 +278,7 @@ void RegisteredPlayers::updateEntity()
                 continue;
 
             glm::vec3 location = PlayerPosition::getBestBasePosition(player);
-            const bool liveLocalPositionAvailable = !player.isLocal || !player.bonePointersNeedResolve || player.internalTransformPositionValid;
+            const bool liveLocalPositionAvailable = !player.isLocal || player.minimalBonePoseValid;
             bool usingCameraPositionFallback = false;
 
             if (player.isLocal && !liveLocalPositionAvailable)

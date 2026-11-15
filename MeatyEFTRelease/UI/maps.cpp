@@ -65,10 +65,10 @@ PDIRECT3DTEXTURE9 labs_texture0 = NULL;
 float labs_texture0_MinHeight = -100.f;
 
 PDIRECT3DTEXTURE9 labs_texture1 = NULL;
-float labs_texture1_MinHeight = -1.f;
+float labs_texture1_MinHeight = -3.f;
 
 PDIRECT3DTEXTURE9 labs_texture2 = NULL;
-float labs_texture2_MinHeight = -3.f;
+float labs_texture2_MinHeight = -1.f;
 
 int labs_orgW = 2912;
 int labs_orgH = 3184;
@@ -592,7 +592,7 @@ bool loadMaps(std::string mapToLoad)
     return true;
 }
 
-MapControl::MapControl() : panOffset(0, 0), zoomLevel(0.20f), isDragging(false), orginal_image_size((float)2255, (float)1916), config_size(2255, 1916), scale(3.731f) {}
+MapControl::MapControl() : panOffset(0, 0), zoomLevel(0.20f), isDragging(false), orginal_image_size((float)2255, (float)1916), config_size(2255, 1916), scale(3.731f), followAnchorWorld(0.0f), followSmoothingInitialized(false) {}
 
 void MapControl::Update(ImVec2 loadedImageSize) {
     if (ImGui::IsMouseReleased(0)) {
@@ -675,25 +675,52 @@ void MapControl::RenderImage(ImTextureID imageTexture, glm::vec3 centerPoint, bo
 {
     if (followLocal)
     {
-        // Set to 0 or it causes ghost on follow
-        imagePos = { 0,0 };
+        const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
+        glm::vec2 targetAnchorWorld(localState->location.x, localState->location.z);
 
-        // Get local map position
-        glm::vec3 localpointMap = getMapPosition(registeredPlayers.getLocalStateSnapshot()->location, currentMap::configX, currentMap::configY, currentMap::configScale);
+        if (localState->velocityValid)
+        {
+            const PlayerSnapshotTelemetry telemetry = registeredPlayers.getSnapshotTelemetry();
+            const float predictionSeconds = telemetry.motionAgeMs >= 0.0
+                ? ImClamp(static_cast<float>(telemetry.motionAgeMs * 0.001), 0.f, 0.06f)
+                : 0.f;
+            targetAnchorWorld.x += localState->velocity.x * predictionSeconds;
+            targetAnchorWorld.y += localState->velocity.z * predictionSeconds;
+        }
 
-        // Get window size
+        const glm::vec2 anchorDelta = targetAnchorWorld - followAnchorWorld;
+        const float anchorDistanceSquared = glm::dot(anchorDelta, anchorDelta);
+
+        if (!followSmoothingInitialized || anchorDistanceSquared > 2500.f)
+        {
+            followAnchorWorld = targetAnchorWorld;
+            followSmoothingInitialized = true;
+        }
+        else
+        {
+            const float deltaTime = ImClamp(ImGui::GetIO().DeltaTime, 0.f, 0.1f);
+            const float followBlend = 1.f - std::exp(-8.f * deltaTime);
+            followAnchorWorld += anchorDelta * followBlend;
+        }
+
+        const ImVec2 localPointMap = {
+            (currentMap::configX + followAnchorWorld.x * currentMap::configScale) * zoomLevel,
+            (currentMap::configY - followAnchorWorld.y * currentMap::configScale) * zoomLevel
+        };
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImVec2 windowSizeCenter = { ImGui::GetWindowSize().x / 2, ImGui::GetWindowSize().y / 2 };
-
-        // Work out center point to center of window
+        const ImVec2 windowSizeCenter = { ImGui::GetWindowSize().x * 0.5f, ImGui::GetWindowSize().y * 0.5f };
         imagePos = {
-            (windowSizeCenter.x - localpointMap.x) + viewport->WorkPos.x,
-            (windowSizeCenter.y - localpointMap.y) + viewport->WorkPos.y
+            (windowSizeCenter.x - localPointMap.x) + viewport->WorkPos.x,
+            (windowSizeCenter.y - localPointMap.y) + viewport->WorkPos.y
         };
     }
+    else
+        followSmoothingInitialized = false;
 
     if (centerPoint.x != 0.f || centerPoint.y != 0.f || centerPoint.z != 0.f)
     {
+        followSmoothingInitialized = false;
+
         // Set to 0 or it causes ghost on follow
         imagePos = { 0,0 };
 

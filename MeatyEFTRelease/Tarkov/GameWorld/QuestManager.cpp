@@ -2,6 +2,7 @@
 
 #include "../../memory/Memory.h"
 #include "../../memory/ScatterReadBatch.h"
+#include "../../UI/globals.h"
 #include "../SDK/EftOffsets.h"
 #include "../Unity/UnityContainers.h"
 #include "MainGame.h"
@@ -78,10 +79,24 @@ static bool IsLocationObjectiveType(const std::string& type)
         Utils::Text::containsIgnoreCase(type, "findQuestItem");
 }
 
-static bool IsItemObjectiveType(const std::string& type)
+static bool IsRegularItemTargetType(const std::string& type)
 {
     return Utils::Text::containsIgnoreCase(type, "findItem") ||
-        Utils::Text::containsIgnoreCase(type, "findQuestItem");
+        Utils::Text::containsIgnoreCase(type, "giveItem") ||
+        Utils::Text::containsIgnoreCase(type, "plantItem");
+}
+
+static bool IsQuestItemTargetType(const std::string& type)
+{
+    return Utils::Text::containsIgnoreCase(type, "findQuestItem") ||
+        Utils::Text::containsIgnoreCase(type, "giveQuestItem") ||
+        Utils::Text::containsIgnoreCase(type, "plantQuestItem");
+}
+
+static bool IsItemObjectiveType(const std::string& type)
+{
+    return IsRegularItemTargetType(type) ||
+        IsQuestItemTargetType(type);
 }
 
 static bool IsSupportedObjectiveType(const std::string& type)
@@ -150,14 +165,23 @@ static void FilterConditions(
         outObjectives.emplace_back(std::move(ao));
 
         
-        // findItem / findQuestItem
-        if (Utils::Text::containsIgnoreCase(obj.type, "findItem"))
+        if (IsRegularItemTargetType(obj.type))
         {
-            if (!obj.itemId.empty())
+            if (!obj.itemIds.empty())
+            {
+                for (const std::string& itemId : obj.itemIds)
+                {
+                    if (!itemId.empty())
+                        outMasterItems.emplace_back(itemId);
+                }
+            }
+            else if (!obj.itemId.empty())
+            {
                 outMasterItems.emplace_back(obj.itemId);
+            }
         }
 
-        if (Utils::Text::containsIgnoreCase(obj.type, "findQuestItem"))
+        if (IsQuestItemTargetType(obj.type))
         {
             if (!obj.questItemId.empty())
                 outMasterItems.emplace_back(obj.questItemId);
@@ -215,6 +239,82 @@ static void FilterConditions(
             outMasterLocations.emplace_back(std::move(loc));
         }
     }
+}
+
+void QuestManager::rebuildMasterTargetsLocked()
+{
+    masterItems.clear();
+    masterLocations.clear();
+
+    std::unordered_set<std::string> automaticQuestIds;
+    automaticQuestIds.reserve(questDataActive.size());
+
+    const auto appendTargets = [&](const TarkovDevTasks& task, const QuestData& quest)
+    {
+        std::vector<ActiveObjective> unusedObjectives;
+        FilterConditions(task, quest, unusedObjectives, masterItems, masterLocations);
+    };
+
+    for (const QuestData& quest : questDataActive)
+    {
+        if (!memoryQuestsEnabled.load(std::memory_order_relaxed))
+            continue;
+
+        automaticQuestIds.insert(quest.questId);
+
+        const auto task = std::find_if(tarkovDevTasksData.begin(), tarkovDevTasksData.end(), [&](const TarkovDevTasks& candidate)
+        {
+            return candidate.qID == quest.questId;
+        });
+
+        if (task != tarkovDevTasksData.end())
+            appendTargets(*task, quest);
+    }
+
+    for (const std::string& questId : selectedQuestIds)
+    {
+        if (automaticQuestIds.contains(questId))
+            continue;
+
+        const auto task = std::find_if(tarkovDevTasksData.begin(), tarkovDevTasksData.end(), [&](const TarkovDevTasks& candidate)
+        {
+            return candidate.qID == questId;
+        });
+
+        if (task == tarkovDevTasksData.end())
+            continue;
+
+        QuestData selectedQuest{};
+        selectedQuest.questId = task->qID;
+        selectedQuest.questName = task->qName;
+        appendTargets(*task, selectedQuest);
+    }
+}
+
+void QuestManager::setQuestSelected(const std::string& questId, const bool selected)
+{
+    if (questId.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+    const bool changed = selected ? selectedQuestIds.insert(questId).second : selectedQuestIds.erase(questId) > 0;
+    if (!changed)
+        return;
+
+    rebuildMasterTargetsLocked();
+    PublishQuestStateLocked(selectedQuestIds);
+}
+
+void QuestManager::setMemoryQuestsEnabled(const bool enabled)
+{
+    std::lock_guard<std::mutex> lock(g_questCacheMutex);
+
+    if (memoryQuestsEnabled.load(std::memory_order_relaxed) == enabled)
+        return;
+
+    memoryQuestsEnabled.store(enabled, std::memory_order_relaxed);
+    rebuildMasterTargetsLocked();
+    PublishQuestStateLocked(selectedQuestIds);
 }
 
 static const char* QuestStatusToStr(int s)
@@ -505,10 +605,9 @@ void QuestManager::initQuestManager()
             if (profileChanged)
             {
                 questDataActive.clear();
-                masterItems.clear();
-                masterLocations.clear();
+                rebuildMasterTargetsLocked();
                 initialScanComplete = false;
-                PublishQuestStateLocked();
+                PublishQuestStateLocked(selectedQuestIds);
             }
 
             cachedProfile = localProfile;
@@ -652,10 +751,9 @@ void QuestManager::initQuestManager()
             if (registeredPlayers.getLocalStateSnapshot()->profile == localProfile)
             {
                 questDataActive = std::move(newQuestDataActive);
-                masterItems = std::move(newMasterItems);
-                masterLocations = std::move(newMasterLocations);
+                rebuildMasterTargetsLocked();
                 initialScanComplete = true;
-                PublishQuestStateLocked();
+                PublishQuestStateLocked(selectedQuestIds);
                 published = true;
             }
         }
@@ -688,8 +786,12 @@ void QuestManager::updateAndPruneActiveQuests()
 {
     try
     {
-        if (!espGlobals::drawQuestHelper && !radarGlobals::drawQuestHelper)
+        if (!espGlobals::drawQuestHelper &&
+            !radarGlobals::drawQuestHelper &&
+            !lootGlobals::enableQuestLoot)
+        {
             return;
+        }
 
         std::vector<QuestData> activeSnapshot;
         bool shouldInitialize = false;
@@ -841,9 +943,8 @@ void QuestManager::updateAndPruneActiveQuests()
             std::lock_guard<std::mutex> lock(g_questCacheMutex);
 
             questDataActive = std::move(updated);
-            masterItems = std::move(newMasterItems);
-            masterLocations = std::move(newMasterLocations);
-            PublishQuestStateLocked();
+            rebuildMasterTargetsLocked();
+            PublishQuestStateLocked(selectedQuestIds);
         }
     }
     catch (const std::exception& e)
@@ -864,12 +965,11 @@ void QuestManager::clearForRaidEnd()
         std::lock_guard<std::mutex> lock(g_questCacheMutex);
 
         questDataActive.clear();
-        masterItems.clear();
-        masterLocations.clear();
+        rebuildMasterTargetsLocked();
         cachedProfile = 0;
         initialScanComplete = false;
         nextInitializationAttempt = {};
-        PublishQuestStateLocked();
+        PublishQuestStateLocked(selectedQuestIds);
     }
 
     LOGS.logInfo("[Quest Manager] Cleared quest cache: raid ended");

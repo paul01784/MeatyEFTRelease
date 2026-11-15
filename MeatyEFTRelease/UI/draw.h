@@ -139,6 +139,8 @@ void drawPlayers()
             continue;
         if (player.hasExfiled)
             continue;
+        if (!player.isBTR && !player.minimalBonePoseValid)
+            continue;
         if (!player.isDead) {
 
 

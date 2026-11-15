@@ -18,6 +18,7 @@ struct PlayerRefreshContext
 struct PlayerRuntimeRead
 {
     uint64_t instance{ 0 };
+    uint64_t cacheEntryId{ 0 };
     PlayerKind kind{ PlayerKind::Unknown };
     uint64_t btrView{ 0 };
     uint64_t rotationAddress{ 0 };
@@ -71,5 +72,11 @@ protected:
         player.playerBoneMatrixPtr = 0;
         player.bonePointersNeedResolve = true;
         player.invalidBones = false;
+        player.minimalBonePointersReady = false;
+        player.fullBonePointersReady = false;
+        player.minimalBonePoseValid = false;
+        player.fullBonePoseValid = false;
+        player.consecutiveBadBoneSamples = 0;
+        player.nextBonePointerResolve = {};
     }
 };

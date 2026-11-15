@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace uiWidgets
 {
@@ -20,19 +21,6 @@ static std::string toLower(const std::string& value)
             return static_cast<char>(std::tolower(character));
         });
     return result;
-}
-
-static const char* QuestStatusLabel(QuestStatus status)
-{
-    switch (status)
-    {
-    case QuestStatus::Locked: return "Locked";
-    case QuestStatus::Available: return "Available";
-    case QuestStatus::Started: return "Started";
-    case QuestStatus::Completed: return "Completed";
-    case QuestStatus::Failed: return "Failed";
-    default: return "Unknown";
-    }
 }
 
 static const char* QuestObjectiveTypeLabel(const std::string& type)
@@ -69,7 +57,7 @@ static bool QuestTextMatches(
 
 void renderQuestsWindow() {
     static ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
-    static int questFilter = 0; // 0 = All, 1 = Active
+    static int questFilter = 0; // 0 = All, 1 = Active, 2 = Selected
     static char questSearch[192] = "";
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -84,6 +72,8 @@ void renderQuestsWindow() {
     }
 
     const std::vector<QuestData> activeQuests = GetQuestDataActiveSnapshot();
+    const std::vector<std::string> selectedQuestIds = GetSelectedQuestIdsSnapshot();
+    const std::unordered_set<std::string> selectedById(selectedQuestIds.begin(), selectedQuestIds.end());
 
     std::unordered_map<std::string, const QuestData*> activeById;
     activeById.reserve(activeQuests.size());
@@ -205,6 +195,7 @@ void renderQuestsWindow() {
 
     std::vector<const TarkovDevTasks*> visibleAllQuests;
     std::vector<const QuestData*> visibleActiveQuests;
+    std::vector<const TarkovDevTasks*> visibleSelectedQuests;
 
     if (questFilter == 0) {
         visibleAllQuests.reserve(tarkovDevTasksData.size());
@@ -221,10 +212,15 @@ void renderQuestsWindow() {
             if (leftActive != rightActive)
                 return leftActive;
 
+            const bool leftSelected = selectedById.contains(left->qID);
+            const bool rightSelected = selectedById.contains(right->qID);
+            if (leftSelected != rightSelected)
+                return leftSelected;
+
             return left->qName < right->qName;
             });
     }
-    else {
+    else if (questFilter == 1) {
         visibleActiveQuests.reserve(activeQuests.size());
 
         for (const auto& quest : activeQuests) {
@@ -236,10 +232,25 @@ void renderQuestsWindow() {
             return left->questName < right->questName;
             });
     }
+    else {
+        visibleSelectedQuests.reserve(selectedQuestIds.size());
+
+        for (const auto& quest : tarkovDevTasksData) {
+            if (selectedById.contains(quest.qID) && !activeById.contains(quest.qID) && staticQuestMatches(quest))
+                visibleSelectedQuests.emplace_back(&quest);
+        }
+
+        std::sort(visibleSelectedQuests.begin(), visibleSelectedQuests.end(), [](const TarkovDevTasks* left, const TarkovDevTasks* right) {
+            return left->qName < right->qName;
+            });
+    }
 
     ImGui::TextUnformatted("Quest database");
     ImGui::SameLine();
-    ImGui::TextDisabled("%zu total  |  %zu active", tarkovDevTasksData.size(), activeQuests.size());
+    const std::size_t inactiveSelectedCount = std::count_if(selectedQuestIds.begin(), selectedQuestIds.end(), [&](const std::string& questId) {
+        return !activeById.contains(questId);
+        });
+    ImGui::TextDisabled("%zu total  |  %zu active  |  %zu selected", tarkovDevTasksData.size(), activeQuests.size(), inactiveSelectedCount);
 
     ImGui::Spacing();
 
@@ -248,13 +259,15 @@ void renderQuestsWindow() {
     ImGui::RadioButton("All", &questFilter, 0);
     ImGui::SameLine();
     ImGui::RadioButton("Active", &questFilter, 1);
+    ImGui::SameLine();
+    ImGui::RadioButton("Selected", &questFilter, 2);
     ImGui::SameLine(0.0f, 24.0f);
 
     const bool hasSearch = questSearch[0] != '\0';
     const float clearButtonWidth = hasSearch ? 54.0f : 0.0f;
     const float searchSpacing = hasSearch ? ImGui::GetStyle().ItemSpacing.x : 0.0f;
     ImGui::SetNextItemWidth(std::max(180.0f, ImGui::GetContentRegionAvail().x - clearButtonWidth - searchSpacing));
-    ImGui::InputTextWithHint("##QuestSearch", "Search quests, objectives, items, maps or IDs...", questSearch, IM_ARRAYSIZE(questSearch));
+    ImGui::InputTextWithHint("##QuestSearch", "Search quests, objectives, items or maps...", questSearch, IM_ARRAYSIZE(questSearch));
 
     if (hasSearch) {
         ImGui::SameLine();
@@ -263,10 +276,22 @@ void renderQuestsWindow() {
             questSearch[0] = '\0';
     }
 
-    const std::size_t sourceCount = questFilter == 0 ? tarkovDevTasksData.size() : activeQuests.size();
-    const std::size_t visibleCount = questFilter == 0 ? visibleAllQuests.size() : visibleActiveQuests.size();
+    if (questFilter == 1) {
+        bool memoryQuestsEnabled = questManager.areMemoryQuestsEnabled();
 
-    ImGui::TextDisabled("Showing %zu of %zu %s", visibleCount, sourceCount, questFilter == 0 ? "quests" : "active quests");
+        if (ImGui::Checkbox("Enable memory-read quests", &memoryQuestsEnabled)) {
+            questManager.setMemoryQuestsEnabled(memoryQuestsEnabled);
+            configManager.SaveConfig();
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("Turn off to use only quests enabled manually from All.");
+    }
+
+    const std::size_t sourceCount = questFilter == 0 ? tarkovDevTasksData.size() : questFilter == 1 ? activeQuests.size() : inactiveSelectedCount;
+    const std::size_t visibleCount = questFilter == 0 ? visibleAllQuests.size() : questFilter == 1 ? visibleActiveQuests.size() : visibleSelectedQuests.size();
+
+    ImGui::TextDisabled("Showing %zu of %zu %s", visibleCount, sourceCount, questFilter == 0 ? "quests" : questFilter == 1 ? "active quests" : "selected quests");
     ImGui::Separator();
 
     if (visibleCount == 0) {
@@ -276,6 +301,8 @@ void renderQuestsWindow() {
             ImGui::TextDisabled("No quests match \"%s\".", questSearch);
         else if (questFilter == 1)
             ImGui::TextDisabled("No active quests are currently available.");
+        else if (questFilter == 2)
+            ImGui::TextDisabled("No inactive quests are selected. Add quests from All.");
         else
             ImGui::TextDisabled("The quest database is currently empty.");
 
@@ -283,15 +310,25 @@ void renderQuestsWindow() {
         return;
     }
 
-    const auto renderMaps = [](const std::vector<std::string>& maps) {
+    const auto mapDisplayName = [](const std::string& mapId) -> const char* {
+        if (mapId == "bigmap") return "Customs";
+        if (mapId == "factory4_day" || mapId == "factory4_night" || mapId == "factory_event") return "Factory";
+        if (mapId == "laboratory" || mapId == "laboratory_dark" || mapId == "laboratory_event") return "The Lab";
+        if (mapId == "RezervBase") return "Reserve";
+        if (mapId == "TarkovStreets" || mapId == "tarkovstreets") return "Streets of Tarkov";
+        if (mapId == "Sandbox" || mapId == "Sandbox_high") return "Ground Zero";
+        return mapId.empty() ? "Unknown map" : mapId.c_str();
+        };
+
+    const auto renderMaps = [&](const std::vector<std::string>& maps) {
         if (maps.empty())
             return;
 
-        ImGui::TextDisabled("Maps");
+        ImGui::TextDisabled(maps.size() == 1 ? "Map" : "Maps");
         ImGui::Indent();
 
         for (const auto& map : maps)
-            ImGui::BulletText("%s", map.c_str());
+            ImGui::BulletText("%s", mapDisplayName(map));
 
         ImGui::Unindent();
         };
@@ -302,10 +339,7 @@ void renderQuestsWindow() {
 
         const std::string name = itemDisplayName(itemId);
 
-        if (name.empty())
-            ImGui::BulletText("%s", itemId.c_str());
-        else
-            ImGui::BulletText("%s  |  %s", name.c_str(), itemId.c_str());
+        ImGui::BulletText("%s", name.empty() ? "Unknown item" : name.c_str());
         };
 
     const auto renderAcceptedItems = [&](const TarkovObjective& objective) {
@@ -334,14 +368,15 @@ void renderQuestsWindow() {
         };
 
     const auto renderObjectiveMeta = [](const TarkovObjective& objective) {
+        std::string details;
         if (objective.count > 1)
-            ImGui::TextDisabled("Required count: %d", objective.count);
-
+            details = "Required: " + std::to_string(objective.count);
         if (objective.foundInRaid)
-            ImGui::TextDisabled("Found in raid required");
-
+            details += (details.empty() ? "" : "  |  ") + std::string("Found in raid");
         if (objective.optional)
-            ImGui::TextDisabled("Optional objective");
+            details += (details.empty() ? "" : "  |  ") + std::string("Optional");
+        if (!details.empty())
+            ImGui::TextDisabled("%s", details.c_str());
         };
 
     const auto renderStaticObjectives = [&](const TarkovDevTasks& quest) {
@@ -351,16 +386,13 @@ void renderQuestsWindow() {
 
             if (!objective.description.empty()) {
                 ImGui::TextWrapped("%zu. %s", index + 1, objective.description.c_str());
-                ImGui::TextDisabled("%s  |  %s", QuestObjectiveTypeLabel(objective.type), objective.type.c_str());
+                ImGui::TextColored(ImVec4(0.45f, 0.72f, 0.95f, 1.0f), "%s", QuestObjectiveTypeLabel(objective.type));
             }
             else {
                 ImGui::Text("%zu. %s", index + 1, QuestObjectiveTypeLabel(objective.type));
             }
 
             ImGui::Indent();
-
-            if (!objective.id.empty())
-                ImGui::TextDisabled("Objective ID: %s", objective.id.c_str());
 
             renderObjectiveMeta(objective);
             renderAcceptedItems(objective);
@@ -371,8 +403,7 @@ void renderQuestsWindow() {
                 ImGui::Indent();
 
                 for (const auto& zone : objective.zones) {
-                    const char* mapName = zone.mapNameId.empty() ? "Unknown map" : zone.mapNameId.c_str();
-                    ImGui::BulletText("%s  (%.1f, %.1f, %.1f)", mapName, zone.position.x, zone.position.y, zone.position.z);
+                    ImGui::BulletText("%s", mapDisplayName(zone.mapNameId));
                 }
 
                 ImGui::Unindent();
@@ -395,16 +426,13 @@ void renderQuestsWindow() {
 
             if (!objective.description.empty()) {
                 ImGui::TextWrapped("%zu. %s", index + 1, objective.description.c_str());
-                ImGui::TextDisabled("%s  |  %s", QuestObjectiveTypeLabel(objective.type), objective.type.c_str());
+                ImGui::TextColored(ImVec4(0.45f, 0.72f, 0.95f, 1.0f), "%s", QuestObjectiveTypeLabel(objective.type));
             }
             else {
                 ImGui::Text("%zu. %s", index + 1, QuestObjectiveTypeLabel(objective.type));
             }
 
             ImGui::Indent();
-
-            if (!objective.objectiveId.empty())
-                ImGui::TextDisabled("Objective ID: %s", objective.objectiveId.c_str());
 
             if (staticObjective) {
                 renderObjectiveMeta(*staticObjective);
@@ -433,8 +461,7 @@ void renderQuestsWindow() {
                 ImGui::Indent();
 
                 for (const auto& zone : objective.zones) {
-                    const char* mapName = zone.mapNameId.empty() ? "Unknown map" : zone.mapNameId.c_str();
-                    ImGui::BulletText("%s  (%.1f, %.1f, %.1f)", mapName, zone.position.x, zone.position.y, zone.position.z);
+                    ImGui::BulletText("%s", mapDisplayName(zone.mapNameId));
                 }
 
                 ImGui::Unindent();
@@ -457,72 +484,65 @@ void renderQuestsWindow() {
         ImGuiTableFlags_SizingStretchProp;
 
     if (ImGui::BeginTable("##QuestDatabase", 3, tableFlags, ImGui::GetContentRegionAvail())) {
-        ImGui::TableSetupColumn("Quest", ImGuiTableColumnFlags_WidthStretch, 0.34f);
-        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 88.0f);
-        ImGui::TableSetupColumn("Objectives", ImGuiTableColumnFlags_WidthStretch, 0.66f);
+        ImGui::TableSetupColumn("Quest", ImGuiTableColumnFlags_WidthStretch, 0.30f);
+        ImGui::TableSetupColumn("Objectives", ImGuiTableColumnFlags_WidthStretch, 0.70f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 92.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
         int rowId = 0;
 
-        if (questFilter == 0) {
-            for (const TarkovDevTasks* quest : visibleAllQuests) {
-                const auto activeIt = activeById.find(quest->qID);
-                const bool isActive = activeIt != activeById.end();
-                const QuestData* activeQuest = isActive ? activeIt->second : nullptr;
+        const auto renderStaticQuestRow = [&](const TarkovDevTasks& quest) {
+            const bool isActive = activeById.contains(quest.qID);
+            const bool isSelected = selectedById.contains(quest.qID);
+            std::size_t locationCount = 0;
+            std::size_t itemCount = 0;
 
-                std::size_t locationCount = 0;
-                std::size_t itemCount = 0;
-
-                for (const auto& objective : quest->objectives) {
-                    locationCount += objective.zones.size();
-
-                    if (objective.zones.empty())
-                        locationCount += objective.maps.size();
-
-                    itemCount += countObjectiveItems(objective);
-                }
-
-                ImGui::PushID(rowId++);
-                ImGui::TableNextRow();
-
-                ImGui::TableSetColumnIndex(0);
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextUnformatted(quest->qName.empty() ? quest->qID.c_str() : quest->qName.c_str());
-                ImGui::PopTextWrapPos();
-
-                if (!quest->qID.empty())
-                    ImGui::TextDisabled("%s", quest->qID.c_str());
-
-                ImGui::TableSetColumnIndex(1);
-
-                if (isActive) {
-                    ImGui::TextColored(ImVec4(0.32f, 0.85f, 0.48f, 1.0f), "ACTIVE");
-
-                    if (activeQuest)
-                        ImGui::TextDisabled("%zu remaining", activeQuest->objectives.size());
-                }
-                else {
-                    ImGui::TextDisabled("Not active");
-                }
-
-                ImGui::TableSetColumnIndex(2);
-
-                const std::string summary =
-                    std::to_string(quest->objectives.size()) + " objectives  |  " +
-                    std::to_string(locationCount) + " locations  |  " +
-                    std::to_string(itemCount) + " item refs";
-
-                if (ImGui::TreeNodeEx("##QuestDetails", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", summary.c_str())) {
-                    ImGui::Spacing();
-                    renderStaticObjectives(*quest);
-                    ImGui::TreePop();
-                }
-
-                ImGui::PopID();
+            for (const auto& objective : quest.objectives) {
+                locationCount += objective.zones.size();
+                if (objective.zones.empty())
+                    locationCount += objective.maps.size();
+                itemCount += countObjectiveItems(objective);
             }
+
+            ImGui::PushID(rowId++);
+            ImGui::TableNextRow();
+
+            ImGui::TableSetColumnIndex(0);
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(quest.qName.empty() ? "Unnamed quest" : quest.qName.c_str());
+            ImGui::PopTextWrapPos();
+
+            ImGui::TableSetColumnIndex(1);
+            const std::string summary = std::to_string(quest.objectives.size()) + " objectives  |  " +
+                std::to_string(locationCount) + " locations  |  " + std::to_string(itemCount) + " items";
+
+            if (ImGui::TreeNodeEx("##QuestDetails", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", summary.c_str())) {
+                ImGui::Spacing();
+                renderStaticObjectives(quest);
+                ImGui::TreePop();
+            }
+
+            ImGui::TableSetColumnIndex(2);
+            if (isActive)
+                ImGui::TextColored(ImVec4(0.32f, 0.85f, 0.48f, 1.0f), "Active");
+
+            if (isSelected) {
+                if (ImGui::SmallButton("Remove"))
+                    questManager.setQuestSelected(quest.qID, false);
+            }
+            else if (ImGui::SmallButton("Enable")) {
+                questManager.setQuestSelected(quest.qID, true);
+            }
+
+            ImGui::PopID();
+            };
+
+        if (questFilter == 0) {
+            for (const TarkovDevTasks* quest : visibleAllQuests)
+                renderStaticQuestRow(*quest);
         }
-        else {
+        else if (questFilter == 1) {
             for (const QuestData* quest : visibleActiveQuests) {
                 std::size_t locationCount = 0;
                 std::size_t itemCount = 0;
@@ -551,22 +571,12 @@ void renderQuestsWindow() {
 
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextUnformatted(quest->questName.empty() ? quest->questId.c_str() : quest->questName.c_str());
+                ImGui::TextUnformatted(quest->questName.empty() ? "Unnamed quest" : quest->questName.c_str());
                 ImGui::PopTextWrapPos();
 
-                if (!quest->questId.empty())
-                    ImGui::TextDisabled("%s", quest->questId.c_str());
-
                 ImGui::TableSetColumnIndex(1);
-                ImGui::TextColored(ImVec4(0.32f, 0.85f, 0.48f, 1.0f), "%s", QuestStatusLabel(quest->status));
-                ImGui::TextDisabled("%zu complete", quest->completedConditions.size());
-
-                ImGui::TableSetColumnIndex(2);
-
-                const std::string summary =
-                    std::to_string(quest->objectives.size()) + " remaining  |  " +
-                    std::to_string(locationCount) + " locations  |  " +
-                    std::to_string(itemCount) + " item refs";
+                const std::string summary = std::to_string(quest->objectives.size()) + " remaining  |  " +
+                    std::to_string(locationCount) + " locations  |  " + std::to_string(itemCount) + " items";
 
                 if (ImGui::TreeNodeEx("##ActiveQuestDetails", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", summary.c_str())) {
                     ImGui::Spacing();
@@ -574,8 +584,15 @@ void renderQuestsWindow() {
                     ImGui::TreePop();
                 }
 
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextColored(ImVec4(0.32f, 0.85f, 0.48f, 1.0f), "Active");
+
                 ImGui::PopID();
             }
+        }
+        else {
+            for (const TarkovDevTasks* quest : visibleSelectedQuests)
+                renderStaticQuestRow(*quest);
         }
 
         ImGui::EndTable();

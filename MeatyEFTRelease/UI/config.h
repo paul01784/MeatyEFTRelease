@@ -60,11 +60,13 @@ public:
     bool LoadConfig();
     bool LoadLootFilterConfig();
     bool SaveConfig();
+    bool RecoverConfigAfterLoadFailure();
     bool SaveLootFilterConfig();
 
     bool refreshFilterLootPrices();
 
 private:
+    bool configSaveBlocked_ = false;
     std::string filename_;
     std::string filename_lootFilter;
     globals app_;

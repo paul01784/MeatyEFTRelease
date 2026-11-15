@@ -4,6 +4,8 @@
 
 #include "../../../UI/globals.h"
 #include "../../../memory/Memory.h"
+#include "../../../memory/ScatterReadBatch.h"
+#include "PlayerMemoryAccess.h"
 #include "../MainGame.h"
 #include "../../../Core/Utilities.h"
 #include "../../Unity/UnityContainers.h"
@@ -13,6 +15,82 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
+
+template <typename T>
+static bool TryReadItemArray(
+    uint64_t arrayPointer,
+    int maximumCount,
+    std::vector<T>& output)
+{
+    output.clear();
+
+    int count = 0;
+    if (!Utils::valid_pointer(arrayPointer) ||
+        !PlayerMemoryAccess::tryRead(
+            arrayPointer + OffsetsArray::CountOffset,
+            count) ||
+        count <= 0 ||
+        count > maximumCount)
+    {
+        return false;
+    }
+
+    output.resize(static_cast<size_t>(count));
+    ScatterReadBatch batch(mem, DmaCacheMode::Cached, "Player item array");
+    if (!batch.AddBytes(
+            arrayPointer + OffsetsArray::ArrBaseOffset,
+            output.data(),
+            output.size() * sizeof(T)) ||
+        !batch.TryExecuteNoPaging())
+    {
+        output.clear();
+        return false;
+    }
+
+    return true;
+}
+
+template <typename T>
+static bool TryReadItemList(
+    uint64_t listPointer,
+    int maximumCount,
+    std::vector<T>& output,
+    DmaCacheMode cacheMode = DmaCacheMode::Cached)
+{
+    output.clear();
+
+    int count = 0;
+    uint64_t arrayPointer = 0;
+    ScatterReadBatch header(mem, cacheMode, "Player item list header");
+    if (!Utils::valid_pointer(listPointer) ||
+        !header.Add(listPointer + UnityList<T>::CountOffset, count) ||
+        !header.Add(listPointer + UnityList<T>::ArrOffset, arrayPointer) ||
+        !header.TryExecuteNoPaging() ||
+        count < 0 ||
+        count > maximumCount ||
+        !Utils::valid_pointer(arrayPointer))
+    {
+        return false;
+    }
+
+    if (count == 0)
+        return true;
+
+    output.resize(static_cast<size_t>(count));
+    ScatterReadBatch entries(mem, cacheMode, "Player item list");
+    if (!entries.AddBytes(
+            arrayPointer + UnityList<T>::ArrStartOffset,
+            output.data(),
+            output.size() * sizeof(T)) ||
+        !entries.TryExecuteNoPaging())
+    {
+        output.clear();
+        return false;
+    }
+
+    return true;
+}
 
 static inline bool TryReadAmmoTemplateFromRound(uint64_t roundPtr, uint64_t& ammoTemplate)
 {
@@ -21,7 +99,7 @@ static inline bool TryReadAmmoTemplateFromRound(uint64_t roundPtr, uint64_t& amm
     if (!Utils::valid_pointer(roundPtr))
         return false;
 
-    if (!mem.TryRead<uint64_t>(roundPtr + sdk::LootItem::Template, ammoTemplate))
+    if (!PlayerMemoryAccess::tryRead(roundPtr + sdk::LootItem::Template, ammoTemplate))
         return false;
 
     return Utils::valid_pointer(ammoTemplate);
@@ -37,43 +115,33 @@ static inline bool CountLoadedChamberArray(
     if (!Utils::valid_pointer(chambersPtr))
         return false;
 
-    UnityArray<Chamber> chambers(
-        chambersPtr,
-        "Weapon chambers",
-        64);
-
-    if (chambers.count <= 0)
+    std::vector<Chamber> chambers;
+    if (!TryReadItemArray(chambersPtr, 64, chambers))
         return false;
 
-    maxAmmoCount += chambers.count;
+    maxAmmoCount += static_cast<int>(chambers.size());
 
-    for (int i = 0; i < chambers.count; ++i)
+    for (const Chamber chamber : chambers)
     {
-        Chamber chamber = chambers[i];
+        const uint64_t chamberPtr = static_cast<uint64_t>(chamber);
+        uint64_t containedItem = 0;
+        if (!Utils::valid_pointer(chamberPtr))
+            return false;
 
-        if (!chamber.HasBullet(true))
+        if (!PlayerMemoryAccess::tryRead(
+                chamberPtr + sdk::Slot::ContainedItem,
+                containedItem,
+                DmaCacheMode::Uncached))
+        {
+            return false;
+        }
+
+        if (!Utils::valid_pointer(containedItem))
             continue;
 
         ++currentAmmoCount;
-
-        // Keep first valid round for ammo type
         if (!Utils::valid_pointer(firstRound))
-        {
-            const uint64_t chamberPtr = static_cast<uint64_t>(chamber);
-
-            if (!Utils::valid_pointer(chamberPtr))
-                continue;
-
-            uint64_t containedItem = 0;
-
-            if (mem.TryRead<uint64_t>(
-                chamberPtr + sdk::Slot::ContainedItem,
-                containedItem) &&
-                Utils::valid_pointer(containedItem))
-            {
-                firstRound = containedItem;
-            }
-        }
+            firstRound = containedItem;
     }
 
     return true;
@@ -101,15 +169,24 @@ static inline bool TryGetAmmoTemplateFromWeapon(
     // ----------------------------------------------------
     uint64_t chambersPtr = 0;
 
-    if (mem.TryRead<uint64_t>(itemBase + sdk::Weapon::Chambers, chambersPtr) &&
-        Utils::valid_pointer(chambersPtr))
-    {
-        CountLoadedChamberArray(
+    if (!PlayerMemoryAccess::tryRead(
+            itemBase + sdk::Weapon::Chambers,
             chambersPtr,
-            firstRound,
-            currentAmmoCount,
-            maxAmmoCount
-        );
+            DmaCacheMode::Uncached))
+    {
+        return false;
+    }
+
+    if (Utils::valid_pointer(chambersPtr))
+    {
+        if (!CountLoadedChamberArray(
+                chambersPtr,
+                firstRound,
+                currentAmmoCount,
+                maxAmmoCount))
+        {
+            return false;
+        }
     }
 
     // ----------------------------------------------------
@@ -118,96 +195,85 @@ static inline bool TryGetAmmoTemplateFromWeapon(
     uint64_t magSlot = 0;
     uint64_t magItemPtr = 0;
 
-    if (!mem.TryRead<uint64_t>(itemBase + sdk::Weapon::MagazineSlotCache, magSlot) ||
+    if (!PlayerMemoryAccess::tryRead(
+            itemBase + sdk::Weapon::MagazineSlotCache,
+            magSlot,
+            DmaCacheMode::Uncached) ||
         !Utils::valid_pointer(magSlot))
     {
         return false;
     }
 
-    if (!mem.TryRead<uint64_t>(magSlot + sdk::Slot::ContainedItem, magItemPtr) ||
+    if (!PlayerMemoryAccess::tryRead(
+            magSlot + sdk::Slot::ContainedItem,
+            magItemPtr,
+            DmaCacheMode::Uncached) ||
         !Utils::valid_pointer(magItemPtr))
     {
         return false;
     }
 
-    // ----------------------------------------------------
-    // 3. Magazine chambers path
-    // Revolvers, etc.
-    // ----------------------------------------------------
-    uint64_t magChambersPtr = 0;
-
-    if (mem.TryRead<uint64_t>(magItemPtr + sdk::LootItemMod::Slots, magChambersPtr) &&
-        Utils::valid_pointer(magChambersPtr))
-    {
-        UnityArray<Chamber> magChambers(
-            magChambersPtr,
-            "Magazine chambers",
-            64);
-
-        if (magChambers.count > 0)
-        {
-            CountLoadedChamberArray(
-                magChambersPtr,
-                firstRound,
-                currentAmmoCount,
-                maxAmmoCount
-            );
-
-            chamberCount = currentAmmoCount;
-            magazineCount = maxAmmoCount;
-
-            return TryReadAmmoTemplateFromRound(firstRound, ammoTemplate);
-        }
-    }
-
-    // ----------------------------------------------------
-    // 4. Regular magazine stack path
-    // ----------------------------------------------------
+    // Read normal magazine cartridges first. Magazine items can also expose
+    // attachment slots, so treating any slot array as a cylinder loses the
+    // regular stack and breaks ammunition for ordinary weapons.
     uint64_t cartridges = 0;
-    uint64_t magStackPtr = 0;
-
-    if (!mem.TryRead<uint64_t>(magItemPtr + sdk::Magazine::Cartridges, cartridges) ||
-        !Utils::valid_pointer(cartridges))
+    if (!PlayerMemoryAccess::tryRead(
+            magItemPtr + sdk::Magazine::Cartridges,
+            cartridges,
+            DmaCacheMode::Uncached))
     {
         return false;
     }
 
-    if (!mem.TryRead<uint64_t>(cartridges + sdk::StackSlot::items, magStackPtr) ||
-        !Utils::valid_pointer(magStackPtr))
+    if (Utils::valid_pointer(cartridges))
     {
-        return false;
-    }
+        uint64_t magStackPtr = 0;
+        int magMaxCount = 0;
+        if (!PlayerMemoryAccess::tryRead(
+                cartridges + sdk::StackSlot::items,
+                magStackPtr,
+                DmaCacheMode::Uncached) ||
+            !Utils::valid_pointer(magStackPtr))
+        {
+            return false;
+        }
 
-    int magMaxCount = 0;
+        if (!PlayerMemoryAccess::tryRead(
+                cartridges + sdk::StackSlot::MaxCount,
+                magMaxCount))
+        {
+            return false;
+        }
 
-    if (!mem.TryRead<int>(cartridges + sdk::StackSlot::MaxCount, magMaxCount))
-        magMaxCount = 0;
+        maxAmmoCount += std::max(0, magMaxCount);
 
-    if (magMaxCount < 0)
-        magMaxCount = 0;
+        std::vector<uint64_t> magStack;
+        if (!TryReadItemList(
+                magStackPtr,
+                512,
+                magStack,
+                DmaCacheMode::Uncached))
+        {
+            return false;
+        }
 
-    maxAmmoCount += magMaxCount;
-
-    UnityList<uint64_t> magStack =
-        UnityList<uint64_t>::Create(
-            magStackPtr,
-            DmaCacheMode::Cached,
-            512);
-
-    if (magStack.count() > 0)
-    {
         for (const auto& stack : magStack)
         {
             if (!Utils::valid_pointer(stack))
-                continue;
+                return false;
 
             int stackNumber = 0;
 
-            if (!mem.TryRead<int>(stack + sdk::Item::StackObjectsCount, stackNumber))
-                continue;
+            if (!PlayerMemoryAccess::tryRead(
+                    stack + sdk::Item::StackObjectsCount,
+                    stackNumber,
+                    DmaCacheMode::Uncached))
+            {
+                return false;
+            }
 
             if (stackNumber < 0)
-                continue;
+                return false;
 
             currentAmmoCount += stackNumber;
 
@@ -215,11 +281,34 @@ static inline bool TryGetAmmoTemplateFromWeapon(
             if (!Utils::valid_pointer(firstRound))
                 firstRound = stack;
         }
+
+        if (currentAmmoCount > maxAmmoCount)
+            return false;
+
+        chamberCount = currentAmmoCount;
+        magazineCount = maxAmmoCount;
+        return TryReadAmmoTemplateFromRound(firstRound, ammoTemplate);
+    }
+
+    // Cylinder-style magazines do not expose a regular cartridge stack.
+    // Only use their chamber slots when the normal cartridge path is absent.
+    uint64_t magChambersPtr = 0;
+    if (!PlayerMemoryAccess::tryRead(
+            magItemPtr + sdk::LootItemMod::Slots,
+            magChambersPtr,
+            DmaCacheMode::Uncached) ||
+        !Utils::valid_pointer(magChambersPtr) ||
+        !CountLoadedChamberArray(
+            magChambersPtr,
+            firstRound,
+            currentAmmoCount,
+            maxAmmoCount))
+    {
+        return false;
     }
 
     chamberCount = currentAmmoCount;
     magazineCount = maxAmmoCount;
-
     return TryReadAmmoTemplateFromRound(firstRound, ammoTemplate);
 }
 
@@ -244,7 +333,7 @@ static void AccumulateWeaponVelocityModifiers(
     ++itemCount;
 
     uint64_t slotsPointer = 0;
-    if (!mem.TryRead<uint64_t>(
+    if (!PlayerMemoryAccess::tryRead(
         itemBase + sdk::LootItemMod::Slots,
         slotsPointer) ||
         !Utils::valid_pointer(slotsPointer))
@@ -254,10 +343,9 @@ static void AccumulateWeaponVelocityModifiers(
 
     try
     {
-        UnityArray<uint64_t> slots(
-            slotsPointer,
-            "Weapon velocity modifier slots",
-            100);
+        std::vector<uint64_t> slots;
+        if (!TryReadItemArray(slotsPointer, 100, slots))
+            return;
 
         for (const uint64_t slot : slots)
         {
@@ -271,11 +359,11 @@ static void AccumulateWeaponVelocityModifiers(
             uint64_t itemTemplate = 0;
             float attachmentModifier = 0.0f;
 
-            if (!mem.TryRead<uint64_t>(
+            if (!PlayerMemoryAccess::tryRead(
                 slot + sdk::Slot::ContainedItem,
                 containedItem) ||
                 !Utils::valid_pointer(containedItem) ||
-                !mem.TryRead<uint64_t>(
+                !PlayerMemoryAccess::tryRead(
                     containedItem + sdk::LootItem::Template,
                     itemTemplate) ||
                 !Utils::valid_pointer(itemTemplate))
@@ -283,7 +371,7 @@ static void AccumulateWeaponVelocityModifiers(
                 continue;
             }
 
-            if (mem.TryRead<float>(
+            if (PlayerMemoryAccess::tryRead(
                 itemTemplate + sdk::ModTemplate::Velocity,
                 attachmentModifier) &&
                 std::isfinite(attachmentModifier) &&
@@ -315,7 +403,7 @@ static bool TryReadWeaponVelocityModifier(
 
     if (!Utils::valid_pointer(weaponItem) ||
         !Utils::valid_pointer(weaponTemplate) ||
-        !mem.TryRead<float>(
+        !PlayerMemoryAccess::tryRead(
             weaponTemplate + sdk::WeaponTemplate::Velocity,
             output) ||
         !std::isfinite(output) ||
@@ -384,11 +472,20 @@ static bool TryReadWeaponBallistics(
         }
     };
 
-    if (!mem.ReadScatter(
-        requests,
-        std::size(requests),
-        DmaCacheMode::Cached,
-        "Weapon ballistics"))
+    std::vector<DWORD> bytesRead(std::size(requests), 0);
+    if (mem.TryReadScatter(
+            requests,
+            std::size(requests),
+            DmaCacheMode::Cached,
+            "Weapon ballistics",
+            bytesRead,
+            DmaPagingMode::NoPaging,
+            false,
+            DmaLockMode::Try) != Memory::TryScatterReadResult::Success ||
+        !std::all_of(bytesRead.begin(), bytesRead.end(), [](DWORD bytes)
+        {
+            return bytes == sizeof(float);
+        }))
     {
         return false;
     }
@@ -423,7 +520,10 @@ bool HandsInfo::update(const Player& playerCache)
     const uint64_t heldItemOffset = PlayerClassifier::get(playerCache).getHeldItemOffset();
     uint64_t itemBase = 0;
 
-    if (!mem.TryRead<uint64_t>(playerCache.P_HandsController + heldItemOffset, itemBase))
+    if (!PlayerMemoryAccess::tryRead(
+            playerCache.P_HandsController + heldItemOffset,
+            itemBase,
+            DmaCacheMode::Uncached))
         return false;
 
     if (!Utils::valid_pointer(itemBase))
@@ -448,7 +548,7 @@ bool HandsInfo::update(const Player& playerCache)
 
         uint64_t itemTemp = 0;
 
-        if (!mem.TryRead<uint64_t>(itemBase + sdk::LootItem::Template, itemTemp) ||
+        if (!PlayerMemoryAccess::tryRead(itemBase + sdk::LootItem::Template, itemTemp) ||
             !Utils::valid_pointer(itemTemp))
         {
             return false;
@@ -458,10 +558,10 @@ bool HandsInfo::update(const Player& playerCache)
 
         MongoID mongoId{};
 
-        if (!mem.TryRead<MongoID>(itemTemp + sdk::ItemTemplate::_id, mongoId))
+        if (!PlayerMemoryAccess::tryRead(itemTemp + sdk::ItemTemplate::_id, mongoId))
             return false;
 
-        std::string itemId = TrimEFT(mongoId.ReadString(mem, 64));
+        std::string itemId = TrimEFT(PlayerMemoryAccess::readString(mongoId._stringId, 64));
 
         std::string itemMarketName;
 
@@ -495,11 +595,11 @@ bool HandsInfo::update(const Player& playerCache)
         {
             uint64_t itemNamePointer = 0;
 
-            if (mem.TryRead<uint64_t>(itemTemp + sdk::ItemTemplate::ShortName, itemNamePointer) &&
+            if (PlayerMemoryAccess::tryRead(itemTemp + sdk::ItemTemplate::ShortName, itemNamePointer) &&
                 Utils::valid_pointer(itemNamePointer))
             {
                 std::string shortNameMem = TrimEFT(
-                    mem.readUnityString(itemNamePointer, 32)
+                    PlayerMemoryAccess::readString(itemNamePointer, 32)
                 );
 
                 if (!shortNameMem.empty())
@@ -529,6 +629,21 @@ bool HandsInfo::update(const Player& playerCache)
         if (itemName.empty() || itemName == "Unknown")
             return false;
 
+        if (!isWeapon)
+        {
+            uint64_t weaponMember = 0;
+            isWeapon =
+                PlayerMemoryAccess::tryReadPointer(
+                    itemBase + sdk::Weapon::MagazineSlotCache,
+                    weaponMember,
+                    DmaCacheMode::Uncached) ||
+                PlayerMemoryAccess::tryReadPointer(
+                    itemBase + sdk::Weapon::Chambers,
+                    weaponMember,
+                    DmaCacheMode::Uncached);
+        }
+
+        cachedIsWeapon = isWeapon;
         cachedItem = itemBase;
     }
 
@@ -537,34 +652,20 @@ bool HandsInfo::update(const Player& playerCache)
 
     int currentWeaponVersion = weaponVersion;
     const bool versionRead = isWeapon &&
-        mem.TryRead<int>(
+        PlayerMemoryAccess::tryRead(
             itemBase + sdk::LootItem::Version,
-            currentWeaponVersion);
-    const bool weaponVersionChanged =
-        identityChanged ||
-        (versionRead && currentWeaponVersion != weaponVersion);
+            currentWeaponVersion,
+            DmaCacheMode::Uncached);
     const auto ballisticsNow = std::chrono::steady_clock::now();
     const bool ballisticsRequested =
         playerCache.isLocal && aimGlobals::predictionEnabled;
-    const bool ballisticsRetryDue =
-        ballisticsRequested &&
-        !ballistics.IsValid() &&
-        (nextBallisticsRefresh ==
-            std::chrono::steady_clock::time_point{} ||
-            ballisticsNow >= nextBallisticsRefresh);
     const bool velocityModifierRefreshDue =
         ballisticsRequested &&
         (nextVelocityModifierRefresh ==
             std::chrono::steady_clock::time_point{} ||
             ballisticsNow >= nextVelocityModifierRefresh);
 
-    if (isWeapon &&
-        (identityChanged ||
-            (playerCache.isLocal &&
-                (weaponVersionChanged ||
-                    ballisticsRetryDue ||
-                    velocityModifierRefreshDue ||
-                    (ammoName.empty() && chamberCount == 0 && magazineCount == 0)))))
+    if (isWeapon)
     {
         uint64_t ammoTemplate = 0;
 
@@ -643,13 +744,15 @@ bool HandsInfo::update(const Player& playerCache)
         }
 
         
-        if (gotAmmoTemplate && Utils::valid_pointer(ammoTemplate))
+        if (gotAmmoTemplate &&
+            Utils::valid_pointer(ammoTemplate) &&
+            (ammoTemplate != cachedAmmoNameTemplate || ammoName.empty()))
         {
             std::string resolvedAmmoName;
             MongoID ammoMongoId{};
-            if (mem.TryRead<MongoID>(ammoTemplate + sdk::ItemTemplate::_id, ammoMongoId))
+            if (PlayerMemoryAccess::tryRead(ammoTemplate + sdk::ItemTemplate::_id, ammoMongoId))
             {
-                const std::string ammoId = TrimEFT(ammoMongoId.ReadString(mem, 64));
+                const std::string ammoId = TrimEFT(PlayerMemoryAccess::readString(ammoMongoId._stringId, 64));
                 if (!ammoId.empty())
                 {
                     for (const auto& ml : marketList)
@@ -667,15 +770,18 @@ bool HandsInfo::update(const Player& playerCache)
             if (resolvedAmmoName.empty())
             {
                 uint64_t shortNamePtr = 0;
-                if (mem.TryRead<uint64_t>(ammoTemplate + sdk::ItemTemplate::ShortName, shortNamePtr) &&
+                if (PlayerMemoryAccess::tryRead(ammoTemplate + sdk::ItemTemplate::ShortName, shortNamePtr) &&
                     Utils::valid_pointer(shortNamePtr))
                 {
-                    resolvedAmmoName = TrimEFT(mem.readUnityString(shortNamePtr, 32));
+                    resolvedAmmoName = TrimEFT(PlayerMemoryAccess::readString(shortNamePtr, 32));
                 }
             }
 
             if (!resolvedAmmoName.empty())
+            {
                 ammoName = std::move(resolvedAmmoName);
+                cachedAmmoNameTemplate = ammoTemplate;
+            }
         }
     }
 
@@ -685,6 +791,7 @@ bool HandsInfo::update(const Player& playerCache)
         chamberCount = 0;
         magazineCount = 0;
         ammoName = "";
+        cachedAmmoNameTemplate = 0;
         loadedAmmoTemplate = 0;
         weaponVersion = -1;
         ballistics = {};

@@ -186,6 +186,7 @@ bool DxRenderWindow::IsDrawCommandSafe(const DxRenderWindow::DrawCommand& cmd) n
             IsSafeThickness(cmd.thickness);
 
     case DrawCommandType::Rect:
+    case DrawCommandType::ScreenRect:
     case DrawCommandType::FilledRect:
         return IsSafeCoord(cmd.x) &&
             IsSafeCoord(cmd.y) &&
@@ -550,6 +551,19 @@ void DxRenderWindow::DrawRect(float x, float y, float w, float h, const glm::vec
 {
     DrawCommand cmd{};
     cmd.type = DrawCommandType::Rect;
+    cmd.x = x;
+    cmd.y = y;
+    cmd.w = w;
+    cmd.h = h;
+    cmd.colour = colour;
+    cmd.thickness = thickness;
+    PushDrawCommand(std::move(cmd));
+}
+
+void DxRenderWindow::DrawScreenRect(float x, float y, float w, float h, const glm::vec4& colour, float thickness)
+{
+    DrawCommand cmd{};
+    cmd.type = DrawCommandType::ScreenRect;
     cmd.x = x;
     cmd.y = y;
     cmd.w = w;
@@ -1464,6 +1478,17 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
             const float thickness = std::max(0.1f, std::min(cmd.thickness * scale, MAX_DRAW_THICKNESS));
             const D2D1_RECT_F rect = D2D1::RectF(cmd.x, cmd.y, cmd.x + (cmd.w * scale), cmd.y + (cmd.h * scale));
             m_d2dRenderTarget->DrawRectangle(rect, m_solidBrush.Get(), thickness);
+            break;
+        }
+
+        case DrawCommandType::ScreenRect:
+        {
+            m_d2dRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
+            m_solidBrush->SetColor(ToD2DColour(cmd.colour));
+            const float thickness = std::max(0.1f, std::min(cmd.thickness, MAX_DRAW_THICKNESS));
+            const D2D1_RECT_F rect = D2D1::RectF(cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h);
+            m_d2dRenderTarget->DrawRectangle(rect, m_solidBrush.Get(), thickness);
+            m_d2dRenderTarget->SetTransform(D2D1::Matrix3x2F::Translation(renderOffsetX, renderOffsetY));
             break;
         }
 

@@ -69,6 +69,17 @@ namespace
         return stream.str();
     }
 
+    std::string LogTime(bool includeDate = false)
+    {
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t time = std::chrono::system_clock::to_time_t(now);
+        std::tm local{};
+        localtime_s(&local, &time);
+        std::ostringstream stream;
+        stream << std::put_time(&local, includeDate ? "%d-%m-%Y %H:%M:%S" : "%H:%M:%S");
+        return stream.str();
+    }
+
     bool ParseValue(const nlohmann::json& value, std::uint64_t& result)
     {
         try
@@ -493,8 +504,15 @@ namespace
     {
         std::uint64_t address{};
         std::uint64_t typeIndex{};
+        std::string fullName;
     };
     using ClassMap = std::unordered_map<std::string, ClassRecord>;
+
+    struct ClassCatalog
+    {
+        ClassMap fullNames;
+        std::unordered_map<std::string, std::vector<ClassRecord>> shortNames;
+    };
 
     std::string ShortName(std::string_view fullName)
     {
@@ -502,13 +520,13 @@ namespace
         return std::string(separator == std::string_view::npos ? fullName : fullName.substr(separator + 1));
     }
 
-    ClassMap ReadTargetClasses(const ResolverSession& session, std::uint64_t table)
+    ClassCatalog ReadTargetClasses(const ResolverSession& session, std::uint64_t table)
     {
         std::unordered_set<std::string> targetNames;
         for (const auto& descriptor : Descriptors())
             targetNames.insert(ShortName(descriptor.className));
 
-        ClassMap classes;
+        ClassCatalog classes;
         for (std::size_t offset = 0; offset < kMaximumClasses; offset += kClassChunkSize)
         {
             const auto count = (std::min)(kClassChunkSize, kMaximumClasses - offset);
@@ -547,13 +565,25 @@ namespace
                     continue;
                 const auto namespaceEnd = std::find(namespaces[i].begin(), namespaces[i].end(), '\0');
                 const std::string nameSpace = namespaceEnd == namespaces[i].end() ? std::string{} : std::string(namespaces[i].begin(), namespaceEnd);
-                const ClassRecord record{pointers[i], offset + i};
-                classes.try_emplace(name, record);
-                if (!nameSpace.empty())
-                    classes.try_emplace(nameSpace + "." + name, record);
+                const std::string fullName = nameSpace.empty() ? name : nameSpace + "." + name;
+                const ClassRecord record{pointers[i], offset + i, fullName};
+                classes.fullNames.try_emplace(fullName, record);
+                classes.shortNames[name].push_back(record);
             }
         }
         return classes;
+    }
+
+    const ClassRecord* FindClass(const ClassCatalog& classes, std::string_view name)
+    {
+        if (name.find('.') != std::string_view::npos)
+        {
+            const auto found = classes.fullNames.find(std::string(name));
+            return found == classes.fullNames.end() ? nullptr : &found->second;
+        }
+
+        const auto found = classes.shortNames.find(std::string(name));
+        return found == classes.shortNames.end() || found->second.empty() ? nullptr : &found->second.front();
     }
 
 #pragma pack(push, 8)
@@ -631,29 +661,36 @@ namespace
         return values;
     }
 
-    bool ResolveValues(const ResolverSession& session, const ClassMap& classes, std::vector<std::uint64_t>& values, std::vector<std::string>& missing)
+    bool ResolveValues(const ResolverSession& session, const ClassCatalog& classes, std::vector<std::uint64_t>& values,
+                       std::vector<std::string>& requiredMissing, std::vector<std::string>& optionalMissing, std::vector<std::string>& diagnostics)
     {
         std::unordered_map<std::uint64_t, FieldMap> fieldCache;
+        std::unordered_map<std::string, std::vector<std::string>> missingClasses;
+        std::unordered_map<std::uint64_t, std::vector<std::string>> missingFields;
+        std::unordered_map<std::uint64_t, std::string> missingFieldClasses;
         const auto& descriptors = Descriptors();
         values.assign(descriptors.size(), 0);
         for (std::size_t i = 0; i < descriptors.size(); ++i)
         {
             const auto& descriptor = descriptors[i];
-            const auto classIterator = classes.find(descriptor.className);
-            if (classIterator == classes.end())
+            const ClassRecord* classRecord = FindClass(classes, descriptor.className);
+            if (!classRecord)
             {
-                missing.push_back(std::string(descriptor.group) + "." + descriptor.name + " (class " + descriptor.className + ")");
+                auto& missing = descriptor.required ? requiredMissing : optionalMissing;
+                const std::string entry = std::string(descriptor.group) + "." + descriptor.name;
+                missing.push_back(entry + " (class " + descriptor.className + ")");
+                missingClasses[descriptor.className].push_back(entry);
                 continue;
             }
             if (descriptor.kind == OffsetKind::TypeIndex)
             {
-                values[i] = classIterator->second.typeIndex;
+                values[i] = classRecord->typeIndex;
                 continue;
             }
 
-            const auto [fieldIterator, inserted] = fieldCache.try_emplace(classIterator->second.address);
+            const auto [fieldIterator, inserted] = fieldCache.try_emplace(classRecord->address);
             if (inserted)
-                fieldIterator->second = ReadFields(session, classIterator->second.address);
+                fieldIterator->second = ReadFields(session, classRecord->address);
             bool found = false;
             for (const auto& candidate : FieldCandidates(descriptor.fieldName))
             {
@@ -665,21 +702,75 @@ namespace
                 break;
             }
             if (!found)
-                missing.push_back(std::string(descriptor.group) + "." + descriptor.name + " (field " + descriptor.fieldName + ")");
+            {
+                auto& missing = descriptor.required ? requiredMissing : optionalMissing;
+                const std::string entry = std::string(descriptor.group) + "." + descriptor.name;
+                missing.push_back(entry + " (field " + descriptor.fieldName + ")");
+                missingFields[classRecord->address].push_back(entry + " expects " + descriptor.fieldName);
+                missingFieldClasses.try_emplace(classRecord->address, classRecord->fullName);
+            }
         }
 
-        if (missing.empty())
-            return true;
         for (std::size_t i = 0; i < descriptors.size(); ++i)
             if (!descriptors[i].required && !values[i])
                 values[i] = *descriptors[i].value;
-        return std::none_of(missing.begin(), missing.end(), [&](const std::string& item)
+
+        std::vector<std::string> classNames;
+        classNames.reserve(missingClasses.size());
+        for (const auto& [className, entries] : missingClasses)
+            classNames.push_back(className);
+        std::sort(classNames.begin(), classNames.end());
+        for (const auto& className : classNames)
         {
-            for (const auto& descriptor : descriptors)
-                if (descriptor.required && item.starts_with(std::string(descriptor.group) + "." + descriptor.name + " "))
-                    return true;
-            return false;
+            const auto& entries = missingClasses.at(className);
+            std::ostringstream detail;
+            detail << "Class not found: " << className << " (used by ";
+            for (std::size_t i = 0; i < entries.size(); ++i)
+                detail << (i ? ", " : "") << entries[i];
+            detail << ")";
+            diagnostics.push_back(detail.str());
+
+            const auto candidates = classes.shortNames.find(ShortName(className));
+            if (candidates == classes.shortNames.end() || candidates->second.empty())
+            {
+                diagnostics.push_back("  Short-name candidates: none");
+                continue;
+            }
+            diagnostics.push_back("  Short-name candidates (possible namespace/class move):");
+            for (const auto& candidate : candidates->second)
+                diagnostics.push_back("    " + candidate.fullName + " [type index " + Hex(candidate.typeIndex) + "]");
+        }
+
+        std::vector<std::uint64_t> fieldClasses;
+        fieldClasses.reserve(missingFields.size());
+        for (const auto& [address, entries] : missingFields)
+            fieldClasses.push_back(address);
+        std::sort(fieldClasses.begin(), fieldClasses.end(), [&](std::uint64_t left, std::uint64_t right)
+        {
+            return missingFieldClasses.at(left) < missingFieldClasses.at(right);
         });
+        for (const std::uint64_t address : fieldClasses)
+        {
+            diagnostics.push_back("Fields missing from " + missingFieldClasses.at(address) + ":");
+            for (const auto& requested : missingFields.at(address))
+                diagnostics.push_back("  " + requested);
+
+            std::vector<std::pair<std::uint64_t, std::string>> available;
+            for (const auto& [name, offset] : fieldCache.at(address))
+                available.emplace_back(offset, name);
+            std::sort(available.begin(), available.end(), [](const auto& left, const auto& right)
+            {
+                return left.first != right.first ? left.first < right.first : left.second < right.second;
+            });
+            diagnostics.push_back("  Available fields (including inherited fields): " + std::to_string(available.size()));
+            if (available.empty())
+                diagnostics.push_back("    <none read; the IL2CPP class field layout may need updating>");
+            else
+                for (const auto& [offset, name] : available)
+                    diagnostics.push_back("    " + Hex(offset) + "  " + name);
+        }
+
+        return requiredMissing.empty();
     }
 
     nlohmann::ordered_json BuildJson(const std::vector<std::uint64_t>& values, std::uint64_t typeInfoRva,
@@ -853,6 +944,7 @@ bool EftOffsetService::StartResolve()
         return false;
     if (worker_.joinable())
         worker_.join();
+    BeginResolveLog();
     SetStatus("Starting full offset scan with the Unity stage...");
     worker_ = std::thread([this] { ResolveWorker(); });
     return true;
@@ -862,9 +954,14 @@ void EftOffsetService::ResolveWorker()
 {
     struct Finish
     {
+        EftOffsetService& service;
         std::atomic_bool& resolving;
-        ~Finish() { resolving.store(false, std::memory_order_release); }
-    } finish{resolving_};
+        ~Finish()
+        {
+            service.FinishResolveLog();
+            resolving.store(false, std::memory_order_release);
+        }
+    } finish{*this, resolving_};
 
     SetStatus("Stage 1/2: resolving and validating active-raid Unity offsets...");
     auto& unityService = UnityOffsetService::Instance();
@@ -876,6 +973,7 @@ void EftOffsetService::ResolveWorker()
         SetStatus("Full scan failed during the Unity stage; existing managed offsets were kept", unityError);
         return;
     }
+    AppendResolveLog("Unity stage: " + unityService.Status());
 
     SetStatus("Stage 2/2: opening a fresh managed resolver session...");
     ResolverSession session;
@@ -893,6 +991,7 @@ void EftOffsetService::ResolveWorker()
         SetStatus("Full scan failed during the managed stage", "The GameAssembly type information table could not be located or validated by signatures or the stored fallback");
         return;
     }
+    AppendResolveLog("Resolved TypeInfoTable RVA: " + Hex(tableRva));
 
     std::uint64_t table = 0;
     if (!session.Read(session.ModuleBase() + tableRva, table) || !IsPointer(table))
@@ -904,18 +1003,43 @@ void EftOffsetService::ResolveWorker()
     SetStatus("Stage 2/2: reading target IL2CPP classes and fields...");
     const auto classes = ReadTargetClasses(session, table);
     std::vector<std::uint64_t> values;
-    std::vector<std::string> missing;
-    if (!ResolveValues(session, classes, values, missing))
+    std::vector<std::string> requiredMissing;
+    std::vector<std::string> optionalMissing;
+    std::vector<std::string> diagnostics;
+    if (!ResolveValues(session, classes, values, requiredMissing, optionalMissing, diagnostics))
     {
+        AppendResolveLog("Unresolved required offsets (" + std::to_string(requiredMissing.size()) + "):");
+        for (const auto& item : requiredMissing)
+            AppendResolveLog("  - " + item);
+        if (!optionalMissing.empty())
+        {
+            AppendResolveLog("Unresolved optional offsets retained at their previous values (" + std::to_string(optionalMissing.size()) + "):");
+            for (const auto& item : optionalMissing)
+                AppendResolveLog("  - " + item);
+        }
+        AppendResolveLog("Resolver diagnostics:");
+        for (const auto& detail : diagnostics)
+            AppendResolveLog(detail);
+
         std::ostringstream message;
-        message << "Required offsets were not resolved (" << missing.size() << "): ";
-        const auto shown = (std::min)(missing.size(), static_cast<std::size_t>(8));
+        message << "Required offsets were not resolved (" << requiredMissing.size() << "): ";
+        const auto shown = (std::min)(requiredMissing.size(), static_cast<std::size_t>(8));
         for (std::size_t i = 0; i < shown; ++i)
-            message << (i ? ", " : "") << missing[i];
-        if (missing.size() > shown)
+            message << (i ? ", " : "") << requiredMissing[i];
+        if (requiredMissing.size() > shown)
             message << ", ...";
         SetStatus("Full scan failed during the managed stage; existing managed offsets were kept", message.str());
         return;
+    }
+
+    if (!optionalMissing.empty())
+    {
+        AppendResolveLog("Optional offsets not resolved; previous values were retained (" + std::to_string(optionalMissing.size()) + "):");
+        for (const auto& item : optionalMissing)
+            AppendResolveLog("  - " + item);
+        AppendResolveLog("Resolver diagnostics:");
+        for (const auto& detail : diagnostics)
+            AppendResolveLog(detail);
     }
 
     IMAGE_DOS_HEADER dos{};
@@ -952,8 +1076,39 @@ bool EftOffsetService::IsResolving() const noexcept
 void EftOffsetService::SetStatus(std::string status, std::string error)
 {
     std::lock_guard lock(mutex_);
+    if (resolveLogActive_)
+    {
+        resolveLog_ += "[" + LogTime() + "] " + status + "\n";
+        if (!error.empty())
+            resolveLog_ += "[" + LogTime() + "] ERROR: " + error + "\n";
+    }
     status_ = std::move(status);
     lastError_ = std::move(error);
+}
+
+void EftOffsetService::BeginResolveLog()
+{
+    std::lock_guard lock(mutex_);
+    resolveLog_ = "Meaty EFT full offset resolve log\nStarted: " + LogTime(true) + "\n\n";
+    resolveLogActive_ = true;
+    resolveLogReady_ = false;
+}
+
+void EftOffsetService::AppendResolveLog(const std::string& message)
+{
+    std::lock_guard lock(mutex_);
+    if (resolveLogActive_)
+        resolveLog_ += "[" + LogTime() + "] " + message + "\n";
+}
+
+void EftOffsetService::FinishResolveLog()
+{
+    std::lock_guard lock(mutex_);
+    if (!resolveLogActive_)
+        return;
+    resolveLog_ += "\nFinished: " + LogTime(true) + "\n";
+    resolveLogActive_ = false;
+    resolveLogReady_ = true;
 }
 
 std::string EftOffsetService::Status() const
@@ -972,6 +1127,18 @@ std::string EftOffsetService::JsonText() const
 {
     std::lock_guard lock(mutex_);
     return jsonText_;
+}
+
+bool EftOffsetService::HasResolveLog() const
+{
+    std::lock_guard lock(mutex_);
+    return resolveLogReady_;
+}
+
+std::string EftOffsetService::ResolveLog() const
+{
+    std::lock_guard lock(mutex_);
+    return resolveLog_;
 }
 
 std::vector<EftOffsetView> EftOffsetService::Entries() const

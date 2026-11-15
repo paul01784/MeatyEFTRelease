@@ -30,7 +30,10 @@ namespace
     constexpr auto kCameraRefreshInterval = std::chrono::seconds(3);
     constexpr std::uint8_t kOpticMatrixFailureLimit = 3;
     constexpr auto kCameraReadFailureGrace = std::chrono::milliseconds(750);
+    constexpr auto kMaximumCameraSampleGap = std::chrono::milliseconds(16);
     constexpr auto kAllCamerasRetryInterval = std::chrono::seconds(3);
+    constexpr float kMinimumOpticMagnification = 1.05f;
+    constexpr float kScopeFovScaleTolerance = 1.25f;
     
     constexpr auto kSnapshotMaxAge = std::chrono::seconds(2);
 
@@ -672,18 +675,26 @@ bool CameraManager::readSight(std::uint64_t sightBone, int listIndex, std::uint6
     float maximumZoom = 0.0f;
     readPointer(result.sightComponent + sdk::SightComponent::_template, result.sightTemplate);
     readPointer(result.sightComponent + sdk::SightComponent::ScopeSelectedModes, selectedModes);
-    result.resolvedZoom = readSelectedZoom(result.sightTemplate, selectedModes, result.selectedScope, result.selectedMode, minimumZoom, maximumZoom);
+    const float selectedZoom = readSelectedZoom(result.sightTemplate, selectedModes, result.selectedScope, result.selectedMode, minimumZoom, maximumZoom);
+    result.resolvedZoom = selectedZoom;
 
     // ScopeZoomValue is the live optic FOV for variable scopes, not the
-    // magnification. The observed 1x/8x positions are 30/3.75 degrees.
-    // Keep the template value for fixed scopes or an implausible live value.
+    // magnification. Its base FOV varies between optic families, so tolerate
+    // that scale difference and snap/clamp to the template endpoints. Without
+    // this, some 1x-8x scopes report about 1.22x at minimum and fall back to
+    // the selected template mode (usually 1x) near maximum zoom.
     if (minimumZoom > 0.0f && maximumZoom > minimumZoom + 0.01f &&
         std::isfinite(result.scopeZoomValue) && result.scopeZoomValue > 0.0f)
     {
         constexpr float kScopeBaseFov = 30.0f;
         const float liveZoom = kScopeBaseFov / result.scopeZoomValue;
-        if (std::isfinite(liveZoom) && liveZoom >= minimumZoom - 0.05f && liveZoom <= maximumZoom + 0.05f)
-            result.resolvedZoom = (std::clamp)(liveZoom, minimumZoom, maximumZoom);
+        const float minimumPlausibleZoom = minimumZoom / kScopeFovScaleTolerance;
+        const float maximumPlausibleZoom = maximumZoom * kScopeFovScaleTolerance;
+        if (std::isfinite(liveZoom) && liveZoom >= minimumPlausibleZoom && liveZoom <= maximumPlausibleZoom)
+        {
+            const bool atMinimumZoom = selectedZoom <= minimumZoom + 0.05f && liveZoom <= minimumZoom * kScopeFovScaleTolerance;
+            result.resolvedZoom = atMinimumZoom ? minimumZoom : (std::clamp)(liveZoom, minimumZoom, maximumZoom);
+        }
     }
 
     result.valid =
@@ -691,7 +702,9 @@ bool CameraManager::readSight(std::uint64_t sightBone, int listIndex, std::uint6
         result.resolvedZoom >= 0.0f &&
         result.resolvedZoom < 100.0f;
 
-    result.magnified = result.valid && result.resolvedZoom > 1.0f;
+    // ScopeZoomValue can drift slightly around 1x as EFT animates a variable
+    // optic. Keep that unmagnified position on the FPS camera.
+    result.magnified = result.valid && result.resolvedZoom > kMinimumOpticMagnification;
 
     result.selectedByCurrentOptic =
         sameUnityObject(
@@ -962,9 +975,10 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
         state.stackedSightResolved = state.sights.size() > 1 && sight.selectedByCurrentOptic;
     }
 
-    state.scoped = state.ads && state.activeSightVectorIndex >= 0 && state.magnification > 1.0f;
-    // An active ADS sight uses the optic camera from 1x upward.
-    const bool wantOptic = state.ads && state.activeSightVectorIndex >= 0 && state.magnification >= 1.0f;
+    state.scoped = state.ads && state.activeSightVectorIndex >= 0 && state.sights[static_cast<std::size_t>(state.activeSightVectorIndex)].magnified;
+    // Unmagnified ADS uses the FPS camera; only a genuinely magnified sight
+    // needs the optic camera and its projection correction.
+    const bool wantOptic = state.scoped;
     state.opticRequested = wantOptic;
     if (!wantOptic)
         m_opticMatrixReadFailures = 0;
@@ -983,6 +997,12 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
     CameraMatrixSample fpsSample{};
     CameraMatrixSample opticSample{};
     const CameraManagerSnapshot previous = snapshot();
+    const bool guaranteeFreshCameraSample =
+        !previous ||
+        !previous->valid ||
+        previous->publishedAt == std::chrono::steady_clock::time_point{} ||
+        (now >= previous->publishedAt &&
+            (now - previous->publishedAt) >= kMaximumCameraSampleGap);
 
     bool fpsSampleBusy = false;
     bool opticSampleBusy = false;
@@ -990,10 +1010,18 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
     std::uint64_t sampledOpticCamera = m_opticCamera;
     if (!fpsSample.valid)
         (void)readCameraSample(
-            m_fpsCamera, m_fpsViewMatrixAddress, fpsSample, &fpsSampleBusy);
+            m_fpsCamera,
+            m_fpsViewMatrixAddress,
+            fpsSample,
+            &fpsSampleBusy,
+            guaranteeFreshCameraSample);
     if (wantOptic && !opticSample.valid)
         (void)readCameraSample(
-            m_opticCamera, m_opticViewMatrixAddress, opticSample, &opticSampleBusy);
+            m_opticCamera,
+            m_opticViewMatrixAddress,
+            opticSample,
+            &opticSampleBusy,
+            guaranteeFreshCameraSample);
 
     if (!fpsSample.valid && !fpsSampleBusy && m_cameraReadFailureSince == std::chrono::steady_clock::time_point{})
         m_cameraReadFailureSince = now;
@@ -1313,7 +1341,12 @@ bool CameraManager::viewProjectionMatchesView(const glm::highp_mat4& viewProject
     return std::isfinite(alignment) && alignment >= kMinimumForwardAlignment;
 }
 
-bool CameraManager::readCameraSample(std::uint64_t nativeCamera, std::uint64_t matrixAddress, CameraMatrixSample& sample, bool* busy)
+bool CameraManager::readCameraSample(
+    std::uint64_t nativeCamera,
+    std::uint64_t matrixAddress,
+    CameraMatrixSample& sample,
+    bool* busy,
+    bool waitForDma)
 {
     sample = {};
     if (busy)
@@ -1329,7 +1362,15 @@ bool CameraManager::readCameraSample(std::uint64_t nativeCamera, std::uint64_t m
         { nativeCamera + UnityOffsets::Camera_WorldToCameraMatrixOffset, &view, sizeof(view) }
     };
     DWORD bytesRead[std::size(requests)]{};
-    const auto result = mem.TryReadScatter(requests, std::size(requests), DmaCacheMode::Uncached, "Camera matrices", bytesRead);
+    const auto result = mem.TryReadScatter(
+        requests,
+        std::size(requests),
+        DmaCacheMode::Uncached,
+        "Camera matrices",
+        bytesRead,
+        DmaPagingMode::NoPaging,
+        false,
+        waitForDma ? DmaLockMode::Wait : DmaLockMode::Try);
     if (result == Memory::TryScatterReadResult::Busy)
     {
         if (busy)

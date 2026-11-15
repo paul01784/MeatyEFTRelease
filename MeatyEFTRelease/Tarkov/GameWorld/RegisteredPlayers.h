@@ -36,13 +36,14 @@ struct PlayerSnapshotTelemetry
 struct PlayerRosterStatus
 {
     std::size_t registeredCount{ 0 };
-    std::size_t aliveCachedCount{ 0 };
+    std::size_t cachedRegisteredCount{ 0 };
     bool possibleMissingEntities{ false };
 };
 
 struct PlayerLocalState
 {
     glm::vec3 location{};
+    glm::vec3 velocity{};
     glm::vec2 rotation{};
     std::string groupId;
     std::uint64_t instance{ 0 };
@@ -50,6 +51,7 @@ struct PlayerLocalState
     std::uint64_t profile{ 0 };
     bool isSavage{ false };
     bool isScoped{ false };
+    bool velocityValid{ false };
 };
 
 using PlayerLocalStateSnapshot = std::shared_ptr<const PlayerLocalState>;
@@ -94,7 +96,7 @@ public:
 
     static bool groupIDSet;
 
-    bool getBonePtrs(Player& player, bool forceResolve = false);
+    bool getBonePtrs(Player& player, bool waitForDma = false);
 
 private:
     std::vector<Player> playerCache;
@@ -113,9 +115,9 @@ private:
     std::chrono::steady_clock::time_point rosterMismatchSince{};
     std::size_t boneResolveCursor{ 0 };
     std::chrono::steady_clock::time_point nextFullBoneUpdate{};
-    std::chrono::steady_clock::time_point lastBoneRefreshLog{};
-    std::uint64_t boneRefreshesSinceLastLog{ 0 };
-    std::size_t nextPlayerAllocationCursor{ 0 };
+    std::chrono::steady_clock::time_point nextGuaranteedRosterRefresh{};
+    std::chrono::steady_clock::time_point nextGuaranteedEntityRefresh{};
+    std::chrono::steady_clock::time_point nextGuaranteedBoneRefresh{};
     std::uint64_t playerRegistryRefreshCount{ 0 };
     std::uint64_t nextCacheEntryId{ 1 };
     std::atomic<bool> softRestartRequested{ false };
@@ -149,7 +151,6 @@ private:
     void queuePlayerEdit(std::uint64_t instance, std::function<void(Player&)> edit);
     void queuePlayerEdit(std::uint64_t instance, std::uint64_t cacheEntryId, std::function<void(Player&)> edit);
     bool applyPendingPlayerEdits();
-    bool pruneInvalidCachedPlayersLocked();
     bool tryBeginProfileApiRequest(const std::string& accountId, int profileMode);
     bool tryBeginDogTagApiRequest(const std::string& profileId);
     std::optional<PlayerProfileStats> getCachedProfileApiResult(const std::string& accountId, int profileMode);
@@ -159,12 +160,11 @@ private:
     std::string voice2Name(std::string voiceName);
     std::optional<Player> buildEntity(uint64_t instance, bool isLocal);
     void tryFindBTR();
+    bool updateBtrMotion();
     void updateBtrPassengerStates();
     void updateEntity();
     void checkGroupIDs();
     void checkExfil();
-    uint64_t getPlayerHealthControllerPtr(uint64_t instance);
-    uint64_t getPlayerBoneMatrixPtr(uint64_t instance);
 };
 
 extern RegisteredPlayers registeredPlayers;

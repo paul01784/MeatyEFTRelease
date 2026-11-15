@@ -1,18 +1,39 @@
 #include "../../UI/includes.h"
 #include "RegisteredPlayers.h"
 #include "Player/PlayerClassifier.h"
+#include "Player/PlayerLookup.h"
 
 #include "../../UI/globals.h"
 #include "MainGame.h"
 #include "../../Core/Utilities.h"
 #include "../../memory/Memory.h"
 
+#include <chrono>
+
+namespace
+{
+    constexpr float kBtrHeadingDistanceSquared = 0.0025f;
+    constexpr float kBtrMaximumMotionSquared = 25.0f;
+    constexpr float kRadiansToDegrees = 57.295779513f;
+
+    bool IsUsableBtrPosition(const glm::vec3& position)
+    {
+        return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z) &&
+            position.x * position.x + position.y * position.y + position.z * position.z > 1.0f;
+    }
+}
+
 void RegisteredPlayers::tryFindBTR()
 {
-    
-
     if (!mem.vHandle)
         return;
+
+    static auto nextSearch = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now < nextSearch)
+        return;
+
+    nextSearch = now + std::chrono::seconds(1);
 
     std::string selectedMap = TrimEFT(mainGame.selectedLocation);
 
@@ -41,14 +62,9 @@ void RegisteredPlayers::tryFindBTR()
             if (!Utils::valid_pointer(address))
                 return false;
 
-            try
-            {
-                return mem.Read(address, &out, sizeof(T));
-            }
-            catch (...)
-            {
-                return false;
-            }
+            DWORD bytesRead = 0;
+            const Memory::ScatterReadRequest request{ address, &out, sizeof(T) };
+            return mem.TryReadScatter(&request, 1, DmaCacheMode::Cached, "BTR discovery", std::span<DWORD>(&bytesRead, 1), DmaPagingMode::NoPaging, false) == Memory::TryScatterReadResult::Success && bytesRead == sizeof(T);
         };
 
     auto TryReadPtr = [&](uint64_t address, uint64_t& out) -> bool
@@ -152,6 +168,95 @@ void RegisteredPlayers::tryFindBTR()
     }
 }
 
+bool RegisteredPlayers::updateBtrMotion()
+{
+    struct BtrMotionRead
+    {
+        uint64_t instance{};
+        uint64_t cacheEntryId{};
+        uint64_t view{};
+        glm::vec3 position{};
+    };
+
+    BtrMotionRead read{};
+
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+
+        for (const Player& player : playerCache)
+        {
+            if (!player.isBTR || player.isDead || player.hasExfiled ||
+                !Utils::valid_pointer(player.instance) || !Utils::valid_pointer(player.btrView))
+            {
+                continue;
+            }
+
+            read.instance = player.instance;
+            read.cacheEntryId = player.cacheEntryId;
+            read.view = player.btrView;
+            break;
+        }
+    }
+
+    if (!Utils::valid_pointer(read.view))
+        return false;
+
+    DWORD bytesRead = 0;
+    const Memory::ScatterReadRequest request{
+        read.view + sdk::BTRView::previousPosition,
+        &read.position,
+        sizeof(read.position)
+    };
+    const ScopedDmaPriority priority(DmaPriority::High);
+    const auto result = mem.TryReadScatter(
+        &request,
+        1,
+        DmaCacheMode::Uncached,
+        "BTR motion",
+        std::span<DWORD>(&bytesRead, 1),
+        DmaPagingMode::NoPaging,
+        true,
+        DmaLockMode::Wait);
+
+    if (result != Memory::TryScatterReadResult::Success || bytesRead != sizeof(read.position) ||
+        !IsUsableBtrPosition(read.position))
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(playerMutex);
+    Player* player = PlayerLookup::findByInstance(playerCache, read.instance);
+
+    if (!player || player->cacheEntryId != read.cacheEntryId || player->btrView != read.view || !player->isBTR)
+        return false;
+
+    player->location = read.position;
+    player->distance = getDistance(read.position, mainGame.localLocation);
+
+    if (!player->btrPositionSampled)
+    {
+        player->btrPreviousPosition = read.position;
+        player->btrPositionSampled = true;
+        return true;
+    }
+
+    const glm::vec3 movement = read.position - player->btrPreviousPosition;
+    const float movementSquared = movement.x * movement.x + movement.z * movement.z;
+
+    if (movementSquared >= kBtrHeadingDistanceSquared && movementSquared <= kBtrMaximumMotionSquared)
+    {
+        player->rotation.x = std::atan2(-movement.z, movement.x) * kRadiansToDegrees;
+        player->btrHeadingValid = true;
+        player->btrPreviousPosition = read.position;
+    }
+    else if (movementSquared > kBtrMaximumMotionSquared)
+    {
+        player->btrPreviousPosition = read.position;
+    }
+
+    return true;
+}
+
 void RegisteredPlayers::updateBtrPassengerStates()
 {
     constexpr float kPassengerRadiusSquared = 25.0f;
@@ -159,14 +264,7 @@ void RegisteredPlayers::updateBtrPassengerStates()
     constexpr float kEntryMaximumAngle = 100.0f;
     constexpr float kRetainedMinimumAngle = 70.0f;
     constexpr float kRetainedMaximumAngle = 110.0f;
-    constexpr float kRadiansToDegrees = 57.295779513f;
     constexpr std::size_t kPassengerCapacity = 4;
-
-    const auto IsUsablePosition = [](const glm::vec3& position)
-    {
-        return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z) &&
-            position.x * position.x + position.y * position.y + position.z * position.z > 1.0f;
-    };
 
     struct BtrVehicle
     {
@@ -191,27 +289,12 @@ void RegisteredPlayers::updateBtrPassengerStates()
         if (!player.isBTR)
             continue;
 
-        if (player.isDead || player.hasExfiled || !Utils::valid_pointer(player.instance) || !IsUsablePosition(player.location))
+        if (player.isDead || player.hasExfiled || !Utils::valid_pointer(player.instance) || !IsUsableBtrPosition(player.location))
         {
             player.btrPositionSampled = false;
             player.btrHeadingValid = false;
             continue;
         }
-
-        if (player.btrPositionSampled)
-        {
-            const glm::vec3 movement = player.location - player.btrPreviousPosition;
-            const float movementSquared = movement.x * movement.x + movement.z * movement.z;
-            if (movementSquared > 0.0025f && movementSquared <= 25.0f)
-            {
-                // The radar maps world +X to right and world -Z to down.
-                player.rotation.x = std::atan2(-movement.z, movement.x) * kRadiansToDegrees;
-                player.btrHeadingValid = true;
-            }
-        }
-
-        player.btrPreviousPosition = player.location;
-        player.btrPositionSampled = true;
         vehicles.push_back({ &player });
     }
 
@@ -225,7 +308,7 @@ void RegisteredPlayers::updateBtrPassengerStates()
 
         const bool human = player.isLocal || (!player.isAi && (player.isPlayer || player.isPlayerScav));
         if (!human || player.isDead || player.hasExfiled || !Utils::valid_pointer(player.instance) ||
-            !IsUsablePosition(player.location) || !std::isfinite(player.rotation.x))
+            !IsUsableBtrPosition(player.location) || !std::isfinite(player.rotation.x))
         {
             continue;
         }
@@ -298,11 +381,15 @@ void RegisteredPlayers::updateBtrPassengerStates()
             player.playerBoneMatrixPtr = 0;
             player.bonePointersNeedResolve = true;
             player.invalidBones = true;
+            player.minimalBonePointersReady = false;
+            player.fullBonePointersReady = false;
+            player.minimalBonePoseValid = false;
+            player.fullBonePoseValid = false;
+            player.consecutiveBadBoneSamples = 0;
+            player.nextBonePointerResolve = {};
             std::fill(player.bonePtrs.begin(), player.bonePtrs.end(), 0ULL);
             std::fill(player.bonePositions.begin(), player.bonePositions.end(), glm::vec3(0.0f));
             player.boneTransformCache.clear();
-            player.internalTransformPtr = 0;
-            player.internalTransformPositionValid = false;
             player.btrExitBoneRefreshPending = true;
             LOGS.logInfo("[BTR] Passenger exited; refreshing bones: " + player.name);
         }

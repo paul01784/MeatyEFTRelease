@@ -12,7 +12,8 @@
 
 namespace
 {
-    constexpr std::chrono::milliseconds corpseReadInterval{ 100 };
+    constexpr std::chrono::milliseconds corpseReadInterval{ 20 };
+    constexpr std::chrono::milliseconds corpseFailedReadRetryInterval{ 20 };
     constexpr std::chrono::milliseconds healthReadInterval{ 2000 };
     constexpr std::chrono::milliseconds handsReadInterval{ 2000 };
     constexpr std::chrono::milliseconds failedReadRetryInterval{ 2500 };
@@ -111,10 +112,8 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
     initialize(player);
     initializeSnapshot(player);
 
-    PlayerMemoryAccess::tryReadChain(instance, { sdk::ObservedPlayerView::PlayerBody, 0x40, 0x30, 0x10 }, player.playerBoneMatrixPtr, DmaCacheMode::Uncached);
-
-    if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::ObservedPlayerController, player.P_ObservedPlayerController) ||
-        !PlayerMemoryAccess::tryReadPointer(player.P_ObservedPlayerController + sdk::ObservedPlayerController::HealthController, player.P_ObservedHealthController))
+    if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::ObservedPlayerController, player.P_ObservedPlayerController, DmaCacheMode::Uncached) ||
+        !PlayerMemoryAccess::tryReadPointer(player.P_ObservedPlayerController + sdk::ObservedPlayerController::HealthController, player.P_ObservedHealthController, DmaCacheMode::Uncached))
     {
         return std::nullopt;
     }
@@ -123,8 +122,8 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
 
     uint64_t movementController = 0;
 
-    if (!PlayerMemoryAccess::tryReadPointer(player.P_ObservedPlayerController + sdk::ObservedPlayerController::MovementController, movementController) ||
-        !PlayerMemoryAccess::tryReadPointer(movementController + sdk::ObservedMovementController::ObservedPlayerStateContext, player.P_MovementContext))
+    if (!PlayerMemoryAccess::tryReadPointer(player.P_ObservedPlayerController + sdk::ObservedPlayerController::MovementController, movementController, DmaCacheMode::Uncached) ||
+        !PlayerMemoryAccess::tryReadPointer(movementController + sdk::ObservedMovementController::ObservedPlayerStateContext, player.P_MovementContext, DmaCacheMode::Uncached))
     {
         return std::nullopt;
     }
@@ -141,21 +140,29 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
         return std::nullopt;
     }
 
-    if (!PlayerMemoryAccess::tryRead(instance + sdk::ObservedPlayerView::IsAI, player.isAi) ||
-        !PlayerMemoryAccess::tryRead(instance + sdk::ObservedPlayerView::Side, player.playerSide))
+    if (!PlayerMemoryAccess::tryRead(instance + sdk::ObservedPlayerView::IsAI, player.isAi, DmaCacheMode::Uncached) ||
+        !PlayerMemoryAccess::tryRead(instance + sdk::ObservedPlayerView::Side, player.playerSide, DmaCacheMode::Uncached))
+    {
+        return std::nullopt;
+    }
+
+    const uint32_t sideValue = static_cast<uint32_t>(player.playerSide);
+    if (sideValue != static_cast<uint32_t>(EPlayerSide::Usec) &&
+        sideValue != static_cast<uint32_t>(EPlayerSide::Bear) &&
+        sideValue != static_cast<uint32_t>(EPlayerSide::Savage))
     {
         return std::nullopt;
     }
 
     player.side = sideToString(player.playerSide);
-    const bool isSavage = (static_cast<uint32_t>(player.playerSide) & static_cast<uint32_t>(EPlayerSide::Savage)) != 0;
+    const bool isSavage = player.playerSide == EPlayerSide::Savage;
 
     if (isSavage && player.isAi)
     {
         uint64_t voicePointer = 0;
         std::string voice;
 
-        if (PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::Voice, voicePointer))
+        if (PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::Voice, voicePointer, DmaCacheMode::Uncached))
             voice = PlayerMemoryAccess::readString(voicePointer);
 
         player.isZombie = containsIgnoreCase(voice, "Zombie");
@@ -174,7 +181,7 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
         player.name = "PScav " + std::to_string(mainGame.pmcNumber++);
         player.isPlayerScav = true;
         player.isAi = false;
-        player.isPlayer = true;
+        player.isPlayer = false;
     }
     else
     {
@@ -192,6 +199,7 @@ void ObservedPlayer::prepareRefresh(const Player& player, PlayerRuntimeRead& rea
 {
     read = {};
     read.instance = player.instance;
+    read.cacheEntryId = player.cacheEntryId;
     read.kind = player.getKind();
     read.rotationAddress = player.P_RotationAddress;
     read.corpseAddress = player.P_CorpseAddr;
@@ -252,7 +260,7 @@ void ObservedPlayer::applyRefresh(Player& player, const PlayerRuntimeRead& read,
     }
 
     if (read.corpseDue)
-        player.nextCorpseRead = executed && read.corpseQueued ? context.now + corpseReadInterval : context.now + failedReadRetryInterval;
+        player.nextCorpseRead = executed && read.corpseQueued ? context.now + corpseReadInterval : context.now + corpseFailedReadRetryInterval;
 
     if (read.handsDue)
         player.nextHandsControllerRead = executed && read.handsQueued ? context.now + handsReadInterval : context.now + failedReadRetryInterval;

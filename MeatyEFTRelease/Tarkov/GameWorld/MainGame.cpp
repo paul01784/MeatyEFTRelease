@@ -27,6 +27,7 @@
 #include "Loot/WishList.h"
 #include "Explosives/ExplosiveManager.h"
 #include "Player/DogTagCache.h"
+#include "Player/PlayerMemoryAccess.h"
 #include "../Features/Aim/FireportTracker.h"
 #include "../Features/Aim/ReadOnlyAim.h"
 #include "../Features/Visibility/AtlasVisibility.h"
@@ -122,6 +123,7 @@ void MainGame::clearCache() {
     this->registeredPlayers = NULL;
     this->registeredPlayersList = NULL;
     this->registeredPlayersCount = 0;
+    this->emptyPlayerListConfirmations = 0;
     std::fill(std::begin(this->player_buffer), std::end(this->player_buffer), 0);
     registeredPlayerArraySnapshot.store(std::make_shared<const RegisteredPlayerArray>(), std::memory_order_release);
     this->selectedLocation = "";
@@ -230,16 +232,11 @@ bool MainGame::checkIfRaidStarted()
     if (!Utils::valid_pointer(mainGame.localPlayerHands))
         return false;
 
-    std::string className;
-
-    try
-    {
-        className = ReadName(mainGame.localPlayerHands, 64, false);
-    }
-    catch (...)
-    {
+    uint64_t classNamePointer = 0;
+    if (!PlayerMemoryAccess::tryReadChain(mainGame.localPlayerHands, { 0x0, 0x10 }, classNamePointer, DmaCacheMode::Uncached))
         return false;
-    }
+
+    const std::string className = PlayerMemoryAccess::readUtf8(classNamePointer, 64, DmaCacheMode::Uncached);
 
     if (IsNullOrWhiteSpace(className))
         return false;
@@ -250,320 +247,109 @@ bool MainGame::checkIfRaidStarted()
     return true;
 }
 
-void MainGame::updateLocalPlayerPtr()
+bool MainGame::updatePlayerList(bool waitForDma)
 {
-    const uint64_t ptr = mem.Read<uint64_t>(
-        mainGame.localGameWorld + sdk::ClientLocalGameWorld::MainPlayer, DmaCacheMode::Uncached
-    );
-
-    if (Utils::valid_pointer(ptr))
-        mainGame.localPlayerPtr = ptr;
-}
-
-bool MainGame::updatePlayerList()
-{
-    if (!mem.vHandle)
+    if (!mem.IsDmaOperational() || !Utils::valid_pointer(mainGame.localGameWorld))
         return false;
 
-    if (!Utils::valid_pointer(mainGame.localGameWorld))
-        return false;
-
-    const auto commitEmptyPlayerList = [&]()
+    const auto tryReadExact = [waitForDma](const Memory::ScatterReadRequest* requests, std::size_t count, std::string_view label)
         {
-            mainGame.registeredPlayers = 0;
-            mainGame.registeredPlayersList = 0;
-            mainGame.registeredPlayersCount = 0;
+            std::vector<DWORD> bytesRead(count, 0);
+            const auto result = mem.TryReadScatter(
+                requests,
+                count,
+                DmaCacheMode::Uncached,
+                label,
+                bytesRead,
+                DmaPagingMode::NoPaging,
+                false,
+                waitForDma ? DmaLockMode::Wait : DmaLockMode::Try);
 
-            std::fill(
-                std::begin(mainGame.player_buffer),
-                std::end(mainGame.player_buffer),
-                0
-            );
+            if (result != Memory::TryScatterReadResult::Success)
+                return false;
 
-            registeredPlayerArraySnapshot.store(std::make_shared<const RegisteredPlayerArray>(), std::memory_order_release);
+            for (std::size_t index = 0; index < count; ++index)
+            {
+                if (bytesRead[index] != static_cast<DWORD>(requests[index].size))
+                    return false;
+            }
+
+            return true;
         };
 
-    auto TryReadValue = [&](uint64_t address, auto& out) -> bool
-        {
-            using T = std::decay_t<decltype(out)>;
-
-            out = {};
-
-            if (!Utils::valid_pointer(address))
-                return false;
-
-            try
-            {
-                return mem.Read(address, &out, sizeof(T), DmaCacheMode::Uncached);
-            }
-            catch (...)
-            {
-                return false;
-            }
-        };
-
-    auto TryReadBuffer = [&](uint64_t address, void* out, size_t size) -> bool
-        {
-            if (!Utils::valid_pointer(address))
-                return false;
-
-            if (!out || size == 0)
-                return false;
-
-            try
-            {
-                return mem.Read(address, out, size, DmaCacheMode::Uncached);
-            }
-            catch (...)
-            {
-                return false;
-            }
-        };
-
-    // Both of these fields belong to LocalGameWorld, so fetch them together.
-    // Keeping them as separate direct reads turned an otherwise small roster
-    // refresh into two independent DMA round trips every player tick.
-    uint64_t latestLocalPlayer = mainGame.localPlayerPtr;
+    uint64_t localPlayer = mainGame.localPlayerPtr;
     uint64_t registeredPlayers = 0;
+    const Memory::ScatterReadRequest rootReads[] =
+    {
+        { mainGame.localGameWorld + sdk::ClientLocalGameWorld::MainPlayer, &localPlayer, sizeof(localPlayer) },
+        { mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers, &registeredPlayers, sizeof(registeredPlayers) }
+    };
+
+    if (!tryReadExact(rootReads, std::size(rootReads), "Player roster roots") || !Utils::valid_pointer(registeredPlayers))
+        return false;
+
     uint64_t registeredPlayersList = 0;
     int registeredPlayersCount = 0;
-
-    const Memory::ScatterReadRequest rootRequests[] =
+    const Memory::ScatterReadRequest headerReads[] =
     {
-        {
-            mainGame.localGameWorld + sdk::ClientLocalGameWorld::MainPlayer,
-            &latestLocalPlayer,
-            sizeof(latestLocalPlayer)
-        },
-        {
-            mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers,
-            &registeredPlayers,
-            sizeof(registeredPlayers)
-        }
+        { registeredPlayers + 0x10, &registeredPlayersList, sizeof(registeredPlayersList) },
+        { registeredPlayers + 0x18, &registeredPlayersCount, sizeof(registeredPlayersCount) }
     };
 
-    if (!mem.ReadScatter(
-        rootRequests,
-        std::size(rootRequests),
-        DmaCacheMode::Uncached,
-        "Player roster roots"))
-    {
-        return false;
-    }
-
-    if (Utils::valid_pointer(latestLocalPlayer))
-        mainGame.localPlayerPtr = latestLocalPlayer;
-
-    if (!Utils::valid_pointer(registeredPlayers))
+    if (!tryReadExact(headerReads, std::size(headerReads), "Player roster header"))
         return false;
 
-    const Memory::ScatterReadRequest headerRequests[] =
-    {
-        {
-            registeredPlayers + 0x10,
-            &registeredPlayersList,
-            sizeof(registeredPlayersList)
-        },
-        {
-            registeredPlayers + 0x18,
-            &registeredPlayersCount,
-            sizeof(registeredPlayersCount)
-        }
-    };
-
-    if (!mem.ReadScatter(headerRequests, std::size(headerRequests), DmaCacheMode::Uncached, "Player roster header"))
-    {
+    const int capacity = static_cast<int>(std::size(mainGame.player_buffer));
+    if (registeredPlayersCount < 0 || registeredPlayersCount > capacity)
         return false;
-    }
 
-    const int bufferCapacity =
-        static_cast<int>(std::size(mainGame.player_buffer));
-
-    if (registeredPlayersCount < 0 || registeredPlayersCount > bufferCapacity)
-    {
-        LOGS.logError(
-            "[PLAYERS][LIST] registeredPlayersCount invalid: " +
-            std::to_string(registeredPlayersCount)
-        );
-
-        return false;
-    }
-
-    // This is a valid read of a genuinely empty list
-    // Do not retain old raid/player data
     if (registeredPlayersCount == 0)
     {
-        commitEmptyPlayerList();
+        if (++emptyPlayerListConfirmations < 2)
+            return false;
+
+        emptyPlayerListConfirmations = 0;
+        mainGame.registeredPlayers = registeredPlayers;
+        mainGame.registeredPlayersList = registeredPlayersList;
+        mainGame.registeredPlayersCount = 0;
+        std::fill(std::begin(mainGame.player_buffer), std::end(mainGame.player_buffer), 0);
+        registeredPlayerArraySnapshot.store(std::make_shared<const RegisteredPlayerArray>(), std::memory_order_release);
         return true;
     }
 
+    emptyPlayerListConfirmations = 0;
     if (!Utils::valid_pointer(registeredPlayersList))
         return false;
 
-    std::vector<uint64_t> tempBuffer(
-        static_cast<size_t>(registeredPlayersCount),
-        0
-    );
-
-    const uint64_t playerArrayStart = registeredPlayersList + 0x20;
-
-    if (!TryReadBuffer(playerArrayStart, tempBuffer.data(), sizeof(uint64_t) * tempBuffer.size()))
-    {
+    std::vector<uint64_t> roster(static_cast<std::size_t>(registeredPlayersCount), 0);
+    const Memory::ScatterReadRequest rosterRead{ registeredPlayersList + 0x20, roster.data(), roster.size() * sizeof(uint64_t) };
+    if (!tryReadExact(&rosterRead, 1, "Player roster entries"))
         return false;
-    }
 
-    uint64_t verifiedRegisteredPlayers = 0;
-    uint64_t verifiedRegisteredPlayersList = 0;
-    int verifiedRegisteredPlayersCount = 0;
+    std::unordered_set<uint64_t> seen;
+    RegisteredPlayerArray validPlayers;
+    seen.reserve(roster.size());
+    validPlayers.reserve(roster.size());
 
-    const Memory::ScatterReadRequest verificationRequests[] =
+    for (uint64_t player : roster)
     {
-        {
-            mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers,
-            &verifiedRegisteredPlayers,
-            sizeof(verifiedRegisteredPlayers)
-        },
-        {
-            registeredPlayers + 0x10,
-            &verifiedRegisteredPlayersList,
-            sizeof(verifiedRegisteredPlayersList)
-        },
-        {
-            registeredPlayers + 0x18,
-            &verifiedRegisteredPlayersCount,
-            sizeof(verifiedRegisteredPlayersCount)
-        }
-    };
-
-    if (!mem.ReadScatter(verificationRequests, std::size(verificationRequests), DmaCacheMode::Uncached, "Player roster verify"))
-    {
-        return false;
-    }
-
-    if (verifiedRegisteredPlayers != registeredPlayers ||
-        verifiedRegisteredPlayersList != registeredPlayersList ||
-        verifiedRegisteredPlayersCount != registeredPlayersCount)
-    {
-        return false;
-    }
-
-    registeredPlayerArraySnapshot.store(std::make_shared<const RegisteredPlayerArray>(tempBuffer), std::memory_order_release);
-
-    std::unordered_set<uint64_t> uniquePlayers;
-    std::vector<uint64_t> validPlayers;
-    uniquePlayers.reserve(tempBuffer.size());
-    validPlayers.reserve(tempBuffer.size());
-
-    for (const uint64_t player : tempBuffer)
-    {
-        if (Utils::valid_pointer(player) && uniquePlayers.insert(player).second)
-            validPlayers.push_back(player);
+        if (Utils::valid_pointer(player) && seen.insert(player).second)
+            validPlayers.emplace_back(player);
     }
 
     if (validPlayers.empty())
         return false;
 
-    if (validPlayers.size() != tempBuffer.size())
-    {
-        static auto lastFilteredRosterLog = std::chrono::steady_clock::time_point{};
-        const auto now = std::chrono::steady_clock::now();
+    if (Utils::valid_pointer(localPlayer))
+        mainGame.localPlayerPtr = localPlayer;
 
-        if (lastFilteredRosterLog == std::chrono::steady_clock::time_point{} || now - lastFilteredRosterLog >= std::chrono::seconds(5))
-        {
-            lastFilteredRosterLog = now;
-            LOGS.logWarn("[PLAYERS][LIST] Filtered " + std::to_string(tempBuffer.size() - validPlayers.size()) +
-                " invalid or duplicate roster entries");
-        }
-    }
-
-    std::copy(
-        validPlayers.begin(),
-        validPlayers.end(),
-        std::begin(mainGame.player_buffer));
-
-    // Clear old entries left after the new shorter list
-    for (std::size_t i = validPlayers.size(); i < static_cast<std::size_t>(bufferCapacity); ++i)
-        mainGame.player_buffer[i] = 0;
-
+    std::fill(std::begin(mainGame.player_buffer), std::end(mainGame.player_buffer), 0);
+    std::copy(validPlayers.begin(), validPlayers.end(), std::begin(mainGame.player_buffer));
     mainGame.registeredPlayers = registeredPlayers;
     mainGame.registeredPlayersList = registeredPlayersList;
     mainGame.registeredPlayersCount = static_cast<int>(validPlayers.size());
-
+    registeredPlayerArraySnapshot.store(std::make_shared<const RegisteredPlayerArray>(validPlayers), std::memory_order_release);
     return true;
-}
-
-void MainGame::getPlayerListDetails()
-{
-
-    try {
-
-        LOGS.logInfo("[MAIN] Waiting for player details");
-
-        globals::radarSubText = "Gathering player details";
-
-        while (true)
-        {
-            Sleep(10);
-
-            mainGame.registeredPlayers = mem.Read<uint64_t>(
-                mainGame.localGameWorld + sdk::ClientLocalGameWorld::RegisteredPlayers);
-
-            if (!Utils::valid_pointer(mainGame.registeredPlayers))
-                continue;
-
-            mainGame.registeredPlayersList = mem.Read<uint64_t>(mainGame.registeredPlayers + 0x10);
-            if (!Utils::valid_pointer(mainGame.registeredPlayersList))
-                continue;
-
-            mainGame.registeredPlayersCount = mem.Read<int>(mainGame.registeredPlayers + 0x18);
-            if (mainGame.registeredPlayersCount <= 0)
-            {
-                mainGame.registeredPlayers = 0;
-                mainGame.registeredPlayersList = 0;
-                mainGame.registeredPlayersCount = 0;
-                continue;
-            }
-
-            // Keep count within buffer bounds
-            if (mainGame.registeredPlayersCount > std::size(mainGame.player_buffer))
-            {
-                mainGame.registeredPlayersCount = std::size(mainGame.player_buffer);
-            }
-
-            // Clear buffer
-            std::fill(std::begin(mainGame.player_buffer),
-                std::end(mainGame.player_buffer),
-                0);
-
-            mem.Read(
-                mainGame.registeredPlayersList + 0x20,
-                mainGame.player_buffer,
-                sizeof(uint64_t) * mainGame.registeredPlayersCount);
-
-            registeredPlayerArraySnapshot.store(
-                std::make_shared<const RegisteredPlayerArray>(mainGame.player_buffer, mainGame.player_buffer + mainGame.registeredPlayersCount),
-                std::memory_order_release);
-
-            size_t validCount = 0;
-            for (size_t i = 0; i < mainGame.registeredPlayersCount; ++i)
-            {
-                if (Utils::valid_pointer(mainGame.player_buffer[i]))
-                    ++validCount;
-            }
-
-            if (validCount >= 1)
-                break;
-        }
-
-    }
-    catch (const std::exception& e) {
-        LOGS.logError("Exception caught in getPlayerListDetails: " + std::string(e.what()) + ". Retrying...");
-
-    }
-    catch (...) {
-        LOGS.logError("Unknown exception caught in getPlayerListDetails. Retrying...");
-
-    }
 }
 
 bool MainGame::getGameWorldDetails(std::stop_token stopToken)
@@ -731,19 +517,29 @@ void MainGame::mainThread(std::stop_token stopToken)
         if (!getGameWorldDetails(stopToken))
             break;
 
+        if (mem.RefreshProcessInformationNow())
+        {
+            mem.RefreshTarkovPointerSnapshot();
+            LOGS.logInfo("[MAIN][DMA] Full refresh completed before raid workers started");
+        }
+        else
+        {
+            LOGS.logWarn("[MAIN][DMA] Full refresh failed before raid workers started; continuing with uncached reads");
+        }
+
         appGlobals::runRadar = true;
         mapGlobals::followLocal = true;
 
         LOGS.logInfo("[MAIN][THREADS] Starting radar");
         appGlobals::runThreads.store(true, std::memory_order_release);
 
+        TaskManager cameraWorker;
         TaskManager fastWorker;
         TaskManager liveWorker;
         TaskManager backgroundWorker;
         TaskManager slowPlayerWorker;
 
-        // Fast worker: latency-sensitive camera, aim, input and raid liveness.
-        fastWorker.addTask(
+        cameraWorker.addTask(
             "cameraTask",
             []()
             {
@@ -905,9 +701,18 @@ void MainGame::mainThread(std::stop_token stopToken)
             &globals::taskWishManager,
             { TaskPriority::Background, DmaPriority::Background, false, 450.0 });
 
-        LOGS.logInfo("[MAIN][MANAGER] Starting Fast, Live, Background and Slow Player workers");
+        LOGS.logInfo("[MAIN][MANAGER] Starting Camera, Fast, Live, Background and Slow Player workers");
         LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log Start");
         watchListManager.logRaidStart(this->selectedLocation.c_str());
+
+        std::jthread cameraWorkerThread(
+            [&](std::stop_token workerStop)
+            {
+                SetThreadPriority(
+                    GetCurrentThread(),
+                    THREAD_PRIORITY_ABOVE_NORMAL);
+                cameraWorker.run(workerStop);
+            });
 
         std::jthread fastWorkerThread(
             [&](std::stop_token workerStop)
@@ -951,11 +756,13 @@ void MainGame::mainThread(std::stop_token stopToken)
         LOGS.logNotice(NoticeColour::GREEN, "Raid ended, stopping and clearing caches");
         appGlobals::runThreads.store(false, std::memory_order_release);
 
+        cameraWorkerThread.request_stop();
         fastWorkerThread.request_stop();
         liveWorkerThread.request_stop();
         backgroundWorkerThread.request_stop();
         slowPlayerWorkerThread.request_stop();
 
+        cameraWorkerThread.join();
         fastWorkerThread.join();
         liveWorkerThread.join();
         backgroundWorkerThread.join();
@@ -967,7 +774,7 @@ void MainGame::mainThread(std::stop_token stopToken)
         wishListData.clear();
         explosiveManager.reset();
 
-        LOGS.logInfo("[MAIN][MANAGER] Fast, Live, Background and Slow Player workers stopped");
+        LOGS.logInfo("[MAIN][MANAGER] Camera, Fast, Live, Background and Slow Player workers stopped");
         watchListManager.logRaidEnd();
         LOGS.logInfo("[MAIN][RaidLog] Sent Raid Log End");
 
@@ -1122,7 +929,7 @@ void MainGame::raidMonitorTask()
                 return active;
             };
 
-        auto logIgnoredShutdown = [&](const char* reason, int observed, int cachedActive)
+        auto logIgnoredShutdown = [&](const char* condition, const char* metric, int observed, int cachedActive)
             {
                 const auto now = std::chrono::steady_clock::now();
 
@@ -1135,10 +942,10 @@ void MainGame::raidMonitorTask()
                 lastIgnoredZeroLog = now;
 
                 LOGS.logWarn(
-                    std::string("[RAID] Delaying shutdown (") +
-                    reason +
-                    "=" + std::to_string(observed) +
-                    ", cachedActive=" + std::to_string(cachedActive) +
+                    std::string("[RAID] Keeping raid active after a transient roster issue (") +
+                    "condition=" + condition +
+                    ", " + metric + "=" + std::to_string(observed) +
+                    ", cachedActivePlayers=" + std::to_string(cachedActive) +
                     ")"
                 );
             };
@@ -1172,7 +979,12 @@ void MainGame::raidMonitorTask()
 
                 if (cachedActivePlayers >= 2 && invalidListTicks <= 3)
                 {
-                    logIgnoredShutdown(reason, invalidListTicks, cachedActivePlayers);
+                    logIgnoredShutdown(
+                        reason,
+                        "consecutiveInvalidChecks",
+                        invalidListTicks,
+                        cachedActivePlayers
+                    );
                 }
 
                 if (invalidListTicks >= kInvalidGwShutdownTicks)
@@ -1274,6 +1086,7 @@ void MainGame::raidMonitorTask()
         {
             logIgnoredShutdown(
                 "registeredPlayersCount",
+                "observedCount",
                 registeredPlayersCount,
                 cachedActivePlayers
             );

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -135,6 +136,7 @@ struct ActiveQuestState
 struct QuestPublishedState
 {
     std::vector<QuestData> activeQuests;
+    std::vector<std::string> selectedQuestIds;
     std::vector<std::string> masterItems;
     std::vector<QuestLocation> masterLocations;
 };
@@ -151,12 +153,25 @@ class QuestManager
 
         void clearForRaidEnd();
 
+        void setQuestSelected(const std::string& questId, bool selected);
+
+        void setMemoryQuestsEnabled(bool enabled);
+
+        [[nodiscard]] bool areMemoryQuestsEnabled() const
+        {
+            return memoryQuestsEnabled.load(std::memory_order_relaxed);
+        }
+
         uint64_t findLiveQuestPtrById(const std::string& wantedQuestId);
 
     private:
+        void rebuildMasterTargetsLocked();
+
         uint64_t cachedProfile = 0;
         bool initialScanComplete = false;
         std::chrono::steady_clock::time_point nextInitializationAttempt{};
+        std::unordered_set<std::string> selectedQuestIds;
+        std::atomic_bool memoryQuestsEnabled{ true };
 };
 
 extern QuestManager questManager;
@@ -166,10 +181,12 @@ extern std::vector<QuestLocation> masterLocations;
 extern std::mutex g_questCacheMutex;
 extern std::atomic<QuestPublishedSnapshot> g_publishedQuestState;
 
-inline void PublishQuestStateLocked()
+inline void PublishQuestStateLocked(const std::unordered_set<std::string>& selectedQuestIds)
 {
     QuestPublishedState state{};
     state.activeQuests = questDataActive;
+    state.selectedQuestIds.assign(selectedQuestIds.begin(), selectedQuestIds.end());
+    std::sort(state.selectedQuestIds.begin(), state.selectedQuestIds.end());
     state.masterItems = masterItems;
     state.masterLocations = masterLocations;
 
@@ -206,4 +223,10 @@ inline std::vector<QuestData> GetQuestDataActiveSnapshot()
 {
     return GetQuestPublishedSnapshot()->activeQuests;
 }
+
+inline std::vector<std::string> GetSelectedQuestIdsSnapshot()
+{
+    return GetQuestPublishedSnapshot()->selectedQuestIds;
+}
+
 

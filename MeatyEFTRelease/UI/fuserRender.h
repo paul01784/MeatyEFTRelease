@@ -734,7 +734,7 @@ namespace fuserRender
             return;
 
         const std::string text = "POSSIBLE MISSING ENTITIES  Registered: " + std::to_string(status.registeredCount) +
-            " | Alive cache: " + std::to_string(status.aliveCachedCount);
+            " | Cached: " + std::to_string(status.cachedRegisteredCount);
         constexpr float fontSize = 18.0f;
         constexpr float boxHeight = 34.0f;
         const float screenCenterX = ScreenWidth() * 0.5f;
@@ -1185,6 +1185,28 @@ namespace fuserRender
         }
     }
 
+    static inline bool HasBone(const Player& player, int index)
+    {
+        if (index < 0)
+            return false;
+
+        const size_t boneIndex = static_cast<size_t>(index);
+        if (boneIndex >= player.bonePositions.size() ||
+            boneIndex >= player.bonePtrs.size() ||
+            !Utils::valid_pointer(player.bonePtrs[boneIndex]))
+        {
+            return false;
+        }
+
+        const glm::vec3& position = player.bonePositions[boneIndex];
+        return std::isfinite(position.x) &&
+            std::isfinite(position.y) &&
+            std::isfinite(position.z) &&
+            (std::fabs(position.x) >= 0.001f ||
+                std::fabs(position.y) >= 0.001f ||
+                std::fabs(position.z) >= 0.001f);
+    }
+
     static inline void DrawPlayerSkeleton(
         const Player& player,
         const glm::vec4& colour)
@@ -1198,8 +1220,8 @@ namespace fuserRender
                 const size_t secondBone = static_cast<size_t>(b);
 
                 if (!g_frameManagedCameraSnapshot ||
-                    firstBone >= player.bonePositions.size() ||
-                    secondBone >= player.bonePositions.size())
+                    !HasBone(player, a) ||
+                    !HasBone(player, b))
                 {
                     return;
                 }
@@ -1252,29 +1274,8 @@ namespace fuserRender
 
         for (int index : indexes)
         {
-            if (index < 0)
+            if (!HasBone(player, index))
                 return false;
-
-            if (static_cast<size_t>(index) >= count)
-                return false;
-
-            const size_t boneIndex = static_cast<size_t>(index);
-            if (boneIndex >= player.bonePtrs.size() ||
-                !Utils::valid_pointer(player.bonePtrs[boneIndex]))
-            {
-                return false;
-            }
-
-            const glm::vec3& position = player.bonePositions[boneIndex];
-            if (!std::isfinite(position.x) ||
-                !std::isfinite(position.y) ||
-                !std::isfinite(position.z) ||
-                (std::fabs(position.x) < 0.001f &&
-                    std::fabs(position.y) < 0.001f &&
-                    std::fabs(position.z) < 0.001f))
-            {
-                return false;
-            }
         }
 
         return true;
@@ -1445,7 +1446,8 @@ namespace fuserRender
                 if (!Utils::valid_pointer(player.instance) ||
                     player.isLocal ||
                     player.hasExfiled ||
-                    player.isDead)
+                    player.isDead ||
+                    (!player.isBTR && !player.minimalBonePoseValid))
                 {
                     continue;
                 }
@@ -1658,23 +1660,6 @@ namespace fuserRender
                 // ----------------------------
                 if (espGlobals::drawSkeletons)
                 {
-                    if (!HasBones(player,
-                        {
-                            boneListIndexes::Head,
-                            boneListIndexes::Pelvis,
-                            boneListIndexes::LForearm,
-                            boneListIndexes::LPalm,
-                            boneListIndexes::RForearm,
-                            boneListIndexes::RPalm,
-                            boneListIndexes::LThigh,
-                            boneListIndexes::LFoot,
-                            boneListIndexes::RThigh,
-                            boneListIndexes::RFoot
-                        }))
-                    {
-                        continue;
-                    }
-
                     DrawPlayerSkeleton(player, playerColour);
                 }
             }
@@ -1765,7 +1750,7 @@ namespace fuserRender
             return;
         }
 
-        constexpr float padding = 8.0f;
+        constexpr float padding = 5.0f;
         const float pulse = Wave01(NowSeconds() * 31.4159265359f);
         const glm::vec4 warningColour =
         {
@@ -1775,7 +1760,7 @@ namespace fuserRender
             0.30f + (pulse * 0.70f)
         };
 
-        g_DxWindow.DrawRect(
+        g_DxWindow.DrawScreenRect(
             padding,
             padding,
             ScreenWidth() - (padding * 2.0f),

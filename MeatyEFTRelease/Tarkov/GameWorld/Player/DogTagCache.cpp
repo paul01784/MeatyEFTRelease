@@ -84,7 +84,7 @@ bool DogTagCache::AddEntryIfMissing(const Entry& entry)
     m_accountIndex[entry.accountId] = index;
 
     
-    if (entry.lvl > 0 &&
+    if (entry.lvl >= 0 &&
         entry.lvl <= 100 &&
         m_sentProfiles.insert(entry.profileId).second)
     {

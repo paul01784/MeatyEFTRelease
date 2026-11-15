@@ -1,6 +1,7 @@
 #include "../../../UI/includes.h"
 #include <glm/glm.hpp>
 #include "Loot.h"
+#include "LootRetryPolicy.h"
 #include "LootClassifier.h"
 #include "../../../UI/globals.h"
 #include "../../../memory/Memory.h"
@@ -10,7 +11,6 @@
 #include "../../SDK/EftOffsets.h"
 #include "../../Unity/UnityContainers.h"
 #include "../../../Web/TarkovDev/TarkovDevClient.h"
-#include <map>
 #include "../../Unity/UnityOffsets.h"
 #include "../../Unity/Transform.h"
 #include "../QuestManager.h"
@@ -146,11 +146,7 @@ std::string GetRenderableCorpseOwnerLabel(const LootEntity& corpse)
         : std::string{};
 }
 
-constexpr std::uint8_t MAX_LOOT_RESOLVE_ATTEMPTS = 20;
 
-constexpr std::chrono::milliseconds LOOT_RESOLVE_RETRY_DELAY{
-    500
-};
 
 namespace
 {
@@ -703,6 +699,8 @@ void loot::clearCache()
     lootBufferScanCursor = 0;
     lootBufferScanListPtr = 0;
 
+    lootFailStreak = lootCountFailStreak = lootBufferFailStreak = unexpectedFailureStreak = 0;
+    lootBackoffUntil = {};
     nextLootDiscovery = {};
     lastDogTagUpdate = {};
     nextLootInitializationRun = {};
@@ -1169,46 +1167,7 @@ void loot::mergeResolveResults(
             }
         }
 
-        const bool attemptFailed = result.failed;
-        const bool retryableFailure = result.retryableFailure;
-
-        result.resolveAttempts = static_cast<std::uint8_t>(
-            std::min<int>(
-                static_cast<int>(previousAttempts) + 1,
-                MAX_LOOT_RESOLVE_ATTEMPTS
-            )
-            );
-
-        if (attemptFailed)
-        {
-            result.wanted = false;
-
-            if (!retryableFailure ||
-                result.resolveAttempts >= MAX_LOOT_RESOLVE_ATTEMPTS)
-            {
-                result.pendingResolve = false;
-                result.failed = true;
-                result.nextResolveAttempt = {};
-            }
-            else
-            {
-                //retry it later.
-                result.pendingResolve = true;
-                result.failed = false;
-                result.nextResolveAttempt =
-                    now + LOOT_RESOLVE_RETRY_DELAY;
-            }
-        }
-        else
-        {
-            //Success
-            result.pendingResolve = false;
-            result.failed = false;
-            result.retryableFailure = true;
-            result.failureReason.clear();
-            result.nextResolveAttempt = {};
-        }
-
+        LootRetryPolicy::Apply(result, previousAttempts, std::chrono::steady_clock::now());
         if (previousItem)
         {
             *previousItem = std::move(result);
@@ -1264,8 +1223,8 @@ bool loot::refreshLootListHeader()
 
     ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
-    if (!batch.Add(lootListP + 0x10, nextLootListPtr) ||
-        !batch.Add(lootListP + 0x18, nextLootCount) ||
+    if (!batch.AddTraced(lootListP, 0x10, nextLootListPtr, "lootListP+0x10") ||
+        !batch.AddTraced(lootListP, 0x18, nextLootCount, "lootListP+0x18") ||
         !batch.Execute())
     {
         return false;
@@ -1369,7 +1328,7 @@ bool loot::buildNewLootItemsScatter(
         ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
         for (auto& shell : shellReads)
-            batch.Add(shell.instance + 0x10, shell.monoBehaviour);
+            batch.AddTraced(shell.instance, 0x10, shell.monoBehaviour, "shell.instance+0x10");
 
         if (!batch.Execute())
         {
@@ -1390,15 +1349,9 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.monoBehaviour))
                 continue;
 
-            batch.Add(
-                shell.monoBehaviour + UnityOffsets::Component_ObjectClassOffset,
-                shell.interactiveClass
-            );
+            batch.AddTraced(shell.monoBehaviour, UnityOffsets::Component_ObjectClassOffset, shell.interactiveClass, "shell.monoBehaviour+UnityOffsets::Component_ObjectClassOffset");
 
-            batch.Add(
-                shell.monoBehaviour + UnityOffsets::Component_GameObjectOffset,
-                shell.gameObject
-            );
+            batch.AddTraced(shell.monoBehaviour, UnityOffsets::Component_GameObjectOffset, shell.gameObject, "shell.monoBehaviour+UnityOffsets::Component_GameObjectOffset");
         }
 
         if (!batch.Execute())
@@ -1420,15 +1373,9 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.gameObject))
                 continue;
 
-            batch.Add(
-                shell.gameObject + UnityOffsets::GameObject_NameOffset,
-                shell.gameObjectNamePtr
-            );
+            batch.AddTraced(shell.gameObject, UnityOffsets::GameObject_NameOffset, shell.gameObjectNamePtr, "shell.gameObject+UnityOffsets::GameObject_NameOffset");
 
-            batch.Add(
-                shell.gameObject + UnityOffsets::GameObject_ComponentsOffset,
-                shell.components
-            );
+            batch.AddTraced(shell.gameObject, UnityOffsets::GameObject_ComponentsOffset, shell.components, "shell.gameObject+UnityOffsets::GameObject_ComponentsOffset");
         }
 
         if (!batch.Execute())
@@ -1450,7 +1397,7 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.components))
                 continue;
 
-            batch.Add(shell.components + 0x8, shell.transformComponent);
+            batch.AddTraced(shell.components, 0x8, shell.transformComponent, "shell.components+0x8");
         }
 
         if (!batch.Execute())
@@ -1469,11 +1416,7 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.transformComponent))
                 continue;
 
-            batch.Add(
-                shell.transformComponent +
-                UnityOffsets::Component_ObjectClassOffset,
-                shell.transformObjectClass
-            );
+            batch.AddTraced(shell.transformComponent, UnityOffsets::Component_ObjectClassOffset, shell.transformObjectClass, "shell.transformComponent+UnityOffsets::Component_ObjectClassOffset");
         }
 
         if (!batch.Execute())
@@ -1492,10 +1435,7 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.transformObjectClass))
                 continue;
 
-            batch.Add(
-                shell.transformObjectClass + 0x10,
-                shell.transformInternal
-            );
+            batch.AddTraced(shell.transformObjectClass, 0x10, shell.transformInternal, "shell.transformObjectClass+0x10");
         }
 
         if (!batch.Execute())
@@ -1515,6 +1455,13 @@ bool loot::buildNewLootItemsScatter(
         item.m_gameObject = shell.gameObject;
         item.m_pGameObjectName = shell.gameObjectNamePtr;
         item.m_pointerToTransform1 = shell.transformInternal;
+
+        if (!Utils::valid_pointer(item.m_pointerToTransform1) && Utils::valid_pointer(shell.gameObject))
+        {
+            uint64_t recoveredTransform = 0;
+            if (mem.TryReadLootTransformFallback(shell.gameObject, recoveredTransform))
+                item.m_pointerToTransform1 = recoveredTransform;
+        }
 
         if (!Utils::valid_pointer(shell.monoBehaviour))
         {
@@ -1651,10 +1598,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootEntity>& items)
         {
             LootEntity& item = items[read.itemIndex];
 
-            batch.Add(
-                item.m_interactiveClass + sdk::InteractiveLootItem::Item,
-                read.itemObject
-            );
+            batch.AddTraced(item.m_interactiveClass, sdk::InteractiveLootItem::Item, read.itemObject, "item.m_interactiveClass+sdk::InteractiveLootItem::Item");
         }
 
         if (!batch.Execute())
@@ -1674,10 +1618,7 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootEntity>& items)
             if (!Utils::valid_pointer(read.itemObject))
                 continue;
 
-            batch.Add(
-                read.itemObject + sdk::LootItem::Template,
-                read.itemTemplate
-            );
+            batch.AddTraced(read.itemObject, sdk::LootItem::Template, read.itemTemplate, "read.itemObject+sdk::LootItem::Template");
         }
 
         if (!batch.Execute())
@@ -1697,15 +1638,9 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootEntity>& items)
             if (!Utils::valid_pointer(read.itemTemplate))
                 continue;
 
-            batch.Add(
-                read.itemTemplate + sdk::ItemTemplate::_id,
-                read.mongoId
-            );
+            batch.AddTraced(read.itemTemplate, sdk::ItemTemplate::_id, read.mongoId, "read.itemTemplate+sdk::ItemTemplate::_id");
 
-            batch.Add(
-                read.itemTemplate + sdk::ItemTemplate::QuestItem,
-                read.questItem
-            );
+            batch.AddTraced(read.itemTemplate, sdk::ItemTemplate::QuestItem, read.questItem, "read.itemTemplate+sdk::ItemTemplate::QuestItem");
         }
 
         if (!batch.Execute())
@@ -1749,11 +1684,14 @@ void loot::classifyObservedLootItemsScatter(std::vector<LootEntity>& items)
 
         if (item.bsgId.empty())
         {
-            markFailed(item, "Empty item ID");
-            continue;
+            if (!mem.TryReadLootIdFallback(read.itemTemplate + sdk::ItemTemplate::_id, item.bsgId))
+            {
+                markFailed(item, "Empty item ID");
+                continue;
+            }
         }
 
-        if (read.questItem)
+        if (read.questItem && !isBattlePassInfoDocument(item))
         {
             LootClassifier::initialize(item, LootEntityKind::QuestItem);
 
@@ -1817,10 +1755,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
         {
             LootEntity& item = items[read.itemIndex];
 
-            batch.Add(
-                item.m_interactiveClass + sdk::LootableContainer::ItemOwner,
-                read.itemOwner
-            );
+            batch.AddTraced(item.m_interactiveClass, sdk::LootableContainer::ItemOwner, read.itemOwner, "item.m_interactiveClass+sdk::LootableContainer::ItemOwner");
         }
 
         if (!batch.Execute())
@@ -1840,10 +1775,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
             if (!Utils::valid_pointer(read.itemOwner))
                 continue;
 
-            batch.Add(
-                read.itemOwner + sdk::LootableContainerItemOwner::RootItem,
-                read.rootItem
-            );
+            batch.AddTraced(read.itemOwner, sdk::LootableContainerItemOwner::RootItem, read.rootItem, "read.itemOwner+sdk::LootableContainerItemOwner::RootItem");
         }
 
         if (!batch.Execute())
@@ -1863,10 +1795,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
             if (!Utils::valid_pointer(read.rootItem))
                 continue;
 
-            batch.Add(
-                read.rootItem + sdk::LootItem::Template,
-                read.itemTemplate
-            );
+            batch.AddTraced(read.rootItem, sdk::LootItem::Template, read.itemTemplate, "read.rootItem+sdk::LootItem::Template");
         }
 
         if (!batch.Execute())
@@ -1886,10 +1815,7 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
             if (!Utils::valid_pointer(read.itemTemplate))
                 continue;
 
-            batch.Add(
-                read.itemTemplate + sdk::ItemTemplate::_id,
-                read.mongoId
-            );
+            batch.AddTraced(read.itemTemplate, sdk::ItemTemplate::_id, read.mongoId, "read.itemTemplate+sdk::ItemTemplate::_id");
         }
 
         if (!batch.Execute())
@@ -1937,8 +1863,11 @@ void loot::classifyLootableContainersScatter(std::vector<LootEntity>& items)
 
         if (item.bsgId.empty())
         {
-            markFailed(item, "Empty container ID");
-            continue;
+            if (!mem.TryReadLootIdFallback(read.itemTemplate + sdk::ItemTemplate::_id, item.bsgId))
+            {
+                markFailed(item, "Empty container ID");
+                continue;
+            }
         }
 
         if (!applyMarketDetails(item.bsgId, item))
@@ -2181,10 +2110,7 @@ void loot::updateLootableContainerStates(std::vector<LootEntity>& workingCache)
     {
         const LootEntity& item = workingCache[read.itemIndex];
 
-        batch.Add(
-            item.m_interactiveClass + sdk::LootableContainer::InteractingPlayer,
-            read.interactingPlayer
-        );
+        batch.AddTraced(item.m_interactiveClass, sdk::LootableContainer::InteractingPlayer, read.interactingPlayer, "item.m_interactiveClass+sdk::LootableContainer::InteractingPlayer");
     }
 
     if (!batch.Execute())
@@ -2457,8 +2383,8 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
 
             for (auto& read : slotReads)
             {
-                batch.Add(read.slotPtr + sdk::Slot::ID, read.namePtr);
-                batch.Add(read.slotPtr + sdk::Slot::ContainedItem, read.containedItem);
+                batch.AddTraced(read.slotPtr, sdk::Slot::ID, read.namePtr, "read.slotPtr+sdk::Slot::ID");
+                batch.AddTraced(read.slotPtr, sdk::Slot::ContainedItem, read.containedItem, "read.slotPtr+sdk::Slot::ContainedItem");
             }
 
             if (!batch.Execute())
@@ -2472,12 +2398,12 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
             for (auto& read : slotReads)
             {
                 if (Utils::valid_pointer(read.namePtr))
-                    batch.Add(read.namePtr + 0x10, read.nameLen);
+                    batch.AddTraced(read.namePtr, 0x10, read.nameLen, "read.namePtr+0x10");
 
                 if (Utils::valid_pointer(read.containedItem))
                 {
-                    batch.Add(read.containedItem + sdk::LootItem::Template, read.inventoryTemplate);
-                    batch.Add(read.containedItem + sdk::BarterOtherOffsets::Dogtag, read.dogTagComponent);
+                    batch.AddTraced(read.containedItem, sdk::LootItem::Template, read.inventoryTemplate, "read.containedItem+sdk::LootItem::Template");
+                    batch.AddTraced(read.containedItem, sdk::BarterOtherOffsets::Dogtag, read.dogTagComponent, "read.containedItem+sdk::BarterOtherOffsets::Dogtag");
                 }
             }
 
@@ -2492,7 +2418,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
             for (auto& read : slotReads)
             {
                 if (Utils::valid_pointer(read.inventoryTemplate))
-                    batch.Add(read.inventoryTemplate + sdk::ItemTemplate::_id, read.mongoId);
+                    batch.AddTraced(read.inventoryTemplate, sdk::ItemTemplate::_id, read.mongoId, "read.inventoryTemplate+sdk::ItemTemplate::_id");
             }
 
             if (!batch.Execute())
@@ -2582,11 +2508,11 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
 
 void loot::lootTask()
 {
-    static int lootFailStreak = 0;
-    static int lootCountFailStreak = 0;
-    static int lootBufferFailStreak = 0;
-    static int unexpectedFailureStreak = 0;
-    static std::chrono::steady_clock::time_point lootBackoffUntil{};
+
+
+
+
+
 
     try
     {

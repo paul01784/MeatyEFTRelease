@@ -115,6 +115,18 @@ enum class DmaCacheMode : uint8_t
     Uncached
 };
 
+enum class DmaPagingMode : uint8_t
+{
+    NoPaging,
+    AllowPaging
+};
+
+enum class DmaLockMode : uint8_t
+{
+    Try,
+    Wait
+};
+
 enum class DmaHealthSource : uint8_t
 {
     GameWorldSingleton,
@@ -290,7 +302,7 @@ private:
 
 private:
     [[nodiscard]] static DWORD BuildReadFlags(DmaCacheMode cacheMode);
-    [[nodiscard]] static DWORD BuildScatterFlags(DmaCacheMode cacheMode);
+    [[nodiscard]] static DWORD BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode = DmaPagingMode::NoPaging, bool zeroPadOnFail = true);
 
 public:
     // Keep a single DMA operation short enough that a waiting high-priority
@@ -303,6 +315,9 @@ public:
         uint64_t address = 0;
         void* buffer = nullptr;
         size_t size = 0;
+        uint64_t diagnosticBase = 0;
+        uint64_t diagnosticOffset = 0;
+        const char* diagnosticExpression = nullptr;
     };
 
     enum class TryScatterReadResult : uint8_t
@@ -566,9 +581,11 @@ public:
     std::wstring readWideString(uintptr_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Cached);
     std::string readUnicodeString(uintptr_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Cached);
 
+    bool TryReadLootIdFallback(uint64_t fieldAddress, std::string& output);
+    bool TryReadLootTransformFallback(uint64_t gameObject, uint64_t& output);
     bool ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Cached, std::string_view callingFunc = {});
 
-    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Cached, std::string_view callingFunc = {}, std::span<DWORD> bytesRead = {});
+    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Cached, std::string_view callingFunc = {}, std::span<DWORD> bytesRead = {}, DmaPagingMode pagingMode = DmaPagingMode::NoPaging, bool zeroPadOnFail = true, DmaLockMode lockMode = DmaLockMode::Try);
 
     [[nodiscard]] static bool IsValidPointer(uintptr_t pointer)
     {

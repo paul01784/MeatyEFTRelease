@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
@@ -120,6 +119,8 @@ private:
     );
 
 private:
+    int lootFailStreak = 0, lootCountFailStreak = 0, lootBufferFailStreak = 0, unexpectedFailureStreak = 0;
+    std::chrono::steady_clock::time_point lootBackoffUntil{};
     mutable std::shared_mutex lootMutex;
 
     std::vector<LootEntity> lootList;
