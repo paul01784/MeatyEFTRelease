@@ -3,6 +3,7 @@
 #include "../includes.h"
 #include "../config.h"
 #include "../globals.h"
+#include "../menuLayout.h"
 #include "../../Tarkov/GameWorld/QuestManager.h"
 #include "../../Web/TarkovDev/TarkovDevClient.h"
 
@@ -56,20 +57,22 @@ static bool QuestTextMatches(
 }
 
 void renderQuestsWindow() {
-    static ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | menuLayout::WidgetMovementFlags(globals::questsWindow);
     static int questFilter = 0; // 0 = All, 1 = Active, 2 = Selected
     static char questSearch[192] = "";
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 30.0f, viewport->Pos.y + 30.0f), ImGuiCond_FirstUseEver);
+    menuLayout::PrepareRightToolbarWindow(globals::questsWindow, "Quest Manager", ImVec2(900.0f, 680.0f), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(900.0f, 680.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(680.0f, 480.0f), ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f));
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
     if (!ImGui::Begin("Quest Manager", &appMenu::appQuests, flags)) {
         ImGui::End();
         return;
     }
+
+    if (menuLayout::RenderWidgetTitleBarControls(globals::questsWindow))
+        configManager.SaveConfig();
 
     const std::vector<QuestData> activeQuests = GetQuestDataActiveSnapshot();
     const std::vector<std::string> selectedQuestIds = GetSelectedQuestIdsSnapshot();

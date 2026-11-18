@@ -1,4 +1,5 @@
 #include "FileUpdater.h"
+#include "../Core/Dependencies/RuntimeDependencies.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -293,10 +294,7 @@ namespace
         {
             cleanup();
 
-            throw std::runtime_error(
-                "BCryptOpenAlgorithmProvider failed. Status: " +
-                std::to_string(status)
-            );
+            throw std::runtime_error("Could not start file verification. Status: " + std::to_string(status));
         }
 
         DWORD hashObjectSize = 0;
@@ -316,10 +314,7 @@ namespace
         {
             cleanup();
 
-            throw std::runtime_error(
-                "BCryptGetProperty(BCRYPT_OBJECT_LENGTH) failed. Status: " +
-                std::to_string(status)
-            );
+            throw std::runtime_error("Could not prepare file verification. Status: " + std::to_string(status));
         }
 
         status = BCryptGetProperty(
@@ -335,10 +330,7 @@ namespace
         {
             cleanup();
 
-            throw std::runtime_error(
-                "BCryptGetProperty(BCRYPT_HASH_LENGTH) failed. Status: " +
-                std::to_string(status)
-            );
+            throw std::runtime_error("Could not prepare file verification. Status: " + std::to_string(status));
         }
 
         std::vector<UCHAR> hashObject(hashObjectSize);
@@ -358,10 +350,7 @@ namespace
         {
             cleanup();
 
-            throw std::runtime_error(
-                "BCryptCreateHash failed. Status: " +
-                std::to_string(status)
-            );
+            throw std::runtime_error("Could not start file verification. Status: " + std::to_string(status));
         }
 
         std::ifstream input(
@@ -373,10 +362,7 @@ namespace
         {
             cleanup();
 
-            throw std::runtime_error(
-                "Failed to open file for hashing: " +
-                filePath.string()
-            );
+            throw std::runtime_error("Failed to open file for verification: " + filePath.string());
         }
 
         constexpr std::size_t bufferSize = 64 * 1024;
@@ -407,12 +393,7 @@ namespace
                 input.close();
                 cleanup();
 
-                throw std::runtime_error(
-                    "BCryptHashData failed while hashing: " +
-                    filePath.string() +
-                    ". Status: " +
-                    std::to_string(status)
-                );
+                throw std::runtime_error("File verification failed while reading: " + filePath.string() + ". Status: " + std::to_string(status));
             }
         }
 
@@ -421,10 +402,7 @@ namespace
             input.close();
             cleanup();
 
-            throw std::runtime_error(
-                "Failed while reading file for hashing: " +
-                filePath.string()
-            );
+            throw std::runtime_error("Failed while reading file for verification: " + filePath.string());
         }
 
         input.close();
@@ -440,12 +418,7 @@ namespace
         {
             cleanup();
 
-            throw std::runtime_error(
-                "BCryptFinishHash failed for: " +
-                filePath.string() +
-                ". Status: " +
-                std::to_string(status)
-            );
+            throw std::runtime_error("Could not complete file verification for: " + filePath.string() + ". Status: " + std::to_string(status));
         }
 
         cleanup();
@@ -562,7 +535,7 @@ void FileUpdater::ProcessEntry(const ManifestEntry& entry, const fs::path& appli
 
     if (!IsValidSha256(expectedHash))
     {
-        throw std::runtime_error("Missing or invalid SHA-256 for file: " + entry.path);
+        throw std::runtime_error("Missing or invalid verification data for file: " + entry.path);
     }
 
     
@@ -613,7 +586,7 @@ void FileUpdater::ProcessEntry(const ManifestEntry& entry, const fs::path& appli
 
         if (downloadedHash != expectedHash)
         {
-            throw std::runtime_error("SHA-256 verification failed for file: " + entry.path);
+            throw std::runtime_error("Downloaded file verification failed for: " + entry.path);
         }
 
         ReportStatus(statusCallback, MakeStatus(L"Installing ", relativePath));
@@ -740,6 +713,14 @@ UpdateResult FileUpdater::Synchronise(const fs::path& applicationDirectory, cons
             }
 
             result.filesChecked++;
+
+            const std::string pinnedHash = RuntimeDependencies::ExpectedHashForUpdaterPath(entry.path);
+            if (!pinnedHash.empty() && NormaliseHash(entry.sha256) != pinnedHash)
+            {
+                result.filesSkipped++;
+                result.warnings.emplace_back(entry.path + ": ignored an incompatible native dependency from the update manifest");
+                continue;
+            }
 
             try
             {

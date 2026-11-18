@@ -205,6 +205,26 @@ void from_json(const nlohmann::json& j, TargetMode& k) {
 }
 
 // Custom serialization for Globals
+void to_json(nlohmann::json& j, const WidgetWindowSettings& settings) {
+    j = nlohmann::json{
+        {"fixedPosition", settings.fixedPosition},
+        {"useAppOpacity", settings.useAppOpacity},
+        {"detachedX", settings.detachedX},
+        {"detachedY", settings.detachedY},
+        {"hasDetachedPosition", settings.hasDetachedPosition}
+    };
+}
+
+void from_json(const nlohmann::json& j, WidgetWindowSettings& settings) {
+    settings.fixedPosition = j.value("fixedPosition", settings.fixedPosition);
+    settings.useAppOpacity = j.value("useAppOpacity", settings.useAppOpacity);
+    settings.detachedX = std::clamp(j.value("detachedX", settings.detachedX), -10000.0f, 10000.0f);
+    settings.detachedY = std::clamp(j.value("detachedY", settings.detachedY), -10000.0f, 10000.0f);
+    settings.hasDetachedPosition = j.value("hasDetachedPosition", settings.hasDetachedPosition);
+    settings.restoreDetachedPosition = true;
+    settings.positionSavePending = false;
+}
+
 void to_json(nlohmann::json& j, const globals& r) {
     j = nlohmann::json{
         {"appWindowAlpha", r.appWindowAlpha},
@@ -212,7 +232,20 @@ void to_json(nlohmann::json& j, const globals& r) {
         {"appMaximizeWindow", r.appMaximizeWindow},
         {"appHideTitlebar", r.appHideTitlebar},
         {"useMeatyJsonMirror", r.useMeatyJsonMirror},
-        {"dogTagAPIKey", r.dogTagAPIKey}
+        {"dogTagAPIKey", r.dogTagAPIKey},
+        {"widgetWindows", {
+            {"loot", r.lootWidgetWindow},
+            {"exfils", r.exfilWidgetWindow},
+            {"topLoot", r.topLootWidgetWindow},
+            {"players", r.playersWidgetWindow},
+            {"settings", r.settingsWindow},
+            {"fuserSettings", r.fuserSettingsWindow},
+            {"inputDevice", r.inputDeviceWindow},
+            {"lootFilters", r.lootFiltersWindow},
+            {"quests", r.questsWindow},
+            {"watchList", r.watchListWindow},
+            {"debug", r.debugWindow}
+        }}
     };
 }
 
@@ -226,6 +259,32 @@ void from_json(const nlohmann::json& j, globals& r) {
     r.appHideTitlebar = j.value("appHideTitlebar", r.appHideTitlebar);
     r.useMeatyJsonMirror = j.value("useMeatyJsonMirror", true);
     r.dogTagAPIKey = j.value("dogTagAPIKey", r.dogTagAPIKey);
+
+    if (j.contains("widgetWindows") && j["widgetWindows"].is_object()) {
+        const nlohmann::json& widgetWindows = j["widgetWindows"];
+        if (widgetWindows.contains("loot") && widgetWindows["loot"].is_object())
+            r.lootWidgetWindow = widgetWindows["loot"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("exfils") && widgetWindows["exfils"].is_object())
+            r.exfilWidgetWindow = widgetWindows["exfils"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("topLoot") && widgetWindows["topLoot"].is_object())
+            r.topLootWidgetWindow = widgetWindows["topLoot"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("players") && widgetWindows["players"].is_object())
+            r.playersWidgetWindow = widgetWindows["players"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("settings") && widgetWindows["settings"].is_object())
+            r.settingsWindow = widgetWindows["settings"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("fuserSettings") && widgetWindows["fuserSettings"].is_object())
+            r.fuserSettingsWindow = widgetWindows["fuserSettings"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("inputDevice") && widgetWindows["inputDevice"].is_object())
+            r.inputDeviceWindow = widgetWindows["inputDevice"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("lootFilters") && widgetWindows["lootFilters"].is_object())
+            r.lootFiltersWindow = widgetWindows["lootFilters"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("quests") && widgetWindows["quests"].is_object())
+            r.questsWindow = widgetWindows["quests"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("watchList") && widgetWindows["watchList"].is_object())
+            r.watchListWindow = widgetWindows["watchList"].get<WidgetWindowSettings>();
+        if (widgetWindows.contains("debug") && widgetWindows["debug"].is_object())
+            r.debugWindow = widgetWindows["debug"].get<WidgetWindowSettings>();
+    }
 }
 
 // Custom serialization for coloursGlobals

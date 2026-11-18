@@ -56,7 +56,7 @@ static bool TryReadItemList(
     uint64_t listPointer,
     int maximumCount,
     std::vector<T>& output,
-    DmaCacheMode cacheMode = DmaCacheMode::Cached)
+    DmaCacheMode cacheMode = DmaCacheMode::Uncached)
 {
     output.clear();
 
@@ -480,7 +480,6 @@ static bool TryReadWeaponBallistics(
             "Weapon ballistics",
             bytesRead,
             DmaPagingMode::NoPaging,
-            false,
             DmaLockMode::Try) != Memory::TryScatterReadResult::Success ||
         !std::all_of(bytesRead.begin(), bytesRead.end(), [](DWORD bytes)
         {
@@ -715,15 +714,17 @@ bool HandsInfo::update(const Player& playerCache)
                 }
             }
 
-            if (!Utils::valid_pointer(ammoTemplate) ||
-                !weaponVelocityModifierValid)
+            if (gotAmmoTemplate &&
+                (!Utils::valid_pointer(ammoTemplate) ||
+                    !weaponVelocityModifierValid))
             {
                 loadedAmmoTemplate = 0;
                 ballistics = {};
             }
-            else if (ammoChanged ||
+            else if (gotAmmoTemplate &&
+                (ammoChanged ||
                 velocityModifierRefreshed ||
-                !ballistics.IsValid())
+                !ballistics.IsValid()))
             {
                 BallisticsInfo refreshedBallistics{};
 
@@ -734,11 +735,6 @@ bool HandsInfo::update(const Player& playerCache)
                 {
                     ballistics = refreshedBallistics;
                     loadedAmmoTemplate = ammoTemplate;
-                }
-                else
-                {
-                    loadedAmmoTemplate = 0;
-                    ballistics = {};
                 }
             }
         }

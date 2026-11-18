@@ -34,6 +34,8 @@ struct CorpseEquipment
     std::string name;
     int value = 0;
     bool wanted = false;
+
+    bool operator==(const CorpseEquipment&) const = default;
 };
 
 struct ItemLootState

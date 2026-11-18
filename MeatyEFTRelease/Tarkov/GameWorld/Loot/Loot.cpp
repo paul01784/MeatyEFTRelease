@@ -374,20 +374,11 @@ namespace
         return true;
     }
 
-    bool updateCorpseOwnerFromDogTag(LootEntity& lootItem, const std::uint64_t dogTagComponent)
+    bool updateCorpseOwnerFromDogTag(LootEntity& lootItem, const DogTagCache::Entry& dogTag)
     {
-        if (!Utils::valid_pointer(dogTagComponent))
-            return false;
-
         CorpseLootState& corpseState = lootItem.getCorpseState();
-        const std::string profileId = TrimEFT(mem.readUnityStringField(
-            dogTagComponent + sdk::DogtagComponent::ProfileId,
-            256,
-            DmaCacheMode::Uncached));
-        const std::string nickname = TrimEFT(mem.readUnityStringField(
-            dogTagComponent + sdk::DogtagComponent::Nickname,
-            256,
-            DmaCacheMode::Uncached));
+        const std::string profileId = TrimEFT(dogTag.profileId);
+        const std::string nickname = TrimEFT(dogTag.nickname);
 
         if (profileId.empty() && nickname.empty())
             return false;
@@ -1897,8 +1888,10 @@ void loot::classifyCorpseLootItems(std::vector<LootEntity>& items)
         item.shortName = "Corpse";
 
         scanCorpseEquipment(item.m_interactiveClass, item, false);
-        item.getCorpseState().value = calculateCorpseValue(item.getCorpseState());
-        g_dogTagCache.ReadFromCorpse(item.m_interactiveClass);
+        CorpseLootState& corpseState = item.getCorpseState();
+        const int corpseValue = calculateCorpseValue(corpseState);
+        if (corpseState.value != corpseValue)
+            corpseState.value = corpseValue;
     }
 }
 
@@ -2204,8 +2197,8 @@ void loot::updateExistingLootItems(std::vector<LootEntity>& workingCache)
     if (!updateDogTags || workingCache.empty())
         return;
 
-    // A failed dog-tag read can be expensive. Try only one corpse per
-    // update so several bad corpses cannot form one large DMA burst.
+    // Attempt dogtag extraction for one previously unprocessed corpse per update.
+    // The dogtag cache records the attempt, so corpse dogtags are never rescanned.
     for (size_t checked = 0;
         checked < workingCache.size();
         ++checked)
@@ -2213,13 +2206,14 @@ void loot::updateExistingLootItems(std::vector<LootEntity>& workingCache)
         const size_t index =
             dogTagRefreshCursor++ % workingCache.size();
 
-        const LootEntity& item = workingCache[index];
+        LootEntity& item = workingCache[index];
 
         if (item.pendingResolve || item.failed ||
             !LootClassifier::get(item).needsCorpseUpdate())
             continue;
 
-        g_dogTagCache.ReadFromCorpse(item.m_interactiveClass);
+        if (const auto dogTag = g_dogTagCache.ReadFromCorpse(item.m_interactiveClass))
+            updateCorpseOwnerFromDogTag(item, *dogTag);
         break;
     }
 }
@@ -2256,7 +2250,9 @@ void loot::updateCorpseRequirements(std::vector<LootEntity>& workingCache)
         updateCorpseOwnerFromPlayerCache(item, playerCache);
 
         CorpseLootState& corpseState = item.getCorpseState();
-        corpseState.value = calculateCorpseValue(corpseState);
+        const int currentValue = calculateCorpseValue(corpseState);
+        if (corpseState.value != currentValue)
+            corpseState.value = currentValue;
 
         if (now - item.lastCorpseEquipmentUpdate < memoryGlobals::getLootUpdateInterval())
         {
@@ -2265,7 +2261,9 @@ void loot::updateCorpseRequirements(std::vector<LootEntity>& workingCache)
 
         scanCorpseEquipment(item.m_interactiveClass, item, true);
 
-        corpseState.value = calculateCorpseValue(corpseState);
+        const int updatedValue = calculateCorpseValue(corpseState);
+        if (corpseState.value != updatedValue)
+            corpseState.value = updatedValue;
 
         ++updated;
     }
@@ -2321,6 +2319,7 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
     try
     {
         CorpseLootState& corpseState = lootItem.getCorpseState();
+        const bool scanDogTag = !g_dogTagCache.WasCorpseProcessed(interactive);
         const PlayerSnapshot playerCacheSnapshot =
             registeredPlayers.getCacheSnapshot();
         const PlayerCollection& playerCache = *playerCacheSnapshot;
@@ -2403,7 +2402,8 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
                 if (Utils::valid_pointer(read.containedItem))
                 {
                     batch.AddTraced(read.containedItem, sdk::LootItem::Template, read.inventoryTemplate, "read.containedItem+sdk::LootItem::Template");
-                    batch.AddTraced(read.containedItem, sdk::BarterOtherOffsets::Dogtag, read.dogTagComponent, "read.containedItem+sdk::BarterOtherOffsets::Dogtag");
+                    if (scanDogTag)
+                        batch.AddTraced(read.containedItem, sdk::BarterOtherOffsets::Dogtag, read.dogTagComponent, "read.containedItem+sdk::BarterOtherOffsets::Dogtag");
                 }
             }
 
@@ -2450,7 +2450,10 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
                 continue;
 
             if (slotName == "Dogtag")
-                updateCorpseOwnerFromDogTag(lootItem, read.dogTagComponent);
+            {
+                if (const auto dogTag = g_dogTagCache.ReadFromDogTagComponent(interactive, read.dogTagComponent))
+                    updateCorpseOwnerFromDogTag(lootItem, *dogTag);
+            }
 
             if (skipNames.contains(slotName))
                 continue;
@@ -2498,7 +2501,8 @@ void loot::scanCorpseEquipment(uint64_t interactive, LootEntity& lootItem, bool 
             newCorpseEquip.emplace_back(std::move(corpseEq));
         }
 
-        lootItem.getCorpseState().equipment = std::move(newCorpseEquip);
+        if (corpseState.equipment != newCorpseEquip)
+            corpseState.equipment = std::move(newCorpseEquip);
     }
     catch (...)
     {

@@ -2,9 +2,8 @@
 #include "UnityOffsetService.h"
 
 #include "../../Tarkov/SDK/EftOffsets.h"
-#include "../../UI/globals.h"
+#include "../../memory/Memory.h"
 #include "../../external/nlohmann/json.hpp"
-#include "../../libs/vmmdll.h"
 
 #include <Windows.h>
 
@@ -137,54 +136,23 @@ namespace
     class ResolverSession
     {
     public:
-        ~ResolverSession()
-        {
-            if (handle_)
-                VMMDLL_Close(handle_);
-        }
-
         bool Open(std::string& error)
         {
-            std::vector<std::string> storage = {"", "-device", "fpga://algo=0", "-waitinitialize"};
-            const auto baseArgumentCount = storage.size();
-            std::error_code pathError;
-            const auto mapPath = std::filesystem::current_path(pathError) / "mmap.txt";
-            if (!pathError && std::filesystem::is_regular_file(mapPath, pathError))
+            if (!mem.IsDmaOperational())
             {
-                storage.emplace_back("-memmap");
-                storage.emplace_back(mapPath.string());
-            }
-
-            const auto initialise = [](std::vector<std::string>& values)
-            {
-                std::vector<LPCSTR> arguments;
-                arguments.reserve(values.size());
-                for (auto& value : values)
-                    arguments.push_back(value.c_str());
-                return VMMDLL_Initialize(static_cast<DWORD>(arguments.size()), arguments.data());
-            };
-
-            handle_ = initialise(storage);
-            if (!handle_ && storage.size() > baseArgumentCount)
-            {
-                storage.resize(baseArgumentCount);
-                handle_ = initialise(storage);
-            }
-            if (!handle_)
-            {
-                error = "Could not open a temporary DMA session";
+                error = "Connect DMA and wait for EscapeFromTarkov.exe before resolving offsets";
                 return false;
             }
 
             if (!RefreshAll())
             {
-                error = "The temporary DMA session could not complete its initial full cache refresh";
+                error = "The shared DMA session could not complete its initial full cache refresh";
                 return false;
             }
 
             for (int attempt = 0; attempt < 20 && !pid_; ++attempt)
             {
-                (void)VMMDLL_PidGetFromName(handle_, const_cast<LPSTR>(kProcessName), &pid_);
+                pid_ = mem.GetPidFromName(kProcessName);
                 if (!pid_)
                     Sleep(250);
             }
@@ -196,27 +164,22 @@ namespace
 
             if (!RefreshAll())
             {
-                error = "The temporary DMA session could not refresh memory, translations and process information";
+                error = "The shared DMA session could not refresh memory, translations and process information";
                 return false;
             }
             pid_ = 0;
-            (void)VMMDLL_PidGetFromName(handle_, const_cast<LPSTR>(kProcessName), &pid_);
+            pid_ = mem.GetPidFromName(kProcessName);
             if (!pid_)
             {
                 error = "EscapeFromTarkov.exe disappeared during the full refresh";
                 return false;
             }
 
-            PVMMDLL_MAP_MODULEENTRY module = nullptr;
-            const bool found = VMMDLL_Map_GetModuleFromNameU(handle_, pid_, const_cast<LPSTR>(kModuleName), &module, VMMDLL_MODULE_FLAG_NORMAL) != FALSE;
-            if (!found || !module)
+            if (!mem.GetModuleInfo(kModuleName, moduleBase_, moduleSize_))
             {
                 error = "GameAssembly.dll was not available in the target process";
                 return false;
             }
-            moduleBase_ = module->vaBase;
-            moduleSize_ = module->cbImageSize;
-            VMMDLL_MemFree(module);
             if (!IsPointer(moduleBase_) || !moduleSize_)
             {
                 error = "GameAssembly.dll returned invalid module information";
@@ -227,16 +190,14 @@ namespace
 
         bool RefreshAll() const
         {
-            return handle_ && VMMDLL_ConfigSet(handle_, VMMDLL_OPT_REFRESH_ALL, 1) != FALSE;
+            return mem.RefreshAllCaches();
         }
 
         bool Read(std::uint64_t address, void* buffer, std::size_t size) const
         {
-            if (!handle_ || !pid_ || !IsPointer(address) || !buffer || !size || size > MAXDWORD)
+            if (!pid_ || !IsPointer(address) || !buffer || !size || size > MAXDWORD)
                 return false;
-            DWORD bytesRead = 0;
-            return VMMDLL_MemReadEx(handle_, pid_, address, static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytesRead,
-                                    VMMDLL_FLAG_NOCACHE | VMMDLL_FLAG_NOCACHEPUT | VMMDLL_FLAG_ZEROPAD_ON_FAIL) != FALSE && bytesRead == size;
+            return mem.Read(address, buffer, size, static_cast<int>(pid_), DmaCacheMode::Uncached, "EFT offset resolver");
         }
 
         template <typename T> bool Read(std::uint64_t address, T& value) const
@@ -249,28 +210,21 @@ namespace
         {
             if (reads.empty())
                 return true;
-            const auto scatter = VMMDLL_Scatter_Initialize(handle_, pid_, VMMDLL_FLAG_NOCACHE | VMMDLL_FLAG_NOCACHEPUT);
-            if (!scatter)
-                return false;
-            std::vector<DWORD> lengths(reads.size());
-            bool prepared = false;
-            for (std::size_t i = 0; i < reads.size(); ++i)
+            std::vector<Memory::ScatterReadRequest> requests;
+            requests.reserve(reads.size());
+            for (const auto& read : reads)
             {
-                const auto& read = reads[i];
                 if (!IsPointer(read.address) || !read.buffer || !read.size)
                     continue;
-                prepared = VMMDLL_Scatter_PrepareEx(scatter, read.address, read.size, static_cast<PBYTE>(read.buffer), &lengths[i]) != FALSE || prepared;
+                requests.push_back({read.address, read.buffer, read.size});
             }
-            const bool result = prepared && VMMDLL_Scatter_ExecuteRead(scatter) != FALSE;
-            VMMDLL_Scatter_CloseHandle(scatter);
-            return result;
+            return !requests.empty() && mem.ReadScatter(requests.data(), requests.size(), DmaCacheMode::Uncached, "EFT offset resolver", static_cast<int>(pid_));
         }
 
         [[nodiscard]] std::uint64_t ModuleBase() const { return moduleBase_; }
         [[nodiscard]] std::uint64_t ModuleSize() const { return moduleSize_; }
 
     private:
-        VMM_HANDLE handle_{};
         DWORD pid_{};
         std::uint64_t moduleBase_{};
         std::uint64_t moduleSize_{};
@@ -933,9 +887,9 @@ bool EftOffsetService::StartResolve()
         SetStatus("Resolver unavailable", "Wait for the active-raid resolver to finish");
         return false;
     }
-    if (memoryGlobals::dmaConnected.load(std::memory_order_acquire) || memoryGlobals::processFound.load(std::memory_order_acquire))
+    if (!mem.IsDmaOperational())
     {
-        SetStatus("Resolver unavailable while DMA is connected", "Disconnect DMA before resolving offsets");
+        SetStatus("Resolver unavailable", "Connect DMA and wait for EscapeFromTarkov.exe before resolving offsets");
         return false;
     }
 
@@ -952,6 +906,8 @@ bool EftOffsetService::StartResolve()
 
 void EftOffsetService::ResolveWorker()
 {
+    const ScopedDmaPriority dmaPriority(DmaPriority::Background);
+
     struct Finish
     {
         EftOffsetService& service;
@@ -975,7 +931,7 @@ void EftOffsetService::ResolveWorker()
     }
     AppendResolveLog("Unity stage: " + unityService.Status());
 
-    SetStatus("Stage 2/2: opening a fresh managed resolver session...");
+    SetStatus("Stage 2/2: using the shared managed DMA session...");
     ResolverSession session;
     std::string error;
     if (!session.Open(error))

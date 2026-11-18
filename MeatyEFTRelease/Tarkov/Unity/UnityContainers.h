@@ -20,7 +20,7 @@
 //    std::uint64_t _counter;              // 0x08
 //    std::uint64_t _stringId;             // 0x10  (pointer to Unity/Mono string object)
 //
-//    __forceinline std::string ReadString(int maxChars = 128, bool useCache = true) const
+//    __forceinline std::string ReadString(int maxChars = 128, bool useCache = false) const
 //    {
 //        if (_stringId == 0)
 //            return {};
@@ -51,7 +51,7 @@ struct MongoID
     std::string ReadString(
         MemoryT& memory,
         int maxChars = 128,
-        bool useCache = true
+        bool useCache = false
     ) const
     {
         if (_stringId == 0)
@@ -247,7 +247,7 @@ struct UnityArray
         std::uintptr_t addr,
         std::string_view telemetryLabel = "UnityArray",
         int maxAllowedCount = 4096,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached)
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached)
         : baseAddr(addr)
     {
         if (!baseAddr)
@@ -379,7 +379,7 @@ struct UnityArray
     }
 };
 
-static std::string ReadName(uint64_t objectClass, int length = 128, bool useCache = true)
+static std::string ReadName(uint64_t objectClass, int length = 128, bool useCache = false)
 {
     try
     {
@@ -539,7 +539,7 @@ public:
 
     static UnityList<T> Create(
         uint64_t addr,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         int maxAllowedCount = MaxCount)
     {
         UnityList<T> list;

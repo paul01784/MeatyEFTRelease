@@ -1230,16 +1230,19 @@ static void renderMenuSettings()
     static std::string apiKeyError;
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 20.0f, viewport->Pos.y + 20.0f), ImGuiCond_FirstUseEver);
+    menuLayout::PrepareRightToolbarWindow(globals::settingsWindow, "Meaty Settings", ImVec2(900.0f, 720.0f), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(900.0f, 720.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(720.0f, 500.0f), ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f));
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
-    if (!ImGui::Begin("Meaty Settings", &appMenu::appSettings, ImGuiWindowFlags_NoCollapse))
+    const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | menuLayout::WidgetMovementFlags(globals::settingsWindow);
+    if (!ImGui::Begin("Meaty Settings", &appMenu::appSettings, windowFlags))
     {
         ImGui::End();
         return;
     }
+
+    if (menuLayout::RenderWidgetTitleBarControls(globals::settingsWindow))
+        configManager.SaveConfig();
 
     const auto saveIfChanged = [](bool changed)
     {
@@ -1473,10 +1476,11 @@ static void renderMenuSettings()
         const bool resolving = eftResolving || unityResolving;
         const bool dmaConnected = memoryGlobals::dmaConnected.load(std::memory_order_acquire);
         const bool dmaWorking = mem.IsInitRunning();
+        const bool dmaOperational = mem.IsDmaOperational();
 
         if (menuLayout::Section("Full offset scan"))
         {
-            ImGui::BeginDisabled(resolving || dmaConnected || dmaWorking);
+            ImGui::BeginDisabled(resolving || !dmaOperational || dmaWorking);
             if (ImGui::Button("Resolve all offsets", ImVec2(200.0f, 30.0f)))
                 ImGui::OpenPopup("Resolve all offsets?");
             ImGui::EndDisabled();
@@ -1490,15 +1494,15 @@ static void renderMenuSettings()
 
             if (resolving)
                 ImGui::TextUnformatted("Running full offset scan...");
-            else if (dmaConnected || dmaWorking)
-                ImGui::TextDisabled("Disconnect DMA first");
+            else if (!dmaOperational || dmaWorking)
+                ImGui::TextDisabled(dmaConnected ? "Wait for the target process" : "Connect DMA first");
 
             ImGui::SetNextWindowSize(ImVec2(540.0f, 0.0f), ImGuiCond_Appearing);
             if (ImGui::BeginPopupModal("Resolve all offsets?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
             {
                 ImGui::TextWrapped(
-                    "Make sure EscapeFromTarkov.exe is in a fully loaded active raid. Meaty will first resolve and live-validate the Unity offsets. "
-                    "It will then open a fresh session, signature-resolve the IL2CPP TypeInfo table, resolve all wanted SDK fields, update "
+                    "Make sure DMA is connected and EscapeFromTarkov.exe is in a fully loaded active raid. Meaty will use the existing shared DMA session "
+                    "to resolve and live-validate the Unity offsets, signature-resolve the IL2CPP TypeInfo table, resolve all wanted SDK fields, update "
                     "configs/offsets.json and load everything into memory.");
                 ImGui::Spacing();
                 if (ImGui::Button("Resolve", ImVec2(120.0f, 28.0f)))
@@ -2563,15 +2567,18 @@ static void renderDebugWindow()
     };
     static DebugPage activePage = DebugPage::Overview;
     std::string windowNameMain = "Debug";
-    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse;
+    const ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse | menuLayout::WidgetMovementFlags(globals::debugWindow);
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 40.0f, viewport->Pos.y + 40.0f), ImGuiCond_FirstUseEver);
+    menuLayout::PrepareRightToolbarWindow(globals::debugWindow, windowNameMain.c_str(), ImVec2(980.0f, 680.0f), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(980.0f, 680.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(720.0f, 480.0f), ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f));
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetDebug, flagss))
     {
+        if (menuLayout::RenderWidgetTitleBarControls(globals::debugWindow))
+            configManager.SaveConfig();
+
         ImGui::BeginChild("##debugNavigation", ImVec2(0.0f, 42.0f), false);
         const auto nav = [&](const char* icon, const char* label, DebugPage page)
         {
@@ -3196,11 +3203,11 @@ static void renderDebugWindow()
                     ImGui::Text("Reads: %.0f ops/s | %.0f requests/s | %s", traffic.readOperationsPerSecond, traffic.readRequestsPerSecond,
                                 formatDataRate(static_cast<std::size_t>(traffic.readBytesRequestedPerSecond)).c_str());
 
-                    ImGui::Text("Writes: %.0f ops/s | %.0f requests/s | %s", traffic.writeOperationsPerSecond, traffic.writeRequestsPerSecond,
-                                formatDataRate(static_cast<std::size_t>(traffic.writeBytesRequestedPerSecond)).c_str());
+                    ImGui::Text("Failures: %llu read | %llu scatter clear", static_cast<unsigned long long>(traffic.readFailures),
+                                static_cast<unsigned long long>(traffic.scatterClearFailures));
 
-                    ImGui::Text("Failures: %llu read | %llu write | %llu scatter clear", static_cast<unsigned long long>(traffic.readFailures),
-                                static_cast<unsigned long long>(traffic.writeFailures), static_cast<unsigned long long>(traffic.scatterClearFailures));
+                    ImGui::Text("Scatter handles: %llu initialized | %llu reused", static_cast<unsigned long long>(traffic.scatterHandleInitializations),
+                                static_cast<unsigned long long>(traffic.scatterHandleReuses));
 
                     if (ImGui::Button("Reset DMA counters"))
                     {

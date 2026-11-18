@@ -235,7 +235,7 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
     if (!pOpen || !*pOpen)
         return;
 
-    static constexpr ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse;
+    const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | menuLayout::WidgetMovementFlags(globals::inputDeviceWindow);
 
     static bool portsScanned = false;
     static std::vector<MakcuSerialPort> serialPorts;
@@ -256,23 +256,21 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(
-        ImVec2(viewport->Pos.x + 40.0f, viewport->Pos.y + 40.0f),
-        ImGuiCond_FirstUseEver
-    );
+    menuLayout::PrepareRightToolbarWindow(globals::inputDeviceWindow, "MAKCU / FERRUM", ImVec2(800.0f, 640.0f), backgroundAlpha);
     ImGui::SetNextWindowSize(ImVec2(800.0f, 640.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(
         ImVec2(620.0f, 450.0f),
         ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
     );
 
-    ImGui::SetNextWindowBgAlpha(backgroundAlpha);
-
     if (!ImGui::Begin("MAKCU / FERRUM", pOpen, windowFlags))
     {
         ImGui::End();
         return;
     }
+
+    if (menuLayout::RenderWidgetTitleBarControls(globals::inputDeviceWindow) && onConfigChanged)
+        onConfigChanged();
 
     ImGui::BeginChild("##inputDeviceNavigation", ImVec2(0.0f, 42.0f), false);
     const auto nav = [&](const char* icon, const char* label, InputDevicePage page)

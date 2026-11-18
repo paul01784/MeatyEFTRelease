@@ -44,6 +44,9 @@ void from_json(const nlohmann::json& j, keyGlobals& k);
 void to_json(nlohmann::json& j, const globals& k);
 void from_json(const nlohmann::json& j, globals& k);
 
+void to_json(nlohmann::json& j, const WidgetWindowSettings& settings);
+void from_json(const nlohmann::json& j, WidgetWindowSettings& settings);
+
 void to_json(nlohmann::json& j, const LootFilters& k);
 void from_json(const nlohmann::json& j, LootFilters& k);
 

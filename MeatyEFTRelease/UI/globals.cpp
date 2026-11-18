@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.45";
+std::string globals::appVersion = "1.0.46";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -17,6 +17,17 @@ bool globals::appMaximizeWindow = true;
 bool globals::appHideTitlebar = false;
 bool globals::useMeatyJsonMirror = true;
 std::string globals::dogTagAPIKey = "";
+WidgetWindowSettings globals::lootWidgetWindow{};
+WidgetWindowSettings globals::exfilWidgetWindow{};
+WidgetWindowSettings globals::topLootWidgetWindow{};
+WidgetWindowSettings globals::playersWidgetWindow{};
+WidgetWindowSettings globals::settingsWindow{};
+WidgetWindowSettings globals::fuserSettingsWindow{};
+WidgetWindowSettings globals::inputDeviceWindow{};
+WidgetWindowSettings globals::lootFiltersWindow{};
+WidgetWindowSettings globals::questsWindow{};
+WidgetWindowSettings globals::watchListWindow{};
+WidgetWindowSettings globals::debugWindow{};
 
 std::string globals::radarSubText = "";
 
@@ -25,7 +36,7 @@ double globals::taskPlayerPositions = 8;
 double globals::taskPlayersBones = 16;
 double globals::taskStaticVisibility = 250;
 double globals::taskGrenades = 100;
-double globals::taskPlayersEquipment = 2000;
+double globals::taskPlayersEquipment = 1000;
 double globals::taskPlayerMetadata = 250;
 double globals::taskExfil = 5000;
 double globals::taskLoot = 3000;

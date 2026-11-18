@@ -724,19 +724,19 @@ void renderRaidLootWidget()
     if (!appMenu::widgetLoot)
         return;
 
-    ImGui::SetNextWindowPos(
-        menuLayout::TopLeftWidgetPosition(),
-        ImGuiCond_Always);
+    menuLayout::PrepareWidgetWindow(globals::lootWidgetWindow, ImVec2(420.0f, 315.0f), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(420.0f, 315.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
     if (ImGui::Begin(
         "Loot",
         &appMenu::widgetLoot,
         ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoResize))
+        ImGuiWindowFlags_NoResize |
+        menuLayout::WidgetMovementFlags(globals::lootWidgetWindow)))
     {
+        if (menuLayout::RenderWidgetTitleBarControls(globals::lootWidgetWindow))
+            configManager.SaveConfig();
+
         std::vector<LootEntity> lootCache = Loot.getCacheLoot();
         DrawRaidLootWindow(lootCache);
     }
@@ -755,21 +755,16 @@ void renderLootFiltersMenu()
 
     std::string windowNameMain = "Loot Filters";
 
-    static ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse;
+    const ImGuiWindowFlags flagss = ImGuiWindowFlags_NoCollapse | menuLayout::WidgetMovementFlags(globals::lootFiltersWindow);
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(
-        ImVec2(viewport->Pos.x + 30.0f, viewport->Pos.y + 30.0f),
-        ImGuiCond_FirstUseEver
-    );
+    menuLayout::PrepareRightToolbarWindow(globals::lootFiltersWindow, windowNameMain.c_str(), ImVec2(930.0f, 720.0f), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(930.0f, 720.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(
         ImVec2(760.0f, 560.0f),
         ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
     );
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
-
     static bool addFilterPopupOpen = false;
     static bool addLootPopupOpen = false;
 
@@ -777,6 +772,9 @@ void renderLootFiltersMenu()
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::appLootFilters, flagss))
     {
+        if (menuLayout::RenderWidgetTitleBarControls(globals::lootFiltersWindow))
+            configManager.SaveConfig();
+
         constexpr float panelMargin = 10.0f;
         constexpr float topPanelY = 45.0f;
         constexpr float leftPanelWidth = 250.0f;

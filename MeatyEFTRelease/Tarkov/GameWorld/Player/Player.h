@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <vector>
 #include "HandsManager.h"
@@ -130,6 +131,9 @@ struct slots
 	std::string equipName;
 	int price;
 	bool wanted;
+	std::uint8_t consecutiveEmptyReads{ 0 };
+
+	bool operator==(const slots&) const = default;
 };
 
 struct BoneTransformCacheEntry
@@ -173,6 +177,11 @@ public:
 	bool foundDogTagCache;
 	bool dogTagCacheLookupAttempted{ false };
 	bool dogTagApiLookupAttempted{ false };
+	std::string equipmentDogTagProfileId;
+	std::string equipmentDogTagAccountId;
+	std::string equipmentDogTagNickname;
+	int equipmentDogTagLevel{ 0 };
+	bool equipmentDogTagDataComplete{ false };
 
 	PlayerProfileStats profileStats;
 	bool hasProfileData;

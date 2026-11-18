@@ -1235,7 +1235,7 @@ void TarkovDev::buildItemList() {
                         static_cast<char>(std::tolower(character)));
             }
 
-            return normalized.contains("battlepass");
+            return normalized.find("battlepass") != std::string::npos;
         };
 
         if ((hasBattlePassLabel(item.name) ||

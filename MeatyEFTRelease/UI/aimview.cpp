@@ -45,12 +45,39 @@ static bool HasBone(const Player& player, int index)
     }
 
     const glm::vec3& position = player.bonePositions[boneIndex];
-    return std::isfinite(position.x) &&
+    const bool positionValid = std::isfinite(position.x) &&
         std::isfinite(position.y) &&
         std::isfinite(position.z) &&
         (std::fabs(position.x) >= 0.001f ||
             std::fabs(position.y) >= 0.001f ||
             std::fabs(position.z) >= 0.001f);
+
+    if (!positionValid)
+        return false;
+
+    const glm::vec3& anchor = player.location;
+    const bool anchorValid = std::isfinite(anchor.x) &&
+        std::isfinite(anchor.y) &&
+        std::isfinite(anchor.z) &&
+        glm::dot(anchor, anchor) >= 0.01f;
+
+    constexpr float kMaximumBoneDistanceFromPlayer = 6.0f;
+    return !anchorValid ||
+        glm::dot(position - anchor, position - anchor) <=
+        kMaximumBoneDistanceFromPlayer * kMaximumBoneDistanceFromPlayer;
+}
+
+static bool HasRenderableBoneSegment(const Player& player, int first, int second)
+{
+    if (!HasBone(player, first) || !HasBone(player, second))
+        return false;
+
+    const glm::vec3 delta =
+        player.bonePositions[static_cast<size_t>(first)] -
+        player.bonePositions[static_cast<size_t>(second)];
+    constexpr float kMaximumBoneSegmentLength = 2.5f;
+    return glm::dot(delta, delta) <=
+        kMaximumBoneSegmentLength * kMaximumBoneSegmentLength;
 }
 
 static bool HasBones(const Player& player, std::initializer_list<int> indexes)
@@ -766,6 +793,9 @@ bool AimViewWidget::DrawPlayerSkeleton(ImDrawList* drawList, const Player& playe
 
     const auto DrawBoneLine = [&](int firstIndex, int secondIndex,
         const ImVec2& fallbackStart, const ImVec2& fallbackEnd) -> bool {
+            if (!HasRenderableBoneSegment(player, firstIndex, secondIndex))
+                return false;
+
             const size_t first = static_cast<size_t>(firstIndex);
             const size_t second = static_cast<size_t>(secondIndex);
             if (cameraSnapshot && first < player.bonePositions.size() &&

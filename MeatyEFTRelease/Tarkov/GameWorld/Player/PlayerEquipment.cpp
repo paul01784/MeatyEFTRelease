@@ -53,8 +53,8 @@ void RegisteredPlayers::playerEquipment()
         decltype(std::declval<Player&>().playerValue)
         >;
 
-    static constexpr size_t kMaxEquipmentInitPerPass = 2;
-    static constexpr size_t kMaxEquipmentScanPerPass = 1;
+    static constexpr size_t kMaxEquipmentInitPerPass = 1;
+    static constexpr size_t kMaxEquipmentScanPerPass = 5;
 
     static size_t initRoundRobinCursor = 0;
     static size_t scanRoundRobinCursor = 0;
@@ -75,6 +75,9 @@ void RegisteredPlayers::playerEquipment()
         uint64_t instance = 0;
         uint64_t cacheEntryId = 0;
         uint64_t inventoryControllerAddr = 0;
+        bool isPlayer = false;
+        bool requiresDogTagSlot = false;
+        bool requiresSecuredContainerSlot = false;
 
         uint64_t inventoryController = 0;
         uint64_t inventory = 0;
@@ -87,6 +90,8 @@ void RegisteredPlayers::playerEquipment()
         uint64_t instance = 0;
         uint64_t cacheEntryId = 0;
         SlotVec slots;
+        bool requiresDogTagSlot = false;
+        bool requiresSecuredContainerSlot = false;
         bool success = false;
     };
 
@@ -97,7 +102,11 @@ void RegisteredPlayers::playerEquipment()
         bool isPlayer = false;
         bool isPmc = false;
         bool dogTagApiLookupAttempted = false;
-        std::string profileId;
+        bool dogTagDataComplete = false;
+        std::string dogTagProfileId;
+        std::string accountId;
+        std::string nickname;
+        int lvl = 0;
         SlotVec slots;
         Clock::time_point updateTime{};
     };
@@ -124,7 +133,8 @@ void RegisteredPlayers::playerEquipment()
         bool hasProfileUpdate = false;
         bool hasDogTagDataUpdate = false;
         bool dogTagApiLookupAttempted = false;
-        std::string profileId;
+        bool dogTagDataComplete = false;
+        std::string dogTagProfileId;
         std::string accountId;
         std::string nickname;
         int lvl = 0;
@@ -170,11 +180,16 @@ void RegisteredPlayers::playerEquipment()
             }
 
             const size_t total = candidates.size();
+            const size_t playerCount = static_cast<size_t>(std::count_if(candidates.begin(), candidates.end(), [](const InitJob& job)
+                {
+                    return job.isPlayer;
+                }));
+            const size_t eligibleCount = playerCount > 0 ? playerCount : total;
             const size_t count =
-                std::min(kMaxEquipmentInitPerPass, total);
+                std::min(kMaxEquipmentInitPerPass, eligibleCount);
 
             const size_t start =
-                initRoundRobinCursor % total;
+                initRoundRobinCursor % eligibleCount;
 
             batch.reserve(count);
 
@@ -189,7 +204,7 @@ void RegisteredPlayers::playerEquipment()
             }
 
             initRoundRobinCursor =
-                (start + count) % total;
+                (start + count) % eligibleCount;
 
             return batch;
         };
@@ -263,9 +278,17 @@ void RegisteredPlayers::playerEquipment()
             job.cacheEntryId = player.cacheEntryId;
             job.inventoryControllerAddr =
                 player.P_InventoryControllerAddr;
+            job.isPlayer = player.isPlayer;
+            job.requiresDogTagSlot = player.isPlayer && !player.isPlayerScav && !player.isAi && !player.isLocal;
+            job.requiresSecuredContainerSlot = player.isPlayer && !player.isPlayerScav && !player.isAi;
 
             initCandidates.emplace_back(std::move(job));
         }
+
+        std::stable_sort(initCandidates.begin(), initCandidates.end(), [](const InitJob& first, const InitJob& second)
+            {
+                return first.isPlayer && !second.isPlayer;
+            });
 
         std::vector<InitJob> initJobs =
             takeInitBatch(initCandidates);
@@ -391,6 +414,8 @@ void RegisteredPlayers::playerEquipment()
                 InitResult result{};
                 result.instance = job.instance;
                 result.cacheEntryId = job.cacheEntryId;
+                result.requiresDogTagSlot = job.requiresDogTagSlot;
+                result.requiresSecuredContainerSlot = job.requiresSecuredContainerSlot;
 
                 int slotCount = 0;
                 ScatterReadBatch slotCountBatch(mem, DmaCacheMode::Uncached, "Player equipment slot count");
@@ -480,8 +505,23 @@ void RegisteredPlayers::playerEquipment()
                         result.slots.push_back({ name, read.slot });
                 }
 
-                result.success = true;
-                initResults.emplace_back(std::move(result));
+                const bool hasDogTagSlot = std::any_of(result.slots.begin(), result.slots.end(), [](const SlotEntry& slot)
+                    {
+                        return TrimEFT(slot.name) == "Dogtag";
+                    });
+                const bool hasSecuredContainerSlot = std::any_of(result.slots.begin(), result.slots.end(), [](const SlotEntry& slot)
+                    {
+                        return TrimEFT(slot.name) == "SecuredContainer";
+                    });
+                const bool requiredSlotsReady =
+                    (!result.requiresDogTagSlot || hasDogTagSlot) &&
+                    (!result.requiresSecuredContainerSlot || hasSecuredContainerSlot);
+
+                if (!result.slots.empty() && requiredSlotsReady)
+                {
+                    result.success = true;
+                    initResults.emplace_back(std::move(result));
+                }
             }
         }
 
@@ -505,8 +545,8 @@ void RegisteredPlayers::playerEquipment()
                 });
         }
 
-        // Stage 3: Build normal contents-update candidates
-        // Each cached player is due every 10 seconds
+        // Stage 3: Build contents-update candidates. Initialized equipment is due
+        // every 10 seconds; players without an equipment dogtag ID retry every pass.
         std::vector<ScanJob> scanCandidates;
         const PlayerSnapshot scanSnapshot = getCacheSnapshot();
         scanCandidates.reserve(scanSnapshot->size());
@@ -530,8 +570,23 @@ void RegisteredPlayers::playerEquipment()
             if (player._slots.empty())
                 continue;
 
-            if (now - player.lastEquipmentUpdate <
-                player.equipmentUpdateInterval)
+            const bool hasDogTagSlot = std::any_of(player._slots.begin(), player._slots.end(), [](const SlotEntry& slot)
+                {
+                    return TrimEFT(slot.name) == "Dogtag";
+                });
+            const bool dogTagReadPending = player.isPlayer && hasDogTagSlot && !player.equipmentDogTagDataComplete;
+            const bool isPmc = player.isPlayer && !player.isPlayerScav && !player.isAi;
+            const bool containerReadPending = isPmc && std::any_of(player._slots.begin(), player._slots.end(), [](const SlotEntry& slot)
+                {
+                    return TrimEFT(slot.name) == "SecuredContainer" && slot.equipName.empty();
+                });
+            const bool emptySlotConfirmationPending = std::any_of(player._slots.begin(), player._slots.end(), [](const SlotEntry& slot)
+                {
+                    return slot.consecutiveEmptyReads > 0;
+                });
+            const bool equipmentUpdateDue = now - player.lastEquipmentUpdate >= player.equipmentUpdateInterval;
+
+            if (!dogTagReadPending && !containerReadPending && !emptySlotConfirmationPending && !equipmentUpdateDue)
             {
                 continue;
             }
@@ -540,14 +595,35 @@ void RegisteredPlayers::playerEquipment()
             job.instance = player.instance;
             job.cacheEntryId = player.cacheEntryId;
             job.isPlayer = player.isPlayer;
-            job.isPmc = player.isPlayer && !player.isPlayerScav && !player.isAi;
+            job.isPmc = isPmc;
             job.dogTagApiLookupAttempted = player.dogTagApiLookupAttempted;
-            job.profileId = player.profileId;
+            job.dogTagDataComplete = player.equipmentDogTagDataComplete;
+            job.dogTagProfileId = player.equipmentDogTagProfileId;
+            job.accountId = player.equipmentDogTagAccountId;
+            job.nickname = player.equipmentDogTagNickname;
+            job.lvl = player.equipmentDogTagLevel;
             job.slots = player._slots;
             job.updateTime = now;
 
             scanCandidates.emplace_back(std::move(job));
         }
+
+        std::stable_sort(scanCandidates.begin(), scanCandidates.end(), [](const ScanJob& first, const ScanJob& second)
+            {
+                const auto needsDogTagDetails = [](const ScanJob& job)
+                    {
+                        return job.isPlayer && !job.dogTagDataComplete &&
+                            std::any_of(job.slots.begin(), job.slots.end(), [](const SlotEntry& slot)
+                                {
+                                    return TrimEFT(slot.name) == "Dogtag";
+                                });
+                    };
+                const bool firstNeedsDetails = needsDogTagDetails(first);
+                const bool secondNeedsDetails = needsDogTagDetails(second);
+                if (firstNeedsDetails != secondNeedsDetails)
+                    return firstNeedsDetails;
+                return first.isPlayer && !second.isPlayer;
+            });
 
         std::vector<ScanJob> scanJobs =
             takeScanBatch(scanCandidates);
@@ -571,9 +647,18 @@ void RegisteredPlayers::playerEquipment()
             {
                 const SlotEntry& slot =
                     job.slots[slotIndex];
+                const std::string slotName = TrimEFT(slot.name);
 
-                if (job.isPmc &&
-                    slot.name == "Scabbard")
+                if (slotName == "Scabbard")
+                {
+                    continue;
+                }
+
+                // These two slot identities are static for a live player. Keep
+                // retrying until their initial details are complete, then leave
+                // them alone during normal ten-second equipment refreshes.
+                if ((slotName == "SecuredContainer" && !slot.equipName.empty()) ||
+                    (slotName == "Dogtag" && job.dogTagDataComplete))
                 {
                     continue;
                 }
@@ -678,14 +763,15 @@ void RegisteredPlayers::playerEquipment()
 
         if (!scanReadSuccess)
         {
-            logFailure("[PLAYER][EQUIP] Slot-content scatter failed; rebuilding that player's slot cache");
+            logFailure("[PLAYER][EQUIP] Slot-content scatter failed; retaining last good equipment and retrying");
 
             for (const ScanJob& job : scanJobs)
             {
                 queuePlayerEdit(job.instance, job.cacheEntryId, [](Player& player)
                     {
-                        player._slots.clear();
-                        player.equipInited = false;
+                        // A failed periodic read is not evidence that equipment
+                        // disappeared. Preserve the initialized slot cache and
+                        // make the player immediately eligible for another pass.
                         player.lastEquipmentUpdate = {};
                     });
             }
@@ -705,7 +791,11 @@ void RegisteredPlayers::playerEquipment()
             result.cacheEntryId = job.cacheEntryId;
             result.isPmc = job.isPmc;
             result.dogTagApiLookupAttempted = job.dogTagApiLookupAttempted;
-            result.profileId = job.profileId;
+            result.dogTagDataComplete = job.dogTagDataComplete;
+            result.dogTagProfileId = job.dogTagProfileId;
+            result.accountId = job.accountId;
+            result.nickname = job.nickname;
+            result.lvl = job.lvl;
             result.updateTime = job.updateTime;
             result.slots = std::move(job.slots);
             result.playerValue = 0;
@@ -733,58 +823,56 @@ void RegisteredPlayers::playerEquipment()
             SlotEntry& slot =
                 result.slots[read.slotIndex];
 
-            slot.wanted = false;
-            slot.price = 0;
-            slot.equipName.clear();
-
             if (!Utils::valid_pointer(read.containedItem))
-                continue;
-
-            // Dogtag profile ID lookup.
-            if (job.isPlayer &&
-                job.profileId.empty() &&
-                !result.hasProfileUpdate)
             {
-                uint64_t classNamePointer = 0;
-                const std::string className = PlayerMemoryAccess::tryReadChain(
-                    read.containedItem,
-                    { 0x0, 0x10 },
-                    classNamePointer,
-                    DmaCacheMode::Uncached)
-                    ? PlayerMemoryAccess::readUtf8(classNamePointer, 128, DmaCacheMode::Uncached)
-                    : std::string{};
-
-                if (className == "BarterOther")
+                const bool hasLastGoodItem = !slot.equipName.empty() || slot.price > 0 || slot.wanted;
+                if (hasLastGoodItem && slot.consecutiveEmptyReads < 1)
                 {
-                    uint64_t dogtag = 0;
-                    PlayerMemoryAccess::tryReadPointer(
-                        read.containedItem + sdk::BarterOtherOffsets::Dogtag,
-                        dogtag,
-                        DmaCacheMode::Uncached);
+                    ++slot.consecutiveEmptyReads;
+                    continue;
+                }
 
-                    if (Utils::valid_pointer(dogtag))
+                slot.wanted = false;
+                slot.price = 0;
+                slot.equipName.clear();
+                slot.consecutiveEmptyReads = 0;
+                continue;
+            }
+
+            slot.consecutiveEmptyReads = 0;
+
+            // Live-player dogtag data is read from the known equipment slot.
+            if (job.isPlayer && !result.dogTagDataComplete && TrimEFT(slot.name) == "Dogtag")
+            {
+                uint64_t dogtag = 0;
+                PlayerMemoryAccess::tryReadPointer(read.containedItem + sdk::BarterOtherOffsets::Dogtag, dogtag, DmaCacheMode::Uncached);
+
+                if (Utils::valid_pointer(dogtag))
+                {
+                    const std::string profileId = TrimEFT(mem.readUnityStringField(
+                        dogtag + sdk::DogtagComponent::ProfileId, 256, DmaCacheMode::Uncached));
+                    const std::string accountId = TrimEFT(mem.readUnityStringField(
+                        dogtag + sdk::DogtagComponent::AccountId, 256, DmaCacheMode::Uncached));
+                    const std::string nickname = TrimEFT(mem.readUnityStringField(
+                        dogtag + sdk::DogtagComponent::Nickname, 256, DmaCacheMode::Uncached));
+                    const int level = mem.Read<int>(dogtag + sdk::DogtagComponent::Level);
+
+                    if (!profileId.empty())
                     {
-                        const uint64_t profileIdPtr =
-                            dogtag +
-                            sdk::DogtagComponent::ProfileId;
-
-                        if (Utils::valid_pointer(profileIdPtr))
-                        {
-                            uint64_t profileString = 0;
-                            const std::string readString = PlayerMemoryAccess::tryReadPointer(
-                                profileIdPtr,
-                                profileString,
-                                DmaCacheMode::Uncached)
-                                ? PlayerMemoryAccess::readString(profileString, 256)
-                                : std::string{};
-
-                            if (!readString.empty())
-                            {
-                                result.hasProfileUpdate = true;
-                                result.profileId = readString;
-                            }
-                        }
+                        result.hasProfileUpdate = true;
+                        result.dogTagProfileId = profileId;
                     }
+
+                    if (!accountId.empty())
+                        result.accountId = accountId;
+                    if (!nickname.empty())
+                        result.nickname = nickname;
+                    if (level > 0)
+                        result.lvl = level;
+
+                    result.hasDogTagDataUpdate = !accountId.empty() || !nickname.empty() || level > 0;
+                    result.dogTagDataComplete = !result.dogTagProfileId.empty() && !result.accountId.empty() &&
+                        !result.nickname.empty() && result.lvl > 0;
                 }
             }
 
@@ -796,6 +884,10 @@ void RegisteredPlayers::playerEquipment()
 
             if (id.empty())
                 continue;
+
+            slot.wanted = false;
+            slot.price = 0;
+            slot.equipName.clear();
 
             for (const auto& marketItem : marketList)
             {
@@ -872,10 +964,10 @@ void RegisteredPlayers::playerEquipment()
             ScanResult& result = scanResults[index];
             const ScanJob& job = scanJobs[index];
 
-            if (!job.isPlayer || result.profileId.empty())
+            if (!job.isPlayer || result.dogTagProfileId.empty())
                 continue;
 
-            auto apiResult = getCachedDogTagApiResult(result.profileId);
+            auto apiResult = getCachedDogTagApiResult(result.dogTagProfileId);
 
             if (apiResult)
             {
@@ -885,9 +977,9 @@ void RegisteredPlayers::playerEquipment()
             {
                 result.dogTagApiLookupAttempted = true;
 
-                if (tryBeginDogTagApiRequest(result.profileId))
+                if (tryBeginDogTagApiRequest(result.dogTagProfileId))
                 {
-                    const auto fetchedResult = g_DogTagAPI.getByProfile(result.profileId);
+                    const auto fetchedResult = g_DogTagAPI.getByProfile(result.dogTagProfileId);
 
                     if (fetchedResult)
                     {
@@ -895,7 +987,7 @@ void RegisteredPlayers::playerEquipment()
                         cachedResult.accountId = fetchedResult->accountId;
                         cachedResult.nickname = fetchedResult->nickname;
                         cachedResult.level = fetchedResult->lvl;
-                        cacheDogTagApiResult(result.profileId, cachedResult);
+                        cacheDogTagApiResult(result.dogTagProfileId, cachedResult);
                         apiResult = std::move(cachedResult);
                     }
                 }
@@ -905,9 +997,14 @@ void RegisteredPlayers::playerEquipment()
                 continue;
 
             result.hasDogTagDataUpdate = true;
-            result.accountId = apiResult->accountId;
-            result.nickname = apiResult->nickname;
-            result.lvl = apiResult->level;
+            if (!apiResult->accountId.empty())
+                result.accountId = apiResult->accountId;
+            if (!apiResult->nickname.empty())
+                result.nickname = apiResult->nickname;
+            if (apiResult->level > 0)
+                result.lvl = apiResult->level;
+            result.dogTagDataComplete = !result.dogTagProfileId.empty() && !result.accountId.empty() &&
+                !result.nickname.empty() && result.lvl > 0;
         }
 
         //Calculate value for each scanned player
@@ -922,7 +1019,7 @@ void RegisteredPlayers::playerEquipment()
 
                 if (slotName == "SecuredContainer" ||
                     slotName == "Dogtag" ||
-                    (result.isPmc && slotName == "Scabbard"))
+                    slotName == "Scabbard")
                 {
                     continue;
                 }
@@ -951,8 +1048,12 @@ void RegisteredPlayers::playerEquipment()
                     if (source != scanSnapshot->end())
                     {
                         Player updatedPlayer = *source;
-                        if (result.hasProfileUpdate && updatedPlayer.profileId.empty())
-                            updatedPlayer.profileId = result.profileId;
+                        if (!result.dogTagProfileId.empty())
+                        {
+                            updatedPlayer.equipmentDogTagProfileId = result.dogTagProfileId;
+                            if (updatedPlayer.profileId.empty())
+                                updatedPlayer.profileId = result.dogTagProfileId;
+                        }
 
                         if (!result.accountId.empty())
                             updatedPlayer.accountId = result.accountId;
@@ -972,20 +1073,37 @@ void RegisteredPlayers::playerEquipment()
                         if (player.isBTR || player.isDead || player.hasExfiled)
                             return;
 
-                        player._slots = std::move(result.slots);
-                        player.playerValue = result.playerValue;
+                        if (player._slots != result.slots || player.playerValue != result.playerValue)
+                        {
+                            player._slots = std::move(result.slots);
+                            player.playerValue = result.playerValue;
+                        }
                         player.lastEquipmentUpdate = result.updateTime;
                         player.dogTagApiLookupAttempted = result.dogTagApiLookupAttempted;
+                        player.equipmentDogTagDataComplete = result.dogTagDataComplete;
 
-                        if (result.hasProfileUpdate && player.profileId.empty())
-                            player.profileId = std::move(result.profileId);
+                        if (!result.dogTagProfileId.empty())
+                        {
+                            player.equipmentDogTagProfileId = result.dogTagProfileId;
+                            if (player.profileId.empty())
+                                player.profileId = result.dogTagProfileId;
+                        }
 
                         if (result.hasDogTagDataUpdate && !result.accountId.empty())
+                        {
+                            player.equipmentDogTagAccountId = result.accountId;
                             player.accountId = std::move(result.accountId);
+                        }
                         if (result.hasDogTagDataUpdate && !result.nickname.empty())
+                        {
+                            player.equipmentDogTagNickname = result.nickname;
                             player.name = std::move(result.nickname);
+                        }
                         if (result.hasDogTagDataUpdate && result.lvl > 0)
+                        {
+                            player.equipmentDogTagLevel = result.lvl;
                             player.DT_lvl = result.lvl;
+                        }
                     });
             }
         }

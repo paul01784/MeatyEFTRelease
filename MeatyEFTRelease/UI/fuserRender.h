@@ -1199,12 +1199,39 @@ namespace fuserRender
         }
 
         const glm::vec3& position = player.bonePositions[boneIndex];
-        return std::isfinite(position.x) &&
+        const bool positionValid = std::isfinite(position.x) &&
             std::isfinite(position.y) &&
             std::isfinite(position.z) &&
             (std::fabs(position.x) >= 0.001f ||
                 std::fabs(position.y) >= 0.001f ||
                 std::fabs(position.z) >= 0.001f);
+
+        if (!positionValid)
+            return false;
+
+        const glm::vec3& anchor = player.location;
+        const bool anchorValid = std::isfinite(anchor.x) &&
+            std::isfinite(anchor.y) &&
+            std::isfinite(anchor.z) &&
+            glm::dot(anchor, anchor) >= 0.01f;
+
+        constexpr float kMaximumBoneDistanceFromPlayer = 6.0f;
+        return !anchorValid ||
+            glm::dot(position - anchor, position - anchor) <=
+            kMaximumBoneDistanceFromPlayer * kMaximumBoneDistanceFromPlayer;
+    }
+
+    static inline bool HasRenderableBoneSegment(const Player& player, int first, int second)
+    {
+        if (!HasBone(player, first) || !HasBone(player, second))
+            return false;
+
+        const glm::vec3 delta =
+            player.bonePositions[static_cast<size_t>(first)] -
+            player.bonePositions[static_cast<size_t>(second)];
+        constexpr float kMaximumBoneSegmentLength = 2.5f;
+        return glm::dot(delta, delta) <=
+            kMaximumBoneSegmentLength * kMaximumBoneSegmentLength;
     }
 
     static inline void DrawPlayerSkeleton(
@@ -1220,8 +1247,7 @@ namespace fuserRender
                 const size_t secondBone = static_cast<size_t>(b);
 
                 if (!g_frameManagedCameraSnapshot ||
-                    !HasBone(player, a) ||
-                    !HasBone(player, b))
+                    !HasRenderableBoneSegment(player, a, b))
                 {
                     return;
                 }
@@ -1279,6 +1305,42 @@ namespace fuserRender
         }
 
         return true;
+    }
+
+    static inline bool ProjectPlayerMarkerAnchor(
+        const Player& player,
+        glm::vec2& screenPosition,
+        bool& rootVisible)
+    {
+        rootVisible = ProjectWorldToScreen(player.location, &screenPosition);
+        if (rootVisible)
+            return true;
+
+        // At close range a magnified ADS projection commonly places the feet
+        // and root below the viewport while the torso is still plainly visible.
+        // Keep the player marker attached to the first visible body anchor.
+        constexpr std::array<int, 8> fallbackBones =
+        {
+            boneListIndexes::Spine,
+            boneListIndexes::Neck,
+            boneListIndexes::Head,
+            boneListIndexes::Pelvis,
+            boneListIndexes::LThigh,
+            boneListIndexes::RThigh,
+            boneListIndexes::LFoot,
+            boneListIndexes::RFoot
+        };
+
+        for (const int bone : fallbackBones)
+        {
+            if (!HasBone(player, bone))
+                continue;
+
+            if (ProjectWorldToScreen(player.bonePositions[static_cast<size_t>(bone)], &screenPosition))
+                return true;
+        }
+
+        return false;
     }
 
     static inline void RenderAmmoHud()
@@ -1467,8 +1529,8 @@ namespace fuserRender
                 }
 
                 glm::vec2 screenPos{};
-                const bool rootVisible = ProjectWorldToScreen(
-                    player.location, &screenPos);
+                bool rootVisible = false;
+                const bool markerVisible = ProjectPlayerMarkerAnchor(player, screenPos, rootVisible);
 
                 const float distanceOpacity = espGlobals::getFuserDistanceOpacity(frameDistance);
                 const glm::vec4 playerColour = WithOpacityMultiplier(PlayerAppearance::resolveColour(player), distanceOpacity);
@@ -1478,7 +1540,7 @@ namespace fuserRender
 
                 if (player.isBTR)
                 {
-                    if (rootVisible)
+                    if (markerVisible)
                     {
                         RenderFuserBtrMarker(screenPos, playerColour,
                             GetBtrPassengerColours(player, cache, distanceOpacity));
@@ -1487,7 +1549,7 @@ namespace fuserRender
                     continue;
                 }
 
-                if (rootVisible)
+                if (markerVisible)
                 {
                     std::string cleanName = CleanText(player.name);
 
@@ -1584,8 +1646,7 @@ namespace fuserRender
                 // ----------------------------
                 // Head dot
                 // ----------------------------
-                if (rootVisible &&
-                    espGlobals::drawHeadDot &&
+                if (espGlobals::drawHeadDot &&
                     HasBones(player, { boneListIndexes::Head }))
                 {
                     glm::vec2 headPos{};
@@ -1594,23 +1655,21 @@ namespace fuserRender
                         player.bonePositions[boneListIndexes::Head],
                         &headPos))
                     {
-                        if (screenPos.x != 0.0f && screenPos.y != 0.0f)
-                        {
-                            const float padding = 2.0f;
-                            const float height = screenPos.y - headPos.y + padding;
-                            float radius = (height / 12) * (espGlobals::headDotSize / 5);
-                            if (radius < 1.0f) radius = 1.0f;
-                            float verticalOffset = height / 20.0f;
-                            glm::vec2 circleCenter = { headPos.x, headPos.y - verticalOffset };
-                            g_DxWindow.DrawCircle(
-                                circleCenter.x,
-                                circleCenter.y,
-                                radius,
-                                playerColour,
-                                1.0f
-                            );
-
-                        }
+                        const float projectedHeight = rootVisible
+                            ? std::fabs(screenPos.y - headPos.y) + 2.0f
+                            : 0.0f;
+                        const float radius = (std::max)(1.0f,
+                            rootVisible
+                                ? (projectedHeight / 12.0f) * (espGlobals::headDotSize / 5.0f)
+                                : espGlobals::headDotSize / 5.0f);
+                        const float verticalOffset = rootVisible ? projectedHeight / 20.0f : 0.0f;
+                        g_DxWindow.DrawCircle(
+                            headPos.x,
+                            headPos.y - verticalOffset,
+                            radius,
+                            playerColour,
+                            1.0f
+                        );
 
                     }
                 }
@@ -1618,39 +1677,42 @@ namespace fuserRender
                 // ----------------------------
                 // Player box
                 // ----------------------------
-                if (rootVisible &&
-                    espGlobals::drawBoxPlayers &&
-                    HasBones(player, { boneListIndexes::Head }))
+                if (espGlobals::drawBoxPlayers &&
+                    HasBones(player, { boneListIndexes::Head }) &&
+                    g_frameManagedCameraSnapshot)
                 {
-                    glm::vec2 screenHead{};
-
-                    if (ProjectWorldToScreen(
+                    CameraScreenSegment bodySegment{};
+                    if (CameraManager::worldSegmentToScreen(
+                        *g_frameManagedCameraSnapshot,
                         player.bonePositions[boneListIndexes::Head],
-                        &screenHead))
+                        player.location,
+                        espGlobals::gameRes.x,
+                        espGlobals::gameRes.y,
+                        bodySegment))
                     {
-                        if (screenPos.x != 0.0f && screenPos.y != 0.0f)
+                        const float padding = 2.0f;
+                        const float top = (std::min)(bodySegment.start.y, bodySegment.end.y);
+                        const float bottom = (std::max)(bodySegment.start.y, bodySegment.end.y);
+                        const float height = bottom - top + padding;
+                        const float width = (height / 2.0f) + padding;
+
+                        if (height > 4.0f && width > 2.0f)
                         {
-                            const float padding = 2.0f;
-                            const float height = screenPos.y - screenHead.y + padding;
-                            const float width = (height / 2.0f) + padding;
-
-                            if (height > 4.0f && width > 2.0f)
+                            const float centerX = (bodySegment.start.x + bodySegment.end.x) * 0.5f;
+                            const glm::vec2 boxStart =
                             {
-                                const glm::vec2 boxStart =
-                                {
-                                    screenPos.x - width * 0.5f - padding,
-                                    screenPos.y - height
-                                };
+                                centerX - width * 0.5f - padding,
+                                top
+                            };
 
-                                DrawCornerBox(
-                                    boxStart.x,
-                                    boxStart.y,
-                                    width,
-                                    height,
-                                    playerColour,
-                                    1.0f
-                                );
-                            }
+                            DrawCornerBox(
+                                boxStart.x,
+                                boxStart.y,
+                                width,
+                                height,
+                                playerColour,
+                                1.0f
+                            );
                         }
                     }
                 }

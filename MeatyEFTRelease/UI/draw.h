@@ -2,6 +2,7 @@
 #include "../Tarkov/GameWorld/QuestManager.h"
 #include "text.h"
 #include "menuLayout.h"
+#include "config.h"
 #include "../Core/Utilities.h"
 #include "../Tarkov/GameWorld/RegisteredPlayers.h"
 #include "../Tarkov/GameWorld/Explosives/ExplosiveManager.h"
@@ -307,10 +308,10 @@ void drawWidgetTopLoot()
 
     const PlayerLocalStateSnapshot localState = registeredPlayers.getLocalStateSnapshot();
     const std::string windowNameMain = "Top Loot";
-    static ImGuiWindowFlags flags =
+    const ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoResize;
+        ImGuiWindowFlags_NoResize |
+        menuLayout::WidgetMovementFlags(globals::topLootWidgetWindow);
 
     std::vector<LootEntity> lootCache = Loot.getCacheLoot();
     
@@ -415,12 +416,14 @@ void drawWidgetTopLoot()
     float dynamicHeight = padding + headerHeight + (visibleRows * rowHeight);
     dynamicHeight = ImClamp(dynamicHeight, 120.0f, 350.0f);
 
-    ImGui::SetNextWindowPos(menuLayout::TopLeftWidgetPosition(), ImGuiCond_Always);
+    menuLayout::PrepareWidgetWindow(globals::topLootWidgetWindow, ImVec2(fixedWidth, dynamicHeight), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(fixedWidth, dynamicHeight), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetTopLoot, flags))
     {
+        if (menuLayout::RenderWidgetTitleBarControls(globals::topLootWidgetWindow))
+            configManager.SaveConfig();
+
         if (ImGui::BeginTable("##toploot", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
         {
             ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 32.0f);
@@ -543,10 +546,10 @@ void drawWidgetPlayers()
         return;
 
     const std::string windowNameMain = "Active Players";
-    static ImGuiWindowFlags flags =
+    const ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoResize;
+        ImGuiWindowFlags_NoResize |
+        menuLayout::WidgetMovementFlags(globals::playersWidgetWindow);
 
     const PlayerSnapshot playerSnapshotHandle =
         registeredPlayers.getCacheSnapshot();
@@ -575,13 +578,14 @@ void drawWidgetPlayers()
         visibleRows++;
     }
 
-    constexpr int maxVisibleRows = 12;
+    constexpr int maxVisibleRows = 8;
     const int tableRows = std::clamp(visibleRows, 1, maxVisibleRows);
-    const float fixedWidth = 750.0f;
+    const float fixedWidth = 880.0f;
     const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
     const float tableHeight =
         ImGui::GetFrameHeightWithSpacing() +
         (tableRows * rowHeight) +
+        rowHeight +
         6.0f;
     const float dynamicHeight =
         ImGui::GetFrameHeight() +
@@ -589,12 +593,14 @@ void drawWidgetPlayers()
         ImGui::GetStyle().ItemSpacing.y +
         tableHeight;
 
-    ImGui::SetNextWindowPos(menuLayout::TopLeftWidgetPosition(), ImGuiCond_Always);
+    menuLayout::PrepareWidgetWindow(globals::playersWidgetWindow, ImVec2(fixedWidth, dynamicHeight), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(fixedWidth, dynamicHeight), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetPlayers, flags))
     {
+        if (menuLayout::RenderWidgetTitleBarControls(globals::playersWidgetWindow))
+            configManager.SaveConfig();
+
         // Persistent edit buffers per player instance
         static std::unordered_map<uint64_t, std::array<char, 16>> groupEditBuffers;
 
@@ -612,13 +618,13 @@ void drawWidgetPlayers()
             ImVec2(0.0f, tableHeight)))
         {
             ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 32.0f);
-            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-            ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthFixed, 125.0f);
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 145.0f);
+            ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthFixed, 165.0f);
             ImGui::TableSetupColumn("LvL", ImGuiTableColumnFlags_WidthFixed, 32.0f);
-            ImGui::TableSetupColumn("KD(PKD)", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+            ImGui::TableSetupColumn("KD(PKD)", ImGuiTableColumnFlags_WidthFixed, 65.0f);
             ImGui::TableSetupColumn("Hours", ImGuiTableColumnFlags_WidthFixed, 50.0f);
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-            ImGui::TableSetupColumn("Container", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn("Container", ImGuiTableColumnFlags_WidthFixed, 110.0f);
             ImGui::TableSetupColumn("Distance", ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableHeadersRow();
 
@@ -716,10 +722,14 @@ void drawWidgetPlayers()
                 else
                     ImGui::TextUnformatted(cache.name.c_str());
 
-                if (ImGui::IsItemHovered() && !cache.profileId.empty())
+                if (ImGui::IsItemHovered() &&
+                    (!cache.profileId.empty() || !cache.equipmentDogTagProfileId.empty()))
                 {
                     ImGui::BeginTooltip();
-                    ImGui::Text("Memory ProfileID: %s", cache.profileId.c_str());
+                    if (!cache.equipmentDogTagProfileId.empty())
+                        ImGui::Text("Equipment ProfileID: %s", cache.equipmentDogTagProfileId.c_str());
+                    if (!cache.profileId.empty())
+                        ImGui::Text("Player ProfileID: %s", cache.profileId.c_str());
                     ImGui::EndTooltip();
                 }
 
@@ -765,8 +775,11 @@ void drawWidgetPlayers()
 
                     if (slotn == "SecuredContainer")
                     {
-                        ImGui::TextUnformatted(slot.equipName.c_str());
-                        foundContainer = true;
+                        if (!slot.equipName.empty())
+                        {
+                            ImGui::TextUnformatted(slot.equipName.c_str());
+                            foundContainer = true;
+                        }
                         break;
                     }
                 }
@@ -1231,15 +1244,13 @@ void drawWidgetExfils()
         return;
 
     std::string windowNameMain = "Raid Extracts";
-    static ImGuiWindowFlags flagss =
+    const ImGuiWindowFlags flagss =
         ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoResize;
+        ImGuiWindowFlags_NoResize |
+        menuLayout::WidgetMovementFlags(globals::exfilWidgetWindow);
 
-    ImGui::SetNextWindowPos(menuLayout::TopLeftWidgetPosition(), ImGuiCond_Always);
+    menuLayout::PrepareWidgetWindow(globals::exfilWidgetWindow, ImVec2(400.0f, 200.0f), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(400, 200), ImGuiCond_Always);
-
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
     const ExfilCacheSnapshot exfilSnapshot =
         exfil.getCacheExfilSnapshot();
@@ -1247,6 +1258,8 @@ void drawWidgetExfils()
 
     if (ImGui::Begin(windowNameMain.c_str(), &appMenu::widgetExfil, flagss))
     {
+        if (menuLayout::RenderWidgetTitleBarControls(globals::exfilWidgetWindow))
+            configManager.SaveConfig();
 
 
 

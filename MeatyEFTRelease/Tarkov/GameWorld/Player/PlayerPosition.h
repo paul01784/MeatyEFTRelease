@@ -17,10 +17,8 @@ namespace PlayerPosition
                 return false;
             }
 
-            constexpr float epsilon = 0.001f;
-            return std::fabs(position.x) >= epsilon ||
-                std::fabs(position.y) >= epsilon ||
-                std::fabs(position.z) >= epsilon;
+            constexpr float kMinimumWorldDistanceSquared = 0.01f;
+            return glm::dot(position, position) >= kMinimumWorldDistanceSquared;
         };
 
         const auto getBonePosition = [&player](boneListIndexes bone)
@@ -35,22 +33,18 @@ namespace PlayerPosition
         const glm::vec3 base = getBonePosition(boneListIndexes::Base);
         const glm::vec3 leftFoot = getBonePosition(boneListIndexes::LFoot);
         const glm::vec3 rightFoot = getBonePosition(boneListIndexes::RFoot);
+        const bool baseUsable = isUsablePosition(base);
+        const bool feetUsable = isUsablePosition(leftFoot) && isUsablePosition(rightFoot);
 
-        if (isUsablePosition(base))
-            return base;
-
-        if (isUsablePosition(leftFoot) && isUsablePosition(rightFoot))
+        if (feetUsable)
         {
-            const float footSeparation = glm::distance(leftFoot, rightFoot);
-            if (footSeparation > 0.01f && footSeparation <= 5.5f)
-                return (leftFoot + rightFoot) * 0.5f;
+            const glm::vec3 feetCenter = (leftFoot + rightFoot) * 0.5f;
+            if (!baseUsable || glm::distance(base, feetCenter) > 5.0f)
+                return feetCenter;
         }
 
-        if (isUsablePosition(leftFoot))
-            return leftFoot;
-
-        if (isUsablePosition(rightFoot))
-            return rightFoot;
+        if (baseUsable)
+            return base;
 
         return glm::vec3(0.0f);
     }

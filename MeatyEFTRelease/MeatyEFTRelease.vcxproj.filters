@@ -70,6 +70,9 @@
     <Filter Include="Core\Offsets">
       <UniqueIdentifier>{9A2F075E-1488-4E70-9D02-B069315076D1}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Core\Dependencies">
+      <UniqueIdentifier>{CC6F8389-CE79-4CBB-84F5-0DF1E78D62F3}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Tarkov\SDK">
       <UniqueIdentifier>{CE30CBB0-156E-4A3C-9042-DC53679A0C12}</UniqueIdentifier>
     </Filter>
@@ -457,7 +460,6 @@
     <ClInclude Include="memory\ScatterReadBatch.h" />
     <ClInclude Include="memory\pch.h" />
     <ClInclude Include="memory\Registry.h" />
-    <ClInclude Include="memory\Shellcode.h" />
     <ClInclude Include="memory\structs.h" />
     <ClInclude Include="external\curl\curl.h" />
     <ClInclude Include="external\curl\curlver.h" />
@@ -488,6 +490,12 @@
     </ClInclude>
     <ClInclude Include="Core\Offsets\UnityOffsetService.h">
       <Filter>Core\Offsets</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Dependencies\RuntimeDependencies.h">
+      <Filter>Core\Dependencies</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\Dependencies\MemProcFSBundle.generated.h">
+      <Filter>Core\Dependencies</Filter>
     </ClInclude>
     <ClInclude Include="Tarkov\Unity\GameObjectManager.h">
       <Filter>Tarkov\Unity</Filter>
@@ -653,6 +661,9 @@
     <ClCompile Include="Core\Offsets\UnityOffsetService.cpp">
       <Filter>Core\Offsets</Filter>
     </ClCompile>
+    <ClCompile Include="Core\Dependencies\RuntimeDependencies.cpp">
+      <Filter>Core\Dependencies</Filter>
+    </ClCompile>
     <ClCompile Include="UI\debug.cpp">
       <Filter>UI</Filter>
     </ClCompile>
@@ -698,7 +709,6 @@
     <ClCompile Include="memory\InputManager.cpp" />
     <ClCompile Include="memory\Memory.cpp" />
     <ClCompile Include="memory\Registry.cpp" />
-    <ClCompile Include="memory\Shellcode.cpp" />
     <ClCompile Include="UI\config.cpp">
       <Filter>UI</Filter>
     </ClCompile>
@@ -993,7 +1003,6 @@
     <None Include="external\glm\gtx\vector_angle.inl" />
     <None Include="external\glm\gtx\vector_query.inl" />
     <None Include="external\glm\gtx\wrap.inl" />
-    <None Include="libs\info.db" />
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>

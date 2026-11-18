@@ -30,7 +30,7 @@ namespace
     constexpr auto kCameraRefreshInterval = std::chrono::seconds(3);
     constexpr std::uint8_t kOpticMatrixFailureLimit = 3;
     constexpr auto kCameraReadFailureGrace = std::chrono::milliseconds(750);
-    constexpr auto kMaximumCameraSampleGap = std::chrono::milliseconds(16);
+    constexpr auto kMaximumCameraSampleGap = std::chrono::milliseconds(4);
     constexpr auto kAllCamerasRetryInterval = std::chrono::seconds(3);
     constexpr float kMinimumOpticMagnification = 1.05f;
     constexpr float kScopeFovScaleTolerance = 1.25f;
@@ -1369,7 +1369,6 @@ bool CameraManager::readCameraSample(
         "Camera matrices",
         bytesRead,
         DmaPagingMode::NoPaging,
-        false,
         waitForDma ? DmaLockMode::Wait : DmaLockMode::Try);
     if (result == Memory::TryScatterReadResult::Busy)
     {
@@ -1377,7 +1376,7 @@ bool CameraManager::readCameraSample(
             *busy = true;
         return false;
     }
-    if (result != Memory::TryScatterReadResult::Success ||
+    if ((result != Memory::TryScatterReadResult::Success && result != Memory::TryScatterReadResult::Incomplete) ||
         bytesRead[0] != sizeof(matrix) ||
         !viewProjectionLooksValid(matrix))
         return false;

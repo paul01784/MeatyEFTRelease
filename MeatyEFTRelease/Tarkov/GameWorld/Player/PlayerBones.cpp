@@ -24,6 +24,13 @@
 
 namespace
 {
+    constexpr uint64_t kMinimumUnityAllocation = 0x1'0000'0000ULL;
+
+    bool IsPlausibleUnityPointer(uint64_t pointer)
+    {
+        return pointer >= kMinimumUnityAllocation && Utils::valid_pointer(pointer);
+    }
+
     void EnsureTransformCacheShape(Player& player);
     bool HasAnyBonePointers(const Player& player);
     bool HasAnchorBonePointer(const Player& player);
@@ -52,7 +59,7 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
         player.bonePositions.resize(player.boneList.size(), glm::vec3(0.0f));
 
     uint64_t resolvedMatrixPtr = 0;
-    if (!PlayerClassifier::get(player).tryResolveBoneMatrix(player, resolvedMatrixPtr) || !Utils::valid_pointer(resolvedMatrixPtr))
+    if (!PlayerClassifier::get(player).tryResolveBoneMatrix(player, resolvedMatrixPtr) || !IsPlausibleUnityPointer(resolvedMatrixPtr))
     {
         player.minimalBonePointersReady = HasMinimalBonePointers(player);
         player.fullBonePointersReady = HasFullBonePointers(player);
@@ -79,7 +86,8 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
 
     std::vector<DWORD> firstBytes(firstRequests.size(), 0);
     const DmaLockMode lockMode = waitForDma ? DmaLockMode::Wait : DmaLockMode::Try;
-    if (mem.TryReadScatter(firstRequests.data(), firstRequests.size(), DmaCacheMode::Uncached, "Player bone pointers", firstBytes, DmaPagingMode::NoPaging, false, lockMode) != Memory::TryScatterReadResult::Success)
+    const auto firstResult = mem.TryReadScatter(firstRequests.data(), firstRequests.size(), DmaCacheMode::Uncached, "Player bone pointers", firstBytes, DmaPagingMode::NoPaging, lockMode);
+    if (firstResult == Memory::TryScatterReadResult::Busy || firstResult == Memory::TryScatterReadResult::Failed)
     {
         player.nextBonePointerResolve = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
         return false;
@@ -93,7 +101,7 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
 
     for (size_t index = 0; index < firstLinks.size(); ++index)
     {
-        if (firstBytes[index] != sizeof(uint64_t) || !Utils::valid_pointer(firstLinks[index]))
+        if (firstBytes[index] != sizeof(uint64_t) || !IsPlausibleUnityPointer(firstLinks[index]))
             continue;
 
         secondIndexes.emplace_back(index);
@@ -107,7 +115,8 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
     }
 
     std::vector<DWORD> secondBytes(secondRequests.size(), 0);
-    if (mem.TryReadScatter(secondRequests.data(), secondRequests.size(), DmaCacheMode::Uncached, "Player bone transforms", secondBytes, DmaPagingMode::NoPaging, false, lockMode) != Memory::TryScatterReadResult::Success)
+    const auto secondResult = mem.TryReadScatter(secondRequests.data(), secondRequests.size(), DmaCacheMode::Uncached, "Player bone transforms", secondBytes, DmaPagingMode::NoPaging, lockMode);
+    if (secondResult == Memory::TryScatterReadResult::Busy || secondResult == Memory::TryScatterReadResult::Failed)
     {
         player.nextBonePointerResolve = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
         return false;
@@ -120,7 +129,7 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
             continue;
 
         const size_t boneIndex = secondIndexes[requestIndex];
-        candidatePointers[boneIndex] = Utils::valid_pointer(resolvedBonePtrs[boneIndex]) ? resolvedBonePtrs[boneIndex] : 0;
+        candidatePointers[boneIndex] = IsPlausibleUnityPointer(resolvedBonePtrs[boneIndex]) ? resolvedBonePtrs[boneIndex] : 0;
     }
 
     Player candidate = player;
@@ -299,11 +308,10 @@ namespace
                 label,
                 bytesRead,
                 DmaPagingMode::NoPaging,
-                false,
                 waitForDma ? DmaLockMode::Wait : DmaLockMode::Try
             );
 
-            if (result != Memory::TryScatterReadResult::Success)
+            if (result == Memory::TryScatterReadResult::Busy || result == Memory::TryScatterReadResult::Failed)
             {
                 allComplete = false;
                 start = end;
@@ -341,15 +349,6 @@ namespace
             static_cast<int>(boneListIndexes::RFoot);
     }
 
-    static void ClearOptionalBonePositions(Player& player)
-    {
-        for (size_t index = 0; index < player.bonePositions.size(); ++index)
-        {
-            if (!IsMinimalBoneSlot(static_cast<int>(index)))
-                player.bonePositions[index] = glm::vec3(0.0f);
-        }
-    }
-
     static bool IsUsableBonePosition(
         const glm::vec3& position)
     {
@@ -360,11 +359,8 @@ namespace
             return false;
         }
 
-        constexpr float epsilon = 0.001f;
-
-        return std::fabs(position.x) >= epsilon ||
-            std::fabs(position.y) >= epsilon ||
-            std::fabs(position.z) >= epsilon;
+        constexpr float kMinimumWorldDistanceSquared = 0.01f;
+        return glm::dot(position, position) >= kMinimumWorldDistanceSquared;
     }
 
     static bool IsPlausibleBoneWorldPosition(
@@ -1057,7 +1053,6 @@ namespace
             bool fullRequested = false;
             std::vector<glm::vec3> positions;
             std::vector<BoneTransformCacheEntry> transformCache;
-            std::vector<uint8_t> sampledSlots;
             std::vector<uint8_t> successfulSlots;
         };
 
@@ -1079,7 +1074,6 @@ namespace
                 pose.cacheEntryId = player.cacheEntryId;
                 pose.positions.resize(player.bonePositions.size(), glm::vec3(0.0f));
                 pose.transformCache = player.boneTransformCache;
-                pose.sampledSlots.resize(player.bonePositions.size(), 0);
                 pose.successfulSlots.resize(player.bonePositions.size(), 0);
                 poses.emplace_back(std::move(pose));
                 return poses.back();
@@ -1136,7 +1130,6 @@ namespace
 
             PendingPose& pose = getPose(*player);
             pose.fullRequested = pose.fullRequested || read.fullPose;
-            pose.sampledSlots[boneIndex] = 1;
 
             if (!read.hasPosition ||
                 !IsPlausibleBoneWorldPosition(read.position))
@@ -1166,54 +1159,19 @@ namespace
             const size_t leftFootIndex = static_cast<size_t>(boneListIndexes::LFoot);
             const size_t rightFootIndex = static_cast<size_t>(boneListIndexes::RFoot);
 
-            const bool anchorSampled =
-                (baseIndex < pose.sampledSlots.size() && pose.sampledSlots[baseIndex]) ||
-                (leftFootIndex < pose.sampledSlots.size() && pose.sampledSlots[leftFootIndex]) ||
-                (rightFootIndex < pose.sampledSlots.size() && pose.sampledSlots[rightFootIndex]);
-
-            if (!anchorSampled)
-                continue;
-
-            if (pose.fullRequested)
-            {
-                std::fill(
-                    player->bonePositions.begin(),
-                    player->bonePositions.end(),
-                    glm::vec3(0.0f));
-            }
-            else
-            {
-                for (const int slot : kMinimalBoneSlots)
-                {
-                    if (slot >= 0 && static_cast<size_t>(slot) < player->bonePositions.size())
-                        player->bonePositions[static_cast<size_t>(slot)] = glm::vec3(0.0f);
-                }
-            }
-
             const bool baseRead = baseIndex < pose.successfulSlots.size() && pose.successfulSlots[baseIndex];
             const bool leftFootRead = leftFootIndex < pose.successfulSlots.size() && pose.successfulSlots[leftFootIndex];
             const bool rightFootRead = rightFootIndex < pose.successfulSlots.size() && pose.successfulSlots[rightFootIndex];
 
+            if (!baseRead && (!leftFootRead || !rightFootRead))
+                continue;
+
             if (baseRead)
                 player->bonePositions[baseIndex] = pose.positions[baseIndex];
 
-            bool acceptLeftFoot = leftFootRead;
-            bool acceptRightFoot = rightFootRead;
-
-            if (baseRead)
-            {
-                acceptLeftFoot = leftFootRead && AreBonesNear(pose.positions[baseIndex], pose.positions[leftFootIndex]);
-                acceptRightFoot = rightFootRead && AreBonesNear(pose.positions[baseIndex], pose.positions[rightFootIndex]);
-            }
-            else if (leftFootRead && rightFootRead &&
-                !AreBonesNear(pose.positions[leftFootIndex], pose.positions[rightFootIndex]))
-            {
-                acceptRightFoot = false;
-            }
-
-            if (acceptLeftFoot)
+            if (leftFootRead)
                 player->bonePositions[leftFootIndex] = pose.positions[leftFootIndex];
-            if (acceptRightFoot)
+            if (rightFootRead)
                 player->bonePositions[rightFootIndex] = pose.positions[rightFootIndex];
 
             for (const int slot : kMinimalBoneSlots)
@@ -1249,12 +1207,14 @@ namespace
                 }
             }
 
-            player->minimalBonePoseValid = anchorValid;
-            player->fullBonePoseValid = pose.fullRequested && optionalBonesAccepted > 0;
-            player->invalidBones = !anchorValid;
-            player->consecutiveBadBoneSamples = anchorValid
-                ? 0
-                : static_cast<std::uint8_t>((std::min)(255, static_cast<int>(player->consecutiveBadBoneSamples) + 1));
+            if (!anchorValid)
+                continue;
+
+            player->minimalBonePoseValid = true;
+            if (pose.fullRequested && optionalBonesAccepted > 0)
+                player->fullBonePoseValid = true;
+            player->invalidBones = false;
+            player->consecutiveBadBoneSamples = 0;
 
             player->location = anchor;
 
@@ -1367,9 +1327,6 @@ void RegisteredPlayers::boneTask()
         if (!mem.IsDmaOperational())
             return;
 
-        if (!Utils::valid_pointer(mainGame.localPlayerPtr))
-            return;
-
         motionUpdated = updateBtrMotion();
 
         const auto now = Clock::now();
@@ -1398,26 +1355,44 @@ void RegisteredPlayers::boneTask()
         if (runFullBonePass)
             nextFullBoneUpdate = now + fullBoneInterval;
 
-        constexpr float kFullBoneUpdateDistanceMargin = 1.0f;
-
-        const float drawPlayerDistance = static_cast<float>(espGlobals::getMaximumPlayerDrawDistance());
+        constexpr float kFullBoneScanEdgeBufferPixels = 200.0f;
         const CameraManagerSnapshot projection = cameraManagerTest.snapshot();
 
-        const auto IsPlayerRootOnScreen =
-            [&](const Player& player) -> bool
+        const auto IsFullBoneScanEligible = [&](const Player& player)
             {
                 if (!projection || !projection->valid)
                     return false;
 
                 glm::vec2 screenPosition{};
+                const auto projectsWithinScanArea = [&](const glm::vec3& position)
+                    {
+                        return CameraManager::worldToScreen(*projection, position, screenPosition,
+                            espGlobals::gameRes.x, espGlobals::gameRes.y, kFullBoneScanEdgeBufferPixels);
+                    };
 
-                return CameraManager::worldToScreen(
-                    *projection,
-                    PlayerPosition::getBestBasePosition(player),
-                    screenPosition,
-                    espGlobals::gameRes.x,
-                    espGlobals::gameRes.y,
-                    200.0f);
+                if (projectsWithinScanArea(PlayerPosition::getBestBasePosition(player)))
+                    return true;
+
+                constexpr std::array<boneListIndexes, 4> kUpperBodyScanAnchors =
+                {
+                    boneListIndexes::Pelvis,
+                    boneListIndexes::Spine,
+                    boneListIndexes::Neck,
+                    boneListIndexes::Head
+                };
+
+                for (const boneListIndexes bone : kUpperBodyScanAnchors)
+                {
+                    const size_t index = static_cast<size_t>(bone);
+                    if (index < player.bonePositions.size() &&
+                        IsUsableBonePosition(player.bonePositions[index]) &&
+                        projectsWithinScanArea(player.bonePositions[index]))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             };
 
         struct PendingBoneScan
@@ -1446,7 +1421,7 @@ void RegisteredPlayers::boneTask()
             {
                 const auto localPlayer = std::find_if(cache.begin(), cache.end(), [](const Player& player)
                     {
-                        return player.isLocal && player.instance == mainGame.localPlayerPtr && !player.isBTR && !player.isDead && !player.hasExfiled &&
+                        return player.isLocal && !player.isBTR && !player.isDead && !player.hasExfiled &&
                             (player.bonePointersNeedResolve || !HasRequiredBonePointers(player)) &&
                             (player.nextBonePointerResolve == Clock::time_point{} || Clock::now() >= player.nextBonePointerResolve);
                     });
@@ -1494,8 +1469,7 @@ void RegisteredPlayers::boneTask()
                         continue;
                     }
 
-                    const bool fullPointersRequired = runFullBonePass && !player.isLocal && IsPlayerRootOnScreen(player) &&
-                        player.distance <= drawPlayerDistance + kFullBoneUpdateDistanceMargin;
+                    const bool fullPointersRequired = runFullBonePass && IsFullBoneScanEligible(player);
 
                     if (HasRequiredBonePointers(player) && (!fullPointersRequired || HasFullBonePointers(player)))
                     {
@@ -1598,24 +1572,10 @@ void RegisteredPlayers::boneTask()
                 pending.snapshot.bonePtrs = player.bonePtrs;
                 pending.snapshot.transformCache = player.boneTransformCache;
 
-                const bool playerRootOnScreen = !player.isLocal && IsPlayerRootOnScreen(player);
-                const bool fullBoneEligible = playerRootOnScreen && player.distance <= drawPlayerDistance + kFullBoneUpdateDistanceMargin;
-
-                if (!player.isLocal && fullBoneEligible)
-                {
-                    // Full positions are refreshed below from uncached reads
-                }
-                else if (!player.isLocal)
-                {
-                    ClearOptionalBonePositions(player);
-                    player.fullBonePoseValid = false;
-                }
-
                 pending.readFullBoneList =
                     runFullBonePass &&
-                    fullBoneEligible &&
-                    HasAnyBonePointers(player) &&
-                    !player.isLocal;
+                    IsFullBoneScanEligible(player) &&
+                    HasAnyBonePointers(player);
 
                 pendingScans.emplace_back(std::move(pending));
             }

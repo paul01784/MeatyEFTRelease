@@ -25,8 +25,6 @@ extern Memory mem;
 
 namespace {
 
-std::uint64_t g_last_disposed_game_world{};
-
 #pragma pack(push, 8)
 struct LinkedListObject {
     std::uint64_t previous{};
@@ -149,11 +147,6 @@ bool fillRaidFromLocalGameWorld(std::uint64_t gom, std::uint64_t local_gw, std::
 
     if (!Utils::valid_pointer(local_gw))
         return false;
-
-    if (Utils::valid_pointer(g_last_disposed_game_world) && local_gw == g_last_disposed_game_world) {
-        debug_out = "previously disposed GameWorld";
-        return false;
-    }
 
     std::uint64_t map_ptr = mem.Read<std::uint64_t>(local_gw + sdk::GameWorld::Location, DmaCacheMode::Uncached);
     if (!Utils::valid_pointer(map_ptr) && Utils::valid_pointer(local_player))
@@ -857,18 +850,6 @@ bool readRegisteredPlayerPtrs(const RaidState& raid, std::vector<std::uint64_t>&
 
     std::erase_if(out_ptrs, [](std::uint64_t p) { return !Utils::valid_pointer(p); });
     return !out_ptrs.empty();
-}
-
-void recordDisposedGameWorld(std::uint64_t local_game_world)
-{
-    if (Utils::valid_pointer(local_game_world))
-        g_last_disposed_game_world = local_game_world;
-}
-
-bool isStaleGameWorld(std::uint64_t local_game_world)
-{
-    return Utils::valid_pointer(g_last_disposed_game_world) &&
-           local_game_world == g_last_disposed_game_world;
 }
 
 void applyRaidStateToMainGame(const RaidState& raid)

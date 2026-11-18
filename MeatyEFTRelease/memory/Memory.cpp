@@ -2,6 +2,7 @@
 #include "Memory.h"
 #include "../Core/Offsets/EftOffsetService.h"
 #include "../Core/Offsets/UnityOffsetService.h"
+#include "../Core/Dependencies/RuntimeDependencies.h"
 #include "../UI/globals.h"
 #include "../UI/debug.h"
 #include "../UI/perfMonitor.h"
@@ -225,11 +226,7 @@ std::string BuildTrafficStatsString(const MemoryTrafficStats& stats)
 		<< "R: " << FormatRate(stats.readOperationsPerSecond) << " ops/s"
 		<< " | " << FormatRate(stats.readRequestsPerSecond) << " req/s"
 		<< " | " << FormatBytes(stats.readBytesRequestedPerSecond) << "/s"
-		<< " || W: " << FormatRate(stats.writeOperationsPerSecond) << " ops/s"
-		<< " | " << FormatRate(stats.writeRequestsPerSecond) << " req/s"
-		<< " | " << FormatBytes(stats.writeBytesRequestedPerSecond) << "/s"
-		<< " || Failures R/W: "
-		<< stats.readFailures << "/" << stats.writeFailures;
+		<< " | Failures: " << stats.readFailures;
 
 	return oss.str();
 }
@@ -240,7 +237,7 @@ std::string BuildTrafficStatsString(const MemoryTrafficStats& stats)
 
 DWORD Memory::BuildReadFlags(DmaCacheMode cacheMode)
 {
-	DWORD flags = VMMDLL_FLAG_ZEROPAD_ON_FAIL;
+	DWORD flags = VMMDLL_FLAG_NOPAGING;
 
 	if (cacheMode == DmaCacheMode::Uncached)
 	{
@@ -250,12 +247,9 @@ DWORD Memory::BuildReadFlags(DmaCacheMode cacheMode)
 	return flags;
 }
 
-DWORD Memory::BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode, bool zeroPadOnFail)
+DWORD Memory::BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode)
 {
-	DWORD flags = VMMDLL_FLAG_SCATTER_PREPAREEX_NOMEMZERO;
-
-	if (zeroPadOnFail)
-		flags |= VMMDLL_FLAG_ZEROPAD_ON_FAIL;
+	DWORD flags = 0;
 
 	if (pagingMode == DmaPagingMode::NoPaging)
 		flags |= VMMDLL_FLAG_NOPAGING;
@@ -272,28 +266,16 @@ DWORD Memory::BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode
 
 Memory::Memory()
 {
-	MemoryLogInfo("Loading libraries");
-
-	modules.VMM = LoadLibraryA("vmm.dll");
-	modules.FTD3XX = LoadLibraryA("FTD3XX.dll");
-	modules.LEECHCORE = LoadLibraryA("leechcore.dll");
-
-	if (!modules.VMM || !modules.FTD3XX || !modules.LEECHCORE)
-	{
-		std::ostringstream oss;
-		oss << "Could not load one or more libraries. "
-			<< "vmm=" << modules.VMM
-			<< " ftd=" << modules.FTD3XX
-			<< " leechcore=" << modules.LEECHCORE;
-
-		MemoryLogError(oss.str());
-		THROW("[!] Could not load a library\n");
-	}
-
 	key = std::make_shared<c_keys>();
+}
 
-	MemoryLogInfo("Successfully loaded libraries");
+void Memory::CloseScatterHandleLocked() noexcept
+{
+	if (!reusableScatterHandle)
+		return;
 
+	VMMDLL_Scatter_CloseHandle(reusableScatterHandle);
+	reusableScatterHandle = nullptr;
 }
 
 Memory::~Memory()
@@ -306,12 +288,14 @@ Memory::~Memory()
 
 	if (vHandle)
 	{
+		CloseScatterHandleLocked();
 		VMMDLL_Close(vHandle);
 		vHandle = nullptr;
 	}
 
 	DMA_INITIALIZED = false;
 	PROCESS_INITIALIZED = false;
+	dmaState.store(DmaConnectionState::Disconnected, std::memory_order_release);
 
 	memoryGlobals::dmaConnected = FALSE;
 	memoryGlobals::processFound = FALSE;
@@ -339,6 +323,7 @@ void Memory::doDMAConnect()
 		dmaThread.join();
 
 	cancelInit.store(false, std::memory_order_release);
+	dmaState.store(DmaConnectionState::Connecting, std::memory_order_release);
 
 	dmaThread = std::thread([this]()
 		{
@@ -358,9 +343,12 @@ void Memory::doDMAConnect()
 			}
 
 			// Init returns false when cancelled or when DMA setup genuinely fails.
-			if (!success || cancelInit.load(std::memory_order_acquire))
+			const bool cancelled = cancelInit.load(std::memory_order_acquire);
+			if (!success || cancelled)
 			{
 				CloseAndReset();
+				if (!cancelled)
+					dmaState.store(DmaConnectionState::Failed, std::memory_order_release);
 			}
 
 			initRunning.store(false, std::memory_order_release);
@@ -995,6 +983,7 @@ uint64_t Memory::FindSignature(
 
 bool Memory::RefreshProcessInformationNow()
 {
+	const auto refreshStarted = std::chrono::steady_clock::now();
 	bool memoryOk = false;
 	bool tlbOk = false;
 	bool processOk = false;
@@ -1025,9 +1014,16 @@ bool Memory::RefreshProcessInformationNow()
 			VMMDLL_OPT_REFRESH_FREQ_MEDIUM,
 			1
 		);
+
+		const auto refreshedAt = std::chrono::steady_clock::now();
+		if (memoryOk)
+			lastMemoryCacheRefresh = refreshedAt;
+		if (tlbOk)
+			lastTlbCacheRefresh = refreshedAt;
 	}
 
 	const bool ok = memoryOk && tlbOk && processOk;
+	RecordDmaTiming("dma.refresh", "Full process", ElapsedMilliseconds(refreshStarted), 1.0, ok ? "success" : "failed");
 
 	if (!ok)
 		MemoryLogError("Immediate full process refresh failed");
@@ -1035,9 +1031,22 @@ bool Memory::RefreshProcessInformationNow()
 	return ok;
 }
 
+bool Memory::RefreshAllCaches()
+{
+	const auto refreshStarted = std::chrono::steady_clock::now();
+	std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
+	const bool ok = vHandle && VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_ALL, 1) != FALSE;
+	RecordDmaTiming("dma.refresh", "All caches", ElapsedMilliseconds(refreshStarted), 1.0, ok ? "success" : "failed");
+	if (!ok)
+		MemoryLogError("Immediate all-cache refresh failed");
+	return ok;
+}
+
 void Memory::ReportDmaHealthFailure(DmaHealthSource source, uint64_t fingerprint)
 {
 	using Clock = std::chrono::steady_clock;
+	if (source == DmaHealthSource::CameraChain)
+		return;
 
 	constexpr uint32_t kFailureThreshold = 3;
 	constexpr auto kMinimumFailureDuration = std::chrono::seconds(1);
@@ -1090,7 +1099,7 @@ void Memory::RunCacheMaintenance()
 {
 	using Clock = std::chrono::steady_clock;
 
-	constexpr auto kMemoryRefreshInterval = std::chrono::milliseconds(300);
+	constexpr auto kMemoryRefreshInterval = std::chrono::seconds(1);
 	constexpr auto kTlbRefreshInterval = std::chrono::seconds(2);
 	constexpr auto kHealthRecoveryCooldown = std::chrono::seconds(15);
 
@@ -1120,59 +1129,46 @@ void Memory::RunCacheMaintenance()
 		}
 	}
 
-	// Cache maintenance must never queue behind live camera/player reads. The
-	// background task will try again on its next short scheduler tick.
+	// The main VMM session uses -norefresh. Keep the data and translation
+	// caches moving with lightweight partial flushes, but never queue cache
+	// maintenance behind camera or player reads.
 	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::try_to_lock);
-
 	if (!lock.owns_lock() || !vHandle)
 		return;
 
-	const bool memoryRefreshDue =
-		lastMemoryCacheRefresh.time_since_epoch().count() == 0 ||
+	const bool memoryRefreshDue = lastMemoryCacheRefresh.time_since_epoch().count() == 0 ||
 		(now - lastMemoryCacheRefresh) >= kMemoryRefreshInterval;
-	const bool tlbRefreshDue =
-		lastTlbCacheRefresh.time_since_epoch().count() == 0 ||
+	const bool tlbRefreshDue = lastTlbCacheRefresh.time_since_epoch().count() == 0 ||
 		(now - lastTlbCacheRefresh) >= kTlbRefreshInterval;
 
-	if (!memoryRefreshDue && !tlbRefreshDue)
-		return;
+	// Run at most one maintenance command per scheduler pass. When both are
+	// due, alternate them so a slow scheduler cannot starve the memory cache.
+	const bool bothRefreshesDue = tlbRefreshDue && memoryRefreshDue;
+	const bool refreshTlb = tlbRefreshDue &&
+		(!memoryRefreshDue || preferTlbCacheRefresh);
+	if (bothRefreshesDue)
+		preferTlbCacheRefresh = !preferTlbCacheRefresh;
 
-	bool ok = true;
-
-	if (memoryRefreshDue)
+	if (refreshTlb)
 	{
-		const bool refreshed = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_MEM_PARTIAL,
-			1
-		);
-
-		if (refreshed)
-			lastMemoryCacheRefresh = now;
-
-		ok = refreshed && ok;
-	}
-
-	if (tlbRefreshDue)
-	{
-		const bool refreshed = VMMDLL_ConfigSet(
-			vHandle,
-			VMMDLL_OPT_REFRESH_FREQ_TLB_PARTIAL,
-			1
-		);
-
+		const auto refreshStarted = Clock::now();
+		const bool refreshed = VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_FREQ_TLB_PARTIAL, 1) != FALSE;
+		RecordDmaTiming("dma.refresh", "Partial TLB", ElapsedMilliseconds(refreshStarted), 1.0, refreshed ? "success" : "failed");
 		if (refreshed)
 			lastTlbCacheRefresh = now;
-
-		ok = refreshed && ok;
+		else
+			MemoryLogErrorThrottled("partial-tlb-maintenance", "Partial DMA TLB maintenance failed", std::chrono::seconds(30));
 	}
-
-	if (!ok)
-		MemoryLogErrorThrottled(
-			"partial-cache-maintenance",
-			"Partial DMA cache maintenance failed",
-			std::chrono::seconds(30)
-		);
+	else if (memoryRefreshDue)
+	{
+		const auto refreshStarted = Clock::now();
+		const bool refreshed = VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_FREQ_MEM_PARTIAL, 1) != FALSE;
+		RecordDmaTiming("dma.refresh", "Partial memory", ElapsedMilliseconds(refreshStarted), 1.0, refreshed ? "success" : "failed");
+		if (refreshed)
+			lastMemoryCacheRefresh = now;
+		else
+			MemoryLogErrorThrottled("partial-memory-maintenance", "Partial DMA memory-cache maintenance failed", std::chrono::seconds(30));
+	}
 }
 
 // ------------------------------------------------------------
@@ -1182,6 +1178,7 @@ void Memory::RunCacheMaintenance()
 void Memory::doDMADisconnect()
 {
 	cancelInit.store(true, std::memory_order_release);
+	dmaState.store(DmaConnectionState::Disconnected, std::memory_order_release);
 
 	// If Init is still running, its worker will see cancelInit,
 	// leave its retry loop, then call CloseAndReset().
@@ -1225,6 +1222,7 @@ bool Memory::Init(bool memMap, bool debug)
 {
 	constexpr LPCSTR processName = "EscapeFromTarkov.exe";
 	constexpr LPCSTR targetModule = "UnityPlayer.dll";
+	dmaState.store(DmaConnectionState::Connecting, std::memory_order_release);
 
 	auto clearProcessState = [this]()
 		{
@@ -1249,6 +1247,7 @@ bool Memory::Init(bool memMap, bool debug)
 
 				if (vHandle)
 				{
+					CloseScatterHandleLocked();
 					VMMDLL_Close(vHandle);
 					vHandle = nullptr;
 				}
@@ -1463,6 +1462,17 @@ bool Memory::Init(bool memMap, bool debug)
 			}
 		}
 
+		if (newHandle)
+		{
+			std::string versionError;
+			if (!RuntimeDependencies::ValidateVmmHandle(newHandle, versionError))
+			{
+				MemoryLogError("[!] " + versionError);
+				VMMDLL_Close(newHandle);
+				newHandle = nullptr;
+			}
+		}
+
 		if (!newHandle)
 		{
 			MemoryLogInfo(
@@ -1483,6 +1493,7 @@ bool Memory::Init(bool memMap, bool debug)
 			// A stale handle should not survive a reconnect attempt.
 			if (vHandle)
 			{
+				CloseScatterHandleLocked();
 				VMMDLL_Close(vHandle);
 				vHandle = nullptr;
 			}
@@ -1496,9 +1507,10 @@ bool Memory::Init(bool memMap, bool debug)
 			{
 				vHandle = newHandle;
 				newHandle = nullptr;
-				lastMemoryCacheRefresh = {};
-				lastTlbCacheRefresh = {};
-
+				const auto refreshStarted = std::chrono::steady_clock::now();
+				lastMemoryCacheRefresh = refreshStarted;
+				lastTlbCacheRefresh = refreshStarted;
+				preferTlbCacheRefresh = true;
 				ULONG64 FPGA_ID = 0;
 				ULONG64 DEVICE_ID = 0;
 
@@ -1514,6 +1526,7 @@ bool Memory::Init(bool memMap, bool debug)
 				{
 					MemoryLogInfo("[!] Could not configure FPGA");
 
+					CloseScatterHandleLocked();
 					VMMDLL_Close(vHandle);
 					vHandle = nullptr;
 
@@ -1535,12 +1548,14 @@ bool Memory::Init(bool memMap, bool debug)
 		}
 
 		memoryGlobals::dmaConnected.store(true, std::memory_order_release);
+		dmaState.store(DmaConnectionState::WaitingForProcess, std::memory_order_release);
 
 		MemoryLogInfo("DMA connected successfully");
 	}
 	else
 	{
 		memoryGlobals::dmaConnected.store(true, std::memory_order_release);
+		dmaState.store(PROCESS_INITIALIZED ? DmaConnectionState::Connected : DmaConnectionState::WaitingForProcess, std::memory_order_release);
 		MemoryLogInfo("DMA already initialised");
 	}
 
@@ -1573,6 +1588,7 @@ bool Memory::Init(bool memMap, bool debug)
 			livePid != 0 &&
 			livePid == current_process.PID)
 		{
+			dmaState.store(DmaConnectionState::Connected, std::memory_order_release);
 			MemoryLogInfo("Process already initialised");
 			return true;
 		}
@@ -1684,6 +1700,7 @@ bool Memory::Init(bool memMap, bool debug)
 					true,
 					std::memory_order_release
 				);
+				dmaState.store(DmaConnectionState::Connected, std::memory_order_release);
 
 				PreloadTarkovPointerSnapshot();
 
@@ -1758,14 +1775,19 @@ void Memory::CloseAndReset()
 
 		if (vHandle)
 		{
+			CloseScatterHandleLocked();
 			VMMDLL_Close(vHandle);
 			vHandle = nullptr;
 		}
 
 		DMA_INITIALIZED = FALSE;
+		lastMemoryCacheRefresh = {};
+		lastTlbCacheRefresh = {};
+		preferTlbCacheRefresh = true;
 	}
 
 	memoryGlobals::dmaConnected.store(false, std::memory_order_release);
+	dmaState.store(DmaConnectionState::Disconnected, std::memory_order_release);
 
 	{
 		std::lock_guard<std::mutex> healthLock(dmaHealthMutex);
@@ -1945,7 +1967,13 @@ bool Memory::TryGetModuleInfo(const std::string& moduleName, uintptr_t& moduleBa
 
 	moduleBase = moduleInfo->vaBase;
 	moduleSize = moduleInfo->cbImageSize;
+	VMMDLL_MemFree(moduleInfo);
 	return moduleBase != 0;
+}
+
+bool Memory::GetModuleInfo(const std::string& moduleName, uintptr_t& moduleBase, size_t& moduleSize) const
+{
+	return TryGetModuleInfo(moduleName, moduleBase, moduleSize);
 }
 
 uintptr_t Memory::GetBaseDaddy(const std::string& module_name)
@@ -2245,32 +2273,17 @@ Memory::TrafficCounterSnapshot Memory::LoadTrafficCounters() const
 	snapshot.readOperations =
 		statsReadOperations.load(std::memory_order_relaxed);
 
-	snapshot.writeOperations =
-		statsWriteOperations.load(std::memory_order_relaxed);
-
 	snapshot.readSuccesses =
 		statsReadSuccesses.load(std::memory_order_relaxed);
-
-	snapshot.writeSuccesses =
-		statsWriteSuccesses.load(std::memory_order_relaxed);
 
 	snapshot.readFailures =
 		statsReadFailures.load(std::memory_order_relaxed);
 
-	snapshot.writeFailures =
-		statsWriteFailures.load(std::memory_order_relaxed);
-
 	snapshot.readRequests =
 		statsReadRequests.load(std::memory_order_relaxed);
 
-	snapshot.writeRequests =
-		statsWriteRequests.load(std::memory_order_relaxed);
-
 	snapshot.readBytesRequested =
 		statsReadBytesRequested.load(std::memory_order_relaxed);
-
-	snapshot.writeBytesRequested =
-		statsWriteBytesRequested.load(std::memory_order_relaxed);
 
 	snapshot.directReadBytesReturned =
 		statsDirectReadBytesReturned.load(std::memory_order_relaxed);
@@ -2278,14 +2291,14 @@ Memory::TrafficCounterSnapshot Memory::LoadTrafficCounters() const
 	snapshot.scatterReadBatches =
 		statsScatterReadBatches.load(std::memory_order_relaxed);
 
-	snapshot.scatterWriteBatches =
-		statsScatterWriteBatches.load(std::memory_order_relaxed);
-
 	snapshot.scatterReadRequests =
 		statsScatterReadRequests.load(std::memory_order_relaxed);
 
-	snapshot.scatterWriteRequests =
-		statsScatterWriteRequests.load(std::memory_order_relaxed);
+	snapshot.scatterHandleInitializations =
+		statsScatterHandleInitializations.load(std::memory_order_relaxed);
+
+	snapshot.scatterHandleReuses =
+		statsScatterHandleReuses.load(std::memory_order_relaxed);
 
 	snapshot.scatterClearFailures =
 		statsScatterClearFailures.load(std::memory_order_relaxed);
@@ -2318,42 +2331,12 @@ void Memory::RecordDirectRead(
 		statsReadFailures.fetch_add(1, std::memory_order_relaxed);
 }
 
-void Memory::RecordDirectWrite(
-	size_t requestedBytes,
-	bool success
-) const
-{
-	statsWriteOperations.fetch_add(1, std::memory_order_relaxed);
-	statsWriteRequests.fetch_add(1, std::memory_order_relaxed);
-
-	statsWriteBytesRequested.fetch_add(
-		static_cast<uint64_t>(requestedBytes),
-		std::memory_order_relaxed
-	);
-
-	if (success)
-		statsWriteSuccesses.fetch_add(1, std::memory_order_relaxed);
-	else
-		statsWriteFailures.fetch_add(1, std::memory_order_relaxed);
-}
-
 void Memory::RecordScatterReadRequest(size_t requestedBytes) const
 {
 	statsReadRequests.fetch_add(1, std::memory_order_relaxed);
 	statsScatterReadRequests.fetch_add(1, std::memory_order_relaxed);
 
 	statsReadBytesRequested.fetch_add(
-		static_cast<uint64_t>(requestedBytes),
-		std::memory_order_relaxed
-	);
-}
-
-void Memory::RecordScatterWriteRequest(size_t requestedBytes) const
-{
-	statsWriteRequests.fetch_add(1, std::memory_order_relaxed);
-	statsScatterWriteRequests.fetch_add(1, std::memory_order_relaxed);
-
-	statsWriteBytesRequested.fetch_add(
 		static_cast<uint64_t>(requestedBytes),
 		std::memory_order_relaxed
 	);
@@ -2368,17 +2351,6 @@ void Memory::RecordScatterReadExecute(bool success) const
 		statsReadSuccesses.fetch_add(1, std::memory_order_relaxed);
 	else
 		statsReadFailures.fetch_add(1, std::memory_order_relaxed);
-}
-
-void Memory::RecordScatterWriteExecute(bool success) const
-{
-	statsWriteOperations.fetch_add(1, std::memory_order_relaxed);
-	statsScatterWriteBatches.fetch_add(1, std::memory_order_relaxed);
-
-	if (success)
-		statsWriteSuccesses.fetch_add(1, std::memory_order_relaxed);
-	else
-		statsWriteFailures.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Memory::RecordScatterClearFailure() const
@@ -2415,31 +2387,15 @@ MemoryTrafficStats Memory::GetTrafficStats() const
 					current.readOperations - trafficStatsBaseline.readOperations
 					) / elapsedSeconds;
 
-			trafficRateSnapshot.writeOperationsPerSecond =
-				static_cast<double>(
-					current.writeOperations - trafficStatsBaseline.writeOperations
-					) / elapsedSeconds;
-
 			trafficRateSnapshot.readRequestsPerSecond =
 				static_cast<double>(
 					current.readRequests - trafficStatsBaseline.readRequests
-					) / elapsedSeconds;
-
-			trafficRateSnapshot.writeRequestsPerSecond =
-				static_cast<double>(
-					current.writeRequests - trafficStatsBaseline.writeRequests
 					) / elapsedSeconds;
 
 			trafficRateSnapshot.readBytesRequestedPerSecond =
 				static_cast<double>(
 					current.readBytesRequested -
 					trafficStatsBaseline.readBytesRequested
-					) / elapsedSeconds;
-
-			trafficRateSnapshot.writeBytesRequestedPerSecond =
-				static_cast<double>(
-					current.writeBytesRequested -
-					trafficStatsBaseline.writeBytesRequested
 					) / elapsedSeconds;
 
 			trafficStatsBaseline = current;
@@ -2450,28 +2406,23 @@ MemoryTrafficStats Memory::GetTrafficStats() const
 	MemoryTrafficStats result{};
 
 	result.readOperations = current.readOperations;
-	result.writeOperations = current.writeOperations;
 
 	result.readSuccesses = current.readSuccesses;
-	result.writeSuccesses = current.writeSuccesses;
 
 	result.readFailures = current.readFailures;
-	result.writeFailures = current.writeFailures;
 
 	result.readRequests = current.readRequests;
-	result.writeRequests = current.writeRequests;
 
 	result.readBytesRequested = current.readBytesRequested;
-	result.writeBytesRequested = current.writeBytesRequested;
 
 	result.directReadBytesReturned =
 		current.directReadBytesReturned;
 
 	result.scatterReadBatches = current.scatterReadBatches;
-	result.scatterWriteBatches = current.scatterWriteBatches;
 
 	result.scatterReadRequests = current.scatterReadRequests;
-	result.scatterWriteRequests = current.scatterWriteRequests;
+	result.scatterHandleInitializations = current.scatterHandleInitializations;
+	result.scatterHandleReuses = current.scatterHandleReuses;
 
 	result.scatterClearFailures = current.scatterClearFailures;
 
@@ -2481,20 +2432,11 @@ MemoryTrafficStats Memory::GetTrafficStats() const
 	result.readOperationsPerSecond =
 		trafficRateSnapshot.readOperationsPerSecond;
 
-	result.writeOperationsPerSecond =
-		trafficRateSnapshot.writeOperationsPerSecond;
-
 	result.readRequestsPerSecond =
 		trafficRateSnapshot.readRequestsPerSecond;
 
-	result.writeRequestsPerSecond =
-		trafficRateSnapshot.writeRequestsPerSecond;
-
 	result.readBytesRequestedPerSecond =
 		trafficRateSnapshot.readBytesRequestedPerSecond;
-
-	result.writeBytesRequestedPerSecond =
-		trafficRateSnapshot.writeBytesRequestedPerSecond;
 
 	return result;
 }
@@ -2524,11 +2466,6 @@ std::string Memory::GetTrafficStatsString() const
 		<< FormatCount(stats.readOperationsPerSecond)
 		<< "/s ("
 		<< FormatBytes(stats.readBytesRequestedPerSecond)
-		<< "/s)"
-		<< " | Writes: "
-		<< FormatCount(stats.writeOperationsPerSecond)
-		<< "/s ("
-		<< FormatBytes(stats.writeBytesRequestedPerSecond)
 		<< "/s)";
 
 	return oss.str();
@@ -2537,27 +2474,22 @@ std::string Memory::GetTrafficStatsString() const
 void Memory::ResetTrafficStats()
 {
 	statsReadOperations.store(0, std::memory_order_relaxed);
-	statsWriteOperations.store(0, std::memory_order_relaxed);
 
 	statsReadSuccesses.store(0, std::memory_order_relaxed);
-	statsWriteSuccesses.store(0, std::memory_order_relaxed);
 
 	statsReadFailures.store(0, std::memory_order_relaxed);
-	statsWriteFailures.store(0, std::memory_order_relaxed);
 
 	statsReadRequests.store(0, std::memory_order_relaxed);
-	statsWriteRequests.store(0, std::memory_order_relaxed);
 
 	statsReadBytesRequested.store(0, std::memory_order_relaxed);
-	statsWriteBytesRequested.store(0, std::memory_order_relaxed);
 
 	statsDirectReadBytesReturned.store(0, std::memory_order_relaxed);
 
 	statsScatterReadBatches.store(0, std::memory_order_relaxed);
-	statsScatterWriteBatches.store(0, std::memory_order_relaxed);
 
 	statsScatterReadRequests.store(0, std::memory_order_relaxed);
-	statsScatterWriteRequests.store(0, std::memory_order_relaxed);
+	statsScatterHandleInitializations.store(0, std::memory_order_relaxed);
+	statsScatterHandleReuses.store(0, std::memory_order_relaxed);
 
 	statsScatterClearFailures.store(0, std::memory_order_relaxed);
 
@@ -2570,7 +2502,7 @@ void Memory::ResetTrafficStats()
 }
 
 // ------------------------------------------------------------
-// Read / Write
+// Read
 // ------------------------------------------------------------
 
 bool Memory::Read(
@@ -2596,7 +2528,11 @@ bool Memory::Read(
 	if (size == 0)
 		return false;
 
-	if (size > MaxDmaTransferBytes)
+	std::memset(buffer, 0, size);
+
+	const size_t transferLimit = GetDmaTransferLimit();
+
+	if (size > transferLimit)
 	{
 		auto* output = static_cast<std::byte*>(buffer);
 		size_t offset = 0;
@@ -2604,7 +2540,7 @@ bool Memory::Read(
 		while (offset < size)
 		{
 			const size_t chunkSize =
-				(std::min)(MaxDmaTransferBytes, size - offset);
+				(std::min)(transferLimit, size - offset);
 
 			if (!Read(
 				address + offset,
@@ -2688,7 +2624,7 @@ bool Memory::Read(
 		);
 	}
 
-	return ok && readSize >= size;
+	return completeRead;
 }
 
 bool Memory::Read(
@@ -2715,7 +2651,11 @@ bool Memory::Read(
 	if (size == 0)
 		return false;
 
-	if (size > MaxDmaTransferBytes)
+	std::memset(buffer, 0, size);
+
+	const size_t transferLimit = GetDmaTransferLimit();
+
+	if (size > transferLimit)
 	{
 		auto* output = static_cast<std::byte*>(buffer);
 		size_t offset = 0;
@@ -2723,7 +2663,7 @@ bool Memory::Read(
 		while (offset < size)
 		{
 			const size_t chunkSize =
-				(std::min)(MaxDmaTransferBytes, size - offset);
+				(std::min)(transferLimit, size - offset);
 
 			if (!Read(
 				address + offset,
@@ -2802,138 +2742,6 @@ bool Memory::Read(
 	}
 
 	return completeRead;
-}
-
-bool Memory::Write(uintptr_t address, const void* buffer, size_t size) const
-{
-	if (!address || !buffer || size == 0)
-	{
-		MemoryLogError("Write failed: invalid args at " + Hex64(address));
-		return false;
-	}
-
-	std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
-
-	if (!vHandle)
-	{
-		MemoryLogError("Write failed: vHandle is null");
-		return false;
-	}
-
-	const DWORD pid = current_process.PID;
-	if (!pid)
-	{
-		MemoryLogError("Write failed: process PID is zero");
-		return false;
-	}
-
-	const bool ok = VMMDLL_MemWrite(
-		vHandle,
-		pid,
-		address,
-		reinterpret_cast<PBYTE>(const_cast<void*>(buffer)),
-		size
-	);
-
-	RecordDirectWrite(size, ok);
-
-	if (!ok)
-	{
-		MemoryLogError("Write failed at " + Hex64(address));
-		return false;
-	}
-
-	return true;
-}
-
-bool Memory::Write(uintptr_t address, const void* buffer, size_t size, int pid) const
-{
-	if (!pid)
-	{
-		MemoryLogError("Write(pid) failed: pid is zero");
-		return false;
-	}
-
-	if (!address || !buffer || size == 0)
-	{
-		MemoryLogError("Write(pid) failed: invalid args at " + Hex64(address));
-		return false;
-	}
-
-	std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
-
-	if (!vHandle)
-	{
-		MemoryLogError("Write(pid) failed: vHandle is null");
-		return false;
-	}
-
-	const bool ok = VMMDLL_MemWrite(
-		vHandle,
-		pid,
-		address,
-		reinterpret_cast<PBYTE>(const_cast<void*>(buffer)),
-		size
-	);
-
-	RecordDirectWrite(size, ok);
-
-	if (!ok)
-	{
-		MemoryLogError("Write failed at " + Hex64(address));
-		return false;
-	}
-
-	return true;
-}
-
-bool Memory::WriteBufferEnsure(
-	uintptr_t address,
-	const void* buffer,
-	size_t size,
-	DmaCacheMode cacheMode
-) const
-{
-	if (!address || !buffer || size == 0)
-	{
-		MemoryLogError("WriteBufferEnsure failed: invalid args");
-		return false;
-	}
-
-	constexpr int retryCount = 3;
-	std::vector<uint8_t> verify(size);
-
-	for (int attempt = 1; attempt <= retryCount; ++attempt)
-	{
-		if (!Write(address, buffer, size))
-		{
-			MemoryLogError(
-				"WriteBufferEnsure write failed at " + Hex64(address) +
-				" attempt=" + std::to_string(attempt)
-			);
-			continue;
-		}
-
-		for (int i = 0; i < 5; ++i)
-			std::this_thread::yield();
-
-		std::fill(verify.begin(), verify.end(), 0);
-
-		if (!Read(address, verify.data(), size, cacheMode))
-		{
-			MemoryLogError(
-				"WriteBufferEnsure readback failed at " + Hex64(address) +
-				" attempt=" + std::to_string(attempt)
-			);
-			continue;
-		}
-
-		if (std::memcmp(verify.data(), buffer, size) == 0)
-			return true;
-	}
-
-	MemoryLogError("WriteBufferEnsure verification failed at " + Hex64(address));
-	return false;
 }
 
 bool Memory::ReadChain(
@@ -3177,7 +2985,7 @@ bool Memory::TryReadLootTransformFallback(uint64_t gameObject, uint64_t& output)
             [&](uint64_t address, void* buffer, size_t size) {
                 DWORD bytes = 0;
                 const BOOL ok = VMMDLL_MemReadEx(vHandle, current_process.PID, address,
-                    static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, VMMDLL_FLAG_NOCACHE);
+					static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, VMMDLL_FLAG_NOCACHE | VMMDLL_FLAG_NOPAGING);
                 const bool complete = ok && bytes == size;
                 RecordDirectRead(size, bytes, complete);
                 return complete;
@@ -3192,54 +3000,66 @@ bool Memory::TryReadLootIdFallback(uint64_t fieldAddress, std::string& output)
         return LootIdFallback::Resolve(fieldAddress, output,
             [&](uint64_t address, void* buffer, size_t size) {
                 DWORD bytes = 0;
-                // Allow the paging path that succeeded in ID probes. No zero padding.
+                // Keep fallback probes fresh, cache-populating and deterministic.
                 const BOOL ok = VMMDLL_MemReadEx(vHandle, current_process.PID, address,
-                    static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, VMMDLL_FLAG_NOCACHE);
+					static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, VMMDLL_FLAG_NOCACHE | VMMDLL_FLAG_NOPAGING);
                 const bool complete = ok && bytes == size;
                 RecordDirectRead(size, bytes, complete);
                 return complete;
             }, [](uint64_t pointer) { return IsValidPointer(pointer); });
     } catch (...) { return false; }
 }
-bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc)
+bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc, int pid)
 {
-	if (!requests || requestCount == 0)
-		return false;
+	return TryReadScatter(
+		requests,
+		requestCount,
+		cacheMode,
+		callingFunc,
+		{},
+		DmaPagingMode::NoPaging,
+		DmaLockMode::Wait,
+		pid) == TryScatterReadResult::Success;
+}
 
+Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc, std::span<DWORD> bytesRead, DmaPagingMode pagingMode, DmaLockMode lockMode, int pid)
+{
+	std::fill(bytesRead.begin(), bytesRead.end(), 0);
+	if (!requests || requestCount == 0)
+		return TryScatterReadResult::Failed;
+
+	if (!bytesRead.empty() && bytesRead.size() < requestCount)
+		return TryScatterReadResult::Failed;
+
+	const size_t transferLimit = GetDmaTransferLimit();
 	bool requiresChunking = requestCount > MaxDmaScatterRequests;
 	size_t totalBytes = 0;
 
-	for (size_t index = 0; index < requestCount; ++index)
+	for (size_t i = 0; i < requestCount; ++i)
 	{
-		if (!requests[index].address ||
-			!requests[index].buffer ||
-			requests[index].size == 0)
-		{
-			return false;
-		}
+		const ScatterReadRequest& request = requests[i];
+		if (!request.address || !request.buffer || request.size == 0 || request.size > MAXDWORD)
+			return TryScatterReadResult::Failed;
 
-		const size_t boundedRequestSize =
-			(std::min)(requests[index].size, MaxDmaTransferBytes);
+		std::memset(request.buffer, 0, request.size);
 
-		if (requests[index].size > MaxDmaTransferBytes ||
-			totalBytes > MaxDmaTransferBytes - boundedRequestSize)
+		if (request.size > transferLimit || totalBytes > transferLimit - (std::min)(request.size, transferLimit))
 		{
 			requiresChunking = true;
-			totalBytes = MaxDmaTransferBytes + 1;
+			totalBytes = transferLimit + 1;
 		}
 		else
 		{
-			totalBytes += requests[index].size;
+			totalBytes += request.size;
 		}
 	}
-
-	if (totalBytes > MaxDmaTransferBytes)
-		requiresChunking = true;
 
 	if (requiresChunking)
 	{
 		std::vector<ScatterReadRequest> chunk;
+		std::vector<size_t> sourceIndices;
 		chunk.reserve(MaxDmaScatterRequests);
+		sourceIndices.reserve(MaxDmaScatterRequests);
 
 		size_t requestIndex = 0;
 		size_t requestOffset = 0;
@@ -3247,24 +3067,16 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 		while (requestIndex < requestCount)
 		{
 			chunk.clear();
+			sourceIndices.clear();
 			size_t chunkBytes = 0;
 
-			while (requestIndex < requestCount &&
-				chunk.size() < MaxDmaScatterRequests &&
-				chunkBytes < MaxDmaTransferBytes)
+			while (requestIndex < requestCount && chunk.size() < MaxDmaScatterRequests && chunkBytes < transferLimit)
 			{
 				const ScatterReadRequest& request = requests[requestIndex];
-				const size_t remainingBytes = request.size - requestOffset;
-				const size_t availableBytes = MaxDmaTransferBytes - chunkBytes;
-				const size_t bytesToQueue =
-					(std::min)(remainingBytes, availableBytes);
+				const size_t bytesToQueue = (std::min)(request.size - requestOffset, transferLimit - chunkBytes);
 
-				chunk.push_back({
-					request.address + requestOffset,
-					static_cast<std::byte*>(request.buffer) + requestOffset,
-					bytesToQueue, request.diagnosticBase, request.diagnosticOffset + requestOffset, request.diagnosticExpression
-					});
-
+				chunk.push_back({ request.address + requestOffset, static_cast<std::byte*>(request.buffer) + requestOffset, bytesToQueue, request.diagnosticBase, request.diagnosticOffset + requestOffset, request.diagnosticExpression });
+				sourceIndices.push_back(requestIndex);
 				chunkBytes += bytesToQueue;
 				requestOffset += bytesToQueue;
 
@@ -3275,138 +3087,26 @@ bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount
 				}
 			}
 
-			if (chunk.empty() ||
-				!ReadScatter(
-					chunk.data(),
-					chunk.size(),
-					cacheMode,
-					callingFunc))
+			if (chunk.empty())
+				return TryScatterReadResult::Failed;
+
+			std::vector<DWORD> chunkBytesRead(chunk.size(), 0);
+			const TryScatterReadResult result = TryReadScatter(chunk.data(), chunk.size(), cacheMode, callingFunc, chunkBytesRead, pagingMode, lockMode, pid);
+
+			if (!bytesRead.empty())
 			{
-				return false;
+				for (size_t i = 0; i < chunk.size(); ++i)
+					bytesRead[sourceIndices[i]] += chunkBytesRead[i];
 			}
+
+			if (result != TryScatterReadResult::Success)
+				return result;
 		}
 
-		return true;
+		return TryScatterReadResult::Success;
 	}
 
 	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
-	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
-
-	if (!vHandle || !current_process.PID)
-		return false;
-
-	const auto executeStarted = std::chrono::steady_clock::now();
-	const VMMDLL_SCATTER_HANDLE handle = VMMDLL_Scatter_Initialize(
-		vHandle,
-		current_process.PID,
-		BuildScatterFlags(cacheMode));
-
-	if (!handle)
-	{
-		lock.unlock();
-		MemoryLogError("ReadScatter failed to create scatter handle");
-		return false;
-	}
-
-    bool prepared = true;
-	uint64_t failedAddress = 0;
-
-	for (size_t index = 0; index < requestCount; ++index)
-	{
-		const ScatterReadRequest& request = requests[index];
-
-		if (!VMMDLL_Scatter_PrepareEx(
-			handle,
-			request.address,
-			request.size,
-			static_cast<PBYTE>(request.buffer),
-			nullptr))
-		{
-			prepared = false;
-			failedAddress = request.address;
-			break;
-		}
-
-		RecordScatterReadRequest(request.size);
-	}
-
-	bool executed = false;
-
-	if (prepared)
-	{
-		executed = VMMDLL_Scatter_ExecuteRead(handle);
-		RecordScatterReadExecute(executed);
-	}
-
-	VMMDLL_Scatter_CloseHandle(handle);
-
-	const double executeMs = ElapsedMilliseconds(executeStarted);
-    lock.unlock();
-
-
-	const std::string_view label = callingFunc.empty()
-		? std::string_view("Scatter Read Batch")
-		: callingFunc;
-
-	const std::string detail = std::to_string(requestCount) + " reads";
-
-	RecordDmaTiming(
-		"dma.lock_wait",
-		label,
-		lockWaitMs,
-		PerfMonitor::kSlowDmaLockWaitMs,
-		detail);
-
-	RecordDmaTiming(
-		"dma.execute",
-		label,
-		executeMs,
-		PerfMonitor::kSlowScatterMs,
-		detail);
-
-	if (!prepared)
-	{
-		MemoryLogError(
-			"ReadScatter failed to prepare read at " +
-			Hex64(failedAddress));
-		return false;
-	}
-
-	if (!executed)
-		MemoryLogError("ReadScatter failed to execute scatter read");
-
-	return executed;
-}
-
-Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc, std::span<DWORD> bytesRead, DmaPagingMode pagingMode, bool zeroPadOnFail, DmaLockMode lockMode)
-{
-	std::fill(bytesRead.begin(), bytesRead.end(), 0);
-	if (!bytesRead.empty() && bytesRead.size() < requestCount)
-		return TryScatterReadResult::Failed;
-
-	if (!requests || requestCount == 0)
-		return TryScatterReadResult::Failed;
-
-	if (requestCount > MaxDmaScatterRequests)
-		return TryScatterReadResult::Failed;
-
-	size_t totalBytes = 0;
-
-	for (size_t i = 0; i < requestCount; ++i)
-	{
-		if (!requests[i].address || !requests[i].buffer || requests[i].size == 0)
-			return TryScatterReadResult::Failed;
-
-		if (requests[i].size > MaxDmaTransferBytes ||
-			totalBytes > MaxDmaTransferBytes - requests[i].size)
-		{
-			return TryScatterReadResult::Failed;
-		}
-
-		totalBytes += requests[i].size;
-	}
-
 	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::defer_lock);
 
 	if (lockMode == DmaLockMode::Wait)
@@ -3417,15 +3117,33 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 	{
 		return TryScatterReadResult::Busy;
 	}
+	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
 
-	if (!vHandle || !current_process.PID)
+	const DWORD targetPid = pid > 0 ? static_cast<DWORD>(pid) : current_process.PID;
+	if (!vHandle || !targetPid)
 		return TryScatterReadResult::Failed;
 
-	const VMMDLL_SCATTER_HANDLE handle = VMMDLL_Scatter_Initialize(
-		vHandle,
-		current_process.PID,
-		BuildScatterFlags(cacheMode, pagingMode, zeroPadOnFail)
-	);
+	const DWORD scatterFlags = BuildScatterFlags(cacheMode, pagingMode);
+	bool reusedHandle = reusableScatterHandle != nullptr;
+	if (reusableScatterHandle && !VMMDLL_Scatter_Clear(reusableScatterHandle, targetPid, scatterFlags))
+	{
+		RecordScatterClearFailure();
+		CloseScatterHandleLocked();
+		reusedHandle = false;
+	}
+
+	if (!reusableScatterHandle)
+	{
+		reusableScatterHandle = VMMDLL_Scatter_Initialize(vHandle, targetPid, scatterFlags);
+		if (reusableScatterHandle)
+			statsScatterHandleInitializations.fetch_add(1, std::memory_order_relaxed);
+	}
+	else if (reusedHandle)
+	{
+		statsScatterHandleReuses.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	const VMMDLL_SCATTER_HANDLE handle = reusableScatterHandle;
 
 	if (!handle)
 	{
@@ -3434,6 +3152,7 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 		return TryScatterReadResult::Failed;
 	}
 
+	std::vector<DWORD> actualBytesRead(requestCount, 0);
 	bool prepared = true;
 	uint64_t failedAddress = 0;
 
@@ -3446,7 +3165,7 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 			request.address,
 			request.size,
 			static_cast<PBYTE>(request.buffer),
-			bytesRead.empty() ? nullptr : &bytesRead[i]))
+			&actualBytesRead[i]))
 		{
 			prepared = false;
 			failedAddress = request.address;
@@ -3458,7 +3177,11 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 
 	if (!prepared)
 	{
-		VMMDLL_Scatter_CloseHandle(handle);
+		if (!VMMDLL_Scatter_Clear(handle, targetPid, scatterFlags))
+		{
+			RecordScatterClearFailure();
+			CloseScatterHandleLocked();
+		}
 		lock.unlock();
 
 		MemoryLogError(
@@ -3470,20 +3193,47 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 	}
 
 	const auto executeStarted = std::chrono::steady_clock::now();
-	const bool ok = VMMDLL_Scatter_ExecuteRead(handle);
+	const bool executed = VMMDLL_Scatter_ExecuteRead(handle);
 	const double executeMs = ElapsedMilliseconds(executeStarted);
 
-	RecordScatterReadExecute(ok);
+	bool complete = executed;
+	size_t incompleteIndex = requestCount;
+	for (size_t i = 0; i < requestCount; ++i)
+	{
+		if (actualBytesRead[i] != requests[i].size)
+		{
+			complete = false;
+			incompleteIndex = i;
+			break;
+		}
+	}
 
-	VMMDLL_Scatter_CloseHandle(handle);
+	if (!bytesRead.empty())
+		std::copy(actualBytesRead.begin(), actualBytesRead.end(), bytesRead.begin());
+
+	RecordScatterReadExecute(complete);
+
+	if (!VMMDLL_Scatter_Clear(handle, targetPid, scatterFlags))
+	{
+		RecordScatterClearFailure();
+		CloseScatterHandleLocked();
+	}
 	lock.unlock();
 
-	if (executeMs >= PerfMonitor::kSlowScatterMs)
+	if (lockWaitMs >= PerfMonitor::kSlowDmaLockWaitMs || executeMs >= PerfMonitor::kSlowScatterMs)
 	{
 		const std::string detail = std::to_string(requestCount) + " reads";
 		const std::string_view label = callingFunc.empty()
 			? std::string_view("Try Scatter Read")
 			: callingFunc;
+
+		RecordDmaTiming(
+			"dma.lock_wait",
+			label,
+			lockWaitMs,
+			PerfMonitor::kSlowDmaLockWaitMs,
+			detail
+		);
 
 		RecordDmaTiming(
 			"dma.execute",
@@ -3494,9 +3244,16 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 		);
 	}
 
-	if (!ok)
+	if (!complete)
 	{
-		MemoryLogError("TryReadScatter failed to execute scatter read");
+		const std::string label = callingFunc.empty() ? "Try Scatter Read" : std::string(callingFunc);
+		if (executed && incompleteIndex < requestCount)
+		{
+			return TryScatterReadResult::Incomplete;
+		}
+
+		const std::string key = "scatter_execute:" + label;
+		MemoryLogErrorThrottled(key.c_str(), "Scatter execution failed [" + label + "]", std::chrono::seconds(2));
 		return TryScatterReadResult::Failed;
 	}
 
@@ -3584,9 +3341,9 @@ MemoryConnectionStats Memory::GetConnectionStats() const
 	stats.dmaInitialized = DMA_INITIALIZED;
 	stats.processInitialized = PROCESS_INITIALIZED;
 
-	stats.vmmLibraryLoaded = (modules.VMM != nullptr);
-	stats.leechCoreLibraryLoaded = (modules.LEECHCORE != nullptr);
-	stats.ftd3xxLibraryLoaded = (modules.FTD3XX != nullptr);
+	stats.vmmLibraryLoaded = GetModuleHandleW(L"vmm.dll") != nullptr;
+	stats.leechCoreLibraryLoaded = GetModuleHandleW(L"leechcore.dll") != nullptr;
+	stats.ftd3xxLibraryLoaded = GetModuleHandleW(L"FTD3XX.dll") != nullptr && GetModuleHandleW(L"FTD3XXWU.dll") != nullptr;
 
 	stats.vmmHandleAddress =
 		static_cast<uint64_t>(

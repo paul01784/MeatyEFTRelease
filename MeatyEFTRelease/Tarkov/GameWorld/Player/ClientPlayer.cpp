@@ -156,13 +156,7 @@ void ClientPlayer::applyRefresh(Player& player, const PlayerRuntimeRead& read, b
             player.rotationRAW = read.rotationRaw;
 
         if (read.velocityQueued)
-        {
-            const float speed = glm::length(read.velocity);
-            const bool velocityValid = std::isfinite(read.velocity.x) && std::isfinite(read.velocity.y) && std::isfinite(read.velocity.z) && std::isfinite(speed) && speed >= 0.1f && speed <= 15.0f;
-            player.velocity = velocityValid ? read.velocity : glm::vec3{};
-            player.velocityValid = velocityValid;
-            player.lastVelocityUpdate = context.now;
-        }
+            applyVelocitySample(player, read.velocity, context.now);
 
         if (read.corpseQueued)
             player.P_CorpseClass = read.corpseClass;

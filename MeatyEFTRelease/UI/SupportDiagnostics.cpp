@@ -672,11 +672,10 @@ SupportReportResult ExportSupportReport(const SupportReportOptions& options)
             { "read_operations_per_second", traffic.readOperationsPerSecond },
             { "read_requests_per_second", traffic.readRequestsPerSecond },
             { "read_bytes_per_second", traffic.readBytesRequestedPerSecond },
-            { "write_operations", traffic.writeOperations },
-            { "write_successes", traffic.writeSuccesses },
-            { "write_failures", traffic.writeFailures },
             { "scatter_read_batches", traffic.scatterReadBatches },
             { "scatter_read_requests", traffic.scatterReadRequests },
+            { "scatter_handle_initializations", traffic.scatterHandleInitializations },
+            { "scatter_handle_reuses", traffic.scatterHandleReuses },
             { "scatter_clear_failures", traffic.scatterClearFailures }
         };
 

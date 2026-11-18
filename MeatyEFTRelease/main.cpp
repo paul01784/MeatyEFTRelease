@@ -8,6 +8,7 @@
 #include "memory/Memory.h"
 #include "Core/Offsets/EftOffsetService.h"
 #include "Core/Offsets/UnityOffsetService.h"
+#include "Core/Dependencies/RuntimeDependencies.h"
 
 #include "UI/SplashWindow.h"
 #include "UI/resource.h"
@@ -119,6 +120,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
                     if (!updateResult.success)
                     {
+                        const RuntimeDependencies::ValidationResult dependencyValidation = RuntimeDependencies::Validate(applicationDirectory);
+                        if (!dependencyValidation.success)
+                            throw std::runtime_error(dependencyValidation.message + "\n\nAutomatic repair also failed: " + updateResult.error);
                         throw std::runtime_error("File update check failed: " + updateResult.error);
                     }
 
@@ -170,6 +174,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
                     splash.SetStatus(L"Skipping application file check...");
                 }
+
+                splash.SetStatus(L"Validating native dependencies...");
+                const RuntimeDependencies::ValidationResult dependencyValidation = RuntimeDependencies::Validate(applicationDirectory);
+                if (!dependencyValidation.success)
+                    throw std::runtime_error(dependencyValidation.message);
+
+                std::string dependencyLoadError;
+                if (!RuntimeDependencies::Load(applicationDirectory, dependencyLoadError))
+                    throw std::runtime_error(dependencyLoadError);
+
+                LOGS.logInfo(std::string("[MAIN][DEPENDENCIES] ") + dependencyValidation.message);
 
                 splash.SetStatus(L"Loading configuration...");
 

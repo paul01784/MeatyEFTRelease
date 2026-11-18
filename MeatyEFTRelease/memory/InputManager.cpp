@@ -232,17 +232,14 @@ bool c_keys::InitKeyboard()
                             return false;
                         }
 
-                        DWORD bytesRead = 0;
-
-                        const BOOL ok = VMMDLL_MemReadEx(
-                            mem.vHandle,
-                            kernelPid,
-                            address,
-                            reinterpret_cast<PBYTE>(outBuffer),
-                            size,
-                            &bytesRead,
-                            VMMDLL_FLAG_NOCACHE
-                        );
+						const bool ok = mem.Read(
+							address,
+							outBuffer,
+							size,
+							static_cast<int>(kernelPid),
+							DmaCacheMode::Uncached,
+							label
+						);
 
                         Log(
                             false,
@@ -252,10 +249,10 @@ bool c_keys::InitKeyboard()
                             static_cast<unsigned long long>(address),
                             size,
                             ok ? "true" : "false",
-                            bytesRead
+							ok ? size : 0
                         );
 
-                        return ok && bytesRead == size;
+						return ok;
                     };
 
                 auto FindKernelSignatureExact = [&] (
@@ -745,9 +742,8 @@ bool c_keys::InitKeyboard()
                 if (attempt == kMaximumResolveAttempts)
                     break;
 
-                // Automatic VMM refresh is disabled. Rebuild process/module
-                // and virtual-translation state before retrying the CSRSS
-                // session mappings.
+                // Force a one-time process and translation refresh before
+                // retrying the CSRSS session mappings.
                 if (!mem.RefreshProcessInformationNow())
                 {
                     Log(true, "[KEYS][WIN11] VMM refresh before retry failed");

@@ -14,7 +14,7 @@ class ScatterReadBatch final
 public:
     explicit ScatterReadBatch(
         Memory& memory,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::string_view label = {})
         : memory_(memory),
         cacheMode_(cacheMode),
@@ -110,12 +110,14 @@ private:
         bool complete = true;
         std::size_t start = 0;
 
+        const std::size_t transferLimit = Memory::GetDmaTransferLimit();
+
         while (start < requests_.size())
         {
             std::size_t end = start;
             std::size_t bytes = 0;
 
-            while (end < requests_.size() && end - start < Memory::MaxDmaScatterRequests && bytes + requests_[end].size <= Memory::MaxDmaTransferBytes)
+            while (end < requests_.size() && end - start < Memory::MaxDmaScatterRequests && bytes + requests_[end].size <= transferLimit)
             {
                 bytes += requests_[end].size;
                 ++end;
@@ -136,7 +138,6 @@ private:
                 effectiveLabel,
                 bytesRead,
                 DmaPagingMode::NoPaging,
-                false,
                 lockMode);
 
             if (result != Memory::TryScatterReadResult::Success)
@@ -165,7 +166,7 @@ private:
     }
 
     Memory& memory_;
-    DmaCacheMode cacheMode_ = DmaCacheMode::Cached;
+    DmaCacheMode cacheMode_ = DmaCacheMode::Uncached;
     std::string label_;
     std::vector<Memory::ScatterReadRequest> requests_;
 };

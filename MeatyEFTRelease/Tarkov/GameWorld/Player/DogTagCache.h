@@ -24,7 +24,8 @@ public:
 
     DogTagCache();
 
-    void ReadFromCorpse(uint64_t corpseInteractiveClass);
+    std::optional<Entry> ReadFromCorpse(uint64_t corpseInteractiveClass);
+    std::optional<Entry> ReadFromDogTagComponent(uint64_t corpseInteractiveClass, uint64_t dogTagComponent);
 
     bool HasEntryByProfileId(const std::string& profileId) const;
     bool HasEntryByAccountId(const std::string& accountId) const;
@@ -33,6 +34,7 @@ public:
     std::optional<Entry> GetByAccountId(const std::string& accountId) const;
 
     const std::vector<Entry>& GetAllEntries() const;
+    bool WasCorpseProcessed(uint64_t corpseInteractiveClass) const;
 
     void ClearProcessedCorpses();
 
@@ -41,9 +43,9 @@ private:
     bool IsDuplicate(const Entry& entry) const;
     bool AddEntryIfMissing(const Entry& entry);
     void RebuildIndexes();
+    std::optional<Entry> ReadDogTagComponent(uint64_t dogTagComponent);
 
-    bool WasCorpseProcessed(uint64_t corpseInteractiveClass) const;
-    void MarkCorpseProcessed(uint64_t corpseInteractiveClass);
+    bool TryMarkCorpseProcessed(uint64_t corpseInteractiveClass);
     
 
 private:

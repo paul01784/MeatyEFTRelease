@@ -9,6 +9,18 @@
 class Player;
 struct LootEntity;
 
+struct WidgetWindowSettings {
+    bool fixedPosition = true;
+    bool useAppOpacity = true;
+    float detachedX = 10.0f;
+    float detachedY = 56.0f;
+    bool hasDetachedPosition = false;
+
+    // Runtime-only state. These values are deliberately not serialized.
+    bool restoreDetachedPosition = true;
+    bool positionSavePending = false;
+};
+
 struct globals {
     static std::string appVersion;
     static std::string latestAppVersion;
@@ -20,6 +32,18 @@ struct globals {
     static bool appHideTitlebar;
     static bool useMeatyJsonMirror;
     static std::string dogTagAPIKey;
+
+    static WidgetWindowSettings lootWidgetWindow;
+    static WidgetWindowSettings exfilWidgetWindow;
+    static WidgetWindowSettings topLootWidgetWindow;
+    static WidgetWindowSettings playersWidgetWindow;
+    static WidgetWindowSettings settingsWindow;
+    static WidgetWindowSettings fuserSettingsWindow;
+    static WidgetWindowSettings inputDeviceWindow;
+    static WidgetWindowSettings lootFiltersWindow;
+    static WidgetWindowSettings questsWindow;
+    static WidgetWindowSettings watchListWindow;
+    static WidgetWindowSettings debugWindow;
 
     static std::string radarSubText;
 

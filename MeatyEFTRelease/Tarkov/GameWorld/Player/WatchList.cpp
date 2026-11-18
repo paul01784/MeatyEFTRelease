@@ -1,6 +1,7 @@
 #include "WatchList.h"
 
 #include "../RegisteredPlayers.h"
+#include "../../../UI/config.h"
 #include "../../../UI/menuLayout.h"
 
 #include <nlohmann/json.hpp>
@@ -1140,7 +1141,7 @@ void WatchListManager::RenderWindow()
 
     enum class WatchListPage : int { Watchlist, Friends, Raids };
     static WatchListPage activePage = WatchListPage::Watchlist;
-    static constexpr ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse;
+    const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | menuLayout::WidgetMovementFlags(globals::watchListWindow);
 
 
     static std::string editProfileId;
@@ -1196,10 +1197,7 @@ void WatchListManager::RenderWindow()
     const ImGuiViewport* viewport =
         ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(
-        ImVec2(viewport->Pos.x + 40.0f, viewport->Pos.y + 40.0f),
-        ImGuiCond_FirstUseEver
-    );
+    menuLayout::PrepareRightToolbarWindow(globals::watchListWindow, "WatchList Manager", ImVec2(850.0f, 650.0f), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(850.0f, 650.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(
         ImVec2(660.0f, 450.0f),
@@ -1212,6 +1210,9 @@ void WatchListManager::RenderWindow()
         windowFlags
     ))
     {
+        if (menuLayout::RenderWidgetTitleBarControls(globals::watchListWindow))
+            configManager.SaveConfig();
+
         ImGui::SetCursorPos(
             ImVec2(10.0f, 45.0f)
         );

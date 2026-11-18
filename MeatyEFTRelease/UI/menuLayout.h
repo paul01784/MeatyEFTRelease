@@ -1,9 +1,12 @@
 #pragma once
 
 #include "../external/imgui/imgui.h"
+#include "../external/imgui/imgui_internal.h"
 #include "IconsFontAwesomeCompat.h"
+#include "globals.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace menuLayout
@@ -20,6 +23,185 @@ namespace menuLayout
         return ImVec2(
             viewport->Pos.x + WidgetToolbarX,
             viewport->Pos.y + WidgetToolbarY + WidgetToolbarButtonSize + WidgetToolbarGap);
+    }
+
+    inline ImVec2 ClampWidgetPosition(const ImVec2& position, const ImVec2& windowSize)
+    {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const float maximumX = std::max(viewport->WorkPos.x, viewport->WorkPos.x + viewport->WorkSize.x - windowSize.x);
+        const float maximumY = std::max(viewport->WorkPos.y, viewport->WorkPos.y + viewport->WorkSize.y - windowSize.y);
+        return ImVec2(
+            std::clamp(position.x, viewport->WorkPos.x, maximumX),
+            std::clamp(position.y, viewport->WorkPos.y, maximumY));
+    }
+
+    inline void PrepareWidgetWindow(WidgetWindowSettings& settings, const ImVec2& windowSize, float appWindowAlpha, const ImVec2& fixedPosition)
+    {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+        if (settings.fixedPosition)
+        {
+            ImGui::SetNextWindowPos(fixedPosition, ImGuiCond_Always);
+        }
+        else if (settings.restoreDetachedPosition && settings.hasDetachedPosition)
+        {
+            const ImVec2 savedPosition(viewport->WorkPos.x + settings.detachedX, viewport->WorkPos.y + settings.detachedY);
+            ImGui::SetNextWindowPos(ClampWidgetPosition(savedPosition, windowSize), ImGuiCond_Always);
+        }
+
+        ImGui::SetNextWindowBgAlpha(settings.useAppOpacity ? appWindowAlpha : 1.0f);
+    }
+
+    inline void PrepareWidgetWindow(WidgetWindowSettings& settings, const ImVec2& windowSize, float appWindowAlpha)
+    {
+        PrepareWidgetWindow(settings, windowSize, appWindowAlpha, TopLeftWidgetPosition());
+    }
+
+    inline ImVec2 TopRightWindowPosition(const ImVec2& windowSize)
+    {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        constexpr float toolbarRightMargin = 10.0f;
+        constexpr float toolbarButtonSize = 42.0f;
+        constexpr float windowGap = 8.0f;
+        constexpr float toolbarTop = 10.0f;
+        const float fixedY = viewport->Pos.y + toolbarTop + toolbarButtonSize + windowGap;
+        ImVec2 position = ClampWidgetPosition(
+            ImVec2(
+                viewport->Pos.x + viewport->Size.x - toolbarRightMargin - toolbarButtonSize - windowGap - windowSize.x,
+                fixedY),
+            windowSize);
+        position.y = fixedY;
+        return position;
+    }
+
+    inline void PrepareRightToolbarWindow(WidgetWindowSettings& settings, const char* windowName, const ImVec2& defaultWindowSize, float appWindowAlpha)
+    {
+        ImVec2 windowSize = defaultWindowSize;
+        if (ImGuiWindow* existingWindow = ImGui::FindWindowByName(windowName); existingWindow && existingWindow->SizeFull.x > 0.0f && existingWindow->SizeFull.y > 0.0f)
+            windowSize = existingWindow->SizeFull;
+        PrepareWidgetWindow(settings, windowSize, appWindowAlpha, TopRightWindowPosition(windowSize));
+    }
+
+    inline ImGuiWindowFlags WidgetMovementFlags(const WidgetWindowSettings& settings)
+    {
+        return settings.fixedPosition ? ImGuiWindowFlags_NoMove : ImGuiWindowFlags_None;
+    }
+
+    inline bool RoundTitleBarButton(const char* id, const ImVec2& centre, float radius, const char* icon, bool active, const char* tooltip)
+    {
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        const ImRect bounds(ImVec2(centre.x - radius, centre.y - radius), ImVec2(centre.x + radius, centre.y + radius));
+        const ImGuiID buttonId = window->GetID(id);
+        ImGui::ItemAdd(bounds, buttonId);
+        bool hovered = false;
+        bool held = false;
+        const bool pressed = ImGui::ButtonBehavior(bounds, buttonId, &hovered, &held, ImGuiButtonFlags_NoNavFocus);
+
+        ImVec4 background = active ? ImVec4(0.78f, 0.12f, 0.15f, 0.96f) : ImVec4(0.16f, 0.17f, 0.19f, 0.92f);
+        if (held)
+            background = ImVec4(0.58f, 0.08f, 0.10f, 1.0f);
+        else if (hovered)
+            background = active ? ImVec4(0.94f, 0.22f, 0.25f, 1.0f) : ImVec4(0.28f, 0.29f, 0.32f, 1.0f);
+
+        ImDrawList* drawList = window->DrawList;
+        drawList->AddCircleFilled(centre, radius, ImGui::GetColorU32(background), 20);
+        drawList->AddCircle(centre, radius, ImGui::GetColorU32(hovered ? ImVec4(1.0f, 0.62f, 0.64f, 1.0f) : ImVec4(0.45f, 0.46f, 0.49f, 0.9f)), 20, 1.0f);
+
+        ImFont* font = ImGui::GetFont();
+        const float iconFontSize = radius * 1.55f;
+        const ImVec2 iconSize = font->CalcTextSizeA(iconFontSize, FLT_MAX, 0.0f, icon);
+        drawList->AddText(font, iconFontSize, ImVec2(centre.x - iconSize.x * 0.5f, centre.y - iconSize.y * 0.5f), IM_COL32(245, 245, 247, 255), icon);
+
+        if (hovered)
+            ImGui::SetTooltip("%s", tooltip);
+
+        return pressed;
+    }
+
+    inline bool RenderWidgetTitleBarControls(WidgetWindowSettings& settings)
+    {
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        const ImRect titleBar = window->TitleBarRect();
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float buttonSize = std::min(ImGui::GetFontSize() * 0.82f, titleBar.GetHeight() - 6.0f);
+        const float radius = buttonSize * 0.5f;
+        const float buttonStep = buttonSize + style.ItemInnerSpacing.x;
+        const float closeButtonSpace = ImGui::GetFontSize() + style.ItemInnerSpacing.x + style.FramePadding.x;
+        const float rightCentreX = titleBar.Max.x - closeButtonSpace - radius;
+        const float centreY = titleBar.Min.y + titleBar.GetHeight() * 0.5f;
+        bool saveRequested = false;
+        bool positionToggled = false;
+
+        // ImGui switches to the content clip rectangle after Begin(), so temporarily
+        // restore the title-bar clip rectangle for these custom decoration buttons.
+        ImGui::PushClipRect(titleBar.Min, titleBar.Max, false);
+
+        if (RoundTitleBarButton(
+            "##WidgetOpacityToggle",
+            ImVec2(rightCentreX, centreY),
+            radius,
+            settings.useAppOpacity ? ICON_FA_DROPLET : ICON_FA_DROPLET_SLASH,
+            settings.useAppOpacity,
+            settings.useAppOpacity ? "App opacity: on (click for fully opaque)" : "App opacity: off (click to follow app opacity)"))
+        {
+            settings.useAppOpacity = !settings.useAppOpacity;
+            saveRequested = true;
+        }
+
+        if (RoundTitleBarButton(
+            "##WidgetPositionToggle",
+            ImVec2(rightCentreX - buttonStep, centreY),
+            radius,
+            settings.fixedPosition ? ICON_FA_LINK : ICON_FA_LINK_SLASH,
+            settings.fixedPosition,
+            settings.fixedPosition ? "Fixed to toolbar (click to detach)" : "Detached (click to fix to toolbar)"))
+        {
+            settings.fixedPosition = !settings.fixedPosition;
+            settings.positionSavePending = false;
+            positionToggled = true;
+
+            if (!settings.fixedPosition)
+            {
+                const ImGuiViewport* viewport = ImGui::GetMainViewport();
+                const ImVec2 currentPosition = ImGui::GetWindowPos();
+                if (!settings.hasDetachedPosition)
+                {
+                    settings.detachedX = currentPosition.x - viewport->WorkPos.x;
+                    settings.detachedY = currentPosition.y - viewport->WorkPos.y;
+                    settings.hasDetachedPosition = true;
+                }
+                settings.restoreDetachedPosition = true;
+            }
+
+            saveRequested = true;
+        }
+
+        ImGui::PopClipRect();
+
+        if (settings.fixedPosition || positionToggled)
+            return saveRequested;
+
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImVec2 currentPosition = ImGui::GetWindowPos();
+        const float detachedX = currentPosition.x - viewport->WorkPos.x;
+        const float detachedY = currentPosition.y - viewport->WorkPos.y;
+        settings.restoreDetachedPosition = false;
+
+        if (!settings.hasDetachedPosition || std::abs(settings.detachedX - detachedX) > 0.5f || std::abs(settings.detachedY - detachedY) > 0.5f)
+        {
+            settings.detachedX = detachedX;
+            settings.detachedY = detachedY;
+            settings.hasDetachedPosition = true;
+            settings.positionSavePending = true;
+        }
+
+        if (settings.positionSavePending && ImGui::GetActiveID() != window->MoveId && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            settings.positionSavePending = false;
+            saveRequested = true;
+        }
+
+        return saveRequested;
     }
 
     inline void PushContentInset()

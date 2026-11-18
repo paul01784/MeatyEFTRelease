@@ -2,7 +2,6 @@
 #include "pch.h"
 #include "InputManager.h"
 #include "Registry.h"
-#include "Shellcode.h"
 #include "structs.h"
 #include "DmaScheduler.h"
 
@@ -22,40 +21,29 @@ struct MemoryTrafficStats
 {
     // Lifetime totals since construction or ResetTrafficStats()
     uint64_t readOperations = 0;          // Direct reads + scatter execute-read batches.
-    uint64_t writeOperations = 0;         // Direct writes + scatter execute-write batches.
-
     uint64_t readSuccesses = 0;
-    uint64_t writeSuccesses = 0;
 
     uint64_t readFailures = 0;
-    uint64_t writeFailures = 0;
 
     uint64_t readRequests = 0;
-    uint64_t writeRequests = 0;
 
     uint64_t readBytesRequested = 0;
-    uint64_t writeBytesRequested = 0;
 
     uint64_t directReadBytesReturned = 0;
 
     uint64_t scatterReadBatches = 0;
-    uint64_t scatterWriteBatches = 0;
-
     uint64_t scatterReadRequests = 0;
-    uint64_t scatterWriteRequests = 0;
+    uint64_t scatterHandleInitializations = 0;
+    uint64_t scatterHandleReuses = 0;
 
     uint64_t scatterClearFailures = 0;
 
     double sampleWindowSeconds = 0.0;
 
     double readOperationsPerSecond = 0.0;
-    double writeOperationsPerSecond = 0.0;
-
     double readRequestsPerSecond = 0.0;
-    double writeRequestsPerSecond = 0.0;
 
     double readBytesRequestedPerSecond = 0.0;
-    double writeBytesRequestedPerSecond = 0.0;
 };
 
 struct MemoryConnectionStats
@@ -139,15 +127,6 @@ enum class DmaHealthSource : uint8_t
 class Memory
 {
 private:
-    struct LibModules
-    {
-        HMODULE VMM = nullptr;
-        HMODULE FTD3XX = nullptr;
-        HMODULE LEECHCORE = nullptr;
-    };
-
-    static inline LibModules modules{};
-
     struct CurrentProcessInformation
     {
         DWORD PID = 0;
@@ -163,6 +142,7 @@ private:
 
     bool DumpMemoryMap(bool debug = false);
     bool SetFPGA();
+    void CloseScatterHandleLocked() noexcept;
 
     std::thread dmaThread;
 
@@ -172,33 +152,25 @@ private:
 
     std::shared_ptr<c_keys> key;
     c_registry registry;
-    c_shellcode shellcode;
     
 private:
     struct TrafficCounterSnapshot
     {
         uint64_t readOperations = 0;
-        uint64_t writeOperations = 0;
-
         uint64_t readSuccesses = 0;
-        uint64_t writeSuccesses = 0;
 
         uint64_t readFailures = 0;
-        uint64_t writeFailures = 0;
 
         uint64_t readRequests = 0;
-        uint64_t writeRequests = 0;
 
         uint64_t readBytesRequested = 0;
-        uint64_t writeBytesRequested = 0;
 
         uint64_t directReadBytesReturned = 0;
 
         uint64_t scatterReadBatches = 0;
-        uint64_t scatterWriteBatches = 0;
-
         uint64_t scatterReadRequests = 0;
-        uint64_t scatterWriteRequests = 0;
+        uint64_t scatterHandleInitializations = 0;
+        uint64_t scatterHandleReuses = 0;
 
         uint64_t scatterClearFailures = 0;
     };
@@ -208,13 +180,9 @@ private:
         double sampleWindowSeconds = 0.0;
 
         double readOperationsPerSecond = 0.0;
-        double writeOperationsPerSecond = 0.0;
-
         double readRequestsPerSecond = 0.0;
-        double writeRequestsPerSecond = 0.0;
 
         double readBytesRequestedPerSecond = 0.0;
-        double writeBytesRequestedPerSecond = 0.0;
     };
 
     TrafficCounterSnapshot LoadTrafficCounters() const;
@@ -225,42 +193,29 @@ private:
         bool success
     ) const;
 
-    void RecordDirectWrite(
-        size_t requestedBytes,
-        bool success
-    ) const;
-
     void RecordScatterReadRequest(size_t requestedBytes) const;
-    void RecordScatterWriteRequest(size_t requestedBytes) const;
 
     void RecordScatterReadExecute(bool success) const;
-    void RecordScatterWriteExecute(bool success) const;
 
     void RecordScatterClearFailure() const;
 
-    // Atomic counters: no locking in normal DMA read/write paths.
+    // Atomic counters: no locking in normal DMA read paths.
     mutable std::atomic<uint64_t> statsReadOperations{ 0 };
-    mutable std::atomic<uint64_t> statsWriteOperations{ 0 };
 
     mutable std::atomic<uint64_t> statsReadSuccesses{ 0 };
-    mutable std::atomic<uint64_t> statsWriteSuccesses{ 0 };
 
     mutable std::atomic<uint64_t> statsReadFailures{ 0 };
-    mutable std::atomic<uint64_t> statsWriteFailures{ 0 };
 
     mutable std::atomic<uint64_t> statsReadRequests{ 0 };
-    mutable std::atomic<uint64_t> statsWriteRequests{ 0 };
 
     mutable std::atomic<uint64_t> statsReadBytesRequested{ 0 };
-    mutable std::atomic<uint64_t> statsWriteBytesRequested{ 0 };
 
     mutable std::atomic<uint64_t> statsDirectReadBytesReturned{ 0 };
 
     mutable std::atomic<uint64_t> statsScatterReadBatches{ 0 };
-    mutable std::atomic<uint64_t> statsScatterWriteBatches{ 0 };
-
     mutable std::atomic<uint64_t> statsScatterReadRequests{ 0 };
-    mutable std::atomic<uint64_t> statsScatterWriteRequests{ 0 };
+    mutable std::atomic<uint64_t> statsScatterHandleInitializations{ 0 };
+    mutable std::atomic<uint64_t> statsScatterHandleReuses{ 0 };
 
     mutable std::atomic<uint64_t> statsScatterClearFailures{ 0 };
 
@@ -275,6 +230,7 @@ private:
 
     mutable std::mutex handleMutex;
     mutable PriorityDmaMutex dmaOpsMutex;
+    VMMDLL_SCATTER_HANDLE reusableScatterHandle = nullptr;
 
     mutable std::mutex tarkovPointersMutex;
     TarkovPointerSnapshot tarkovPointers{};
@@ -284,6 +240,7 @@ private:
 
     std::chrono::steady_clock::time_point lastMemoryCacheRefresh{};
     std::chrono::steady_clock::time_point lastTlbCacheRefresh{};
+    bool preferTlbCacheRefresh = true;
 
     struct DmaHealthFailureState
     {
@@ -302,13 +259,21 @@ private:
 
 private:
     [[nodiscard]] static DWORD BuildReadFlags(DmaCacheMode cacheMode);
-    [[nodiscard]] static DWORD BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode = DmaPagingMode::NoPaging, bool zeroPadOnFail = true);
+    [[nodiscard]] static DWORD BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode = DmaPagingMode::NoPaging);
 
 public:
-    // Keep a single DMA operation short enough that a waiting high-priority
-    // task can take the bus between chunks.
+    // 64 KiB remains the hard device limit. Live work yields every 32 KiB;
+    // background work may use the full window for throughput.
+    static constexpr size_t PreferredDmaTransferBytes = 32 * 1024;
     static constexpr size_t MaxDmaTransferBytes = 64 * 1024;
     static constexpr size_t MaxDmaScatterRequests = 256;
+
+    [[nodiscard]] static size_t GetDmaTransferLimit() noexcept
+    {
+        return GetCurrentDmaPriority() == DmaPriority::Background
+            ? MaxDmaTransferBytes
+            : PreferredDmaTransferBytes;
+    }
 
     struct ScatterReadRequest
     {
@@ -323,6 +288,7 @@ public:
     enum class TryScatterReadResult : uint8_t
     {
         Success,
+        Incomplete,
         Busy,
         Failed
     };
@@ -338,9 +304,6 @@ public:
 
     c_keys* GetKeyboard() { return key.get(); }
     const c_keys* GetKeyboard() const { return key.get(); }
-
-    c_shellcode& GetShellcode() { return shellcode; }
-    const c_shellcode& GetShellcode() const { return shellcode; }
 
     bool Init(bool memMap = true, bool debug = false);
     bool WaitForRetryOrCancel(DWORD milliseconds);
@@ -365,6 +328,7 @@ public:
 
     uintptr_t GetBaseDaddy(const std::string& module_name);
     size_t GetBaseSize(const std::string& module_name);
+    [[nodiscard]] bool GetModuleInfo(const std::string& moduleName, uintptr_t& moduleBase, size_t& moduleSize) const;
 
     void PreloadTarkovPointerSnapshot();
     void RefreshTarkovPointerSnapshot();
@@ -388,42 +352,22 @@ public:
         uint64_t range_start,
         uint64_t range_end,
         int PID = 0,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached
     );
 
     bool RefreshProcessInformationNow();
+    bool RefreshAllCaches();
     void RunCacheMaintenance();
     void ReportDmaHealthFailure(DmaHealthSource source, uint64_t fingerprint = 0);
     void ReportDmaHealthSuccess(DmaHealthSource source);
     [[nodiscard]] uint64_t GetDmaRecoveryEpoch() const noexcept;
 
 
-    bool WriteBufferEnsure(
-        uintptr_t address,
-        const void* buffer,
-        size_t size,
-        DmaCacheMode cacheMode = DmaCacheMode::Uncached
-    ) const;
-
-    bool Write(uintptr_t address, const void* buffer, size_t size) const;
-    bool Write(uintptr_t address, const void* buffer, size_t size, int pid) const;
-
-    template <typename T>
-    bool WriteValue(uintptr_t address, const T& value) const
-    {
-        static_assert(std::is_trivially_copyable_v<T>, "WriteValue<T> requires trivially copyable type");
-
-        if (!address)
-            return false;
-
-        return Write(address, &value, sizeof(T));
-    }
-
     bool Read(
         uintptr_t address,
         void* buffer,
         size_t size,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::string_view callingFunc = {},
         std::source_location caller = std::source_location::current()) const;
 
@@ -432,7 +376,7 @@ public:
         void* buffer,
         size_t size,
         int pid,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::string_view callingFunc = {},
         std::source_location caller = std::source_location::current()) const;
 
@@ -440,7 +384,7 @@ public:
     [[nodiscard]] bool TryRead(
         uint64_t address,
         T& out,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::source_location caller = std::source_location::current()) const
     {
         static_assert(std::is_trivially_copyable_v<T>, "TryRead<T> requires trivially copyable type");
@@ -456,7 +400,7 @@ public:
     template <typename T>
     [[nodiscard]] std::optional<T> ReadOpt(
         uint64_t address,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::source_location caller = std::source_location::current()) const
     {
         T value{};
@@ -471,7 +415,7 @@ public:
     [[nodiscard]] T ReadOr(
         uint64_t address,
         T fallback,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::source_location caller = std::source_location::current()) const
     {
         T value{};
@@ -485,7 +429,7 @@ public:
     template <typename T>
     [[nodiscard]] T Read(
         uint64_t address,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::source_location caller = std::source_location::current()) const
     {
         static_assert(std::is_trivially_copyable_v<T>, "Read<T> requires trivially copyable type");
@@ -501,7 +445,7 @@ public:
     template <typename T>
     [[nodiscard]] T Read(
         void* address,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::source_location caller = std::source_location::current()) const
     {
         return Read<T>(reinterpret_cast<uint64_t>(address), cacheMode, caller);
@@ -511,7 +455,7 @@ public:
     [[nodiscard]] std::vector<T> ReadVector(
         uint64_t address,
         size_t count,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::source_location caller = std::source_location::current()) const
     {
         static_assert(std::is_trivially_copyable_v<T>, "ReadVector<T> requires trivially copyable type");
@@ -540,7 +484,7 @@ public:
     [[nodiscard]] std::vector<T> read_vec_new(
         uint64_t address,
         size_t count,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::source_location caller = std::source_location::current()) const
     {
         return ReadVector<T>(address, count, cacheMode, caller);
@@ -550,7 +494,7 @@ public:
     [[nodiscard]] std::vector<T> read_vec(
         uint64_t address,
         size_t count,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached,
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached,
         std::source_location caller = std::source_location::current()) const
     {
         return ReadVector<T>(address, count, cacheMode, caller);
@@ -560,13 +504,13 @@ public:
         uint64_t base,
         const std::vector<uint64_t>& offsets,
         uint64_t& out,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached
     ) const;
 
     [[nodiscard]] uint64_t ReadChain(
         uint64_t base,
         const std::vector<uint64_t>& offsets,
-        DmaCacheMode cacheMode = DmaCacheMode::Cached
+        DmaCacheMode cacheMode = DmaCacheMode::Uncached
     ) const
     {
         uint64_t out = 0;
@@ -574,18 +518,18 @@ public:
         return out;
     }
 
-    std::string readUnityString(uintptr_t address, SIZE_T maxChars = 128, DmaCacheMode cacheMode = DmaCacheMode::Cached);
-    std::string readUnityStringField(uintptr_t fieldAddress, SIZE_T maxChars = 128, DmaCacheMode cacheMode = DmaCacheMode::Cached);
-    std::string readUTF8String(uint64_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Cached);
-    std::string readString(uint64_t address, size_t size, DmaCacheMode cacheMode = DmaCacheMode::Cached);
-    std::wstring readWideString(uintptr_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Cached);
-    std::string readUnicodeString(uintptr_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Cached);
+    std::string readUnityString(uintptr_t address, SIZE_T maxChars = 128, DmaCacheMode cacheMode = DmaCacheMode::Uncached);
+    std::string readUnityStringField(uintptr_t fieldAddress, SIZE_T maxChars = 128, DmaCacheMode cacheMode = DmaCacheMode::Uncached);
+    std::string readUTF8String(uint64_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Uncached);
+    std::string readString(uint64_t address, size_t size, DmaCacheMode cacheMode = DmaCacheMode::Uncached);
+    std::wstring readWideString(uintptr_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Uncached);
+    std::string readUnicodeString(uintptr_t address, SIZE_T size, DmaCacheMode cacheMode = DmaCacheMode::Uncached);
 
     bool TryReadLootIdFallback(uint64_t fieldAddress, std::string& output);
     bool TryReadLootTransformFallback(uint64_t gameObject, uint64_t& output);
-    bool ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Cached, std::string_view callingFunc = {});
+    bool ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Uncached, std::string_view callingFunc = {}, int pid = 0);
 
-    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Cached, std::string_view callingFunc = {}, std::span<DWORD> bytesRead = {}, DmaPagingMode pagingMode = DmaPagingMode::NoPaging, bool zeroPadOnFail = true, DmaLockMode lockMode = DmaLockMode::Try);
+    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Uncached, std::string_view callingFunc = {}, std::span<DWORD> bytesRead = {}, DmaPagingMode pagingMode = DmaPagingMode::NoPaging, DmaLockMode lockMode = DmaLockMode::Try, int pid = 0);
 
     [[nodiscard]] static bool IsValidPointer(uintptr_t pointer)
     {

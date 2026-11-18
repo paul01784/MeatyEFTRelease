@@ -262,7 +262,6 @@ bool MainGame::updatePlayerList(bool waitForDma)
                 label,
                 bytesRead,
                 DmaPagingMode::NoPaging,
-                false,
                 waitForDma ? DmaLockMode::Wait : DmaLockMode::Try);
 
             if (result != Memory::TryScatterReadResult::Success)
@@ -366,10 +365,12 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
 
     const auto bssOnlyStartedAt = std::chrono::steady_clock::now();
     auto lastGomFallbackAt = std::chrono::steady_clock::time_point{};
+    auto lastTimedRecoveryAt = std::chrono::steady_clock::now();
 
     constexpr int kMaxPendingPromoteAttempts = 6;
     constexpr auto kBssOnlyDuration = std::chrono::seconds(6);
     constexpr auto kGomFallbackInterval = std::chrono::seconds(20);
+    constexpr auto kTimedRecoveryInterval = std::chrono::seconds(25);
     constexpr DWORD kRetryDelayMs = 2500;
 
     while (!stopToken.stop_requested())
@@ -458,6 +459,33 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
                 : "Looking for a raid...";
 
             mem.RunCacheMaintenance();
+
+            const auto recoveryNow = std::chrono::steady_clock::now();
+            const std::uint64_t maintenanceEpoch = mem.GetDmaRecoveryEpoch();
+            if (maintenanceEpoch != observedRecoveryEpoch)
+            {
+                observedRecoveryEpoch = maintenanceEpoch;
+                pending_local_gw = 0;
+                pending_gw_object = 0;
+                pendingAttempts = 0;
+                lastTimedRecoveryAt = recoveryNow;
+            }
+            else if ((recoveryNow - lastTimedRecoveryAt) >= kTimedRecoveryInterval)
+            {
+                lastTimedRecoveryAt = recoveryNow;
+                if (mem.RefreshProcessInformationNow())
+                {
+                    mem.RefreshTarkovPointerSnapshot();
+                    pending_local_gw = 0;
+                    pending_gw_object = 0;
+                    pendingAttempts = 0;
+                    LOGS.logInfo("[GameWorld] Timed DMA recovery completed after 25 seconds without a raid");
+                }
+                else
+                {
+                    LOGS.logWarn("[GameWorld] Timed DMA recovery failed; discovery will continue");
+                }
+            }
         }
         catch (const std::exception& e)
         {
@@ -788,6 +816,14 @@ void MainGame::mainThread(std::stop_token stopToken)
         ::registeredPlayers.clearCache();
         exfil.clearCache();
         g_dogTagCache.ClearProcessedCorpses();
+
+        const bool raidEndRefreshSucceeded = mem.RefreshProcessInformationNow();
+        mem.RefreshTarkovPointerSnapshot();
+        if (raidEndRefreshSucceeded)
+            LOGS.logInfo("[MAIN][DMA] Full memory, TLB and process refresh completed after raid cleanup");
+        else
+            LOGS.logWarn("[MAIN][DMA] Post-raid full refresh failed; timed recovery remains active");
+
         if (!WaitForStop(stopToken, std::chrono::milliseconds(3000)))
             break;
 

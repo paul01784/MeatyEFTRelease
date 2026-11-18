@@ -25,10 +25,10 @@ bool DogTagCache::WasCorpseProcessed(uint64_t corpseInteractiveClass) const
     return m_processedCorpses.find(corpseInteractiveClass) != m_processedCorpses.end();
 }
 
-void DogTagCache::MarkCorpseProcessed(uint64_t corpseInteractiveClass)
+bool DogTagCache::TryMarkCorpseProcessed(uint64_t corpseInteractiveClass)
 {
     std::lock_guard<std::mutex> lock(m_processedMutex);
-    m_processedCorpses.insert(corpseInteractiveClass);
+    return m_processedCorpses.insert(corpseInteractiveClass).second;
 }
 
 void DogTagCache::ClearProcessedCorpses()
@@ -140,25 +140,66 @@ const std::vector<DogTagCache::Entry>& DogTagCache::GetAllEntries() const
     return m_entries;
 }
 
-void DogTagCache::ReadFromCorpse(uint64_t corpseInteractiveClass)
+std::optional<DogTagCache::Entry> DogTagCache::ReadDogTagComponent(uint64_t dogTagComponent)
+{
+    if (!Utils::valid_pointer(dogTagComponent))
+        return std::nullopt;
+
+    Entry victim;
+    victim.profileId = mem.readUnityStringField(dogTagComponent + sdk::DogtagComponent::ProfileId, 256);
+    victim.accountId = mem.readUnityStringField(dogTagComponent + sdk::DogtagComponent::AccountId, 256);
+    victim.nickname = mem.readUnityStringField(dogTagComponent + sdk::DogtagComponent::Nickname, 256);
+    victim.lvl = mem.Read<int>(dogTagComponent + sdk::DogtagComponent::Level);
+
+    Entry killer;
+    killer.profileId = mem.readUnityStringField(dogTagComponent + sdk::DogtagComponent::KillerProfileId, 256);
+    killer.accountId = mem.readUnityStringField(dogTagComponent + sdk::DogtagComponent::KillerAccountId, 256);
+    killer.nickname = mem.readUnityStringField(dogTagComponent + sdk::DogtagComponent::KillerName, 256);
+
+    AddEntryIfMissing(victim);
+
+    if (killer.accountId != "0")
+        AddEntryIfMissing(killer);
+
+    return IsValidEntry(victim) ? std::optional<Entry>(std::move(victim)) : std::nullopt;
+}
+
+std::optional<DogTagCache::Entry> DogTagCache::ReadFromDogTagComponent(uint64_t corpseInteractiveClass, uint64_t dogTagComponent)
+{
+    if (!Utils::valid_pointer(corpseInteractiveClass) || !Utils::valid_pointer(dogTagComponent))
+        return std::nullopt;
+
+    if (!TryMarkCorpseProcessed(corpseInteractiveClass))
+        return std::nullopt;
+
+    try
+    {
+        return ReadDogTagComponent(dogTagComponent);
+    }
+    catch (...)
+    {
+        std::cout << "[DogTagCache] exception while processing corpse dogtag\n";
+        return std::nullopt;
+    }
+}
+
+std::optional<DogTagCache::Entry> DogTagCache::ReadFromCorpse(uint64_t corpseInteractiveClass)
 {
     if (!Utils::valid_pointer(corpseInteractiveClass))
-        return;
+        return std::nullopt;
 
-    if (WasCorpseProcessed(corpseInteractiveClass))
-        return;
-
-    bool processedSuccessfully = false;
+    if (!TryMarkCorpseProcessed(corpseInteractiveClass))
+        return std::nullopt;
 
     try
     {
         uint64_t itemBase = mem.Read<uint64_t>(corpseInteractiveClass + sdk::InteractiveLootItem::Item);
         if (!Utils::valid_pointer(itemBase))
-            return;
+            return std::nullopt;
 
         uint64_t slotsPtr = mem.Read<uint64_t>(itemBase + sdk::LootItemMod::Slots);
         if (!Utils::valid_pointer(slotsPtr))
-            return;
+            return std::nullopt;
 
         constexpr int kMaxDogtagSlots = 128;
         auto slotsRead = UnityArray<uint64_t>(
@@ -166,7 +207,7 @@ void DogTagCache::ReadFromCorpse(uint64_t corpseInteractiveClass)
             "Dogtag slots",
             kMaxDogtagSlots);
         if (slotsRead.count == 0)
-            return;
+            return std::nullopt;
 
         for (auto& slotPtr : slotsRead)
         {
@@ -192,31 +233,13 @@ void DogTagCache::ReadFromCorpse(uint64_t corpseInteractiveClass)
             if (!Utils::valid_pointer(dogtagComp))
                 break;
 
-            Entry victim;
-            victim.profileId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::ProfileId, 256);
-            victim.accountId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::AccountId, 256);
-            victim.nickname = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::Nickname, 256);
-            victim.lvl = mem.Read<int>(dogtagComp + sdk::DogtagComponent::Level);
-
-            Entry killer;
-            killer.profileId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::KillerProfileId, 256);
-            killer.accountId = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::KillerAccountId, 256);
-            killer.nickname = mem.readUnityStringField(dogtagComp + sdk::DogtagComponent::KillerName, 256);
-
-            AddEntryIfMissing(victim);
-
-            if (killer.accountId != "0") // skip scavs or maybe bad data
-                AddEntryIfMissing(killer);
-
-            processedSuccessfully = true;
-            break;
+            return ReadDogTagComponent(dogtagComp);
         }
-
-        if (processedSuccessfully)
-            MarkCorpseProcessed(corpseInteractiveClass);
     }
     catch (...)
     {
         std::cout << "[DogTagCache] exception while processing corpse dogtag\n";
     }
+
+    return std::nullopt;
 }

@@ -197,16 +197,19 @@ void renderFuserWindow()
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + 30.0f, viewport->Pos.y + 30.0f), ImGuiCond_FirstUseEver);
+    menuLayout::PrepareRightToolbarWindow(globals::fuserSettingsWindow, "Fuser", ImVec2(760.0f, 610.0f), globals::appWindowAlpha);
     ImGui::SetNextWindowSize(ImVec2(760.0f, 610.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(620.0f, 450.0f), ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f));
-    ImGui::SetNextWindowBgAlpha(globals::appWindowAlpha);
 
-    if (!ImGui::Begin("Fuser", &appMenu::appFuser, ImGuiWindowFlags_NoCollapse))
+    const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoCollapse | menuLayout::WidgetMovementFlags(globals::fuserSettingsWindow);
+    if (!ImGui::Begin("Fuser", &appMenu::appFuser, windowFlags))
     {
         ImGui::End();
         return;
     }
+
+    if (menuLayout::RenderWidgetTitleBarControls(globals::fuserSettingsWindow))
+        configManager.SaveConfig();
 
     DxWindowConfig editorConfig = g_DxWindow.GetConfig();
     ImGui::BeginChild("##fuserNavigation", ImVec2(0.0f, 42.0f), false);

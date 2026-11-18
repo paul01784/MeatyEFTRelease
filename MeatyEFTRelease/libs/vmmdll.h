@@ -8,10 +8,10 @@
 // while Linux may only access UTF-8 versions. Some functionality may also
 // be degraded or unavailable on Linux.
 //
-// (c) Ulf Frisk, 2018-2024
+// (c) Ulf Frisk, 2018-2026
 // Author: Ulf Frisk, pcileech@frizk.net
 //
-// Header Version: 5.9.17
+// Header Version: 5.18.10
 //
 
 #include "leechcore.h"
@@ -30,7 +30,7 @@ extern "C" {
 typedef unsigned __int64                    QWORD, *PQWORD;
 
 #endif /* _WIN32 */
-#ifdef LINUX
+#if defined(LINUX) || defined(MACOS)
 
 #include <inttypes.h>
 #include <stdarg.h>
@@ -62,6 +62,7 @@ typedef const uint16_t                      *LPCWSTR;
 #define _Out_
 #define _Out_opt_
 #define _Out_writes_(x)
+#define _Out_writes_bytes_(x)
 #define _Out_writes_bytes_opt_(x)
 #define _Out_writes_opt_(x)
 #define _Out_writes_to_(x,y)
@@ -72,7 +73,7 @@ typedef const uint16_t                      *LPCWSTR;
 #define _Printf_format_string_
 #define _Success_(x)
 
-#endif /* LINUX */
+#endif /* LINUX || MACOS */
 
 typedef struct tdVMM_HANDLE     *VMM_HANDLE;
 typedef struct tdVMMVM_HANDLE   *VMMVM_HANDLE;
@@ -233,6 +234,20 @@ VOID VMMDLL_MemFree(_Frees_ptr_opt_ PVOID pvMem);
 #define VMMDLL_OPT_REFRESH_FREQ_MEDIUM                  0x2001000100000000  // W - refresh medium frequency - incl. full process refresh
 #define VMMDLL_OPT_REFRESH_FREQ_SLOW                    0x2001001000000000  // W - refresh slow frequency.
 
+#define VMMDLL_OPT_REFRESH_SPECIFIC_HEAP_ALLOC          0x2003000100000000  // W - refresh only heap allocations.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_KOBJECT             0x2003000200000000  // W - refresh only kernel objects.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_NET                 0x2003000300000000  // W - refresh only network connections.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_PFN                 0x2003000400000000  // W - refresh only pfn database.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_PHYSMEMMAP          0x2003000500000000  // W - refresh only physical memory map.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_POOL                0x2003000600000000  // W - refresh only kernel pool.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_REGISTRY            0x2003000700000000  // W - refresh only registry.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_SERVICES            0x2003000800000000  // W - refresh only services.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_THREADCS            0x2003000900000000  // W - refresh only thread callstacks.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_USER                0x2003000A00000000  // W - refresh only users.
+#define VMMDLL_OPT_REFRESH_SPECIFIC_VM                  0x2003000B00000000  // W - refresh only virtual machines.
+
+#define VMMDLL_OPT_REFRESH_SPECIFIC_PROCESS             0x2002000300000000  // W - refresh only the specified process [LO-DWORD: Process PID]
+
 // PROCESS OPTIONS: [LO-DWORD: Process PID]
 #define VMMDLL_OPT_PROCESS_DTB                          0x2002000100000000  // W - force set process directory table base.
 #define VMMDLL_OPT_PROCESS_DTB_FAST_LOWINTEGRITY        0x2002000200000000  // W - force set process directory table base (fast, low integrity mode, with less checks) - use at own risk!.
@@ -296,7 +311,7 @@ typedef struct tdVMMDLL_MAP_PFN *PVMMDLL_MAP_PFN;
 //-----------------------------------------------------------------------------
 // LINUX SPECIFIC DEFINES:
 //-----------------------------------------------------------------------------
-#ifdef LINUX
+#if defined(LINUX) || defined(MACOS)
 
 #define IMAGE_SIZEOF_SHORT_NAME              8
 
@@ -330,7 +345,7 @@ typedef struct _SERVICE_STATUS {
     DWORD   dwCheckPoint;
     DWORD   dwWaitHint;
 } SERVICE_STATUS, *LPSERVICE_STATUS;
-#endif /* LINUX */
+#endif /* LINUX || MACOS */
 
 
 
@@ -409,7 +424,7 @@ EXPORTED_FUNCTION BOOL VMMDLL_VfsList_IsHandleValid(_In_ HANDLE pFileList);
 /*
 * List a directory of files in MemProcFS. Directories and files will be listed
 * by callbacks into functions supplied in the pFileList parameter.
-* If information of an individual file is needed it's neccessary to list all
+* If information of an individual file is needed it's necessary to list all
 * files in its directory.
 * -- hVMM
 * -- [uw]szPath
@@ -751,6 +766,30 @@ VOID VMMDLL_LogEx(
     va_list arglist
 );
 
+/*
+* Log callback function.
+* -- hVMM
+* -- MID = module id.
+* -- uszModule = module name.
+* -- dwLogLevel
+* -- uszLogMessage = log message in utf-8.
+*/
+typedef VOID(*VMMDLL_LOG_CALLBACK_PFN)(_In_ VMM_HANDLE hVMM, _In_ VMMDLL_MODULE_ID MID, _In_ LPCSTR uszModule, _In_ VMMDLL_LOGLEVEL dwLogLevel, _In_ LPCSTR uszLogMessage);
+
+/*
+* Register or unregister an optional log callback function.
+* When vmm logs an action which is visible according to current logging
+* configuration the registered callback function will be called with details.
+* To clear an already registered callback function specify NULL as pfnCB.
+* Callback logging will follow file logging configuration even if no log file
+* is specified when a callback function is registered.
+* -- hVMM
+* -- pfnCB
+* -- return = success/fail.
+*/
+EXPORTED_FUNCTION _Success_(return)
+BOOL VMMDLL_LogCallback(_In_ VMM_HANDLE hVMM, _In_opt_ VMMDLL_LOG_CALLBACK_PFN pfnCB);
+
 
 
 //-----------------------------------------------------------------------------
@@ -773,9 +812,11 @@ VOID VMMDLL_LogEx(
 #define VMMDLL_FLAG_NOPAGING_IO                     0x0020  // do not try to retrieve memory from paged out memory if read would incur additional I/O (even if possible).
 #define VMMDLL_FLAG_NOCACHEPUT                      0x0100  // do not write back to the data cache upon successful read from memory acquisition device.
 #define VMMDLL_FLAG_CACHE_RECENT_ONLY               0x0200  // only fetch from the most recent active cache region when reading.
-#define VMMDLL_FLAG_NO_PREDICTIVE_READ              0x0400  // do not perform additional predictive page reads (default on smaller requests).
-#define VMMDLL_FLAG_FORCECACHE_READ_DISABLE         0x0800  // disable/override any use of VMM_FLAG_FORCECACHE_READ. only recommended for local files. improves forensic artifact order.
+#define VMMDLL_FLAG_NO_PREDICTIVE_READ              0x0400  // (deprecated/unused).
+#define VMMDLL_FLAG_FORCECACHE_READ_DISABLE         0x0800  // disable/override any use of VMMDLL_FLAG_FORCECACHE_READ. only recommended for local files. improves forensic artifact order.
 #define VMMDLL_FLAG_SCATTER_PREPAREEX_NOMEMZERO     0x1000  // do not zero out the memory buffer when preparing a scatter read.
+#define VMMDLL_FLAG_NOMEMCALLBACK                   0x2000  // do not call user-set memory callback functions when reading memory (even if active).
+#define VMMDLL_FLAG_SCATTER_FORCE_PAGEREAD          0x4000  // force page-sized reads when using scatter functionality.
 
 /*
 * Read memory in various non-contigious locations specified by the pointers to
@@ -887,6 +928,41 @@ BOOL VMMDLL_MemWrite(_In_ VMM_HANDLE hVMM, _In_ DWORD dwPID, _In_ ULONG64 qwA, _
 */
 EXPORTED_FUNCTION _Success_(return)
 BOOL VMMDLL_MemVirt2Phys(_In_ VMM_HANDLE hVMM, _In_ DWORD dwPID, _In_ ULONG64 qwVA, _Out_ PULONG64 pqwPA);
+
+/* ABI bitness stable re - implementation of the Win32 MEMORY_BASIC_INFORMATION structure. */
+typedef struct tdVMMDLL_MEMORY_BASIC_INFORMATION {
+    QWORD BaseAddress;
+    QWORD AllocationBase;
+    DWORD AllocationProtect;
+    WORD  PartitionId;
+    WORD  _Reserved1;
+    DWORD _Reserved2;
+    QWORD RegionSize;
+    DWORD State;
+    DWORD Protect;
+    DWORD Type;
+    DWORD _Reserved3;
+} VMMDLL_MEMORY_BASIC_INFORMATION, *PVMMDLL_MEMORY_BASIC_INFORMATION;
+
+/*
+* VirtualQuery(Ex) analogue to allow enumeration of memory ranges via the API
+* in a way that is similar to the Win32 API VirtualQuery(Ex). The parameters
+* are roughly equivalent to their Win32 counterparts.
+* -- hVMM
+* -- dwPID
+* -- lpAddress
+* -- lpBuffer
+* -- dwLength
+* -- return
+*/
+EXPORTED_FUNCTION _Success_(return != 0)
+SIZE_T VMMDLL_MemVirtualQuery(
+    _In_ VMM_HANDLE hVMM,
+    _In_ DWORD dwPID,
+    _In_ QWORD lpAddress,
+    _Out_writes_bytes_(dwLength) PVMMDLL_MEMORY_BASIC_INFORMATION lpBuffer,
+    _In_ SIZE_T dwLength
+);
 
 
 
@@ -1030,6 +1106,46 @@ VOID VMMDLL_Scatter_CloseHandle(_In_opt_ _Post_ptr_invalid_ VMMDLL_SCATTER_HANDL
 
 
 //-----------------------------------------------------------------------------
+// MEMORY CALLBACK FUNCTIONALITY:
+// Allows for advanced memory access statistics and the creation of specialized
+// custom memory views for physical memory or per-process virtual memory.
+// Callback functions may be registered to modify memory reads and/or writes.
+//-----------------------------------------------------------------------------
+
+typedef enum tdVMMDLL_MEM_CALLBACK_TP {
+    VMMDLL_MEM_CALLBACK_READ_PHYSICAL_PRE = 1,
+    VMMDLL_MEM_CALLBACK_READ_PHYSICAL_POST = 2,
+    VMMDLL_MEM_CALLBACK_WRITE_PHYSICAL_PRE = 3,
+    VMMDLL_MEM_CALLBACK_READ_VIRTUAL_PRE = 4,
+    VMMDLL_MEM_CALLBACK_READ_VIRTUAL_POST = 5,
+    VMMDLL_MEM_CALLBACK_WRITE_VIRTUAL_PRE = 6,
+} VMMDLL_MEM_CALLBACK_TP;
+
+/*
+* MEM callback function definition.
+* -- ctxUser = user context pointer.
+* -- dwPID = PID of target process, (DWORD)-1 for physical memory.
+* -- cpMEMs = count of pMEMs.
+* -- ppMEMs = array of pointers to MEM scatter read headers.
+*/
+typedef VOID(*VMMDLL_MEM_CALLBACK_PFN)(_In_opt_ PVOID ctxUser, _In_ DWORD dwPID, _In_ DWORD cpMEMs, _In_ PPMEM_SCATTER ppMEMs);
+
+/*
+* Register or unregister an optional memory access callback function.
+* It's possible to have one callback function registered for each type.
+* To clear an already registered callback function specify NULL as pfnCB.
+* -- hVMM
+* -- tp = type of callback to register / unregister - VMMDLL_MEM_CALLBACK_*.
+* -- ctxUser = user context pointer to be passed to the callback function.
+* -- pfnCB = callback function to register / unregister.
+* -- return
+*/
+EXPORTED_FUNCTION _Success_(return)
+BOOL VMMDLL_MemCallback(_In_ VMM_HANDLE hVMM, _In_ VMMDLL_MEM_CALLBACK_TP tp, _In_opt_ PVOID ctxUser, _In_opt_ VMMDLL_MEM_CALLBACK_PFN pfnCB);
+
+
+
+//-----------------------------------------------------------------------------
 // VMM PROCESS MAP FUNCTIONALITY BELOW:
 // Functionality for retrieving process related collections of items such as
 // page table map (PTE), virtual address descriptor map (VAD), loaded modules,
@@ -1046,8 +1162,12 @@ VOID VMMDLL_Scatter_CloseHandle(_In_opt_ _Post_ptr_invalid_ VMMDLL_SCATTER_HANDL
 #define VMMDLL_MAP_HEAP_VERSION             4
 #define VMMDLL_MAP_HEAPALLOC_VERSION        1
 #define VMMDLL_MAP_THREAD_VERSION           4
+#define VMMDLL_MAP_THREAD_CALLSTACK_VERSION 1
 #define VMMDLL_MAP_HANDLE_VERSION           3
 #define VMMDLL_MAP_POOL_VERSION             2
+#define VMMDLL_MAP_KOBJECT_VERSION          1
+#define VMMDLL_MAP_KDRIVER_VERSION          1
+#define VMMDLL_MAP_KDEVICE_VERSION          1
 #define VMMDLL_MAP_NET_VERSION              3
 #define VMMDLL_MAP_PHYSMEM_VERSION          2
 #define VMMDLL_MAP_USER_VERSION             2
@@ -1084,7 +1204,7 @@ typedef struct tdVMMDLL_MAP_PTEENTRY {
     QWORD fPage;
     BOOL  fWoW64;
     DWORD _FutureUse1;
-    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependant
+    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependent
     DWORD _Reserved1;
     DWORD cSoftware;    // # software (non active) PTEs in region
 } VMMDLL_MAP_PTEENTRY, *PVMMDLL_MAP_PTEENTRY;
@@ -1113,7 +1233,7 @@ typedef struct tdVMMDLL_MAP_VADENTRY {
     DWORD cbPrototypePte;
     QWORD vaPrototypePte;
     QWORD vaSubsection;
-    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependant
+    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependent
     DWORD _FutureUse1;
     DWORD _Reserved1;
     QWORD vaFileObject;             // only valid if fFile/fImage _and_ after wszText is initialized
@@ -1175,10 +1295,10 @@ typedef struct tdVMMDLL_MAP_MODULEENTRY {
     QWORD vaEntry;
     DWORD cbImageSize;
     BOOL  fWoW64;
-    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependant
+    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependent
     DWORD _Reserved3;
     DWORD _Reserved4;
-    union { LPSTR  uszFullName; LPWSTR wszFullName; };      // U/W dependant
+    union { LPSTR  uszFullName; LPWSTR wszFullName; };      // U/W dependent
     VMMDLL_MODULE_TP tp;
     DWORD cbFileSizeRaw;
     DWORD cSection;
@@ -1194,7 +1314,7 @@ typedef struct tdVMMDLL_MAP_UNLOADEDMODULEENTRY {
     QWORD vaBase;
     DWORD cbImageSize;
     BOOL  fWoW64;
-    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependant
+    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependent
     DWORD _FutureUse1;
     DWORD dwCheckSum;               // user-mode only
     DWORD dwTimeDateStamp;          // user-mode only
@@ -1208,16 +1328,16 @@ typedef struct tdVMMDLL_MAP_EATENTRY {
     DWORD oFunctionsArray;          // PIMAGE_EXPORT_DIRECTORY->AddressOfFunctions[oFunctionsArray]
     DWORD oNamesArray;              // PIMAGE_EXPORT_DIRECTORY->AddressOfNames[oNamesArray]
     DWORD _FutureUse1;
-    union { LPSTR  uszFunction; LPWSTR wszFunction; };      // U/W dependant
+    union { LPSTR  uszFunction; LPWSTR wszFunction; };      // U/W dependent
     union { LPSTR  uszForwardedFunction; LPWSTR wszForwardedFunction; };    // U/W dependant (function or ordinal name if exists).
 } VMMDLL_MAP_EATENTRY, *PVMMDLL_MAP_EATENTRY;
 
 typedef struct tdVMMDLL_MAP_IATENTRY {
     QWORD vaFunction;
-    union { LPSTR  uszFunction; LPWSTR wszFunction; };      // U/W dependant
+    union { LPSTR  uszFunction; LPWSTR wszFunction; };      // U/W dependent
     DWORD _FutureUse1;
     DWORD _FutureUse2;
-    union { LPSTR  uszModule; LPWSTR wszModule; };          // U/W dependant
+    union { LPSTR  uszModule; LPWSTR wszModule; };          // U/W dependent
     struct {
         BOOL f32;
         WORD wHint;
@@ -1311,6 +1431,18 @@ typedef struct tdVMMDLL_MAP_THREADENTRY {
     QWORD vaWin32StartAddress;
 } VMMDLL_MAP_THREADENTRY, *PVMMDLL_MAP_THREADENTRY;
 
+typedef struct tdVMMDLL_MAP_THREAD_CALLSTACKENTRY {
+    DWORD i;
+    BOOL  fRegPresent;
+    QWORD vaRetAddr;
+    QWORD vaRSP;
+    QWORD vaBaseSP;
+    DWORD _FutureUse1;
+    DWORD cbDisplacement;
+    union { LPSTR uszModule; LPWSTR wszModule; };           // U/W dependent
+    union { LPSTR uszFunction; LPWSTR wszFunction; };       // U/W dependent
+} VMMDLL_MAP_THREAD_CALLSTACKENTRY, *PVMMDLL_MAP_THREAD_CALLSTACKENTRY;
+
 typedef struct tdVMMDLL_MAP_HANDLEENTRY {
     QWORD vaObject;
     DWORD dwHandle;
@@ -1320,12 +1452,12 @@ typedef struct tdVMMDLL_MAP_HANDLEENTRY {
     QWORD qwPointerCount;
     QWORD vaObjectCreateInfo;
     QWORD vaSecurityDescriptor;
-    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependant
+    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependent
     DWORD _FutureUse2;
     DWORD dwPID;
     DWORD dwPoolTag;
     DWORD _FutureUse[7];
-    union { LPSTR  uszType; LPWSTR wszType; QWORD _Pad1; }; // U/W dependant
+    union { LPSTR  uszType; LPWSTR wszType; QWORD _Pad1; }; // U/W dependent
 } VMMDLL_MAP_HANDLEENTRY, *PVMMDLL_MAP_HANDLEENTRY;
 
 typedef enum tdVMMDLL_MAP_POOL_TYPE {
@@ -1372,6 +1504,38 @@ typedef struct tdVMMDLL_MAP_POOLENTRY {
     DWORD _Filler;
 } VMMDLL_MAP_POOLENTRY, *PVMMDLL_MAP_POOLENTRY;
 
+typedef struct tdVMMDLL_MAP_KDEVICEENTRY {
+    QWORD va;                                       // Address of this object in memory.
+    DWORD iDepth;                                   // Depth of the device object.
+    DWORD dwDeviceType;                             // Device type according to FILE_DEVICE_*
+    union { LPSTR  uszDeviceType; LPWSTR wszDeviceType; }; // Device type name.
+    QWORD vaDriverObject;                           // Address of the driver object.
+    QWORD vaAttachedDevice;                         // Address of the attached device object (if exists).
+    QWORD vaFileSystemDevice;                       // Address of the file system device object (if exists).
+    union { LPSTR  uszVolumeInfo; LPWSTR wszVolumeInfo; }; // Volume information (if exists) .
+} VMMDLL_MAP_KDEVICEENTRY, *PVMMDLL_MAP_KDEVICEENTRY;
+
+typedef struct tdVMMDLL_MAP_KDRIVERENTRY {
+    QWORD va;                                       // Address of this object in memory.
+    QWORD vaDriverStart;                            // Address of the loaded driver module in memory.
+    QWORD cbDriverSize;                             // Size of the loaded driver module in memory.
+    QWORD vaDeviceObject;                           // Address of the device object.
+    union { LPSTR  uszName; LPWSTR wszName; };      // Driver name.
+    union { LPSTR  uszPath; LPWSTR wszPath; };      // Driver path.
+    union { LPSTR  uszServiceKeyName; LPWSTR wszServiceKeyName; }; // Service key name.
+    QWORD MajorFunction[28];                        // Major function array.
+} VMMDLL_MAP_KDRIVERENTRY, *PVMMDLL_MAP_KDRIVERENTRY;
+
+typedef struct tdVMMDLL_MAP_KOBJECTENTRY {
+    QWORD va;                                       // Address of this object in memory.
+    QWORD vaParent;                                 // Address of parent object.
+    DWORD _Filler;
+    DWORD cvaChild;                                 // Number of child object addresses.
+    PQWORD pvaChild;                                // Array of child object addresses.
+    union { LPSTR uszName; LPWSTR wszName; };       // Object name.
+    union { LPSTR uszType; LPWSTR wszType; };       // Object type
+} VMMDLL_MAP_KOBJECTENTRY, *PVMMDLL_MAP_KOBJECTENTRY;
+
 typedef struct tdVMMDLL_MAP_NETENTRY {
     DWORD dwPID;
     DWORD dwState;
@@ -1382,20 +1546,20 @@ typedef struct tdVMMDLL_MAP_NETENTRY {
         WORD _Reserved;
         WORD port;
         BYTE pbAddr[16];            // ipv4 = 1st 4 bytes, ipv6 = all bytes
-        union { LPSTR  uszText; LPWSTR wszText; };          // U/W dependant
+        union { LPSTR  uszText; LPWSTR wszText; };          // U/W dependent
     } Src;
     struct {
         BOOL fValid;
         WORD _Reserved;
         WORD port;
         BYTE pbAddr[16];            // ipv4 = 1st 4 bytes, ipv6 = all bytes
-        union { LPSTR  uszText; LPWSTR wszText; };          // U/W dependant
+        union { LPSTR  uszText; LPWSTR wszText; };          // U/W dependent
     } Dst;
     QWORD vaObj;
     QWORD ftTime;
     DWORD dwPoolTag;
     DWORD _FutureUse4;
-    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependant
+    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependent
     DWORD _FutureUse2[4];
 } VMMDLL_MAP_NETENTRY, *PVMMDLL_MAP_NETENTRY;
 
@@ -1406,9 +1570,9 @@ typedef struct tdVMMDLL_MAP_PHYSMEMENTRY {
 
 typedef struct tdVMMDLL_MAP_USERENTRY {
     DWORD _FutureUse1[2];
-    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependant
+    union { LPSTR  uszText; LPWSTR wszText; };              // U/W dependent
     ULONG64 vaRegHive;
-    union { LPSTR  uszSID; LPWSTR wszSID; };                // U/W dependant
+    union { LPSTR  uszSID; LPWSTR wszSID; };                // U/W dependent
     DWORD _FutureUse2[2];
 } VMMDLL_MAP_USERENTRY, *PVMMDLL_MAP_USERENTRY;
 
@@ -1420,7 +1584,7 @@ typedef enum tdVMMDLL_VM_TP {
 
 typedef struct tdVMMDLL_MAP_VMENTRY {
     VMMVM_HANDLE hVM;
-    union { LPSTR  uszName; LPWSTR wszName; };              // U/W dependant
+    union { LPSTR  uszName; LPWSTR wszName; };              // U/W dependent
     QWORD gpaMax;
     VMMDLL_VM_TP tp;
     BOOL fActive;
@@ -1438,12 +1602,12 @@ typedef struct tdVMMDLL_MAP_SERVICEENTRY {
     DWORD dwOrdinal;
     DWORD dwStartType;
     SERVICE_STATUS ServiceStatus;
-    union { LPSTR  uszServiceName; LPWSTR wszServiceName; QWORD _Reserved1; };  // U/W dependant
-    union { LPSTR  uszDisplayName; LPWSTR wszDisplayName; QWORD _Reserved2; };  // U/W dependant
-    union { LPSTR  uszPath;        LPWSTR wszPath;        QWORD _Reserved3; };  // U/W dependant
-    union { LPSTR  uszUserTp;      LPWSTR wszUserTp;      QWORD _Reserved4; };  // U/W dependant
-    union { LPSTR  uszUserAcct;    LPWSTR wszUserAcct;    QWORD _Reserved5; };  // U/W dependant
-    union { LPSTR  uszImagePath;   LPWSTR wszImagePath;   QWORD _Reserved6; };  // U/W dependant
+    union { LPSTR  uszServiceName; LPWSTR wszServiceName; QWORD _Reserved1; };  // U/W dependent
+    union { LPSTR  uszDisplayName; LPWSTR wszDisplayName; QWORD _Reserved2; };  // U/W dependent
+    union { LPSTR  uszPath;        LPWSTR wszPath;        QWORD _Reserved3; };  // U/W dependent
+    union { LPSTR  uszUserTp;      LPWSTR wszUserTp;      QWORD _Reserved4; };  // U/W dependent
+    union { LPSTR  uszUserAcct;    LPWSTR wszUserAcct;    QWORD _Reserved5; };  // U/W dependent
+    union { LPSTR  uszImagePath;   LPWSTR wszImagePath;   QWORD _Reserved6; };  // U/W dependent
     DWORD dwPID;
     DWORD _FutureUse1;
     QWORD _FutureUse2;
@@ -1543,6 +1707,19 @@ typedef struct tdVMMDLL_MAP_THREAD {
     VMMDLL_MAP_THREADENTRY pMap[];  // map entries.
 } VMMDLL_MAP_THREAD, *PVMMDLL_MAP_THREAD;
 
+typedef struct tdVMMDLL_MAP_THREAD_CALLSTACK {
+    DWORD dwVersion;                // VMMDLL_MAP_THREAD_CALLSTACK_VERSION
+    DWORD _Reserved1[6];
+    DWORD dwPID;
+    DWORD dwTID;
+    DWORD cbText;
+    union { LPSTR  uszText; LPWSTR wszText; };  // U/W dependent
+    PBYTE pbMultiText;              // multi-str pointed into by VMM_MAP_EATENTRY.[wszFunction|wszModule]
+    DWORD cbMultiText;
+    DWORD cMap;
+    VMMDLL_MAP_THREAD_CALLSTACKENTRY pMap[0];
+} VMMDLL_MAP_THREAD_CALLSTACK, *PVMMDLL_MAP_THREAD_CALLSTACK;
+
 typedef struct tdVMMDLL_MAP_HANDLE {
     DWORD dwVersion;                // VMMDLL_MAP_HANDLE_VERSION
     DWORD _Reserved1[5];
@@ -1562,6 +1739,33 @@ typedef struct tdVMMDLL_MAP_POOL {
     DWORD cMap;                     // # map entries.
     VMMDLL_MAP_POOLENTRY pMap[];    // map entries.
 } VMMDLL_MAP_POOL, *PVMMDLL_MAP_POOL;
+
+typedef struct tdVMMDLL_MAP_KOBJECT {
+    DWORD dwVersion;                // VMMDLL_MAP_KOBJECT_VERSION
+    DWORD _Reserved1[5];
+    PBYTE pbMultiText;              // multi-wstr pointed into by VMM_MAP_NETENTRY.wszText
+    DWORD cbMultiText;
+    DWORD cMap;                     // # map entries.
+    VMMDLL_MAP_KOBJECTENTRY pMap[]; // map entries.
+} VMMDLL_MAP_KOBJECT, *PVMMDLL_MAP_KOBJECT;
+
+typedef struct tdVMMDLL_MAP_KDRIVER {
+    DWORD dwVersion;                // VMMDLL_MAP_KDRIVER_VERSION
+    DWORD _Reserved1[5];
+    PBYTE pbMultiText;              // multi-wstr pointed into by VMM_MAP_NETENTRY.wszText
+    DWORD cbMultiText;
+    DWORD cMap;                     // # map entries.
+    VMMDLL_MAP_KDRIVERENTRY pMap[]; // map entries.
+} VMMDLL_MAP_KDRIVER, *PVMMDLL_MAP_KDRIVER;
+
+typedef struct tdVMMDLL_MAP_KDEVICE {
+    DWORD dwVersion;                // VMMDLL_MAP_KDEVICE_VERSION
+    DWORD _Reserved1[5];
+    PBYTE pbMultiText;              // multi-wstr pointed into by VMM_MAP_NETENTRY.wszText
+    DWORD cbMultiText;
+    DWORD cMap;                     // # map entries.
+    VMMDLL_MAP_KDEVICEENTRY pMap[]; // map entries.
+} VMMDLL_MAP_KDEVICE, *PVMMDLL_MAP_KDEVICE;
 
 typedef struct tdVMMDLL_MAP_NET {
     DWORD dwVersion;                // VMMDLL_MAP_NET_VERSION
@@ -1748,6 +1952,24 @@ EXPORTED_FUNCTION
 _Success_(return) BOOL VMMDLL_Map_GetThread(_In_ VMM_HANDLE hVMM, _In_ DWORD dwPID, _Out_ PVMMDLL_MAP_THREAD *ppThreadMap);
 
 /*
+* Retrieve the thread callstack for a specific thread.
+* Callstack retrieval is:
+* - supported for x64 user-mode threads.
+* - a best-effort operation and may not always succeed.
+* - may download a large amounts of pdb symbol data from Microsoft.
+* CALLER FREE: VMMDLL_MemFree(*ppThreadCallstack)
+* -- hVMM
+* -- dwPID
+* -- dwTID
+* -- flags = 0, VMMDLL_FLAG_NOCACHE or VMM_FLAG_FORCECACHE_READ
+* -- ppThreadCallstack
+* -- return
+*/
+EXPORTED_FUNCTION
+_Success_(return) BOOL VMMDLL_Map_GetThread_CallstackU(_In_ VMM_HANDLE hVMM, _In_ DWORD dwPID, _In_ DWORD dwTID, _In_ DWORD flags, _Out_ PVMMDLL_MAP_THREAD_CALLSTACK *ppThreadCallstack);
+_Success_(return) BOOL VMMDLL_Map_GetThread_CallstackW(_In_ VMM_HANDLE hVMM, _In_ DWORD dwPID, _In_ DWORD dwTID, _In_ DWORD flags, _Out_ PVMMDLL_MAP_THREAD_CALLSTACK *ppThreadCallstack);
+
+/*
 * Retrieve the handles for the specified process.
 * Entries returned are sorted on VMMDLL_MAP_HANDLEENTRY.dwHandle
 * CALLER FREE: VMMDLL_MemFree(*ppHandleMap)
@@ -1769,6 +1991,39 @@ _Success_(return) BOOL VMMDLL_Map_GetHandleW(_In_ VMM_HANDLE hVMM, _In_ DWORD dw
 */
 EXPORTED_FUNCTION
 _Success_(return) BOOL VMMDLL_Map_GetPhysMem(_In_ VMM_HANDLE hVMM, _Out_ PVMMDLL_MAP_PHYSMEM *ppPhysMemMap);
+
+/*
+* Retrieve the kernel device map - consisting of kernel device objects.
+* CALLER FREE: VMMDLL_MemFree(*ppKDeviceMap)
+* -- hVMM
+* -- ppKDeviceMap = ptr to receive result on success. must be free'd with VMMDLL_MemFree().
+* -- return = success/fail.
+*/
+EXPORTED_FUNCTION
+_Success_(return) BOOL VMMDLL_Map_GetKDeviceU(_In_ VMM_HANDLE hVMM, _Out_ PVMMDLL_MAP_KDEVICE *ppKDeviceMap);
+_Success_(return) BOOL VMMDLL_Map_GetKDeviceW(_In_ VMM_HANDLE hVMM, _Out_ PVMMDLL_MAP_KDEVICE *ppKDeviceMap);
+
+/*
+* Retrieve the kernel driver map - consisting of kernel driver objects.
+* CALLER FREE: VMMDLL_MemFree(*ppKDriverMap)
+* -- hVMM
+* -- ppKDriverMap = ptr to receive result on success. must be free'd with VMMDLL_MemFree().
+* -- return = success/fail.
+*/
+EXPORTED_FUNCTION
+_Success_(return) BOOL VMMDLL_Map_GetKDriverU(_In_ VMM_HANDLE hVMM, _Out_ PVMMDLL_MAP_KDRIVER *ppKDriverMap);
+_Success_(return) BOOL VMMDLL_Map_GetKDriverW(_In_ VMM_HANDLE hVMM, _Out_ PVMMDLL_MAP_KDRIVER *ppKDriverMap);
+
+/*
+* Retrieve the kernel object map - consisting of kernel objects such as devices, drivers and other objects.
+* CALLER FREE: VMMDLL_MemFree(*ppKObjectMap)
+* -- hVMM
+* -- ppKObjectMap = ptr to receive result on success. must be free'd with VMMDLL_MemFree().
+* -- return = success/fail.
+*/
+EXPORTED_FUNCTION
+_Success_(return) BOOL VMMDLL_Map_GetKObjectU(_In_ VMM_HANDLE hVMM, _Out_ PVMMDLL_MAP_KOBJECT *ppKObjectMap);
+_Success_(return) BOOL VMMDLL_Map_GetKObjectW(_In_ VMM_HANDLE hVMM, _Out_ PVMMDLL_MAP_KOBJECT *ppKObjectMap);
 
 /*
 * Retrieve the pool map - consisting of kernel allocated pool entries.
@@ -1919,11 +2174,11 @@ BOOL VMMDLL_MemSearch(
 #ifndef VMMYARA_RULE_MATCH_DEFINED
 #define VMMYARA_RULE_MATCH_DEFINED
 
-#define VMMYARA_RULE_MATCH_VERSION          0xfedc0003
-#define VMMYARA_RULE_MATCH_TAG_MAX          8
-#define VMMYARA_RULE_MATCH_META_MAX         16
-#define VMMYARA_RULE_MATCH_STRING_MAX       8
-#define VMMYARA_RULE_MATCH_OFFSET_MAX       16
+#define VMMYARA_RULE_MATCH_VERSION          0xfedc0005
+#define VMMYARA_RULE_MATCH_TAG_MAX          27
+#define VMMYARA_RULE_MATCH_META_MAX         32
+#define VMMYARA_RULE_MATCH_STRING_MAX       16
+#define VMMYARA_RULE_MATCH_OFFSET_MAX       24
 
 /*
 * Struct with match information upon a match in VmmYara_RulesScanMemory().
@@ -2449,7 +2704,7 @@ BOOL VMMDLL_PdbTypeChildOffset(
 //-----------------------------------------------------------------------------
 
 #define VMMDLL_REGISTRY_HIVE_INFORMATION_MAGIC      0xc0ffee653df8d01e
-#define VMMDLL_REGISTRY_HIVE_INFORMATION_VERSION    4
+#define VMMDLL_REGISTRY_HIVE_INFORMATION_VERSION    5
 
 typedef struct td_VMMDLL_REGISTRY_HIVE_INFORMATION {
     ULONG64 magic;
@@ -2462,7 +2717,12 @@ typedef struct td_VMMDLL_REGISTRY_HIVE_INFORMATION {
     CHAR uszName[128];
     CHAR uszNameShort[32 + 1];
     CHAR uszHiveRootPath[MAX_PATH];
-    QWORD _FutureReserved[0x10];
+    struct {
+        BOOL fValid;
+        DWORD dwHandle;
+        QWORD vaFileObject;
+    } File;
+    QWORD _FutureReserved[0x0e];
 } VMMDLL_REGISTRY_HIVE_INFORMATION, *PVMMDLL_REGISTRY_HIVE_INFORMATION;
 
 /*
@@ -2583,6 +2843,23 @@ BOOL VMMDLL_WinReg_EnumValueU(
 );
 
 /*
+* Retrieve the original UTF-8 name of a registry key or value.
+* -- uszFullPath = existing file-system path, including the value name if fValue.
+* -- fValue = TRUE for a value, FALSE for a key.
+* -- uszName = output buffer, or NULL to query the required size.
+* -- pcbName = buffer capacity on input.
+* -- return
+*/
+EXPORTED_FUNCTION _Success_(return)
+BOOL VMMDLL_WinReg_QueryNameOriginalU(
+    _In_ VMM_HANDLE hVMM,
+    _In_ LPCSTR uszFullPath,
+    _In_ BOOL fValue,
+    _Out_writes_opt_(*pcbName) LPSTR uszName,
+    _When_(uszName == NULL, _Out_) _When_(uszName != NULL, _Inout_) PDWORD pcbName
+);
+
+/*
 * Query a registry value given a registry key/value path - similar to WINAPI
 * function 'RegQueryValueEx'.
 * Please consult WINAPI function documentation for information.
@@ -2662,6 +2939,23 @@ BOOL VMMDLL_WinReg_EnumValueW(
     _Out_opt_ LPDWORD lpType,
     _Out_writes_opt_(*lpcbData) LPBYTE lpData,
     _Inout_opt_ LPDWORD lpcbData
+);
+
+/*
+* Retrieve the original UTF-16 name of a registry key or value.
+* -- wszFullPath = existing file-system path, including the value name if fValue.
+* -- fValue = TRUE for a value, FALSE for a key.
+* -- wszName = output buffer, or NULL to query the required size.
+* -- pcchName = buffer capacity on input.
+* -- return
+*/
+_Success_(return)
+BOOL VMMDLL_WinReg_QueryNameOriginalW(
+    _In_ VMM_HANDLE hVMM,
+    _In_ LPCWSTR wszFullPath,
+    _In_ BOOL fValue,
+    _Out_writes_opt_(*pcchName) LPWSTR wszName,
+    _When_(wszName == NULL, _Out_) _When_(wszName != NULL, _Inout_) PDWORD pcchName
 );
 
 /*
@@ -2834,6 +3128,14 @@ BOOL VMMDLL_UtilFillHexAscii(
     _Out_writes_opt_(*pcsz) LPSTR sz,
     _Inout_ PDWORD pcsz
 );
+
+/*
+* Retrieve license information - Licensed To.
+* -- CALLER FREE: VMMDLL_MemFree(return)
+* -- return = NULL on fail, otherwise a string that must be free'd by caller.
+*/
+EXPORTED_FUNCTION _Success_(return != NULL)
+LPSTR VMMDLL_LicensedTo();
 
 
 
