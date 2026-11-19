@@ -96,6 +96,24 @@ namespace
 		return oss.str();
 	}
 
+	std::string PathToUtf8(const std::filesystem::path& path)
+	{
+		const std::wstring& widePath = path.native();
+		if (widePath.empty())
+			return {};
+
+		const int utf8Size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, widePath.data(), static_cast<int>(widePath.size()), nullptr, 0, nullptr, nullptr);
+		if (utf8Size <= 0)
+			return {};
+
+		std::string utf8Path(static_cast<std::size_t>(utf8Size), '\0');
+		const int convertedSize = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, widePath.data(), static_cast<int>(widePath.size()), utf8Path.data(), utf8Size, nullptr, nullptr);
+		if (convertedSize != utf8Size)
+			return {};
+
+		return utf8Path;
+	}
+
     void MemoryLogError(const std::string& message)
     {
         LOGS.logError("[Memory] " + message);
@@ -1381,14 +1399,23 @@ bool Memory::Init(bool memMap, bool debug)
 			args.push_back("-printf");
 		}
 
+		const std::size_t argsWithoutMemMapCount = args.size();
 		std::string memMapPathString;
 
 		if (useMemMap)
 		{
-			memMapPathString = memMapPath.string();
-
-			args.push_back("-memmap");
-			args.push_back(memMapPathString.c_str());
+			memMapPathString = PathToUtf8(memMapPath);
+			if (memMapPathString.empty())
+			{
+				useMemMap = false;
+				MemoryLogInfo("[!] Could not encode mmap.txt path as UTF-8; continuing without memory map");
+			}
+			else
+			{
+				args.push_back("-memmap");
+				args.push_back(memMapPathString.c_str());
+				MemoryLogInfo("Using UTF-8 memory map path: " + memMapPathString);
+			}
 		}
 
 		auto tryInitializeVmm = [&]() -> VMM_HANDLE
@@ -1458,6 +1485,28 @@ bool Memory::Init(bool memMap, bool debug)
 
 					if (attempt < 2)
 						std::this_thread::sleep_for(std::chrono::milliseconds(750));
+				}
+			}
+		}
+
+		if (!newHandle && useMemMap)
+		{
+			MemoryLogInfo("[!] DMA init with mmap.txt failed; retrying without memory map...");
+			args.resize(argsWithoutMemMapCount);
+			useMemMap = false;
+
+			for (int attempt = 1; attempt <= 2; ++attempt)
+			{
+				if (cancelInit.load(std::memory_order_acquire))
+					break;
+
+				std::this_thread::sleep_for(std::chrono::milliseconds(750));
+				newHandle = tryInitializeVmm();
+
+				if (newHandle)
+				{
+					MemoryLogInfo("DMA connected without mmap.txt fallback");
+					break;
 				}
 			}
 		}
