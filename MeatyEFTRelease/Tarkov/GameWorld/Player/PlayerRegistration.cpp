@@ -70,7 +70,7 @@ void RegisteredPlayers::playersTask()
             return;
 
         std::unordered_set<uint64_t> uniqueAddresses(roster->begin(), roster->end());
-        const std::vector<uint64_t> registeredAddresses(roster->begin(), roster->end());
+        std::vector<uint64_t> registeredAddresses(roster->begin(), roster->end());
 
         const auto now = std::chrono::steady_clock::now();
 
@@ -87,6 +87,13 @@ void RegisteredPlayers::playersTask()
             }
 
             rebuildPlayerCacheIndexLocked();
+            const auto lastAttempt = [&](uint64_t instance)
+            {
+                const auto entry = failedAllocations.find(instance);
+                return entry == failedAllocations.end() ? std::chrono::steady_clock::time_point{} : entry->second.lastAttempt;
+            };
+            std::stable_sort(registeredAddresses.begin(), registeredAddresses.end(),
+                [&](uint64_t left, uint64_t right) { return lastAttempt(left) < lastAttempt(right); });
         }
 
         if (registeredAddresses.empty())
@@ -98,6 +105,7 @@ void RegisteredPlayers::playersTask()
         std::vector<Player> pendingPlayers;
         pendingPlayers.reserve(registeredAddresses.size());
 
+        unsigned allocationAttempts = 0;
         for (const uint64_t instance : registeredAddresses)
         {
             bool isCached = false;
@@ -114,8 +122,16 @@ void RegisteredPlayers::playersTask()
             if (isCached || !shouldRetry)
                 continue;
 
+            if (allocationAttempts++ >= 2)
+                break;
+
             const bool isLocal = instance == mainGame.localPlayerPtr;
-            auto player = buildEntity(instance, isLocal);
+            PlayerMemoryAccess::InitializationReads reads;
+            auto player = [&]
+            {
+                const PlayerMemoryAccess::InitializationScope scope(reads);
+                return buildEntity(instance, isLocal);
+            }();
 
             if (!player.has_value())
             {
@@ -123,11 +139,22 @@ void RegisteredPlayers::playersTask()
                 PlayerAllocationFailure& failure = failedAllocations[instance];
                 ++failure.attempts;
                 failure.lastAttempt = now;
+                if (failure.attempts == 1 || failure.attempts == 4 || failure.attempts == 16 ||
+                    failure.attempts == 64 || failure.attempts % 256 == 0)
+                    LOGS.logInfo("[PLAYER][INIT] instance=" + std::to_string(instance) +
+                        " local=" + std::to_string(isLocal) + " attempt=" + std::to_string(failure.attempts) +
+                        " stage=" + reads.stage + " failure=" + reads.failure +
+                        " address=" + std::to_string(reads.failedAddress) +
+                        " direct_recovered=" + std::to_string(reads.directRecovered));
                 continue;
             }
 
             {
                 std::lock_guard<std::mutex> lock(playerMutex);
+                if (failedAllocations.contains(instance) || reads.directRecovered)
+                    LOGS.logInfo("[PLAYER][INIT] recovered instance=" + std::to_string(instance) +
+                        " local=" + std::to_string(isLocal) +
+                        " direct_recovered=" + std::to_string(reads.directRecovered));
                 failedAllocations.erase(instance);
             }
 
@@ -191,11 +218,13 @@ std::optional<Player> RegisteredPlayers::buildEntity(uint64_t instance, bool isL
     if (!PlayerMemoryAccess::tryReadChain(instance, { 0x0, 0x10 }, classNamePointer, DmaCacheMode::Uncached))
         return std::nullopt;
 
+    PlayerMemoryAccess::initializationStage("class name");
     const std::string className = PlayerMemoryAccess::readUtf8(classNamePointer, 64, DmaCacheMode::Uncached);
 
     if (className.empty())
         return std::nullopt;
 
+    PlayerMemoryAccess::initializationStage("player class/required metadata");
     auto player = PlayerClassifier::classify(className, isLocal).tryCreate(instance, className);
     if (!player.has_value())
         return std::nullopt;

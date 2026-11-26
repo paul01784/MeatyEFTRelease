@@ -463,7 +463,9 @@ namespace
 
     static bool HasFullBonePointers(const Player& player)
     {
-        return !player.bonePtrs.empty() && std::all_of(player.bonePtrs.begin(), player.bonePtrs.end(), [](uint64_t bonePtr)
+        // Optional silhouette joints must not keep a valid core pose in recovery.
+        constexpr size_t coreBoneCount = static_cast<size_t>(boneListIndexes::Base) + 1;
+        return player.bonePtrs.size() >= coreBoneCount && std::all_of(player.bonePtrs.begin(), player.bonePtrs.begin() + coreBoneCount, [](uint64_t bonePtr)
             {
                 return Utils::valid_pointer(bonePtr);
             });

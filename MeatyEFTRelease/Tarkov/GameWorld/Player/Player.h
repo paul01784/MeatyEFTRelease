@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <SimpleMath.h>
 #include <glm/glm.hpp>
 #include "../../../Web/TarkovDev/TarkovDevClient.h"
@@ -168,6 +168,9 @@ public:
 	std::string profileId;
 	std::string side;
 	std::string voice;
+	std::string aiRoleReadStatus{ "not_requested" };
+	uint32_t aiRoleReadAttempts{ 0 };
+	std::chrono::steady_clock::time_point nextAiRoleRefresh{};
 	EPlayerSide playerSide;
 
 	glm::vec3 location;
@@ -285,11 +288,16 @@ public:
 	uint64_t playerBoneMatrixPtr;
 	bool usingCameraPositionFallback{ false };
 
-	inline static constexpr std::array<allPlayerBones, 13> boneList = {
+	inline static constexpr std::array<allPlayerBones, 21> boneList = {
 		allPlayerBones::HumanPelvis, allPlayerBones::HumanHead, allPlayerBones::HumanNeck, allPlayerBones::HumanSpine1, allPlayerBones::HumanLForearm2,
 		allPlayerBones::HumanLPalm, allPlayerBones::HumanRForearm2, allPlayerBones::HumanRPalm,
 		allPlayerBones::HumanLThigh2, allPlayerBones::HumanLFoot,
-		allPlayerBones::HumanRThigh2, allPlayerBones::HumanRFoot, allPlayerBones::HumanBase
+		allPlayerBones::HumanRThigh2, allPlayerBones::HumanRFoot, allPlayerBones::HumanBase,
+        // Optional silhouette detail; these are not additional aim candidates.
+        allPlayerBones::HumanLUpperarm, allPlayerBones::HumanRUpperarm,
+        allPlayerBones::HumanLForearm1, allPlayerBones::HumanRForearm1,
+        allPlayerBones::HumanLCalf, allPlayerBones::HumanRCalf,
+        allPlayerBones::HumanLToe, allPlayerBones::HumanRToe
 	};
 
 	std::vector<uint64_t> bonePtrs = std::vector<uint64_t>(boneList.size());

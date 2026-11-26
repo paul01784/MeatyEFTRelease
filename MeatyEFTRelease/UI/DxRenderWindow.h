@@ -187,6 +187,7 @@ public:
 
     void DrawCircle(float x, float y, float radius, const glm::vec4& colour, float thickness = 1.0f);
     void DrawFilledCircle(float x, float y, float radius, const glm::vec4& colour);
+    void DrawSilhouettePolygons(const std::vector<std::vector<glm::vec2>>& polygons, const glm::vec4& fillColour, const glm::vec4& outlineColour, float outlineThickness);
     void DrawSilhouette(const std::vector<DxSilhouetteSegment>& segments, const glm::vec4& fillColour, const glm::vec4& outlineColour, float outlineThickness);
 
     void DrawString(
@@ -276,6 +277,7 @@ private:
         float markerSize = 0.0f;
         float textOffsetY = 0.0f;
         std::vector<DxSilhouetteSegment> silhouetteSegments;
+        std::vector<std::vector<glm::vec2>> silhouettePolygons;
     };
 
     struct CachedTextLayout

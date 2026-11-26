@@ -81,12 +81,15 @@ struct MarkerStyle
     float shadowOffset = 2.0f;
 };
 
+enum class SilhouetteModel : int { Classic = 0, Human = 1 };
+
 struct PlayerMarkerStyle
 {
     MarkerShape shape = MarkerShape::Triangle;
     float size = 9.0f;
     bool entitySilhouette = false;
     float silhouetteOpacity = 0.28f;
+    SilhouetteModel silhouetteModel = SilhouetteModel::Classic;
 };
 
 struct AppearanceConfig

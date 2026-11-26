@@ -1,6 +1,7 @@
 #include "../../../UI/includes.h"
 #include "../RegisteredPlayers.h"
 #include "PlayerAppearance.h"
+#include "ObservedPlayer.h"
 #include "../../../UI/debug.h"
 #include "../../../UI/globals.h"
 #include "DogTagCache.h"
@@ -54,6 +55,9 @@ void RegisteredPlayers::playerMetadataTask()
     static constexpr Milliseconds kRemoteHeldItemRefreshInterval{ 5000 };
     static constexpr Milliseconds kFailedReadRetryInterval{ 500 };
     static constexpr Milliseconds kLocalFailedReadRetryInterval{ 100 };
+    static constexpr Milliseconds kAiRoleRetryInterval{ 2000 };
+    // Bound optional work on this background lane; never add reads to the pose/aim lane.
+    unsigned int aiRoleBudget = 2;
 
     struct MetadataJob
     {
@@ -66,6 +70,8 @@ void RegisteredPlayers::playerMetadataTask()
         bool lookupProfile = false;
         bool profileLookupSucceeded = false;
         bool handsSucceeded = false;
+        bool refreshAiRole = false;
+        bool aiRoleSucceeded = false;
     };
 
     const Clock::time_point now = Clock::now();
@@ -86,6 +92,15 @@ void RegisteredPlayers::playerMetadataTask()
         MetadataJob job{};
         job.instance = player.instance;
         job.player = player;
+
+        job.refreshAiRole = aiRoleBudget > 0 && player.getKind() == PlayerKind::Observed &&
+            player.isAi && player.playerSide == EPlayerSide::Savage && player.voice.empty() &&
+            now >= player.nextAiRoleRefresh;
+        if (job.refreshAiRole)
+        {
+            --aiRoleBudget;
+            job.player.nextAiRoleRefresh = now + kAiRoleRetryInterval;
+        }
 
         if (Utils::valid_pointer(player.P_HandsController))
         {
@@ -128,6 +143,7 @@ void RegisteredPlayers::playerMetadataTask()
         }
 
         if (!job.updateHands &&
+            !job.refreshAiRole &&
             !job.updateWatchStatus &&
             !job.lookupDogTag &&
             !job.lookupProfile)
@@ -140,6 +156,9 @@ void RegisteredPlayers::playerMetadataTask()
 
     for (MetadataJob& job : jobs)
     {
+        if (job.refreshAiRole)
+            job.aiRoleSucceeded = ObservedPlayer::tryRefreshAiRole(job.player);
+
         if (job.updateHands)
         {
             try
@@ -237,6 +256,23 @@ void RegisteredPlayers::playerMetadataTask()
             {
                 if (player.isBTR || player.isDead || player.hasExfiled)
                     return;
+
+                if (job.refreshAiRole && player.voice.empty())
+                {
+                    player.nextAiRoleRefresh = job.player.nextAiRoleRefresh;
+                    player.aiRoleReadAttempts = job.player.aiRoleReadAttempts;
+                    player.aiRoleReadStatus = job.player.aiRoleReadStatus;
+                    if (job.aiRoleSucceeded)
+                    {
+                        player.voice = std::move(job.player.voice);
+                        player.name = std::move(job.player.name);
+                        player.type = job.player.type;
+                        player.isZombie = job.player.isZombie;
+                        player.isBoss = job.player.isBoss;
+                        player.isBlackDivision = job.player.isBlackDivision;
+                        player.isCultist = job.player.isCultist;
+                    }
+                }
 
                 if (job.updateHands)
                 {

@@ -212,7 +212,14 @@ bool DxRenderWindow::IsDrawCommandSafe(const DxRenderWindow::DrawCommand& cmd) n
             IsSafePositiveSize(cmd.radius);
 
     case DrawCommandType::Silhouette:
-        return !cmd.silhouetteSegments.empty() && cmd.silhouetteSegments.size() <= 128 &&
+        return (!cmd.silhouetteSegments.empty() || !cmd.silhouettePolygons.empty()) &&
+            cmd.silhouetteSegments.size() + cmd.silhouettePolygons.size() <= 128 &&
+            std::all_of(cmd.silhouettePolygons.begin(), cmd.silhouettePolygons.end(), [](const auto& polygon)
+                {
+                    return polygon.size() >= 3 && polygon.size() <= 64 &&
+                        std::all_of(polygon.begin(), polygon.end(), [](const glm::vec2& p)
+                            { return IsSafeCoord(p.x) && IsSafeCoord(p.y); });
+                }) &&
             IsSafeThickness(cmd.thickness) &&
             std::all_of(cmd.silhouetteSegments.begin(), cmd.silhouetteSegments.end(), [](const DxSilhouetteSegment& segment)
                 {
@@ -638,6 +645,18 @@ void DxRenderWindow::DrawFilledCircle(float x, float y, float radius, const glm:
     cmd.y = y;
     cmd.radius = radius;
     cmd.colour = colour;
+    PushDrawCommand(std::move(cmd));
+}
+
+void DxRenderWindow::DrawSilhouettePolygons(const std::vector<std::vector<glm::vec2>>& polygons, const glm::vec4& fillColour, const glm::vec4& outlineColour, float outlineThickness)
+{
+    if (polygons.empty()) return;
+    DrawCommand cmd{};
+    cmd.type = DrawCommandType::Silhouette;
+    cmd.silhouettePolygons = polygons;
+    cmd.fillColour = fillColour;
+    cmd.outlineColour = outlineColour;
+    cmd.thickness = outlineThickness;
     PushDrawCommand(std::move(cmd));
 }
 
@@ -1635,11 +1654,27 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
             };
 
             ComPtr<ID2D1PathGeometry> combined;
-            for (const DxSilhouetteSegment& segment : cmd.silhouetteSegments)
+            const size_t partCount = cmd.silhouetteSegments.size() + cmd.silhouettePolygons.size();
+            for (size_t index = 0; index < partCount; ++index)
             {
                 ComPtr<ID2D1PathGeometry> part;
-                if (!makeBodyPart(segment, part))
-                    continue;
+                if (index < cmd.silhouetteSegments.size())
+                {
+                    if (!makeBodyPart(cmd.silhouetteSegments[index], part)) continue;
+                }
+                else
+                {
+                    const auto& polygon = cmd.silhouettePolygons[index - cmd.silhouetteSegments.size()];
+                    ComPtr<ID2D1GeometrySink> sink;
+                    if (FAILED(m_d2dFactory->CreatePathGeometry(part.GetAddressOf())) ||
+                        FAILED(part->Open(sink.GetAddressOf()))) continue;
+                    // Points are already projected, just like classic segment anchors.
+                    sink->BeginFigure(D2D1::Point2F(polygon[0].x, polygon[0].y), D2D1_FIGURE_BEGIN_FILLED);
+                    for (size_t p = 1; p < polygon.size(); ++p)
+                        sink->AddLine(D2D1::Point2F(polygon[p].x, polygon[p].y));
+                    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                    if (FAILED(sink->Close())) continue;
+                }
                 if (!combined)
                 {
                     combined = std::move(part);

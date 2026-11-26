@@ -5,6 +5,8 @@
 class ObservedPlayer final : public PlayerRuntimeModel
 {
 public:
+    // Optional identity metadata: failure must not prevent player publication.
+    static bool tryRefreshAiRole(Player& player);
     [[nodiscard]] PlayerKind getKind() const noexcept override;
     [[nodiscard]] bool matches(std::string_view className, bool isLocal) const noexcept override;
     [[nodiscard]] uint64_t getHeldItemOffset() const noexcept override;
