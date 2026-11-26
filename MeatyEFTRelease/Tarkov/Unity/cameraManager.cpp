@@ -10,8 +10,12 @@
 #include <array>
 #include <cmath>
 #include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -49,9 +53,6 @@ namespace
     constexpr std::uint64_t kComponentArrayEntryComponent = 0x8;
     constexpr std::uint64_t kComponentArrayEntryStride = 0x10;
 
-    constexpr std::uint64_t kEftCameraManagerOpticManager = 0x10;
-    constexpr std::uint64_t kOpticCameraManagerCurrentSight = 0x78;
-    constexpr std::uint64_t kOpticSightScopeTransform = 0x40;
     constexpr std::uint64_t kSightBoneTransform = 0x18;
     constexpr int kMaxGameObjectComponents = 128;
 
@@ -100,6 +101,94 @@ namespace
         }
 
         return value.size() == expected.size() || value[value.size() - expected.size() - 1] == '.';
+    }
+
+    void saveCameraListDump(const std::string& contents)
+    {
+        std::error_code fileError;
+        const std::filesystem::path logsDirectory = "logs";
+        std::filesystem::create_directories(logsDirectory, fileError);
+        if (fileError)
+        {
+            LOGS.logWarn(
+                "[CAMERA MANAGER] Failed to create camera dump directory: ",
+                fileError.message());
+            return;
+        }
+
+        const std::filesystem::path dumpPath = logsDirectory / "camera_list.txt";
+        std::ofstream output(dumpPath, std::ios::out | std::ios::trunc);
+        if (!output.is_open())
+        {
+            LOGS.logWarn(
+                "[CAMERA MANAGER] Failed to open camera dump: ",
+                dumpPath.string());
+            return;
+        }
+
+        output << contents;
+    }
+
+    [[nodiscard]] std::string readManagedObjectClassName(std::uint64_t object)
+    {
+        std::uint64_t objectClass = 0;
+        std::uint64_t namePointer = 0;
+        if (!readPointer(object, objectClass) || !readPointer(objectClass + sdk::Runtime::Il2CppClassLayout::Name, namePointer))
+            return {};
+
+        return mem.readString(namePointer, 96, DmaCacheMode::Uncached);
+    }
+
+    [[nodiscard]] std::uint64_t resolveCameraManagerInstance()
+    {
+        const std::uint64_t gameAssembly = mem.GetTarkovPointerSnapshot().gameAssemblyBase;
+        std::uint64_t typeInfoTable = 0;
+        std::uint64_t cameraManagerClass = 0;
+        std::uint64_t staticFields = 0;
+        std::uint64_t instance = 0;
+
+        if (!validPointer(gameAssembly) ||
+            !readPointer(gameAssembly + sdk::Runtime::TypeInfoTableRva, typeInfoTable) ||
+            !readPointer(typeInfoTable + sdk::CameraManager::TypeIndex * sizeof(std::uint64_t), cameraManagerClass) ||
+            !readPointer(cameraManagerClass + sdk::Runtime::Il2CppClassStaticFields, staticFields) ||
+            !readPointer(staticFields + sdk::CameraManager::Instance, instance))
+            return 0;
+
+        return instance;
+    }
+
+    [[nodiscard]] std::uint64_t cameraManagerOpticOffset(std::uint64_t manager)
+    {
+        const std::string className = readManagedObjectClassName(manager);
+        if (classNameMatches(className, "CameraManagerRs"))
+            return sdk::CameraManagerRs::OpticCameraManager;
+        if (classNameMatches(className, "CameraManagerMono"))
+            return sdk::CameraManagerMono::OpticCameraManager;
+        return 0;
+    }
+
+    [[nodiscard]] std::uint64_t cameraManagerCameraOffset(std::uint64_t manager)
+    {
+        const std::string className = readManagedObjectClassName(manager);
+        if (classNameMatches(className, "CameraManagerRs"))
+            return sdk::CameraManagerRs::Camera;
+        if (classNameMatches(className, "CameraManagerMono"))
+            return sdk::CameraManagerMono::Camera;
+        return 0;
+    }
+
+    [[nodiscard]] std::uint64_t opticManagerCameraOffset(std::uint64_t manager)
+    {
+        return classNameMatches(readManagedObjectClassName(manager), "OpticCameraManagerRs")
+            ? sdk::OpticCameraManagerRs::Camera
+            : sdk::OpticCameraManager::Camera;
+    }
+
+    [[nodiscard]] std::uint64_t opticManagerCurrentSightOffset(std::uint64_t manager)
+    {
+        return classNameMatches(readManagedObjectClassName(manager), "OpticCameraManagerRs")
+            ? sdk::OpticCameraManagerRs::CurrentOpticSight
+            : sdk::OpticCameraManager::CurrentOpticSight;
     }
 
     [[nodiscard]] bool sameUnityObject(std::uint64_t left, std::uint64_t right)
@@ -183,6 +272,8 @@ void CameraManager::reset()
     m_lastAds = false;
     m_opticMatrixReadFailures = 0;
     m_cameraReadFailureSince = {};
+    m_lastBootstrapFailure.clear();
+    m_lastCameraListDump.clear();
     m_busyReadSkips = 0;
     if (m_cameraHealthFailureActive)
         mem.ReportDmaHealthSuccess(DmaHealthSource::CameraChain);
@@ -196,30 +287,31 @@ bool CameraManager::readCameraList(std::uint64_t globalAddress, CameraListView& 
 {
     list = {};
 
-    std::uint64_t listObject = 0;
-    if (!readPointer(globalAddress, listObject))
-        return false;
+    const auto readLayout = [&](std::uint64_t container)
+    {
+        std::uint64_t items = 0;
+        std::int32_t count32 = 0;
+        std::uint64_t count64 = 0;
+        std::uint64_t alternateCount64 = 0;
+        if (!readPointer(container, items))
+            return false;
 
-    if (!readPointer(listObject, list.items))
-        return false;
+        const bool count32Valid = readUncached(container + 0x8, count32) && count32 > 0 && count32 <= kMaxCameraCount;
+        const bool count64Valid = readUncached(container + 0x8, count64) && count64 > 0 && count64 <= kMaxCameraCount;
+        const bool alternateCountValid = readUncached(container + 0x10, alternateCount64) && alternateCount64 > 0 && alternateCount64 <= kMaxCameraCount;
+        if (!count32Valid && !count64Valid && !alternateCountValid)
+            return false;
 
-    int dmaRadarCount = 0;
-    std::uint64_t meatyCount = 0;
+        list.items = items;
+        list.count = count32Valid ? count32 : static_cast<int>(count64Valid ? count64 : alternateCount64);
+        return true;
+    };
 
-    const bool readDmaCount = readUncached(listObject + 0x8, dmaRadarCount);
-    const bool readMeatyCount = readUncached(listObject + 0x10, meatyCount);
+    std::uint64_t indirectContainer = 0;
+    if (readPointer(globalAddress, indirectContainer) && indirectContainer != globalAddress && readLayout(indirectContainer))
+        return true;
 
-    const bool dmaCountValid = readDmaCount && dmaRadarCount > 0 && dmaRadarCount <= kMaxCameraCount;
-    const bool meatyCountValid = readMeatyCount && meatyCount > 0 && meatyCount <= kMaxCameraCount;
-
-    if (!dmaCountValid && !meatyCountValid)
-        return false;
-
-    list.count = dmaCountValid ? dmaRadarCount : 0;
-    if (meatyCountValid)
-        list.count = (std::max)(list.count, static_cast<int>(meatyCount));
-
-    return list.count > 0;
+    return readLayout(globalAddress);
 }
 
 std::uint64_t CameraManager::resolveAllCamerasGlobal()
@@ -228,7 +320,10 @@ std::uint64_t CameraManager::resolveAllCamerasGlobal()
         m_unityPlayerBase = mem.GetTarkovPointerSnapshot().unityPlayerBase;
 
     if (!validPointer(m_unityPlayerBase))
+    {
+        m_lastBootstrapFailure = "UnityPlayer.dll base is unavailable";
         return 0;
+    }
 
     const std::uint64_t hardcoded = m_unityPlayerBase + UnityOffsets::AllCamera;
     CameraListView list{};
@@ -239,6 +334,7 @@ std::uint64_t CameraManager::resolveAllCamerasGlobal()
         return hardcoded;
     }
 
+    m_lastBootstrapFailure = "AllCameras container/count is unreadable at UnityPlayer.dll + configured RVA";
     return 0;
 }
 
@@ -247,30 +343,13 @@ std::string CameraManager::readCameraName(std::uint64_t camera) const
     if (!validPointer(camera))
         return {};
 
-    constexpr std::array<std::uint64_t, 2> gameObjectOffsets = {
-        UnityOffsets::GameObject_ObjectClassOffset,
-        UnityOffsets::GameObject_ComponentsOffset
-    };
+    std::uint64_t gameObject = 0;
+    std::uint64_t namePointer = 0;
+    if (!readPointer(camera + UnityOffsets::Camera_GameObjectOffset, gameObject) ||
+        !readPointer(gameObject + UnityOffsets::GameObject_NameOffset, namePointer))
+        return {};
 
-    for (const std::uint64_t offset : gameObjectOffsets)
-    {
-        std::uint64_t gameObject = 0;
-        if (!readPointer(camera + offset, gameObject))
-            continue;
-
-        std::uint64_t namePointer = 0;
-        if (!readPointer(gameObject + UnityOffsets::GameObject_NameOffset, namePointer))
-        {
-            continue;
-        }
-
-        std::string name = mem.readString(namePointer, 64, DmaCacheMode::Uncached);
-
-        if (!name.empty())
-            return name;
-    }
-
-    return {};
+    return mem.readString(namePointer, 64, DmaCacheMode::Uncached);
 }
 
 std::string CameraManager::readManagedComponentName(std::uint64_t objectClass) const
@@ -294,49 +373,32 @@ std::uint64_t CameraManager::resolveManagedComponent(std::uint64_t camera, std::
     if (!validPointer(camera) || className.empty())
         return 0;
 
-    constexpr std::array<std::uint64_t, 2> gameObjectOffsets = {
-        UnityOffsets::GameObject_ObjectClassOffset,
-        UnityOffsets::GameObject_ComponentsOffset
-    };
+    std::uint64_t gameObject = 0;
+    if (!readPointer(camera + UnityOffsets::Camera_GameObjectOffset, gameObject))
+        return 0;
 
-    for (const std::uint64_t gameObjectOffset : gameObjectOffsets)
+    std::uint64_t components = 0;
+    std::uint64_t componentCount = 0;
+    if (!readPointer(gameObject + UnityOffsets::GameObject_ComponentsOffset, components) ||
+        !readUncached(gameObject + UnityOffsets::NativeGameObject_ComponentCountOffset, componentCount) ||
+        componentCount == 0 || componentCount > kMaxGameObjectComponents)
+        return 0;
+
+    for (std::uint64_t index = 0; index < componentCount; ++index)
     {
-        std::uint64_t gameObject = 0;
-        if (!readPointer(camera + gameObjectOffset, gameObject))
+        std::uint64_t component = 0;
+        std::uint64_t objectClass = 0;
+        if (!readPointer(components + index * kComponentArrayEntryStride + kComponentArrayEntryComponent, component) ||
+            !readPointer(component + kComponentObjectClass, objectClass))
             continue;
 
-        std::uint64_t components = 0;
-        std::uint64_t componentCount = 0;
-
-        if (!readPointer(gameObject + UnityOffsets::GameObject_ComponentsOffset, components) ||
-            !readUncached(gameObject + UnityOffsets::GameObject_ComponentsOffset + kComponentArraySize, componentCount) ||
-            componentCount == 0 || componentCount > kMaxGameObjectComponents)
-        {
+        const std::string candidate = readManagedComponentName(objectClass);
+        if (!classNameMatches(candidate, className))
             continue;
-        }
 
-        for (std::uint64_t index = 0; index < componentCount; ++index)
-        {
-            std::uint64_t component = 0;
-            std::uint64_t objectClass = 0;
-
-            if (!readPointer(components + index * kComponentArrayEntryStride + kComponentArrayEntryComponent, component) ||
-                !readPointer(component + kComponentObjectClass, objectClass))
-            {
-                continue;
-            }
-
-            const std::string candidate = readManagedComponentName(objectClass);
-
-            if (!classNameMatches(candidate, className))
-                continue;
-
-            std::uint64_t managedComponent = 0;
-            if (readPointer(objectClass + kObjectClassMonoBehaviour, managedComponent))
-            {
-                return managedComponent;
-            }
-        }
+        std::uint64_t managedComponent = 0;
+        if (readPointer(objectClass + kObjectClassMonoBehaviour, managedComponent))
+            return managedComponent;
     }
 
     return 0;
@@ -351,8 +413,14 @@ bool CameraManager::resolveOpticCameraManager()
     {
         if (!validPointer(m_eftCameraManager))
             m_eftCameraManager = resolveManagedComponent(m_fpsCamera, "CameraManager");
+        if (!validPointer(m_eftCameraManager))
+            m_eftCameraManager = resolveCameraManagerInstance();
         if (validPointer(m_eftCameraManager))
-            (void)readPointer(m_eftCameraManager + kEftCameraManagerOpticManager, manager);
+        {
+            const std::uint64_t opticOffset = cameraManagerOpticOffset(m_eftCameraManager);
+            if (opticOffset)
+                (void)readPointer(m_eftCameraManager + opticOffset, manager);
+        }
     }
     if (!validPointer(manager))
         return false;
@@ -361,7 +429,7 @@ bool CameraManager::resolveOpticCameraManager()
 
     std::uint64_t cameraReference = 0;
     std::uint64_t nativeCamera = 0;
-    if (readPointer(manager + sdk::OpticCameraManager::Camera, cameraReference) &&
+    if (readPointer(manager + opticManagerCameraOffset(manager), cameraReference) &&
         classNameMatches(readManagedComponentName(cameraReference), "Camera") &&
         readPointer(cameraReference + kUnityObjectCachedPointer, nativeCamera) && nativeCamera != m_fpsCamera)
     {
@@ -384,7 +452,7 @@ bool CameraManager::readCurrentOpticSight(std::uint64_t& currentOpticSight, std:
     if (!validPointer(m_opticCameraManager))
         return false;
 
-    if (!readUncached(m_opticCameraManager + kOpticCameraManagerCurrentSight, currentOpticSight))
+    if (!readUncached(m_opticCameraManager + opticManagerCurrentSightOffset(m_opticCameraManager), currentOpticSight))
     {
         return false;
     }
@@ -395,7 +463,7 @@ bool CameraManager::readCurrentOpticSight(std::uint64_t& currentOpticSight, std:
         return true;
     }
 
-    readPointer(currentOpticSight + kOpticSightScopeTransform, currentScopeTransform);
+    readPointer(currentOpticSight + sdk::OpticSight::ScopeTransform, currentScopeTransform);
 
     return true;
 }
@@ -405,11 +473,9 @@ std::uint64_t CameraManager::resolveViewMatrixAddress(std::uint64_t camera, bool
     if (!validPointer(camera))
         return 0;
 
-    glm::highp_mat4 view{};
-    const bool viewValid = readUncached(camera + UnityOffsets::Camera_WorldToCameraMatrixOffset, view) && matrixLooksValid(view);
     const auto candidateLooksValid = [&](const glm::highp_mat4& candidate)
     {
-        return viewProjectionLooksValid(candidate) && (!viewValid || viewProjectionMatchesView(candidate, view));
+        return viewProjectionLooksValid(candidate);
     };
 
     glm::highp_mat4 matrix{};
@@ -420,9 +486,9 @@ std::uint64_t CameraManager::resolveViewMatrixAddress(std::uint64_t camera, bool
     std::uint64_t gameObject = 0;
     std::uint64_t componentData = 0;
     std::uint64_t matrixBase = 0;
-    if (!readPointer(camera + UnityOffsets::GameObject_ComponentsOffset, gameObject) ||
+    if (!readPointer(camera + UnityOffsets::Camera_GameObjectOffset, gameObject) ||
         !readPointer(gameObject + UnityOffsets::GameObject_ComponentsOffset, componentData) ||
-        !readPointer(componentData + 0x18, matrixBase))
+        !readPointer(componentData + UnityOffsets::GameObject_ComponentStepOffset, matrixBase))
         return 0;
 
     const std::uint64_t matrixAddress = matrixBase + m_viewMatrixOffset;
@@ -455,6 +521,7 @@ bool CameraManager::resolveCamerasFromAllCameras(std::uint64_t& fps, std::uint64
     CameraListView list{};
     if (!readCameraList(m_allCamerasGlobal, list))
     {
+        m_lastBootstrapFailure = "AllCameras container/count became unreadable";
         m_allCamerasGlobal = 0;
         return validPointer(fps) || validPointer(optic);
     }
@@ -463,34 +530,82 @@ bool CameraManager::resolveCamerasFromAllCameras(std::uint64_t& fps, std::uint64
     std::uint64_t foundFps = 0;
     std::uint64_t foundOptic = 0;
     std::uint64_t firstOptic = 0;
+    std::uint64_t namedFps = 0;
+    std::string cameraNames;
+    std::ostringstream cameraDump;
+    cameraDump
+        << "AllCameras scan\n"
+        << "UnityPlayer base: 0x" << std::hex << m_unityPlayerBase << '\n'
+        << "AllCameras RVA: 0x" << UnityOffsets::AllCamera << '\n'
+        << "AllCameras global: 0x" << m_allCamerasGlobal << '\n'
+        << "Items: 0x" << list.items << std::dec << '\n'
+        << "Count: " << count << '\n'
+        << "Expected FPS: FPS Camera RS\n"
+        << "Expected optic: GameplayCameraOptic(Clone)\n\n";
 
     for (int index = 0; index < count; ++index)
     {
         std::uint64_t camera = 0;
         if (!readPointer(list.items + static_cast<std::uint64_t>(index) * sizeof(std::uint64_t), camera))
         {
+            cameraDump
+                << '[' << std::setw(3) << std::setfill('0') << index
+                << "] camera=<unreadable>\n";
             continue;
         }
 
         const std::string name = readCameraName(camera);
-        if (name.empty())
-            continue;
+        if (!name.empty() && cameraNames.size() < 384)
+        {
+            if (!cameraNames.empty())
+                cameraNames += ", ";
+            cameraNames += name;
+        }
 
-        const bool isFps = containsInsensitive(name, "FPS") && containsInsensitive(name, "Camera");
-        const bool isOptic = (containsInsensitive(name, "Optic") || containsInsensitive(name, "BaseOptic")) && containsInsensitive(name, "Camera");
+        const bool isFps = name == "FPS Camera RS" || (containsInsensitive(name, "FPS") && containsInsensitive(name, "Camera"));
+        const bool isOptic = name == "GameplayCameraOptic(Clone)" ||
+            ((containsInsensitive(name, "Optic") || containsInsensitive(name, "BaseOptic")) && containsInsensitive(name, "Camera"));
+        const std::uint64_t matrixAddress = resolveViewMatrixAddress(camera, isOptic);
 
-        if (!foundFps && isFps && validPointer(resolveViewMatrixAddress(camera)))
+        cameraDump
+            << '[' << std::setw(3) << std::setfill('0') << index << "] camera=0x"
+            << std::hex << camera
+            << " matrix=0x" << matrixAddress << std::dec
+            << " matrix_valid=" << (validPointer(matrixAddress) ? "yes" : "no")
+            << " match=" << (isFps ? "fps" : (isOptic ? "optic" : "other"))
+            << " name=\"" << (name.empty() ? "<unreadable>" : name) << "\"\n";
+
+        if (!namedFps && isFps)
+            namedFps = camera;
+        if (!foundFps && isFps && validPointer(matrixAddress))
             foundFps = camera;
         if (isOptic)
         {
             if (!firstOptic)
                 firstOptic = camera;
-            if (!foundOptic && validPointer(resolveViewMatrixAddress(camera, true)))
+            if (!foundOptic && validPointer(matrixAddress))
                 foundOptic = camera;
         }
+    }
 
-        if (foundFps && foundOptic)
-            break;
+    cameraDump
+        << "\nResolved FPS: 0x" << std::hex << foundFps << '\n'
+        << "Resolved optic: 0x" << foundOptic << std::dec << '\n';
+    const std::string cameraListDump = cameraDump.str();
+    if (cameraListDump != m_lastCameraListDump)
+    {
+        saveCameraListDump(cameraListDump);
+        m_lastCameraListDump = cameraListDump;
+    }
+
+    if (!foundFps)
+    {
+        if (validPointer(namedFps))
+            m_lastBootstrapFailure = "FPS camera was found, but its configured +0x118 matrix failed validation";
+        else if (cameraNames.empty())
+            m_lastBootstrapFailure = "AllCameras was readable, but no camera names could be read";
+        else
+            m_lastBootstrapFailure = "No FPS camera name matched in AllCameras. Seen: " + cameraNames;
     }
 
     if (validPointer(foundFps))
@@ -515,16 +630,47 @@ bool CameraManager::resolveCameras()
 {
     std::uint64_t fps = 0;
     std::uint64_t optic = 0;
-    if (!resolveCamerasFromAllCameras(fps, optic))
-        return false;
+    (void)resolveCamerasFromAllCameras(fps, optic);
 
-    const std::uint64_t fpsMatrix = resolveViewMatrixAddress(fps);
-    if (!validPointer(fps) || !validPointer(fpsMatrix))
+    std::uint64_t fpsMatrix = resolveViewMatrixAddress(fps);
+    bool fpsResolvedFromAllCameras = validPointer(fps) && validPointer(fpsMatrix);
+
+    if (!fpsResolvedFromAllCameras)
+    {
+        m_eftCameraManager = resolveCameraManagerInstance();
+        const std::uint64_t cameraOffset = cameraManagerCameraOffset(m_eftCameraManager);
+        std::uint64_t cameraReference = 0;
+        std::uint64_t nativeCamera = 0;
+
+        if (cameraOffset &&
+            readPointer(m_eftCameraManager + cameraOffset, cameraReference) &&
+            classNameMatches(readManagedComponentName(cameraReference), "Camera") &&
+            readPointer(cameraReference + kUnityObjectCachedPointer, nativeCamera))
+        {
+            fps = nativeCamera;
+            const std::uint64_t managedMatrix = resolveViewMatrixAddress(nativeCamera);
+            if (validPointer(managedMatrix))
+                fpsMatrix = managedMatrix;
+        }
+    }
+
+    if (!validPointer(fps))
+    {
+        m_lastBootstrapFailure += m_lastBootstrapFailure.empty() ? "" : "; ";
+        m_lastBootstrapFailure += "managed CameraManager did not yield an FPS camera pointer";
         return false;
+    }
+    if (!validPointer(fpsMatrix))
+    {
+        m_lastBootstrapFailure += m_lastBootstrapFailure.empty() ? "" : "; ";
+        m_lastBootstrapFailure += "managed FPS camera pointer resolved, but its configured +0x118 matrix failed validation";
+        return false;
+    }
 
     if (fps != m_fpsCamera || optic != m_opticCamera)
     {
-        m_eftCameraManager = 0;
+        if (fpsResolvedFromAllCameras)
+            m_eftCameraManager = 0;
         m_opticCameraManager = 0;
         m_lastManagedCameraResolve = {};
     }
@@ -533,10 +679,12 @@ bool CameraManager::resolveCameras()
     m_opticCamera = optic;
     m_fpsViewMatrixAddress = fpsMatrix;
     m_opticViewMatrixAddress = resolveViewMatrixAddress(optic, true);
-    m_allCamerasFpsViewMatrixAddress = m_fpsViewMatrixAddress;
+    if (fpsResolvedFromAllCameras)
+        m_allCamerasFpsViewMatrixAddress = m_fpsViewMatrixAddress;
     m_allCamerasOpticViewMatrixAddress = m_opticViewMatrixAddress;
-    m_fpsFromAllCameras = true;
+    m_fpsFromAllCameras = fpsResolvedFromAllCameras;
     m_opticFromAllCameras = validPointer(optic);
+    m_lastBootstrapFailure.clear();
 
     return true;
 }
@@ -860,6 +1008,14 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
             mem.ReportDmaHealthFailure(
                 DmaHealthSource::CameraChain,
                 m_allCamerasGlobal ^ (m_unityPlayerBase << 1));
+
+            CameraManagerState failure{};
+            failure.allCamerasGlobal = validPointer(m_allCamerasGlobal) ? m_allCamerasGlobal :
+                (validPointer(m_unityPlayerBase) ? m_unityPlayerBase + UnityOffsets::AllCamera : 0);
+            failure.viewMatrixOffset = m_viewMatrixOffset;
+            failure.usedAllCamerasOffset = validPointer(m_unityPlayerBase);
+            failure.cameraSampleFailure = m_lastBootstrapFailure.empty() ? "Camera bootstrap failed before enumeration" : m_lastBootstrapFailure;
+            publish(std::move(failure));
             return false;
         }
     }
@@ -918,7 +1074,7 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
 
         if (validPointer(resolvedCurrentOpticSight))
         {
-            readPointer(resolvedCurrentOpticSight + kOpticSightScopeTransform, currentScopeTransform);
+            readPointer(resolvedCurrentOpticSight + sdk::OpticSight::ScopeTransform, currentScopeTransform);
         }
         else
         {
@@ -1367,24 +1523,14 @@ bool CameraManager::readCameraSample(
         std::size(requests),
         DmaCacheMode::Uncached,
         "Camera matrices",
-        bytesRead,
-        DmaPagingMode::NoPaging,
-        waitForDma ? DmaLockMode::Wait : DmaLockMode::Try);
-    if (result == Memory::TryScatterReadResult::Busy)
-    {
-        if (busy)
-            *busy = true;
-        return false;
-    }
+        bytesRead);
     if ((result != Memory::TryScatterReadResult::Success && result != Memory::TryScatterReadResult::Incomplete) ||
         bytesRead[0] != sizeof(matrix) ||
         !viewProjectionLooksValid(matrix))
         return false;
 
-    if (bytesRead[1] == sizeof(view) && matrixLooksValid(view))
+    if (bytesRead[1] == sizeof(view) && matrixLooksValid(view) && viewProjectionMatchesView(matrix, view))
     {
-        if (!viewProjectionMatchesView(matrix, view))
-            return false;
         sample.view = view;
         sample.viewValid = true;
     }

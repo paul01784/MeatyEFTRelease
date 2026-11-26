@@ -103,18 +103,6 @@ enum class DmaCacheMode : uint8_t
     Uncached
 };
 
-enum class DmaPagingMode : uint8_t
-{
-    NoPaging,
-    AllowPaging
-};
-
-enum class DmaLockMode : uint8_t
-{
-    Try,
-    Wait
-};
-
 enum class DmaHealthSource : uint8_t
 {
     GameWorldSingleton,
@@ -142,7 +130,6 @@ private:
 
     bool DumpMemoryMap(bool debug = false);
     bool SetFPGA();
-    void CloseScatterHandleLocked() noexcept;
 
     std::thread dmaThread;
 
@@ -229,18 +216,13 @@ private:
     mutable std::chrono::steady_clock::time_point trafficStatsLastSample{};
 
     mutable std::mutex handleMutex;
-    mutable PriorityDmaMutex dmaOpsMutex;
-    VMMDLL_SCATTER_HANDLE reusableScatterHandle = nullptr;
+    mutable std::mutex dmaOpsMutex;
 
     mutable std::mutex tarkovPointersMutex;
     TarkovPointerSnapshot tarkovPointers{};
 
     [[nodiscard]] bool TryGetModuleInfo(const std::string& moduleName, uintptr_t& moduleBase, size_t& moduleSize) const;
     void ClearTarkovPointerSnapshot();
-
-    std::chrono::steady_clock::time_point lastMemoryCacheRefresh{};
-    std::chrono::steady_clock::time_point lastTlbCacheRefresh{};
-    bool preferTlbCacheRefresh = true;
 
     struct DmaHealthFailureState
     {
@@ -259,21 +241,12 @@ private:
 
 private:
     [[nodiscard]] static DWORD BuildReadFlags(DmaCacheMode cacheMode);
-    [[nodiscard]] static DWORD BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode = DmaPagingMode::NoPaging);
+    [[nodiscard]] static DWORD BuildScatterFlags(DmaCacheMode cacheMode);
 
 public:
-    // 64 KiB remains the hard device limit. Live work yields every 32 KiB;
-    // background work may use the full window for throughput.
-    static constexpr size_t PreferredDmaTransferBytes = 32 * 1024;
+    // Retained for callers that intentionally keep large batches bounded.
     static constexpr size_t MaxDmaTransferBytes = 64 * 1024;
     static constexpr size_t MaxDmaScatterRequests = 256;
-
-    [[nodiscard]] static size_t GetDmaTransferLimit() noexcept
-    {
-        return GetCurrentDmaPriority() == DmaPriority::Background
-            ? MaxDmaTransferBytes
-            : PreferredDmaTransferBytes;
-    }
 
     struct ScatterReadRequest
     {
@@ -289,7 +262,6 @@ public:
     {
         Success,
         Incomplete,
-        Busy,
         Failed
     };
 
@@ -316,7 +288,8 @@ public:
     bool IsDmaOperational() const;
     [[nodiscard]] bool ShouldDeferDmaWork(DmaPriority priority) const
     {
-        return dmaOpsMutex.ShouldDefer(priority);
+        (void)priority;
+        return false;
     }
 
     DWORD GetPidFromName(const std::string& process_name);
@@ -326,7 +299,7 @@ public:
     VMMDLL_PROCESS_INFORMATION GetProcessInformation();
     PEB GetProcessPeb();
 
-    uintptr_t GetBaseDaddy(const std::string& module_name);
+    uintptr_t GetBase(const std::string& module_name);
     size_t GetBaseSize(const std::string& module_name);
     [[nodiscard]] bool GetModuleInfo(const std::string& moduleName, uintptr_t& moduleBase, size_t& moduleSize) const;
 
@@ -529,7 +502,7 @@ public:
     bool TryReadLootTransformFallback(uint64_t gameObject, uint64_t& output);
     bool ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Uncached, std::string_view callingFunc = {}, int pid = 0);
 
-    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Uncached, std::string_view callingFunc = {}, std::span<DWORD> bytesRead = {}, DmaPagingMode pagingMode = DmaPagingMode::NoPaging, DmaLockMode lockMode = DmaLockMode::Try, int pid = 0);
+    TryScatterReadResult TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode = DmaCacheMode::Uncached, std::string_view callingFunc = {}, std::span<DWORD> bytesRead = {}, int pid = 0);
 
     [[nodiscard]] static bool IsValidPointer(uintptr_t pointer)
     {

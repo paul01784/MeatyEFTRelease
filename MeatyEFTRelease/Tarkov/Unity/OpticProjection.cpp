@@ -253,8 +253,10 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
     std::uint64_t nodes = 0;
     std::uint32_t index = 0;
 
-    if (!readPointer(nativeTransform + 0x70, hierarchy) || !readValue(nativeTransform + 0x78, index) || index >= kMaxTransformIndex ||
-        !readPointer(hierarchy + 0x40, parents) || !readPointer(hierarchy + 0x68, nodes))
+    if (!readPointer(nativeTransform + UnityOffsets::TransformAccess_HierarchyOffset, hierarchy) ||
+        !readValue(nativeTransform + UnityOffsets::TransformAccess_IndexOffset, index) || index >= kMaxTransformIndex ||
+        !readPointer(hierarchy + UnityOffsets::Hierarchy_IndicesOffset, parents) ||
+        !readPointer(hierarchy + UnityOffsets::Hierarchy_VerticesOffset, nodes))
     {
         return false;
     }
@@ -289,8 +291,9 @@ template <typename T> [[nodiscard]] bool readValue(std::uint64_t address, T& val
     std::uint64_t hierarchy = 0;
     std::uint64_t nodes = 0;
     std::uint32_t index = 0;
-    if (!readPointer(nativeTransform + 0x70, hierarchy) || !readValue(nativeTransform + 0x78, index) || index >= kMaxTransformIndex ||
-        !readPointer(hierarchy + 0x68, nodes))
+    if (!readPointer(nativeTransform + UnityOffsets::TransformAccess_HierarchyOffset, hierarchy) ||
+        !readValue(nativeTransform + UnityOffsets::TransformAccess_IndexOffset, index) || index >= kMaxTransformIndex ||
+        !readPointer(hierarchy + UnityOffsets::Hierarchy_VerticesOffset, nodes))
     {
         return 0;
     }
@@ -1036,12 +1039,6 @@ bool OpticProjectionEngine::readCamera(std::uint64_t nativeCamera, CameraMatrixS
         {nativeCamera + UnityOffsets::Camera_NonJitteredProjectionMatrixOffset, &raw.nonJitteredProjection, sizeof(raw.nonJitteredProjection)}};
     DWORD bytesRead[std::size(requests)]{};
     const auto result = mem.TryReadScatter(requests, std::size(requests), DmaCacheMode::Uncached, "Camera VP", bytesRead);
-    if (result == Memory::TryScatterReadResult::Busy)
-    {
-        if (busy)
-            *busy = true;
-        return false;
-    }
     if (result != Memory::TryScatterReadResult::Success)
         return false;
     for (std::size_t index = 0; index < std::size(requests); ++index)
@@ -1195,7 +1192,8 @@ bool OpticProjectionEngine::discover(std::uint64_t localPlayer, std::uint64_t op
     std::uint32_t extraVertexStreamId = 0;
     m_failureReason = "native lens renderer validation";
     if (!readPointer(route.lens, lensType) || lensType != unityPlayer + UnityOffsets::MeshRendererType || !readPointer(route.lens + 0x60, materialArrayType) ||
-        materialArrayType != unityPlayer + UnityOffsets::RendererMaterialArrayType || !readPointer(route.lens + 0x58, gameObject) ||
+        materialArrayType != unityPlayer + UnityOffsets::RendererMaterialArrayType ||
+        !readPointer(route.lens + UnityOffsets::Component_GameObjectOffset, gameObject) ||
         !readValue(route.lens + 0x122, staticBatchSubmeshCount) || staticBatchSubmeshCount != 0 || !readValue(route.lens + 0x25C, extraVertexStreamId) ||
         extraVertexStreamId != 0)
     {
@@ -1206,8 +1204,9 @@ bool OpticProjectionEngine::discover(std::uint64_t localPlayer, std::uint64_t op
     route.meshFilter = resolveComponent(gameObject, unityPlayer + UnityOffsets::MeshFilterTypeDescriptor);
     std::uint64_t componentGameObject = 0;
     m_failureReason = "lens Transform or MeshFilter";
-    if (!validPointer(route.lensTransform) || !validPointer(route.meshFilter) || !readPointer(route.lensTransform + 0x58, componentGameObject) ||
-        componentGameObject != gameObject || !readPointer(route.meshFilter + 0x58, componentGameObject) || componentGameObject != gameObject ||
+    if (!validPointer(route.lensTransform) || !validPointer(route.meshFilter) ||
+        !readPointer(route.lensTransform + UnityOffsets::Component_GameObjectOffset, componentGameObject) || componentGameObject != gameObject ||
+        !readPointer(route.meshFilter + UnityOffsets::Component_GameObjectOffset, componentGameObject) || componentGameObject != gameObject ||
         !readValue(route.meshFilter + 0x60, route.meshId))
     {
         return false;
@@ -1265,7 +1264,7 @@ bool OpticProjectionEngine::discover(std::uint64_t localPlayer, std::uint64_t op
     const auto resolveCameraChain = [&](std::uint64_t camera, std::vector<std::uint64_t>& chain)
     {
         std::uint64_t cameraObject = 0;
-        if (!readPointer(camera + 0x58, cameraObject))
+        if (!readPointer(camera + UnityOffsets::Camera_GameObjectOffset, cameraObject))
             return false;
         const std::uint64_t cameraTransform = resolveComponent(cameraObject, unityPlayer + UnityOffsets::TransformTypeDescriptor, 256);
         return validPointer(cameraTransform) && resolveTransformChain(cameraTransform, chain);
@@ -1395,13 +1394,6 @@ bool OpticProjectionEngine::update(std::uint64_t localPlayer, std::uint64_t opti
     }
     std::vector<DWORD> bytesRead(requests.size());
     const auto result = mem.TryReadScatter(requests.data(), requests.size(), DmaCacheMode::Uncached, "Proper optic projection", bytesRead);
-    if (result == Memory::TryScatterReadResult::Busy)
-    {
-        if (busy)
-            *busy = true;
-        m_failureReason = "DMA busy during paired sample";
-        return false;
-    }
     if (result != Memory::TryScatterReadResult::Success)
     {
         m_failureReason = "paired scatter execution";

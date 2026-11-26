@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.46";
+std::string globals::appVersion = "1.0.48";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;
@@ -267,11 +267,11 @@ boneListIndexes aimGlobals::pmcBone = boneListIndexes::Head;
 TargetMode aimGlobals::targetMode = TargetMode::FOV;
 bool aimGlobals::targetLock = false;
 bool aimGlobals::aimClosestBoneToFireport = false;
+bool aimGlobals::aiIgnoreClosestBone = false;
+bool aimGlobals::pmcIgnoreClosestBone = false;
 float aimGlobals::aimSmooth = 4.f;
 float aimGlobals::aimSpeedPixelsPerSecond = 1200.f;
 float aimGlobals::aimDeadzonePixels = 2.5f;
-float aimGlobals::aimOffsetX = 0.f;
-float aimGlobals::aimOffsetY = 0.f;
 bool aimGlobals::showAimFovRing = true;
 
 

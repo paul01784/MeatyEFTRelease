@@ -17,8 +17,21 @@ namespace sdk
 
     namespace Runtime
     {
+        struct Il2CppClassLayout
+        {
+            static constexpr std::uint32_t Image = 0x00;
+            static constexpr std::uint32_t Name = 0x10;
+            static constexpr std::uint32_t Namespace = 0x18;
+            static constexpr std::uint32_t Parent = 0x58;
+            static constexpr std::uint32_t Fields = 0x80;
+            static constexpr std::uint32_t StaticFields = 0xA0;
+            static constexpr std::uint32_t InstanceSize = 0xF8;
+            static constexpr std::uint32_t FieldCount = 0x124;
+        };
 
-        inline std::uint64_t TypeInfoTableRva = 0x5FB0F48;
-        inline std::uint64_t Il2CppClassStaticFields = 0xB8;
+        inline std::uint64_t TypeInfoTableRva = 0x75DA668;
+        inline std::uint64_t InGameStatusRva = 0x72CF648;
+        inline std::uint64_t GamePlayerOwnerRva = 0x731CE40;
+        inline std::uint64_t Il2CppClassStaticFields = Il2CppClassLayout::StaticFields;
     }
 }

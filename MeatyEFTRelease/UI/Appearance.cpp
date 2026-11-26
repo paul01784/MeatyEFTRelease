@@ -112,13 +112,20 @@ void ReadViewStyle(const nlohmann::json& json, MarkerViewStyle& style)
 
 nlohmann::json PlayerMarkerStyleJson(const PlayerMarkerStyle& style)
 {
-    return {{"shape", static_cast<int>(style.shape)}, {"size", style.size}};
+    return {
+        {"shape", static_cast<int>(style.shape)},
+        {"size", style.size},
+        {"entitySilhouette", style.entitySilhouette},
+        {"silhouetteOpacity", style.silhouetteOpacity}
+    };
 }
 
 void ReadPlayerMarkerStyle(const nlohmann::json& json, PlayerMarkerStyle& style, bool allowTank)
 {
     style.shape = static_cast<MarkerShape>(std::clamp(json.value("shape", static_cast<int>(style.shape)), 0, allowTank ? 6 : 5));
     style.size = std::clamp(json.value("size", style.size), 3.0f, 30.0f);
+    style.entitySilhouette = json.value("entitySilhouette", style.entitySilhouette);
+    style.silhouetteOpacity = std::clamp(json.value("silhouetteOpacity", style.silhouetteOpacity), 0.05f, 0.8f);
 }
 
 nlohmann::json MarkerStyleJson(const MarkerStyle& style)

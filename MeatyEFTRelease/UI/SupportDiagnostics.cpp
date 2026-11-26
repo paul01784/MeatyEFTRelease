@@ -885,7 +885,6 @@ SupportReportResult ExportSupportReport(const SupportReportOptions& options)
             { "smooth", aimGlobals::aimSmooth },
             { "speed_pixels_per_second", aimGlobals::aimSpeedPixelsPerSecond },
             { "deadzone_pixels", aimGlobals::aimDeadzonePixels },
-            { "offset", { { "x", aimGlobals::aimOffsetX }, { "y", aimGlobals::aimOffsetY } } },
             { "reference", { { "valid", aimReference.valid }, { "position", Vec2Json(aimReference.pos) } } },
             { "fireport", {
                 { "valid", fireport.valid },

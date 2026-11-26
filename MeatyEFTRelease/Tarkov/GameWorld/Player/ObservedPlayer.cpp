@@ -130,7 +130,7 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
 
     player.P_CorpseAddr = player.P_ObservedHealthController + sdk::ObservedHealthController::PlayerCorpse;
     player.P_RotationAddress = player.P_MovementContext + sdk::ObservedPlayerStateContext::Rotation;
-    player.P_VelocityAddress = player.P_MovementContext + sdk::ObservedPlayerStateContext::Velocity;
+    player.P_VelocityAddress = movementController + sdk::ObservedMovementController::Model + sdk::ObservedPlayerMovementModel::Velocity;
 
     if (!Utils::valid_pointer(player.P_CorpseAddr) ||
         !Utils::valid_pointer(player.P_InventoryControllerAddr) ||

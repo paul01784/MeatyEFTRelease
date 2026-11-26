@@ -77,19 +77,15 @@ struct GameObjectManager
         return mainGame.gameObjectManager;   // pull live value from mainGame instance
     }
 
-    // Offsets
-    static constexpr uint64_t OFFSET_LastActiveNode = 0x20;
-    static constexpr uint64_t OFFSET_ActiveNodes = 0x28;
-
     // Accessors
     uint64_t LastActiveNode() const
     {
-        return mem.Read<uint64_t>(base() + OFFSET_LastActiveNode);
+        return mem.Read<uint64_t>(base() + UnityOffsets::GameObjectManager_LastActiveNodeOffset);
     }
 
     uint64_t ActiveNodes() const
     {
-        return mem.Read<uint64_t>(base() + OFFSET_ActiveNodes);
+        return mem.Read<uint64_t>(base() + UnityOffsets::GameObjectManager_ActiveNodesOffset);
     }
 
     
@@ -163,7 +159,7 @@ struct GameObjectManager
 
                     //localgameworld ptr
                     uint64_t localGameWorld = 0x0;
-                    localGameWorld = mem.ReadChain(currentObject.ThisObject, { UnityOffsets::GameObject_ComponentsOffset, 0x18, UnityOffsets::Component_ObjectClassOffset });
+                    localGameWorld = mem.ReadChain(currentObject.ThisObject, { UnityOffsets::GameObject_ComponentsOffset, UnityOffsets::GameObject_ComponentStepOffset, UnityOffsets::GameObject_LocalGameWorldOffset });
                     if (Utils::valid_pointer(localGameWorld))
                     {
                         //storage 
@@ -384,7 +380,7 @@ struct GameObjectManager
             // Resolve GameWorld
             uint64_t gameWorld = mem.ReadChain(
                 nodes[i].ThisObject,
-                { UnityOffsets::GameObject_ComponentsOffset, 0x18, UnityOffsets::Component_ObjectClassOffset });
+                { UnityOffsets::GameObject_ComponentsOffset, UnityOffsets::GameObject_ComponentStepOffset, UnityOffsets::GameObject_LocalGameWorldOffset });
 
             dbg("gameWorld ptr: " + hex(gameWorld));
 

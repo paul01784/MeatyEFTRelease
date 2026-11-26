@@ -192,16 +192,29 @@ void Exfil::tryLoadMemoryExfils()
 
 				const std::string_view displayExfilName = ExfilNames::ToDisplayName(memoryExfilName);
 
-				const uint64_t transformInternal = mem.ReadChain(exfilPointAddr, TransformChain);
+				const uint64_t transformObject = mem.ReadChain(exfilPointAddr, TransformChain);
 
-				if (!Utils::valid_pointer(transformInternal))
+				if (!Utils::valid_pointer(transformObject))
 					return;
 
-				UnityTransform transform(transformInternal);
+				uint64_t nativeTransform = 0;
+				if (!UnityTransform::TryResolveNative(transformObject, nativeTransform))
+					return;
+
+				UnityTransform transform(nativeTransform);
+				if (!transform.IsValid())
+					return;
+
+				const glm::vec3 worldPosition = transform.UpdatePosition();
+				if (!transform.IsValid() ||
+					(worldPosition.x == 0.0f && worldPosition.y == 0.0f && worldPosition.z == 0.0f))
+				{
+					return;
+				}
 
 				exfilsMemory exfilNew{};
 				exfilNew.instance = exfilPointAddr;
-				exfilNew.locationWorld = transform.UpdatePosition();
+				exfilNew.locationWorld = worldPosition;
 				exfilNew.extractName = type == ExfilType::Secret
 					? "Secret: " + std::string(displayExfilName)
 					: std::string(displayExfilName);

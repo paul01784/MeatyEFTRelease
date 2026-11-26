@@ -85,6 +85,8 @@ struct PlayerMarkerStyle
 {
     MarkerShape shape = MarkerShape::Triangle;
     float size = 9.0f;
+    bool entitySilhouette = false;
+    float silhouetteOpacity = 0.28f;
 };
 
 struct AppearanceConfig

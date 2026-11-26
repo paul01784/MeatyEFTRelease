@@ -42,7 +42,7 @@ static bool TryReadItemArray(
             arrayPointer + OffsetsArray::ArrBaseOffset,
             output.data(),
             output.size() * sizeof(T)) ||
-        !batch.TryExecuteNoPaging())
+        !batch.Execute())
     {
         output.clear();
         return false;
@@ -66,7 +66,7 @@ static bool TryReadItemList(
     if (!Utils::valid_pointer(listPointer) ||
         !header.Add(listPointer + UnityList<T>::CountOffset, count) ||
         !header.Add(listPointer + UnityList<T>::ArrOffset, arrayPointer) ||
-        !header.TryExecuteNoPaging() ||
+        !header.Execute() ||
         count < 0 ||
         count > maximumCount ||
         !Utils::valid_pointer(arrayPointer))
@@ -83,7 +83,7 @@ static bool TryReadItemList(
             arrayPointer + UnityList<T>::ArrStartOffset,
             output.data(),
             output.size() * sizeof(T)) ||
-        !entries.TryExecuteNoPaging())
+        !entries.Execute())
     {
         output.clear();
         return false;
@@ -478,9 +478,7 @@ static bool TryReadWeaponBallistics(
             std::size(requests),
             DmaCacheMode::Cached,
             "Weapon ballistics",
-            bytesRead,
-            DmaPagingMode::NoPaging,
-            DmaLockMode::Try) != Memory::TryScatterReadResult::Success ||
+            bytesRead) != Memory::TryScatterReadResult::Success ||
         !std::all_of(bytesRead.begin(), bytesRead.end(), [](DWORD bytes)
         {
             return bytes == sizeof(float);

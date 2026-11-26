@@ -8,19 +8,19 @@
   "unity": {
     "rvas": {
       "UnityPlayer.dll": {
-        "gameObjectManager": "0x1A233A0",
-        "allCameras": "0x19F3080"
+        "gameObjectManager": "0x2054CB0",
+        "allCameras": "0x1F7DB00"
       }
     },
     "layouts": {
       "GameObjectManager": {
-        "lastActiveNode": "0x20",
-        "activeNodes": "0x28"
+        "lastActiveNode": "0x18",
+        "activeNodes": "0x20"
       },
       "Camera": {
-        "viewMatrix": "0x128",
-        "fov": "0x1A8",
-        "aspectRatio": "0x518"
+        "viewMatrix": "0x118",
+        "fov": "0x198",
+        "aspectRatio": "0x510"
       }
     },
     "resolution": {
@@ -55,12 +55,12 @@
     }
   },
   "bootstrap": {
-    "typeInfoTableRva": "0x5FB0F48",
-    "il2CppClassStaticFields": "0xB8"
+    "typeInfoTableRva": "0x75DA668",
+    "il2CppClassStaticFields": "0xA0"
   },
   "offsets": {
     "GamePlayerOwner": {
-      "TypeIndex": "0x2215",
+      "TypeIndex": "0x2118",
       "MyPlayer": "0x8"
     },
     "GameWorld": {
@@ -119,22 +119,22 @@
       "RibcageScaleCurrent": "0x150",
       "_playerBody": "0x1A0",
       "ProceduralWeaponAnimation": "0x3C0",
-      "GameWorld": "0x690",
-      "Corpse": "0x728",
-      "Location": "0x928",
-      "Profile": "0x9C0",
-      "_inventoryController": "0xA38",
-      "_handsController": "0xA40",
-      "_playerLookRaycastTransform": "0xAE0",
-      "PlayerBones": "0xB48"
+      "GameWorld": "0x778",
+      "Corpse": "0x810",
+      "Location": "0xA18",
+      "Profile": "0xAB0",
+      "_inventoryController": "0xB28",
+      "_handsController": "0xB30",
+      "_playerLookRaycastTransform": "0xBE0",
+      "PlayerBones": "0xC50"
     },
     "SimpleCharacterController": {
       "Velocity": "0xF0"
     },
     "FirearmController": {
-      "Firearms": "0xD0",
-      "GunBaseTransform": "0x148",
-      "Fireport": "0x150"
+      "Firearms": "0xE0",
+      "GunBaseTransform": "0x158",
+      "Fireport": "0x160"
     },
     "Firearms": {
       "Fireport": "0xD8"
@@ -171,11 +171,14 @@
       "HandsController": "0x140"
     },
     "ObservedMovementController": {
+      "Model": "0x10",
       "ObservedPlayerStateContext": "0xB0"
     },
     "ObservedPlayerStateContext": {
-      "Rotation": "0x28",
-      "Velocity": "0xF8"
+      "Rotation": "0x28"
+    },
+    "ObservedPlayerMovementModel": {
+      "Velocity": "0x30"
     },
     "ObservedPlayerHands": {
       "Item": "0x58"
@@ -199,7 +202,7 @@
     },
     "Weapon": {
       "Chambers": "0xB0",
-      "MagazineSlotCache": "0xC8"
+      "MagazineSlotCache": "0xD8"
     },
     "Magazine": {
       "Cartridges": "0xA8"
@@ -265,27 +268,38 @@
       "Zooms": "0x1B8"
     },
     "CameraManager": {
-      "Instance": "0x0",
-      "OpticCameraManager": "0x10",
-      "Camera": "0x70"
+      "TypeIndex": "0x347F",
+      "Instance": "0x0"
+    },
+    "CameraManagerMono": {
+      "OpticCameraManager": "0x120",
+      "Camera": "0x38"
+    },
+    "CameraManagerRs": {
+      "OpticCameraManager": "0x80",
+      "Camera": "0xE0"
     },
     "OpticCameraManager": {
       "Camera": "0x68",
       "CurrentOpticSight": "0x70"
     },
+    "OpticCameraManagerRs": {
+      "Camera": "0x90",
+      "CurrentOpticSight": "0x98"
+    },
     "OpticSight": {
-      "LensRenderer": "0x30",
-      "ScopeTransform": "0x40"
+      "LensRenderer": "0x48",
+      "ScopeTransform": "0x58"
     },
     "InteractiveLootItem": {
-      "Item": "0xF0"
+      "Item": "0x100"
     },
     "LootItemMod": {
       "Slots": "0x80"
     },
     "LootableContainer": {
-      "InteractingPlayer": "0x160",
-      "ItemOwner": "0x178"
+      "InteractingPlayer": "0x180",
+      "ItemOwner": "0x198"
     },
     "LootableContainerItemOwner": {
       "RootItem": "0xD0"
@@ -354,15 +368,15 @@
       "TraderId": "0x48"
     },
     "HideoutAreaQTEOverlay": {
-      "TypeIndex": "0x2645",
+      "TypeIndex": "0x2684",
       "QteController": "0x0"
     },
     "QTEController": {
-      "TypeIndex": "0x266C",
+      "TypeIndex": "0x26AB",
       "SpawnedQtes": "0x90"
     },
     "ShrinkingCircleQTE": {
-      "TypeIndex": "0x2678",
+      "TypeIndex": "0x26B8",
       "Speed": "0x20",
       "SuccessRange": "0x24",
       "MinScale": "0x2C",

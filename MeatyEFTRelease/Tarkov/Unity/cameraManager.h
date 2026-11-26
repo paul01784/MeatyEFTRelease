@@ -191,6 +191,8 @@ private:
 
     std::uint8_t m_opticMatrixReadFailures = 0;
     std::chrono::steady_clock::time_point m_cameraReadFailureSince{};
+    std::string m_lastBootstrapFailure;
+    std::string m_lastCameraListDump;
 
     std::uint64_t m_busyReadSkips = 0;
     std::uint64_t m_observedDmaRecoveryEpoch = 0;

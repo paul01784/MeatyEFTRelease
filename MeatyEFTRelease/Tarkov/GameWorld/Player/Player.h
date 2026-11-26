@@ -11,13 +11,14 @@
 #include <memory>
 #include <vector>
 #include "HandsManager.h"
+#include "PlayerVelocityFilter.h"
 
 
 
 struct TransformAccessReadOnly
 {
-	uint64_t pTransformData; // offset 0x88
-	int32_t index;          // offset 0x90
+	uint64_t pTransformData; // relative offset 0x0 (Transform + 0x50)
+	int32_t index;          // relative offset 0x8 (Transform + 0x58)
 	int32_t pad;            // optional padding for alignment
 };
 
@@ -171,6 +172,11 @@ public:
 
 	glm::vec3 location;
 	glm::vec3 velocity{};
+	PlayerVelocityFilter velocityFilter{};
+	PlayerWorldVelocityTracker worldVelocityTracker{};
+	glm::vec3 worldVelocity{};
+	bool worldVelocityValid{ false };
+	std::chrono::steady_clock::time_point lastWorldVelocityUpdate{};
 	bool velocityValid{ false };
 	std::chrono::steady_clock::time_point lastVelocityUpdate{};
 	

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <glm/glm.hpp>
 #include "Ballistics.h"
+#include "../../Unity/cameraManager.h"
 #include "../../GameWorld/RegisteredPlayers.h"
 #include "../../../UI/render.h"
 
@@ -28,6 +29,8 @@ struct AimReferencePoint
 {
     glm::vec2 pos{};
     bool valid = false;
+    std::uint64_t cameraVersion = 0;
+    std::uint64_t fireportVersion = 0;
 };
 
 struct AimPredictionContext
@@ -48,10 +51,12 @@ public:
     std::optional<TargetResult> getActiveTarget() const;
 
     AimReferencePoint resolveAimReference() const;
+    AimReferencePoint resolveAimReference(const CameraManagerState& camera) const;
 
 private:
     std::optional<TargetResult> buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx,
                                                   const glm::vec2& aimRef,
+                                                  const CameraManagerState& camera,
                                                   const PlayerLocalState& localState,
                                                   const AimPredictionContext& prediction,
                                                   bool useClosestBoneToFireport,
@@ -60,10 +65,12 @@ private:
     bool getSelectedBonePosition(const Player& entity, boneListIndexes selectedBone, glm::vec3& outPosition) const;
 
     bool getClosestBoneToAimReference(const Player& entity, const glm::vec2& aimRef,
+                                      const CameraManagerState& camera,
                                       boneListIndexes& outBone, glm::vec3& outPosition) const;
 
     std::optional<TargetResult> findBestTarget(const std::vector<Player>& snapshot, TargetMode mode,
                                                float maxDistance, float fovRadiusPx, const glm::vec2& aimRef,
+                                               const CameraManagerState& camera,
                                                const PlayerLocalState& localState,
                                                const AimPredictionContext& prediction,
                                                bool useClosestBoneToFireport) const;
@@ -71,12 +78,14 @@ private:
     std::optional<TargetResult> refreshTargetByInstance(const std::vector<Player>& snapshot, uint64_t instance,
                                                         float maxDistance, float fovRadiusPx,
                                                         const glm::vec2& aimRef,
+                                                        const CameraManagerState& camera,
                                                         const PlayerLocalState& localState,
                                                         const AimPredictionContext& prediction,
                                                         bool useClosestBoneToFireport) const;
 
     void clearTargetState(bool keyIsHeld);
     void pauseTargetState(bool keyIsHeld);
+    void resetMovementState();
 
 private:
     mutable std::shared_mutex m_targetMutex;
@@ -88,6 +97,12 @@ private:
     bool m_wasKeyHeld = false;
     glm::vec2 m_moveRemainder{};
     std::chrono::steady_clock::time_point m_lastMoveTime{};
+    std::uint64_t m_lastMoveCameraVersion = 0;
+    std::uint64_t m_lastMoveFireportVersion = 0;
+    std::uint64_t m_moveInstance = 0;
+    boneListIndexes m_moveBone = boneListIndexes::Head;
+    glm::vec2 m_previousError{};
+    bool m_aimSettled = false;
 
 };
 

@@ -513,6 +513,7 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ClInclude Include="Tarkov\GameWorld\RegisteredPlayers.h" />
     <ClInclude Include="Tarkov\GameWorld\Player\Player.h" />
     <ClInclude Include="Tarkov\GameWorld\Player\PlayerRuntimeModel.h" />
+    <ClInclude Include="Tarkov\GameWorld\Player\PlayerVelocityFilter.h" />
     <ClInclude Include="Tarkov\GameWorld\Player\PlayerMemoryAccess.h" />
     <ClInclude Include="Tarkov\GameWorld\Player\PlayerClassifier.h" />
     <ClInclude Include="Tarkov\GameWorld\Player\PlayerLookup.h" />

@@ -29,28 +29,21 @@ namespace
         boneListIndexes::RFoot
     };
 
-    glm::vec2 ApplyAimOffset(const glm::vec2& screenPosition)
-    {
-        const float offsetX = std::isfinite(aimGlobals::aimOffsetX)
-            ? std::clamp(aimGlobals::aimOffsetX, -1000.0f, 1000.0f)
-            : 0.0f;
-        const float offsetY = std::isfinite(aimGlobals::aimOffsetY)
-            ? std::clamp(aimGlobals::aimOffsetY, -1000.0f, 1000.0f)
-            : 0.0f;
-
-        // Screen Y grows downwards, so a positive Y offset means "raise aim".
-        return {screenPosition.x + offsetX, screenPosition.y - offsetY};
-    }
 }
 
 AimReferencePoint ReadOnlyAim::resolveAimReference() const
 {
-    const FireportPose pose = g_fireport.snapshot();
-    if (!IsFireportPoseFresh(pose, kFireportAimMaxAge))
-        return {};
-
     const CameraManagerSnapshot cameraSnapshot = cameraManagerTest.snapshot();
     if (!cameraSnapshot || !cameraSnapshot->valid)
+        return {};
+
+    return resolveAimReference(*cameraSnapshot);
+}
+
+AimReferencePoint ReadOnlyAim::resolveAimReference(const CameraManagerState& camera) const
+{
+    const FireportPose pose = g_fireport.snapshot();
+    if (!IsFireportPoseFresh(pose, kFireportAimMaxAge))
         return {};
 
     const glm::vec3 endpoint =
@@ -58,7 +51,7 @@ AimReferencePoint ReadOnlyAim::resolveAimReference() const
         pose.worldForward * kFireportProjectionDistanceM;
     glm::vec2 screen{};
     if (!CameraManager::worldToScreen(
-        *cameraSnapshot,
+        camera,
         endpoint,
         screen,
         espGlobals::gameRes.x,
@@ -75,10 +68,10 @@ AimReferencePoint ReadOnlyAim::resolveAimReference() const
         return {};
     }
 
-    return {screen, true};
+    return {screen, true, camera.version, pose.version};
 }
 
-std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport, bool enforceFov) const
+std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const CameraManagerState& camera, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport, bool enforceFov) const
 {
     if (!Utils::valid_pointer(entity.instance) ||
         entity.instance == localState.instance ||
@@ -105,8 +98,11 @@ std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity,
 
     boneListIndexes selectedBone = entity.isAi ? aimGlobals::aiBone : aimGlobals::pmcBone;
     glm::vec3 selectedBoneWorldPos{};
-    const bool foundSelectedBone = useClosestBoneToFireport
-        ? getClosestBoneToAimReference(entity, aimRef, selectedBone, selectedBoneWorldPos)
+    const bool ignoreClosestBone = entity.isAi
+        ? aimGlobals::aiIgnoreClosestBone
+        : aimGlobals::pmcIgnoreClosestBone;
+    const bool foundSelectedBone = useClosestBoneToFireport && !ignoreClosestBone
+        ? getClosestBoneToAimReference(entity, aimRef, camera, selectedBone, selectedBoneWorldPos)
         : getSelectedBonePosition(entity, selectedBone, selectedBoneWorldPos);
 
     if (!foundSelectedBone)
@@ -114,31 +110,28 @@ std::optional<TargetResult> ReadOnlyAim::buildTargetResult(const Player& entity,
 
     if (prediction.enabled)
     {
+        const auto now = std::chrono::steady_clock::now();
+        const bool freshVelocity = entity.worldVelocityValid && entity.lastWorldVelocityUpdate != std::chrono::steady_clock::time_point{} &&
+            now >= entity.lastWorldVelocityUpdate && now - entity.lastWorldVelocityUpdate <= std::chrono::milliseconds(250);
+        if (!freshVelocity)
+            return std::nullopt;
+
         const BallisticSimulationResult simulation = BallisticsCalculator::Simulate(prediction.sourcePosition, selectedBoneWorldPos, prediction.ballistics);
+        if (!simulation.valid)
+            return std::nullopt;
 
-        if (simulation.valid)
-        {
-            const bool freshVelocity = entity.velocityValid && entity.lastVelocityUpdate !=
-                    std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() -
-                    entity.lastVelocityUpdate <= std::chrono::milliseconds(250);
-
-            if (freshVelocity)
-            {
-                selectedBoneWorldPos += entity.velocity * simulation.travelTime;
-            }
-
-            selectedBoneWorldPos.y += simulation.dropCompensation;
-        }
+        selectedBoneWorldPos += entity.worldVelocity * simulation.travelTime;
+        selectedBoneWorldPos.y += simulation.dropCompensation;
     }
 
     glm::vec2 selectedBoneScreenPos{};
-    if (!Utils::Camera::world_to_screen(selectedBoneWorldPos, &selectedBoneScreenPos))
+    if (!CameraManager::worldToScreen(camera, selectedBoneWorldPos, selectedBoneScreenPos, espGlobals::gameRes.x, espGlobals::gameRes.y))
         return std::nullopt;
 
     if (!std::isfinite(selectedBoneScreenPos.x) || !std::isfinite(selectedBoneScreenPos.y))
         return std::nullopt;
 
-    const glm::vec2 adjustedScreenPos = ApplyAimOffset(selectedBoneScreenPos);
+    const glm::vec2 adjustedScreenPos = selectedBoneScreenPos;
     const glm::vec2 screenDelta = adjustedScreenPos - aimRef;
     const float screenDistanceSq = glm::dot(screenDelta, screenDelta);
     const float fovRadiusSq = fovRadiusPx * fovRadiusPx;
@@ -179,7 +172,7 @@ bool ReadOnlyAim::getSelectedBonePosition(const Player& entity, boneListIndexes 
     return true;
 }
 
-bool ReadOnlyAim::getClosestBoneToAimReference(const Player& entity, const glm::vec2& aimRef, boneListIndexes& outBone, glm::vec3& outPosition) const
+bool ReadOnlyAim::getClosestBoneToAimReference(const Player& entity, const glm::vec2& aimRef, const CameraManagerState& camera, boneListIndexes& outBone, glm::vec3& outPosition) const
 {
     bool foundBone = false;
     float closestDistanceSq = std::numeric_limits<float>::max();
@@ -191,7 +184,7 @@ bool ReadOnlyAim::getClosestBoneToAimReference(const Player& entity, const glm::
             continue;
 
         glm::vec2 boneScreenPosition{};
-        if (!Utils::Camera::world_to_screen(bonePosition, &boneScreenPosition))
+        if (!CameraManager::worldToScreen(camera, bonePosition, boneScreenPosition, espGlobals::gameRes.x, espGlobals::gameRes.y))
             continue;
 
         const glm::vec2 delta = boneScreenPosition - aimRef;
@@ -209,7 +202,7 @@ bool ReadOnlyAim::getClosestBoneToAimReference(const Player& entity, const glm::
     return foundBone;
 }
 
-std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player>& snapshot, TargetMode mode, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player>& snapshot, TargetMode mode, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const CameraManagerState& camera, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
 {
     std::optional<TargetResult> bestTarget;
 
@@ -219,6 +212,7 @@ std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player
             maxDistance,
             fovRadiusPx,
             aimRef,
+            camera,
             localState,
             prediction,
             useClosestBoneToFireport);
@@ -254,7 +248,7 @@ std::optional<TargetResult> ReadOnlyAim::findBestTarget(const std::vector<Player
     return bestTarget;
 }
 
-std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vector<Player>& snapshot,uint64_t instance, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
+std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vector<Player>& snapshot,uint64_t instance, float maxDistance, float fovRadiusPx, const glm::vec2& aimRef, const CameraManagerState& camera, const PlayerLocalState& localState, const AimPredictionContext& prediction, bool useClosestBoneToFireport) const
 {
     if (!instance)
         return std::nullopt;
@@ -267,6 +261,7 @@ std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vect
             maxDistance,
             fovRadiusPx,
             aimRef,
+            camera,
             localState,
             prediction,
             useClosestBoneToFireport,
@@ -276,6 +271,18 @@ std::optional<TargetResult> ReadOnlyAim::refreshTargetByInstance(const std::vect
     return std::nullopt;
 }
 
+void ReadOnlyAim::resetMovementState()
+{
+    m_moveRemainder = {};
+    m_lastMoveTime = {};
+    m_lastMoveCameraVersion = 0;
+    m_lastMoveFireportVersion = 0;
+    m_moveInstance = 0;
+    m_moveBone = boneListIndexes::Head;
+    m_previousError = {};
+    m_aimSettled = false;
+}
+
 void ReadOnlyAim::clearTargetState(bool keyIsHeld)
 {
     std::unique_lock lock(m_targetMutex);
@@ -283,8 +290,7 @@ void ReadOnlyAim::clearTargetState(bool keyIsHeld)
     m_activeTarget.reset();
     m_lockedInstance = 0;
     m_wasKeyHeld = keyIsHeld;
-    m_moveRemainder = {};
-    m_lastMoveTime = {};
+    resetMovementState();
 }
 
 void ReadOnlyAim::pauseTargetState(bool keyIsHeld)
@@ -298,8 +304,7 @@ void ReadOnlyAim::pauseTargetState(bool keyIsHeld)
     std::unique_lock lock(m_targetMutex);
     m_liveTarget.reset();
     m_wasKeyHeld = true;
-    m_moveRemainder = {};
-    m_lastMoveTime = {};
+    resetMovementState();
 }
 
 void ReadOnlyAim::aimTask()
@@ -337,7 +342,7 @@ void ReadOnlyAim::aimTask()
         return;
     }
 
-    const AimReferencePoint aimRefPoint = resolveAimReference();
+    const AimReferencePoint aimRefPoint = resolveAimReference(*cameraSnapshot);
     if (!aimRefPoint.valid)
     {
         pauseTargetState(keyIsHeld);
@@ -388,12 +393,19 @@ void ReadOnlyAim::aimTask()
         }
     }
 
+    if (aimGlobals::predictionEnabled && !prediction.enabled)
+    {
+        pauseTargetState(keyIsHeld);
+        return;
+    }
+
     const auto liveTarget = findBestTarget(
         snapshot,
         aimGlobals::targetMode,
         maxDistance,
         fovRadius,
         aimRef,
+        *cameraSnapshot,
         *localState,
         prediction,
         useClosestBoneToFireport);
@@ -432,6 +444,7 @@ void ReadOnlyAim::aimTask()
                         maxDistance,
                         fovRadius,
                         aimRef,
+                        *cameraSnapshot,
                         *localState,
                         prediction,
                         useClosestBoneToFireport);
@@ -450,11 +463,24 @@ void ReadOnlyAim::aimTask()
     }
 
     if (keyIsHeld && targetToMove.has_value())
+    {
+        if (m_moveInstance != targetToMove->player.instance || m_moveBone != targetToMove->selectedBone)
+        {
+            resetMovementState();
+            m_moveInstance = targetToMove->player.instance;
+            m_moveBone = targetToMove->selectedBone;
+        }
+
+        if (aimRefPoint.cameraVersion == m_lastMoveCameraVersion || aimRefPoint.fireportVersion == m_lastMoveFireportVersion)
+            return;
+
+        m_lastMoveCameraVersion = aimRefPoint.cameraVersion;
+        m_lastMoveFireportVersion = aimRefPoint.fireportVersion;
         moveToTargetBone(*targetToMove, aimRef);
+    }
     else
     {
-        m_moveRemainder = {};
-        m_lastMoveTime = {};
+        resetMovementState();
     }
 }
 
@@ -462,8 +488,7 @@ bool ReadOnlyAim::moveToTargetBone(const TargetResult& target, const glm::vec2& 
 {
     if (!aimGlobals::aimEnabled || !inputDevice.IsConnected())
     {
-        m_moveRemainder = {};
-        m_lastMoveTime = {};
+        resetMovementState();
         return false;
     }
 
@@ -480,20 +505,6 @@ bool ReadOnlyAim::moveToTargetBone(const TargetResult& target, const glm::vec2& 
     const float deadZonePixels = std::isfinite(aimGlobals::aimDeadzonePixels)
         ? std::clamp(aimGlobals::aimDeadzonePixels, 0.1f, 1000.0f)
         : 1.0f;
-    if (errorDistanceSq <= (deadZonePixels * deadZonePixels))
-    {
-        m_moveRemainder = {};
-        m_lastMoveTime = {};
-        return false;
-    }
-
-    const float smooth = std::isfinite(aimGlobals::aimSmooth)
-        ? std::clamp(aimGlobals::aimSmooth, 1.0f, 1000.0f)
-        : 1.0f;
-    const float speedPixelsPerSecond = std::isfinite(aimGlobals::aimSpeedPixelsPerSecond)
-        ? std::clamp(aimGlobals::aimSpeedPixelsPerSecond, 1.0f, 10000.0f)
-        : 1200.0f;
-
     const auto now = std::chrono::steady_clock::now();
     float deltaSeconds = 0.01f;
     if (m_lastMoveTime != std::chrono::steady_clock::time_point{})
@@ -503,12 +514,35 @@ bool ReadOnlyAim::moveToTargetBone(const TargetResult& target, const glm::vec2& 
             deltaSeconds = 0.01f;
     }
     m_lastMoveTime = now;
+    deltaSeconds = std::clamp(deltaSeconds, 0.001f, 0.025f);
 
-    // Limit the effect of a stalled task
-    deltaSeconds = std::clamp(deltaSeconds, 0.001f, 0.05f);
+    const float resumeRadius = deadZonePixels + std::max(0.5f, deadZonePixels * 0.25f);
+    const float stopRadius = m_aimSettled ? resumeRadius : deadZonePixels;
+    if (errorDistanceSq <= stopRadius * stopRadius)
+    {
+        m_aimSettled = true;
+        m_moveRemainder = {};
+        m_previousError = {};
+        return false;
+    }
+    m_aimSettled = false;
+
+    if (errorX * m_previousError.x <= 0.0f)
+        m_moveRemainder.x = 0.0f;
+    if (errorY * m_previousError.y <= 0.0f)
+        m_moveRemainder.y = 0.0f;
+    m_previousError = {errorX, errorY};
+
+    const float smooth = std::isfinite(aimGlobals::aimSmooth)
+        ? std::clamp(aimGlobals::aimSmooth, 1.0f, 1000.0f)
+        : 1.0f;
+    const float speedPixelsPerSecond = std::isfinite(aimGlobals::aimSpeedPixelsPerSecond)
+        ? std::clamp(aimGlobals::aimSpeedPixelsPerSecond, 1.0f, 10000.0f)
+        : 1200.0f;
 
     const float errorDistance = std::sqrt(errorDistanceSq);
-    const float responseDistance = errorDistance / smooth;
+    const float responseAlpha = smooth <= 1.0f ? 1.0f : -std::expm1(std::log1p(-1.0f / smooth) * (deltaSeconds / 0.01f));
+    const float responseDistance = (errorDistance - deadZonePixels) * responseAlpha;
     const float maxStepPixels = speedPixelsPerSecond * deltaSeconds;
     const float stepDistance = std::min(responseDistance, maxStepPixels);
 

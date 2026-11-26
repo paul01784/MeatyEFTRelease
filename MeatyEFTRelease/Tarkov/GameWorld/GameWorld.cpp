@@ -33,8 +33,9 @@ struct LinkedListObject {
 };
 #pragma pack(pop)
 
-constexpr std::uint64_t kGomLastActiveNode = 0x20;
-constexpr std::uint64_t kGomActiveNodes = 0x28;
+static_assert(offsetof(LinkedListObject, previous) == UnityOffsets::ObjectListNode_PreviousOffset);
+static_assert(offsetof(LinkedListObject, next) == UnityOffsets::ObjectListNode_NextOffset);
+static_assert(offsetof(LinkedListObject, this_object) == UnityOffsets::ObjectListNode_ObjectOffset);
 
 constexpr std::uint64_t kGameWorldSingletonClassBss = 0x5D71168;
 constexpr std::uint64_t kGameWorldSingletonInstance = 0x10;
@@ -316,14 +317,15 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     object_dump << "Game World object scan\n";
 
     
-    if (!Utils::valid_pointer(gom) || !readGomListPtr(gom, kGomActiveNodes) || !readGomListPtr(gom, kGomLastActiveNode))
+    if (!Utils::valid_pointer(gom) || !readGomListPtr(gom, UnityOffsets::GameObjectManager_ActiveNodesOffset) ||
+        !readGomListPtr(gom, UnityOffsets::GameObjectManager_LastActiveNodeOffset))
     {
         mem.RefreshTarkovPointerSnapshot();
         gom = mem.GetTarkovPointerSnapshot().gameObjectManager;
 
         if (!Utils::valid_pointer(gom) ||
-            !readGomListPtr(gom, kGomActiveNodes) ||
-            !readGomListPtr(gom, kGomLastActiveNode))
+            !readGomListPtr(gom, UnityOffsets::GameObjectManager_ActiveNodesOffset) ||
+            !readGomListPtr(gom, UnityOffsets::GameObjectManager_LastActiveNodeOffset))
         {
             mem.PreloadTarkovPointerSnapshot();
 
@@ -345,10 +347,10 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
     }
 
     const std::uint64_t active_list_ptr =
-        readGomListPtr(gom, kGomActiveNodes);
+        readGomListPtr(gom, UnityOffsets::GameObjectManager_ActiveNodesOffset);
 
     const std::uint64_t last_list_ptr =
-        readGomListPtr(gom, kGomLastActiveNode);
+        readGomListPtr(gom, UnityOffsets::GameObjectManager_LastActiveNodeOffset);
 
     if (!Utils::valid_pointer(active_list_ptr) ||
         !Utils::valid_pointer(last_list_ptr))
@@ -658,8 +660,8 @@ bool tryResolveRaid(std::uint64_t gom, RaidState& raid, std::string& debug_out, 
             nodes[i].this_object,
             {
                 UnityOffsets::GameObject_ComponentsOffset,
-                0x18,
-                UnityOffsets::Component_ObjectClassOffset
+                UnityOffsets::GameObject_ComponentStepOffset,
+                UnityOffsets::GameObject_LocalGameWorldOffset
             }
         );
 

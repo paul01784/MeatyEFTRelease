@@ -122,8 +122,16 @@ bool UnityTransform::TryResolveFromComponent(
     if (!Memory::IsValidPointer(componentObject))
         return false;
 
-    nativeTransform = mem.ReadChain(componentObject, TransformChain, ToCacheMode(useCache));
-    return Memory::IsValidPointer(nativeTransform);
+    const uint64_t resolved = mem.ReadChain(
+        componentObject,
+        TransformChain,
+        ToCacheMode(useCache));
+
+    if (!Memory::IsValidPointer(resolved))
+        return false;
+
+    
+    return TryResolveNative(resolved, nativeTransform, useCache);
 }
 
 UnityTransform::UnityTransform(
@@ -464,11 +472,6 @@ TransformPoseReadResult UnityTransform::TryUpdateWorldPose(
         ToCacheMode(_useCache),
         "Transform pose",
         bytesRead);
-
-    if (readResult == Memory::TryScatterReadResult::Busy)
-    {
-        return TransformPoseReadResult::Busy;
-    }
 
     if (readResult != Memory::TryScatterReadResult::Success)
     {

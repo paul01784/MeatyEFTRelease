@@ -956,7 +956,7 @@ static void RenderMarkerEditorPanel()
         static constexpr const char* PlayerTypes[] = {"PMC", "Player scav", "AI", "Boss", "Black Division", "Local player", "Friendly", "Watched", "BTR"};
         beginRow("Player type");
         ImGui::SetNextItemWidth(105.0f);
-        changed |= ImGui::Combo("##playerType", &playerType, PlayerTypes, IM_ARRAYSIZE(PlayerTypes));
+        ImGui::Combo("##playerType", &playerType, PlayerTypes, IM_ARRAYSIZE(PlayerTypes));
         markerColour = GetMarkerEditorColour(category, playerType);
         ImGui::SameLine(0.0f, 8.0f);
         ImGui::TextDisabled("Colour");
@@ -984,11 +984,11 @@ static void RenderMarkerEditorPanel()
     }
 
     MarkerViewStyle& baseView = GetMarkerViewStyle(style, viewMode);
-    PlayerMarkerStyle* playerMarker = category == MarkerCategory::Player && viewMode == MarkerView::Radar
+    PlayerMarkerStyle* playerMarker = category == MarkerCategory::Player
         ? &draft.playerMarkers[static_cast<size_t>(std::clamp(playerType, 0, static_cast<int>(PlayerMarkerType::Count) - 1))]
         : nullptr;
     MarkerViewStyle view = baseView;
-    if (playerMarker)
+    if (playerMarker && viewMode == MarkerView::Radar)
     {
         view.shape = playerMarker->shape;
         view.size = playerMarker->size;
@@ -1044,7 +1044,16 @@ static void RenderMarkerEditorPanel()
     }
     else if (playerFuser)
     {
-        ImGui::TextWrapped("Preview follows the current Box, Head dot, Health and Skeleton options from the player ESP settings.");
+        PlayerMarkerStyle& silhouetteStyle = draft.playerMarkers[static_cast<size_t>(std::clamp(playerType, 0, static_cast<int>(PlayerMarkerType::Count) - 1))];
+        beginRow("Entity silhouette");
+        changed |= ImGui::Checkbox("##entitySilhouette", &silhouetteStyle.entitySilhouette);
+        if (silhouetteStyle.entitySilhouette)
+        {
+            beginRow("Fill opacity");
+            ImGui::SetNextItemWidth(controlWidth);
+            changed |= ImGui::SliderFloat("##silhouetteOpacity", &silhouetteStyle.silhouetteOpacity, 0.05f, 0.8f, "%.2f");
+        }
+        ImGui::TextWrapped("Rounded fill follows the projected skeleton and scales with the current camera view.");
     }
     else if (category == MarkerCategory::Tripwire)
     {
@@ -1125,7 +1134,6 @@ static void RenderMarkerEditorPanel()
                 espGlobals::crosshairType = view.shape == MarkerShape::Cross ? 1 : 0;
         }
         appearanceManager.Apply(draft);
-        appearanceManager.Save();
         configManager.SaveConfig();
     }
 
@@ -4083,8 +4091,7 @@ static void renderDebugWindow()
                                 aimGlobals::targetLock ? "ON" : "OFF", aimGlobals::aimFOV, aimGlobals::aimDistance);
                     ImGui::Text("Smoothing: %.2f | Bone mode: %s", aimGlobals::aimSmooth,
                                 aimGlobals::aimClosestBoneToFireport ? "Closest Bone" : "Selected Bones");
-                    ImGui::Text("Speed: %.0f px/s | Deadzone: %.1f px | Offset: %.1f, %.1f", aimGlobals::aimSpeedPixelsPerSecond, aimGlobals::aimDeadzonePixels,
-                                aimGlobals::aimOffsetX, aimGlobals::aimOffsetY);
+                    ImGui::Text("Speed: %.0f px/s | Deadzone: %.1f px", aimGlobals::aimSpeedPixelsPerSecond, aimGlobals::aimDeadzonePixels);
 
                     auto drawTarget = [&](const char* label, const std::optional<TargetResult>& target)
                     {

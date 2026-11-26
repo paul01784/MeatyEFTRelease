@@ -209,11 +209,11 @@ void RegisteredPlayers::updateEntity()
             if (guaranteeFreshRead)
             {
                 const ScopedDmaPriority priority(DmaPriority::High);
-                executed = batch.ExecuteNoPaging();
+                executed = batch.Execute();
             }
             else
             {
-                executed = batch.TryExecuteNoPaging();
+                executed = batch.Execute();
             }
 
             if (executed || guaranteeFreshRead)

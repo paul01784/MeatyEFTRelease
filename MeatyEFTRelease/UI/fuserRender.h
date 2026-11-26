@@ -1289,6 +1289,73 @@ namespace fuserRender
         drawBoneLine(boneListIndexes::RThigh, boneListIndexes::RFoot);
     }
 
+    static inline void DrawPlayerEntitySilhouette(const Player& player, const glm::vec4& colour)
+    {
+        if (!g_frameManagedCameraSnapshot)
+            return;
+
+        const PlayerMarkerStyle style = appearanceManager.GetPlayerMarkerStyle(PlayerAppearance::resolveMarkerType(player));
+        if (!style.entitySilhouette)
+            return;
+
+        const auto projectBone = [&](boneListIndexes bone, glm::vec2& screen)
+        {
+            return HasBone(player, bone) && ProjectWorldToScreen(player.bonePositions[static_cast<size_t>(bone)], &screen);
+        };
+
+        glm::vec2 head{}, pelvis{}, root{};
+        const bool hasHead = projectBone(boneListIndexes::Head, head);
+        const bool hasPelvis = projectBone(boneListIndexes::Pelvis, pelvis);
+        if (!hasHead || !hasPelvis || !ProjectWorldToScreen(player.location, &root))
+            return;
+
+        float bodyHeight = std::fabs(pelvis.y - head.y) * 1.35f;
+        if (bodyHeight < 8.0f || bodyHeight > static_cast<float>(espGlobals::gameRes.y) * 1.5f)
+            return;
+
+        glm::vec4 fillColour = colour;
+        fillColour.a = std::clamp(fillColour.a * style.silhouetteOpacity, 0.0f, 1.0f);
+        const glm::vec4 outlineColour(
+            std::clamp(colour.r * 0.75f + 0.15f, 0.0f, 1.0f),
+            std::clamp(colour.g * 0.75f + 0.15f, 0.0f, 1.0f),
+            std::clamp(colour.b * 0.75f + 0.15f, 0.0f, 1.0f),
+            std::clamp(colour.a * 0.9f, 0.0f, 1.0f));
+        std::vector<DxSilhouetteSegment> silhouetteSegments;
+        silhouetteSegments.reserve(10);
+        constexpr float silhouetteSize = 1.21f;
+
+        const auto drawBodyPart = [&](boneListIndexes from, boneListIndexes to, float startWidth, float endWidth, DxSilhouetteShape shape)
+        {
+            if (!HasRenderableBoneSegment(player, from, to))
+                return;
+
+            glm::vec2 start{}, end{};
+            if (!projectBone(from, start) || !projectBone(to, end) || glm::distance(start, end) < 1.0f)
+                return;
+
+            const float startRadius = std::clamp(bodyHeight * startWidth * 0.5f, 1.5f, 32.0f) * silhouetteSize;
+            const float endRadius = std::clamp(bodyHeight * endWidth * 0.5f, 1.5f, 32.0f) * silhouetteSize;
+            silhouetteSegments.push_back({start, end, startRadius, endRadius, shape});
+        };
+
+        drawBodyPart(boneListIndexes::Head, boneListIndexes::Pelvis, 0.40f, 0.40f, DxSilhouetteShape::Torso);
+        drawBodyPart(boneListIndexes::Head, boneListIndexes::LForearm, 0.13f, 0.08f, DxSilhouetteShape::UpperLimb);
+        drawBodyPart(boneListIndexes::LForearm, boneListIndexes::LPalm, 0.08f, 0.05f, DxSilhouetteShape::LowerLimb);
+        drawBodyPart(boneListIndexes::Head, boneListIndexes::RForearm, 0.13f, 0.08f, DxSilhouetteShape::UpperLimb);
+        drawBodyPart(boneListIndexes::RForearm, boneListIndexes::RPalm, 0.08f, 0.05f, DxSilhouetteShape::LowerLimb);
+        drawBodyPart(boneListIndexes::Pelvis, boneListIndexes::LThigh, 0.20f, 0.13f, DxSilhouetteShape::UpperLimb);
+        drawBodyPart(boneListIndexes::LThigh, boneListIndexes::LFoot, 0.13f, 0.07f, DxSilhouetteShape::LowerLimb);
+        drawBodyPart(boneListIndexes::Pelvis, boneListIndexes::RThigh, 0.20f, 0.13f, DxSilhouetteShape::UpperLimb);
+        drawBodyPart(boneListIndexes::RThigh, boneListIndexes::RFoot, 0.13f, 0.07f, DxSilhouetteShape::LowerLimb);
+
+        const float projectedHeight = std::fabs(root.y - head.y) + 2.0f;
+        const float headRadius = std::clamp(projectedHeight / 28.0f, 1.75f, 14.0f) * silhouetteSize * 1.05f;
+        const glm::vec2 headCentre(head.x, head.y - projectedHeight / 20.0f);
+        const glm::vec2 headAxis = glm::normalize(pelvis - head);
+        silhouetteSegments.push_back({headCentre, headCentre + headAxis * headRadius, headRadius, headRadius, DxSilhouetteShape::Head});
+        g_DxWindow.DrawSilhouette(silhouetteSegments, fillColour, outlineColour, std::clamp(bodyHeight / 250.0f, 0.8f, 1.8f));
+    }
+
     static inline bool HasBones(
         const Player& player,
         std::initializer_list<int> indexes)
@@ -1716,6 +1783,8 @@ namespace fuserRender
                         }
                     }
                 }
+
+                DrawPlayerEntitySilhouette(player, playerColour);
 
                 // ----------------------------
                 // Skeleton

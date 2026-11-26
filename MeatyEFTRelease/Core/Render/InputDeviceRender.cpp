@@ -256,10 +256,10 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    menuLayout::PrepareRightToolbarWindow(globals::inputDeviceWindow, "MAKCU / FERRUM", ImVec2(800.0f, 640.0f), backgroundAlpha);
-    ImGui::SetNextWindowSize(ImVec2(800.0f, 640.0f), ImGuiCond_FirstUseEver);
+    menuLayout::PrepareRightToolbarWindow(globals::inputDeviceWindow, "MAKCU / FERRUM", ImVec2(680.0f, 640.0f), backgroundAlpha);
+    ImGui::SetNextWindowSize(ImVec2(680.0f, 640.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(
-        ImVec2(620.0f, 450.0f),
+        ImVec2(540.0f, 450.0f),
         ImVec2(viewport->Size.x - 40.0f, viewport->Size.y - 40.0f)
     );
 
@@ -598,8 +598,6 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
         {
             bool configChanged = false;
             const bool configureFerrum = selectedDevice == InputDeviceType::Ferrum;
-            float* calibrationX = configureFerrum ? &ferrum.mouseUnitsPerScreenPixelX : &makcu.mouseUnitsPerScreenPixelX;
-            float* calibrationY = configureFerrum ? &ferrum.mouseUnitsPerScreenPixelY : &makcu.mouseUnitsPerScreenPixelY;
             const char* deviceName = configureFerrum ? "Ferrum" : "MAKCU";
 
             ImGui::SeparatorText("Aim Settings");
@@ -617,7 +615,7 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
                 &aimGlobals::predictionEnabled
             );
             ShowSettingsTooltip(
-                "Lead moving targets and compensate for bullet drop using the chambered round, weapon/attachment velocity modifiers, and the target's live velocity."
+                "Lead targets using measured world-position movement and compensate for bullet drop using the chambered round and weapon/attachment velocity modifiers."
             );
 
             if (aimGlobals::predictionEnabled)
@@ -658,17 +656,19 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
                     readOnlyAim.getActiveTarget();
 
                 if (activeTarget.has_value() &&
-                    activeTarget->player.velocityValid &&
-                    activeTarget->player.lastVelocityUpdate !=
+                    activeTarget->player.worldVelocityValid &&
+                    activeTarget->player.lastWorldVelocityUpdate !=
                         std::chrono::steady_clock::time_point{} &&
                     std::chrono::steady_clock::now() -
-                        activeTarget->player.lastVelocityUpdate <=
+                        activeTarget->player.lastWorldVelocityUpdate <=
                         std::chrono::milliseconds(250))
                 {
                     ImGui::TextDisabled(
-                        "Target velocity: %.2f m/s",
-                        glm::length(activeTarget->player.velocity)
+                        "Prediction velocity: %.2f m/s (world movement)",
+                        glm::length(activeTarget->player.worldVelocity)
                     );
+                    if (activeTarget->player.velocityValid)
+                        ImGui::TextDisabled("Read velocity: %.2f m/s", glm::length(activeTarget->player.velocity));
                 }
             }
 
@@ -758,63 +758,6 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
                 "Aim stops correcting when the desired point is inside this radius, allowing a small amount of float."
             );
 
-            configChanged |= ImGui::DragFloat(
-                "Aim offset X",
-                &aimGlobals::aimOffsetX,
-                0.5f,
-                -200.0f,
-                200.0f,
-                "%.1f px"
-            );
-            ShowSettingsTooltip(
-                "Horizontal offset applied to the desired bone point. Positive values move the point right."
-            );
-
-            configChanged |= ImGui::DragFloat(
-                "Aim offset Y (positive raises)",
-                &aimGlobals::aimOffsetY,
-                0.5f,
-                -200.0f,
-                200.0f,
-                "%.1f px"
-            );
-            ShowSettingsTooltip(
-                "Vertical offset applied to the desired bone point. Positive values raise the aim point."
-            );
-
-            ImGui::Spacing();
-            ImGui::SeparatorText("Mouse Calibration");
-
-            configChanged |= ImGui::DragFloat(
-                "X units per screen pixel",
-                calibrationX,
-                0.001f,
-                0.001f,
-                5.0f,
-                "%.4f"
-            );
-            ShowSettingsTooltip("Horizontal conversion factor for the selected device: screen pixels multiplied by this value become hardware movement units.");
-
-            configChanged |= ImGui::DragFloat(
-                "Y units per screen pixel",
-                calibrationY,
-                0.001f,
-                0.001f,
-                5.0f,
-                "%.4f"
-            );
-            ShowSettingsTooltip("Vertical conversion factor for the selected device: screen pixels multiplied by this value become hardware movement units.");
-
-            if (ImGui::Button("Reset mouse calibration"))
-            {
-                *calibrationX = 1.0f;
-                *calibrationY = 1.0f;
-                configChanged = true;
-            }
-            ShowSettingsTooltip(
-                "Reset both calibration values to 1.0000. Use calibration for hardware sensitivity differences, not aim speed."
-            );
-
             ImGui::Spacing();
             ImGui::SeparatorText("Target Selection");
 
@@ -868,21 +811,28 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
                 "Uses the valid player bone nearest the projected fireport endpoint. Disable it to use the selected AI and PMC bones below."
             );
 
-            ImGui::BeginDisabled(aimGlobals::aimClosestBoneToFireport);
-            configChanged |= ShowBoneSelectionBox(
-                aimGlobals::aiBone,
-                "AI target bone");
+            const float boneComboWidth = ImGui::GetContentRegionAvail().x * 0.50f;
+            ImGui::PushItemWidth(boneComboWidth);
+            configChanged |= ShowBoneSelectionBox(aimGlobals::aiBone, "AI target bone");
+            if (aimGlobals::aimClosestBoneToFireport)
+            {
+                ImGui::SameLine();
+                configChanged |= ImGui::Checkbox("Ignore Closest##AI", &aimGlobals::aiIgnoreClosestBone);
+            }
             ShowSettingsTooltip(
-                "Bone used for AI and Scav targets when closest-bone selection is disabled."
+                "When Ignore Closest is checked, AI and Scav targets use this selected bone even while Closest Bone is enabled."
             );
 
-            configChanged |= ShowBoneSelectionBox(
-                aimGlobals::pmcBone,
-                "PMC target bone");
+            configChanged |= ShowBoneSelectionBox(aimGlobals::pmcBone, "PMC target bone");
+            if (aimGlobals::aimClosestBoneToFireport)
+            {
+                ImGui::SameLine();
+                configChanged |= ImGui::Checkbox("Ignore Closest##PMC", &aimGlobals::pmcIgnoreClosestBone);
+            }
             ShowSettingsTooltip(
-                "Bone used for PMC targets when closest-bone selection is disabled."
+                "When Ignore Closest is checked, PMC targets use this selected bone even while Closest Bone is enabled."
             );
-            ImGui::EndDisabled();
+            ImGui::PopItemWidth();
 
             ImGui::PopItemWidth();
             ImGui::EndDisabled();
@@ -905,8 +855,6 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
             const std::string lastReply = showFerrum ? ferrumDiagnostics.lastReply : makcuDiagnostics.lastReply;
             const std::string lastError = showFerrum ? ferrumDiagnostics.lastError : makcuDiagnostics.lastError;
             const char* deviceName = showFerrum ? "Ferrum" : "MAKCU";
-            const float calibrationX = showFerrum ? ferrum.mouseUnitsPerScreenPixelX : makcu.mouseUnitsPerScreenPixelX;
-            const float calibrationY = showFerrum ? ferrum.mouseUnitsPerScreenPixelY : makcu.mouseUnitsPerScreenPixelY;
 
             const std::optional<TargetResult> bestTarget =
                 readOnlyAim.getLiveTarget();
@@ -958,18 +906,6 @@ void RenderInputDeviceWindow(bool* pOpen, float backgroundAlpha, const std::func
                 "Aim speed/deadzone: %.0f px/s | %.1f px",
                 aimGlobals::aimSpeedPixelsPerSecond,
                 aimGlobals::aimDeadzonePixels
-            );
-
-            ImGui::Text(
-                "Aim offset: X %.1f px | Y %.1f px",
-                aimGlobals::aimOffsetX,
-                aimGlobals::aimOffsetY
-            );
-
-            ImGui::Text(
-                "Mouse calibration: X %.4f | Y %.4f",
-                calibrationX,
-                calibrationY
             );
 
             ImGui::Text(

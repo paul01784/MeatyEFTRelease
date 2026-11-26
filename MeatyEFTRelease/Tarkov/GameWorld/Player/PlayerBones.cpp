@@ -85,9 +85,8 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
     }
 
     std::vector<DWORD> firstBytes(firstRequests.size(), 0);
-    const DmaLockMode lockMode = waitForDma ? DmaLockMode::Wait : DmaLockMode::Try;
-    const auto firstResult = mem.TryReadScatter(firstRequests.data(), firstRequests.size(), DmaCacheMode::Uncached, "Player bone pointers", firstBytes, DmaPagingMode::NoPaging, lockMode);
-    if (firstResult == Memory::TryScatterReadResult::Busy || firstResult == Memory::TryScatterReadResult::Failed)
+    const auto firstResult = mem.TryReadScatter(firstRequests.data(), firstRequests.size(), DmaCacheMode::Uncached, "Player bone pointers", firstBytes);
+    if (firstResult == Memory::TryScatterReadResult::Failed)
     {
         player.nextBonePointerResolve = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
         return false;
@@ -115,8 +114,8 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
     }
 
     std::vector<DWORD> secondBytes(secondRequests.size(), 0);
-    const auto secondResult = mem.TryReadScatter(secondRequests.data(), secondRequests.size(), DmaCacheMode::Uncached, "Player bone transforms", secondBytes, DmaPagingMode::NoPaging, lockMode);
-    if (secondResult == Memory::TryScatterReadResult::Busy || secondResult == Memory::TryScatterReadResult::Failed)
+    const auto secondResult = mem.TryReadScatter(secondRequests.data(), secondRequests.size(), DmaCacheMode::Uncached, "Player bone transforms", secondBytes);
+    if (secondResult == Memory::TryScatterReadResult::Failed)
     {
         player.nextBonePointerResolve = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
         return false;
@@ -306,12 +305,10 @@ namespace
                 requestCount,
                 DmaCacheMode::Uncached,
                 label,
-                bytesRead,
-                DmaPagingMode::NoPaging,
-                waitForDma ? DmaLockMode::Wait : DmaLockMode::Try
+                bytesRead
             );
 
-            if (result == Memory::TryScatterReadResult::Busy || result == Memory::TryScatterReadResult::Failed)
+            if (result == Memory::TryScatterReadResult::Failed)
             {
                 allComplete = false;
                 start = end;
@@ -1217,6 +1214,17 @@ namespace
             player->consecutiveBadBoneSamples = 0;
 
             player->location = anchor;
+
+            if (pose.successfulSlots[boneListIndexes::Base])
+            {
+                const auto sampledAt = std::chrono::steady_clock::now();
+                if (player->worldVelocityTracker.update(pose.positions[boneListIndexes::Base], sampledAt))
+                {
+                    player->worldVelocity = player->worldVelocityTracker.value();
+                    player->lastWorldVelocityUpdate = sampledAt;
+                }
+                player->worldVelocityValid = player->worldVelocityTracker.valid();
+            }
 
             if (player->isLocal)
             {

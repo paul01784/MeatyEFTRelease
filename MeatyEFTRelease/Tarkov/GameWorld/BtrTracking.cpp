@@ -64,7 +64,7 @@ void RegisteredPlayers::tryFindBTR()
 
             DWORD bytesRead = 0;
             const Memory::ScatterReadRequest request{ address, &out, sizeof(T) };
-            return mem.TryReadScatter(&request, 1, DmaCacheMode::Cached, "BTR discovery", std::span<DWORD>(&bytesRead, 1), DmaPagingMode::NoPaging) == Memory::TryScatterReadResult::Success && bytesRead == sizeof(T);
+            return mem.TryReadScatter(&request, 1, DmaCacheMode::Cached, "BTR discovery", std::span<DWORD>(&bytesRead, 1)) == Memory::TryScatterReadResult::Success && bytesRead == sizeof(T);
         };
 
     auto TryReadPtr = [&](uint64_t address, uint64_t& out) -> bool
@@ -213,9 +213,7 @@ bool RegisteredPlayers::updateBtrMotion()
         1,
         DmaCacheMode::Uncached,
         "BTR motion",
-        std::span<DWORD>(&bytesRead, 1),
-        DmaPagingMode::NoPaging,
-        DmaLockMode::Wait);
+        std::span<DWORD>(&bytesRead, 1));
 
     if (result != Memory::TryScatterReadResult::Success || bytesRead != sizeof(read.position) ||
         !IsUsableBtrPosition(read.position))

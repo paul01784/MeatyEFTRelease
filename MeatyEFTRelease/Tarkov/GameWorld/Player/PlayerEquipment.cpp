@@ -165,7 +165,7 @@ void RegisteredPlayers::playerEquipment()
             if (!queuedAnything)
                 return true;
 
-            return batch.ExecuteNoPaging();
+            return batch.Execute();
         };
 
     auto takeInitBatch = [&](
@@ -420,7 +420,7 @@ void RegisteredPlayers::playerEquipment()
                 int slotCount = 0;
                 ScatterReadBatch slotCountBatch(mem, DmaCacheMode::Uncached, "Player equipment slot count");
                 if (!slotCountBatch.Add(job.slotsPtr + OffsetsArray::CountOffset, slotCount) ||
-                    !slotCountBatch.ExecuteNoPaging() || slotCount < 0 || slotCount > 128)
+                    !slotCountBatch.Execute() || slotCount < 0 || slotCount > 128)
                     continue;
 
                 std::vector<uint64_t> slotPointers(static_cast<size_t>(slotCount), 0);
@@ -428,7 +428,7 @@ void RegisteredPlayers::playerEquipment()
                 {
                     ScatterReadBatch slotsBatch(mem, DmaCacheMode::Uncached, "Player equipment slots");
                     if (!slotsBatch.AddBytes(job.slotsPtr + OffsetsArray::ArrBaseOffset, slotPointers.data(), slotPointers.size() * sizeof(uint64_t)) ||
-                        !slotsBatch.ExecuteNoPaging())
+                        !slotsBatch.Execute())
                     {
                         continue;
                     }
@@ -486,7 +486,7 @@ void RegisteredPlayers::playerEquipment()
                     queuedStrings |= stringBatch.AddBytes(read.namePointer + 0x14, read.characters.data(), read.characters.size() * sizeof(wchar_t));
                 }
 
-                if (queuedStrings && !stringBatch.ExecuteNoPaging())
+                if (queuedStrings && !stringBatch.Execute())
                     continue;
 
                 for (const SlotNameRead& read : nameReads)

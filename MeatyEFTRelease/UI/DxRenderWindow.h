@@ -34,6 +34,23 @@ struct DxFontSettings
     bool italic = false;
 };
 
+enum class DxSilhouetteShape
+{
+    Torso,
+    UpperLimb,
+    LowerLimb,
+    Head
+};
+
+struct DxSilhouetteSegment
+{
+    glm::vec2 start{};
+    glm::vec2 end{};
+    float startRadius = 1.0f;
+    float endRadius = 1.0f;
+    DxSilhouetteShape shape = DxSilhouetteShape::UpperLimb;
+};
+
 struct DxWindowConfig
 {
     // Startup
@@ -170,6 +187,7 @@ public:
 
     void DrawCircle(float x, float y, float radius, const glm::vec4& colour, float thickness = 1.0f);
     void DrawFilledCircle(float x, float y, float radius, const glm::vec4& colour);
+    void DrawSilhouette(const std::vector<DxSilhouetteSegment>& segments, const glm::vec4& fillColour, const glm::vec4& outlineColour, float outlineThickness);
 
     void DrawString(
         const std::string& text,
@@ -221,6 +239,7 @@ private:
         Box,
         Circle,
         FilledCircle,
+        Silhouette,
         Text,
         MarkerWithText
     };
@@ -256,6 +275,7 @@ private:
 
         float markerSize = 0.0f;
         float textOffsetY = 0.0f;
+        std::vector<DxSilhouetteSegment> silhouetteSegments;
     };
 
     struct CachedTextLayout

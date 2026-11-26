@@ -679,12 +679,12 @@ void to_json(nlohmann::json& j, const aimGlobals& a) {
         {"pmcBone", a.pmcBone},
         {"targetLock", a.targetLock},
         {"aimClosestBoneToFireport", a.aimClosestBoneToFireport},
+        {"aiIgnoreClosestBone", a.aiIgnoreClosestBone},
+        {"pmcIgnoreClosestBone", a.pmcIgnoreClosestBone},
         {"targetMode", a.targetMode},
         {"aimSmooth", a.aimSmooth},
         {"aimSpeedPixelsPerSecond", a.aimSpeedPixelsPerSecond},
         {"aimDeadzonePixels", a.aimDeadzonePixels},
-        {"aimOffsetX", a.aimOffsetX},
-        {"aimOffsetY", a.aimOffsetY},
         {"showAimFovRing", a.showAimFovRing}
     };
 }
@@ -699,12 +699,12 @@ void from_json(const nlohmann::json& j, aimGlobals& a) {
     a.targetLock = j.value("targetLock", a.targetLock);
     a.aimClosestBoneToFireport =
         j.value("aimClosestBoneToFireport", a.aimClosestBoneToFireport);
+    a.aiIgnoreClosestBone = j.value("aiIgnoreClosestBone", a.aiIgnoreClosestBone);
+    a.pmcIgnoreClosestBone = j.value("pmcIgnoreClosestBone", a.pmcIgnoreClosestBone);
     a.targetMode = j.value("targetMode", a.targetMode);
     a.aimSmooth = j.value("aimSmooth", a.aimSmooth);
     a.aimSpeedPixelsPerSecond = j.value("aimSpeedPixelsPerSecond", a.aimSpeedPixelsPerSecond);
     a.aimDeadzonePixels = j.value("aimDeadzonePixels", a.aimDeadzonePixels);
-    a.aimOffsetX = j.value("aimOffsetX", a.aimOffsetX);
-    a.aimOffsetY = j.value("aimOffsetY", a.aimOffsetY);
     a.showAimFovRing = j.value("showAimFovRing", a.showAimFovRing);
 
     if (j.contains("drawFireportLine"))
@@ -859,8 +859,6 @@ void to_json(nlohmann::json& j, const MakcuConfig& k)
     j = nlohmann::json{
         { "comPort", std::string(k.comPort) },
         { "connectOnStartup", k.connectOnStartup },
-        { "mouseUnitsPerScreenPixelX", k.mouseUnitsPerScreenPixelX },
-        { "mouseUnitsPerScreenPixelY", k.mouseUnitsPerScreenPixelY }
     };
 }
 
@@ -869,8 +867,6 @@ void from_json(const nlohmann::json& j, MakcuConfig& k)
     
     k.comPort[0] = '\0';
     k.connectOnStartup = false;
-    k.mouseUnitsPerScreenPixelX = 1.0f;
-    k.mouseUnitsPerScreenPixelY = 1.0f;
 
     if (const auto it = j.find("comPort");
         it != j.end() && it->is_string())
@@ -891,14 +887,6 @@ void from_json(const nlohmann::json& j, MakcuConfig& k)
         k.connectOnStartup = it->get<bool>();
     }
 
-    k.mouseUnitsPerScreenPixelX = j.value(
-        "mouseUnitsPerScreenPixelX",
-        k.mouseUnitsPerScreenPixelX
-    );
-    k.mouseUnitsPerScreenPixelY = j.value(
-        "mouseUnitsPerScreenPixelY",
-        k.mouseUnitsPerScreenPixelY
-    );
 }
 
 void to_json(nlohmann::json& j, const FerrumConfig& k)
@@ -906,8 +894,6 @@ void to_json(nlohmann::json& j, const FerrumConfig& k)
     j = nlohmann::json{
         { "comPort", std::string(k.comPort) },
         { "connectOnStartup", k.connectOnStartup },
-        { "mouseUnitsPerScreenPixelX", k.mouseUnitsPerScreenPixelX },
-        { "mouseUnitsPerScreenPixelY", k.mouseUnitsPerScreenPixelY }
     };
 }
 
@@ -915,8 +901,6 @@ void from_json(const nlohmann::json& j, FerrumConfig& k)
 {
     k.comPort[0] = '\0';
     k.connectOnStartup = false;
-    k.mouseUnitsPerScreenPixelX = 1.0f;
-    k.mouseUnitsPerScreenPixelY = 1.0f;
 
     if (const auto it = j.find("comPort"); it != j.end() && it->is_string())
     {
@@ -927,8 +911,6 @@ void from_json(const nlohmann::json& j, FerrumConfig& k)
     if (const auto it = j.find("connectOnStartup"); it != j.end() && it->is_boolean())
         k.connectOnStartup = it->get<bool>();
 
-    k.mouseUnitsPerScreenPixelX = j.value("mouseUnitsPerScreenPixelX", k.mouseUnitsPerScreenPixelX);
-    k.mouseUnitsPerScreenPixelY = j.value("mouseUnitsPerScreenPixelY", k.mouseUnitsPerScreenPixelY);
 }
 
 void to_json(nlohmann::json& j, const memoryGlobals& k) {
@@ -1128,8 +1110,6 @@ bool ConfigManager::LoadConfig() try
             makcuConfig = makcu_;
         }
 
-        makcu.mouseUnitsPerScreenPixelX = makcu_.mouseUnitsPerScreenPixelX;
-        makcu.mouseUnitsPerScreenPixelY = makcu_.mouseUnitsPerScreenPixelY;
 
         if (j.contains("ferrum") && j["ferrum"].is_object())
         {
@@ -1145,8 +1125,6 @@ bool ConfigManager::LoadConfig() try
         if (makcuConfig.connectOnStartup && ferrumConfig.connectOnStartup)
             ferrumConfig.connectOnStartup = false;
 
-        ferrum.mouseUnitsPerScreenPixelX = ferrum_.mouseUnitsPerScreenPixelX;
-        ferrum.mouseUnitsPerScreenPixelY = ferrum_.mouseUnitsPerScreenPixelY;
 
         if (j.contains("memoryGlobals") &&
             j["memoryGlobals"].is_object())
@@ -1207,11 +1185,7 @@ bool ConfigManager::SaveConfig() try
     fuser_ = g_DxWindow.GetConfig();
     aimView_ = g_AimViewWidget.GetConfig();
     makcu_ = makcuConfig;
-    makcu_.mouseUnitsPerScreenPixelX = makcu.mouseUnitsPerScreenPixelX;
-    makcu_.mouseUnitsPerScreenPixelY = makcu.mouseUnitsPerScreenPixelY;
     ferrum_ = ferrumConfig;
-    ferrum_.mouseUnitsPerScreenPixelX = ferrum.mouseUnitsPerScreenPixelX;
-    ferrum_.mouseUnitsPerScreenPixelY = ferrum.mouseUnitsPerScreenPixelY;
 
     nlohmann::json j;
 

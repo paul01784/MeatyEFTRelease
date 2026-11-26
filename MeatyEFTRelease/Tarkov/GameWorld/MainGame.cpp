@@ -260,9 +260,7 @@ bool MainGame::updatePlayerList(bool waitForDma)
                 count,
                 DmaCacheMode::Uncached,
                 label,
-                bytesRead,
-                DmaPagingMode::NoPaging,
-                waitForDma ? DmaLockMode::Wait : DmaLockMode::Try);
+                bytesRead);
 
             if (result != Memory::TryScatterReadResult::Success)
                 return false;
@@ -366,17 +364,27 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
     const auto bssOnlyStartedAt = std::chrono::steady_clock::now();
     auto lastGomFallbackAt = std::chrono::steady_clock::time_point{};
     auto lastTimedRecoveryAt = std::chrono::steady_clock::now();
+    auto nextRaidCheckLogAt = bssOnlyStartedAt;
 
     constexpr int kMaxPendingPromoteAttempts = 6;
     constexpr auto kBssOnlyDuration = std::chrono::seconds(6);
     constexpr auto kGomFallbackInterval = std::chrono::seconds(20);
     constexpr auto kTimedRecoveryInterval = std::chrono::seconds(25);
+    constexpr auto kRaidCheckLogInterval = std::chrono::seconds(5);
     constexpr DWORD kRetryDelayMs = 2500;
 
     while (!stopToken.stop_requested())
     {
         try
         {
+            const auto checkStartedAt = std::chrono::steady_clock::now();
+            const bool logRaidCheck = false; //checkStartedAt >= nextRaidCheckLogAt;
+            if (logRaidCheck)
+            {
+                nextRaidCheckLogAt = checkStartedAt + kRaidCheckLogInterval;
+                LOGS.logInfo("[GameWorld][Readiness] Refreshing raid state");
+            }
+
             const std::uint64_t recoveryEpoch = mem.GetDmaRecoveryEpoch();
             if (recoveryEpoch != observedRecoveryEpoch)
             {
@@ -389,6 +397,9 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
             
             mem.RefreshTarkovPointerSnapshot();
             this->gameObjectManager = mem.GetTarkovPointerSnapshot().gameObjectManager;
+
+            if (logRaidCheck)
+                LOGS.logInfo("[GameWorld][Readiness] Evaluating raid readiness");
 
             RaidState raid{};
             std::string probe;
@@ -440,6 +451,18 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
                     pending_local_gw = pending.local_game_world;
                     pending_gw_object = pending.game_world_object;
                 }
+            }
+
+            if (logRaidCheck)
+            {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - checkStartedAt);
+                const char* outcome = "still looking for a raid";
+                if (resolved)
+                    outcome = "raid ready";
+                else if (Utils::valid_pointer(pending_local_gw))
+                    outcome = "waiting for raid start";
+
+                LOGS.logInfo("[GameWorld][Readiness] Check completed in ", elapsed.count(), " ms (", outcome, ")");
             }
 
             if (resolved)
@@ -517,6 +540,7 @@ bool MainGame::getGameWorldDetails(std::stop_token stopToken)
         }
     }
 
+    LOGS.logInfo("[GameWorld][Readiness] Raid readiness wait ended");
     return false;
 }
 
@@ -569,20 +593,26 @@ void MainGame::mainThread(std::stop_token stopToken)
 
         cameraWorker.addTask(
             "cameraTask",
-            []()
+            [firstUpdate = true]() mutable
             {
                 try
                 {
+                    const bool logStartup = firstUpdate;
+                    firstUpdate = false;
+                    if (logStartup)
+                        LOGS.logInfo("[CAMERA MANAGER] First camera update started");
 
                     const PlayerSnapshot players = ::registeredPlayers.getCacheSnapshot();
                     const auto local = std::find_if(players->begin(), players->end(),
                         [](const Player& player) { return player.isLocal; });
-                    (void)cameraManagerTest.updateWithAds(
+                    const bool updated = cameraManagerTest.updateWithAds(
                         local != players->end() ? local->P_PWA : 0,
                         local != players->end() && local->isAiming,
                         0,
                         local != players->end() ? local->instance : 0);
 
+                    if (logStartup)
+                        LOGS.logInfo("[CAMERA MANAGER] First camera update finished (", updated ? "updated" : "no update", ")");
                 }
                 catch (const std::exception& exception)
                 {

@@ -509,6 +509,9 @@
     <ClInclude Include="Tarkov\GameWorld\Player\PlayerRuntimeModel.h">
       <Filter>Tarkov\GameWorld\Player</Filter>
     </ClInclude>
+    <ClInclude Include="Tarkov\GameWorld\Player\PlayerVelocityFilter.h">
+      <Filter>Tarkov\GameWorld\Player</Filter>
+    </ClInclude>
     <ClInclude Include="Tarkov\GameWorld\Player\PlayerMemoryAccess.h">
       <Filter>Tarkov\GameWorld\Player</Filter>
     </ClInclude>

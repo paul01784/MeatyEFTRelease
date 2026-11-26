@@ -16,8 +16,6 @@ struct FerrumConfig
 {
     char comPort[32] = "";
     bool connectOnStartup = false;
-    float mouseUnitsPerScreenPixelX = 1.0f;
-    float mouseUnitsPerScreenPixelY = 1.0f;
 };
 
 struct FerrumSerialPort

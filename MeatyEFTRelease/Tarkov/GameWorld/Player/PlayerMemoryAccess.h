@@ -20,7 +20,7 @@ namespace PlayerMemoryAccess
 
         DWORD bytesRead = 0;
         const Memory::ScatterReadRequest request{ address, &value, sizeof(T) };
-        return mem.TryReadScatter(&request, 1, cacheMode, "Player pointer", std::span<DWORD>(&bytesRead, 1), DmaPagingMode::NoPaging) == Memory::TryScatterReadResult::Success && bytesRead == sizeof(T);
+        return mem.TryReadScatter(&request, 1, cacheMode, "Player pointer", std::span<DWORD>(&bytesRead, 1)) == Memory::TryScatterReadResult::Success && bytesRead == sizeof(T);
     }
 
     inline bool tryReadPointer(uint64_t address, uint64_t& value, DmaCacheMode cacheMode = DmaCacheMode::Uncached)
@@ -50,7 +50,7 @@ namespace PlayerMemoryAccess
         std::vector<char> buffer(maximumLength + 1, '\0');
         DWORD bytesRead = 0;
         const Memory::ScatterReadRequest request{ address, buffer.data(), maximumLength };
-        const auto result = mem.TryReadScatter(&request, 1, cacheMode, "Player string", std::span<DWORD>(&bytesRead, 1), DmaPagingMode::NoPaging);
+        const auto result = mem.TryReadScatter(&request, 1, cacheMode, "Player string", std::span<DWORD>(&bytesRead, 1));
 
         if (result != Memory::TryScatterReadResult::Success || bytesRead != maximumLength)
             return {};
@@ -70,7 +70,7 @@ namespace PlayerMemoryAccess
         DWORD bytesRead = 0;
         const std::size_t byteCount = static_cast<std::size_t>(length) * sizeof(wchar_t);
         const Memory::ScatterReadRequest request{ stringPointer + 0x14, buffer.data(), byteCount };
-        const auto result = mem.TryReadScatter(&request, 1, DmaCacheMode::Uncached, "Player managed string", std::span<DWORD>(&bytesRead, 1), DmaPagingMode::NoPaging);
+        const auto result = mem.TryReadScatter(&request, 1, DmaCacheMode::Uncached, "Player managed string", std::span<DWORD>(&bytesRead, 1));
 
         if (result != Memory::TryScatterReadResult::Success || bytesRead != byteCount)
             return {};

@@ -255,27 +255,12 @@ std::string BuildTrafficStatsString(const MemoryTrafficStats& stats)
 
 DWORD Memory::BuildReadFlags(DmaCacheMode cacheMode)
 {
-	DWORD flags = VMMDLL_FLAG_NOPAGING;
-
-	if (cacheMode == DmaCacheMode::Uncached)
-	{
-		flags |= VMMDLL_FLAG_NOCACHE;
-	}
-
-	return flags;
+	return cacheMode == DmaCacheMode::Cached ? 0 : VMMDLL_FLAG_NOCACHE;
 }
 
-DWORD Memory::BuildScatterFlags(DmaCacheMode cacheMode, DmaPagingMode pagingMode)
+DWORD Memory::BuildScatterFlags(DmaCacheMode cacheMode)
 {
-	DWORD flags = 0;
-
-	if (pagingMode == DmaPagingMode::NoPaging)
-		flags |= VMMDLL_FLAG_NOPAGING;
-
-	if (cacheMode == DmaCacheMode::Uncached)
-		flags |= VMMDLL_FLAG_NOCACHE;
-
-	return flags;
+	return cacheMode == DmaCacheMode::Cached ? 0 : VMMDLL_FLAG_NOCACHE;
 }
 
 // ------------------------------------------------------------
@@ -287,26 +272,16 @@ Memory::Memory()
 	key = std::make_shared<c_keys>();
 }
 
-void Memory::CloseScatterHandleLocked() noexcept
-{
-	if (!reusableScatterHandle)
-		return;
-
-	VMMDLL_Scatter_CloseHandle(reusableScatterHandle);
-	reusableScatterHandle = nullptr;
-}
-
 Memory::~Memory()
 {
 	if (dmaThread.joinable())
 		dmaThread.join();
 
-	std::lock_guard<PriorityDmaMutex> dmaLock(dmaOpsMutex);
+	std::lock_guard<std::mutex> dmaLock(dmaOpsMutex);
 	std::lock_guard<std::mutex> lock(handleMutex);
 
 	if (vHandle)
 	{
-		CloseScatterHandleLocked();
 		VMMDLL_Close(vHandle);
 		vHandle = nullptr;
 	}
@@ -403,6 +378,18 @@ bool Memory::IsDmaOperational() const
 
 std::filesystem::path GetMemMapPath()
 {
+	std::wstring executablePath(32768, L'\0');
+	const DWORD executablePathLength = GetModuleFileNameW(
+		nullptr,
+		executablePath.data(),
+		static_cast<DWORD>(executablePath.size()));
+
+	if (executablePathLength > 0 && executablePathLength < executablePath.size())
+	{
+		executablePath.resize(executablePathLength);
+		return std::filesystem::path(executablePath).parent_path() / "mmap.txt";
+	}
+
 	std::error_code ec;
 	const auto currentDir = std::filesystem::current_path(ec);
 	return ec
@@ -437,16 +424,40 @@ bool IsMemMapFileValid(const std::filesystem::path& mapPath)
 
 		std::uint64_t start = 0;
 		std::uint64_t end = 0;
-		std::string trailing;
 
-		if (!(stream >> std::hex >> start >> end))
+		if (!(stream >> std::hex >> start))
+			return false;
+
+		stream >> std::ws;
+		if (stream.peek() == '-')
+		{
+			stream.get();
+			stream >> std::ws;
+		}
+
+		if (!(stream >> std::hex >> end))
 			return false;
 
 		if (start > end)
 			return false;
 
-		if (stream >> trailing)
-			return false;
+		stream >> std::ws;
+		if (stream.peek() != std::char_traits<char>::eof())
+		{
+			std::string remapSeparator;
+			ULONG64 remap = 0;
+
+			if (!(stream >> remapSeparator) ||
+				remapSeparator != "->" ||
+				!(stream >> std::hex >> remap))
+			{
+				return false;
+			}
+
+			stream >> std::ws;
+			if (stream.peek() != std::char_traits<char>::eof())
+				return false;
+		}
 
 		foundValidRange = true;
 	}
@@ -456,6 +467,13 @@ bool IsMemMapFileValid(const std::filesystem::path& mapPath)
 
 bool Memory::DumpMemoryMap(bool debug)
 {
+	struct PhysicalRange
+	{
+		ULONG64 start;
+		ULONG64 length;
+		ULONG64 remap;
+	};
+
 	const std::filesystem::path mapPath = GetMemMapPath();
 	std::filesystem::path tempMapPath = mapPath;
 	tempMapPath += ".tmp";
@@ -485,24 +503,66 @@ bool Memory::DumpMemoryMap(bool debug)
 		return false;
 	}
 
-	PVMMDLL_MAP_PHYSMEM pPhysMemMap = nullptr;
+	std::vector<PhysicalRange> ranges;
+	MemoryLogInfo("Building mmap.txt from the LeechCore device map");
 
-	if (!VMMDLL_Map_GetPhysMem(tempHandle, &pPhysMemMap))
+	ULONG64 leechCoreHandleValue = 0;
+	if (!VMMDLL_ConfigGet(
+		tempHandle,
+		VMMDLL_OPT_CORE_LEECHCORE_HANDLE,
+		&leechCoreHandleValue) ||
+		leechCoreHandleValue == 0)
 	{
-		MemoryLogInfo("[!] Failed to get physical memory map");
-
+		MemoryLogInfo("[!] Failed to get the LeechCore handle for mmap generation");
 		VMMDLL_Close(tempHandle);
 		return false;
 	}
 
-	if (!pPhysMemMap ||
-		pPhysMemMap->dwVersion != VMMDLL_MAP_PHYSMEM_VERSION ||
-		pPhysMemMap->cMap == 0)
-	{
-		MemoryLogInfo("[!] Invalid or empty physical memory map");
+	PBYTE pLeechCoreMapData = nullptr;
+	DWORD leechCoreMapDataSize = 0;
+	const BOOL gotLeechCoreMap = LcCommand(
+		reinterpret_cast<HANDLE>(leechCoreHandleValue),
+		LC_CMD_MEMMAP_GET_STRUCT,
+		0,
+		nullptr,
+		&pLeechCoreMapData,
+		&leechCoreMapDataSize
+	);
 
-		VMMDLL_MemFree(pPhysMemMap);
+	if (!gotLeechCoreMap ||
+		!pLeechCoreMapData ||
+		leechCoreMapDataSize < sizeof(LC_MEMMAP_ENTRY) ||
+		(leechCoreMapDataSize % sizeof(LC_MEMMAP_ENTRY)) != 0)
+	{
+		MemoryLogInfo("[!] LeechCore returned an invalid or empty physical memory map");
+
+		if (pLeechCoreMapData)
+			LcMemFree(pLeechCoreMapData);
 		VMMDLL_Close(tempHandle);
+		return false;
+	}
+
+	const DWORD rangeCount =
+		leechCoreMapDataSize / static_cast<DWORD>(sizeof(LC_MEMMAP_ENTRY));
+	const PLC_MEMMAP_ENTRY pLeechCoreMap =
+		reinterpret_cast<PLC_MEMMAP_ENTRY>(pLeechCoreMapData);
+
+	ranges.reserve(rangeCount);
+	for (DWORD i = 0; i < rangeCount; ++i)
+	{
+		ranges.push_back({
+			pLeechCoreMap[i].pa,
+			pLeechCoreMap[i].cb,
+			pLeechCoreMap[i].paRemap
+		});
+	}
+
+	LcMemFree(pLeechCoreMapData);
+	VMMDLL_Close(tempHandle);
+
+	if (ranges.empty())
+	{
+		MemoryLogInfo("[!] No physical memory ranges were available for mmap generation");
 		return false;
 	}
 
@@ -513,19 +573,16 @@ bool Memory::DumpMemoryMap(bool debug)
 	if (!file.is_open())
 	{
 		MemoryLogInfo("[!] Failed to create temporary mmap file");
-
-		VMMDLL_MemFree(pPhysMemMap);
-		VMMDLL_Close(tempHandle);
 		return false;
 	}
 
 	bool writeOk = true;
 	DWORD writtenRanges = 0;
 
-	for (DWORD i = 0; i < pPhysMemMap->cMap; ++i)
+	for (const PhysicalRange& range : ranges)
 	{
-		const ULONG64 start = pPhysMemMap->pMap[i].pa;
-		const ULONG64 length = pPhysMemMap->pMap[i].cb;
+		const ULONG64 start = range.start;
+		const ULONG64 length = range.length;
 
 		if (length == 0)
 			continue;
@@ -539,7 +596,21 @@ bool Memory::DumpMemoryMap(bool debug)
 
 		const ULONG64 end = start + length - 1;
 
-		file << std::hex << start << ' ' << end << '\n';
+		file
+			<< std::hex << std::uppercase << std::setfill('0')
+			<< std::setw(16) << start
+			<< " - "
+			<< std::setw(16) << end
+			;
+
+		if (range.remap != start)
+		{
+			file
+				<< " -> "
+				<< std::setw(16) << range.remap;
+		}
+
+		file << '\n';
 
 		if (!file.good())
 		{
@@ -555,9 +626,6 @@ bool Memory::DumpMemoryMap(bool debug)
 	writeOk = writeOk && file.good() && writtenRanges > 0;
 
 	file.close();
-
-	VMMDLL_MemFree(pPhysMemMap);
-	VMMDLL_Close(tempHandle);
 
 	if (!writeOk)
 	{
@@ -846,7 +914,7 @@ uint64_t Memory::FindSignature(
 
 	if (PID == 0)
 	{
-		std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
 
 		if (!vHandle)
 		{
@@ -1007,7 +1075,7 @@ bool Memory::RefreshProcessInformationNow()
 	bool processOk = false;
 
 	{
-		std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
 
 		if (!vHandle)
 			return false;
@@ -1033,11 +1101,6 @@ bool Memory::RefreshProcessInformationNow()
 			1
 		);
 
-		const auto refreshedAt = std::chrono::steady_clock::now();
-		if (memoryOk)
-			lastMemoryCacheRefresh = refreshedAt;
-		if (tlbOk)
-			lastTlbCacheRefresh = refreshedAt;
 	}
 
 	const bool ok = memoryOk && tlbOk && processOk;
@@ -1052,7 +1115,7 @@ bool Memory::RefreshProcessInformationNow()
 bool Memory::RefreshAllCaches()
 {
 	const auto refreshStarted = std::chrono::steady_clock::now();
-	std::lock_guard<PriorityDmaMutex> lock(dmaOpsMutex);
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
 	const bool ok = vHandle && VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_ALL, 1) != FALSE;
 	RecordDmaTiming("dma.refresh", "All caches", ElapsedMilliseconds(refreshStarted), 1.0, ok ? "success" : "failed");
 	if (!ok)
@@ -1117,8 +1180,6 @@ void Memory::RunCacheMaintenance()
 {
 	using Clock = std::chrono::steady_clock;
 
-	constexpr auto kMemoryRefreshInterval = std::chrono::seconds(1);
-	constexpr auto kTlbRefreshInterval = std::chrono::seconds(2);
 	constexpr auto kHealthRecoveryCooldown = std::chrono::seconds(15);
 
 	const auto now = Clock::now();
@@ -1147,46 +1208,6 @@ void Memory::RunCacheMaintenance()
 		}
 	}
 
-	// The main VMM session uses -norefresh. Keep the data and translation
-	// caches moving with lightweight partial flushes, but never queue cache
-	// maintenance behind camera or player reads.
-	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::try_to_lock);
-	if (!lock.owns_lock() || !vHandle)
-		return;
-
-	const bool memoryRefreshDue = lastMemoryCacheRefresh.time_since_epoch().count() == 0 ||
-		(now - lastMemoryCacheRefresh) >= kMemoryRefreshInterval;
-	const bool tlbRefreshDue = lastTlbCacheRefresh.time_since_epoch().count() == 0 ||
-		(now - lastTlbCacheRefresh) >= kTlbRefreshInterval;
-
-	// Run at most one maintenance command per scheduler pass. When both are
-	// due, alternate them so a slow scheduler cannot starve the memory cache.
-	const bool bothRefreshesDue = tlbRefreshDue && memoryRefreshDue;
-	const bool refreshTlb = tlbRefreshDue &&
-		(!memoryRefreshDue || preferTlbCacheRefresh);
-	if (bothRefreshesDue)
-		preferTlbCacheRefresh = !preferTlbCacheRefresh;
-
-	if (refreshTlb)
-	{
-		const auto refreshStarted = Clock::now();
-		const bool refreshed = VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_FREQ_TLB_PARTIAL, 1) != FALSE;
-		RecordDmaTiming("dma.refresh", "Partial TLB", ElapsedMilliseconds(refreshStarted), 1.0, refreshed ? "success" : "failed");
-		if (refreshed)
-			lastTlbCacheRefresh = now;
-		else
-			MemoryLogErrorThrottled("partial-tlb-maintenance", "Partial DMA TLB maintenance failed", std::chrono::seconds(30));
-	}
-	else if (memoryRefreshDue)
-	{
-		const auto refreshStarted = Clock::now();
-		const bool refreshed = VMMDLL_ConfigSet(vHandle, VMMDLL_OPT_REFRESH_FREQ_MEM_PARTIAL, 1) != FALSE;
-		RecordDmaTiming("dma.refresh", "Partial memory", ElapsedMilliseconds(refreshStarted), 1.0, refreshed ? "success" : "failed");
-		if (refreshed)
-			lastMemoryCacheRefresh = now;
-		else
-			MemoryLogErrorThrottled("partial-memory-maintenance", "Partial DMA memory-cache maintenance failed", std::chrono::seconds(30));
-	}
 }
 
 // ------------------------------------------------------------
@@ -1259,13 +1280,12 @@ bool Memory::Init(bool memMap, bool debug)
 	auto closeAndReset = [this, &clearProcessState]()
 		{
 			{
-				std::lock_guard<PriorityDmaMutex> dmaLock(dmaOpsMutex);
+				std::lock_guard<std::mutex> dmaLock(dmaOpsMutex);
 				std::lock_guard<std::mutex> lock(handleMutex);
 				clearProcessState();
 
 				if (vHandle)
 				{
-					CloseScatterHandleLocked();
 					VMMDLL_Close(vHandle);
 					vHandle = nullptr;
 				}
@@ -1279,6 +1299,13 @@ bool Memory::Init(bool memMap, bool debug)
 	// Disconnect was pressed before the worker properly started.
 	if (cancelInit.load(std::memory_order_acquire))
 	{
+		closeAndReset();
+		return false;
+	}
+
+	if (!memMap)
+	{
+		MemoryLogError("[!] DMA initialisation without mmap.txt is disabled");
 		closeAndReset();
 		return false;
 	}
@@ -1306,76 +1333,29 @@ bool Memory::Init(bool memMap, bool debug)
 	{
 		MemoryLogInfo("Initialising DMA...");
 
-		std::filesystem::path memMapPath;
-		std::error_code fsError;
+		const std::filesystem::path memMapPath = GetMemMapPath();
 
-		memMapPath = std::filesystem::current_path(fsError);
-
-		if (fsError)
+		if (!IsMemMapFileValid(memMapPath))
 		{
-			MemoryLogInfo("[!] Could not resolve current path; using local mmap.txt");
-			memMapPath = "mmap.txt";
+			MemoryLogInfo("No valid mmap.txt found; generating memory map...");
+
+			std::error_code fsError;
+			std::filesystem::remove(memMapPath, fsError);
+
+			if (!DumpMemoryMap(debug) || !IsMemMapFileValid(memMapPath))
+			{
+				MemoryLogError(
+					"[!] DMA initialisation aborted: mmap.txt is missing, invalid, "
+					"or could not be generated");
+				closeAndReset();
+				return false;
+			}
+
+			MemoryLogInfo("Memory map created and validated successfully");
 		}
 		else
 		{
-			memMapPath /= "mmap.txt";
-		}
-
-		bool useMemMap = false;
-
-		if (memMap)
-		{
-			fsError.clear();
-
-			bool mapExists =
-				std::filesystem::is_regular_file(memMapPath, fsError) &&
-				!fsError;
-
-			if (mapExists)
-			{
-				const auto mapSize = std::filesystem::file_size(memMapPath, fsError);
-
-				mapExists = !fsError && mapSize > 0;
-			}
-
-			if (!mapExists)
-			{
-				MemoryLogInfo("No valid mmap.txt found; generating memory map...");
-
-				fsError.clear();
-				std::filesystem::remove(memMapPath, fsError);
-
-				if (DumpMemoryMap(debug))
-				{
-					fsError.clear();
-
-					useMemMap =
-						std::filesystem::is_regular_file(memMapPath, fsError) &&
-						!fsError;
-
-					if (useMemMap)
-					{
-						const auto mapSize =
-							std::filesystem::file_size(memMapPath, fsError);
-
-						useMemMap = !fsError && mapSize > 0;
-					}
-
-					if (useMemMap)
-						MemoryLogInfo("Memory map created successfully");
-					else
-						MemoryLogInfo("[!] mmap dump reported success but mmap.txt was invalid");
-				}
-				else
-				{
-					MemoryLogInfo("[!] Could not create mmap.txt; continuing without memory map");
-				}
-			}
-			else
-			{
-				useMemMap = true;
-				MemoryLogInfo("Using existing mmap.txt");
-			}
+			MemoryLogInfo("Using existing validated mmap.txt");
 		}
 
 		if (cancelInit.load(std::memory_order_acquire))
@@ -1388,7 +1368,6 @@ bool Memory::Init(bool memMap, bool debug)
 		args.reserve(12);
 
 		args.push_back("");
-		args.push_back("-norefresh");
 		args.push_back("-device");
 		args.push_back("fpga://algo=0");
 		args.push_back("-waitinitialize");
@@ -1399,117 +1378,22 @@ bool Memory::Init(bool memMap, bool debug)
 			args.push_back("-printf");
 		}
 
-		const std::size_t argsWithoutMemMapCount = args.size();
-		std::string memMapPathString;
-
-		if (useMemMap)
+		std::string memMapPathString = PathToUtf8(memMapPath);
+		if (memMapPathString.empty())
 		{
-			memMapPathString = PathToUtf8(memMapPath);
-			if (memMapPathString.empty())
-			{
-				useMemMap = false;
-				MemoryLogInfo("[!] Could not encode mmap.txt path as UTF-8; continuing without memory map");
-			}
-			else
-			{
-				args.push_back("-memmap");
-				args.push_back(memMapPathString.c_str());
-				MemoryLogInfo("Using UTF-8 memory map path: " + memMapPathString);
-			}
+			MemoryLogError(
+				"[!] DMA initialisation aborted: mmap.txt path could not be encoded as UTF-8");
+			closeAndReset();
+			return false;
 		}
 
-		auto tryInitializeVmm = [&]() -> VMM_HANDLE
-			{
-				return VMMDLL_Initialize(
-					static_cast<DWORD>(args.size()),
-					args.data()
-				);
-			};
+		args.push_back("-memmap");
+		args.push_back(memMapPathString.c_str());
+		MemoryLogInfo("Using required UTF-8 memory map path: " + memMapPathString);
 
-		std::this_thread::sleep_for(std::chrono::milliseconds(300));
-
-		VMM_HANDLE newHandle = nullptr;
-
-		constexpr int kMaxInitAttempts = 4;
-
-		for (int attempt = 1; attempt <= kMaxInitAttempts; ++attempt)
-		{
-			if (cancelInit.load(std::memory_order_acquire))
-				break;
-
-			newHandle = tryInitializeVmm();
-
-			if (newHandle)
-			{
-				if (attempt > 1)
-				{
-					MemoryLogInfo(
-						"DMA connected on retry attempt " + std::to_string(attempt)
-					);
-				}
-
-				break;
-			}
-
-			if (attempt < kMaxInitAttempts)
-			{
-				MemoryLogInfo(
-					"DMA init attempt " + std::to_string(attempt) +
-					" failed; retrying in 750ms (device may still be releasing)..."
-				);
-
-				std::this_thread::sleep_for(std::chrono::milliseconds(750));
-			}
-		}
-
-		if (!newHandle && useMemMap)
-		{
-			MemoryLogInfo("Refreshing mmap.txt and retrying DMA init...");
-
-			std::this_thread::sleep_for(std::chrono::seconds(2));
-
-			if (DumpMemoryMap(debug))
-			{
-				for (int attempt = 1; attempt <= 2; ++attempt)
-				{
-					if (cancelInit.load(std::memory_order_acquire))
-						break;
-
-					newHandle = tryInitializeVmm();
-
-					if (newHandle)
-					{
-						MemoryLogInfo("DMA connected after mmap refresh");
-						break;
-					}
-
-					if (attempt < 2)
-						std::this_thread::sleep_for(std::chrono::milliseconds(750));
-				}
-			}
-		}
-
-		if (!newHandle && useMemMap)
-		{
-			MemoryLogInfo("[!] DMA init with mmap.txt failed; retrying without memory map...");
-			args.resize(argsWithoutMemMapCount);
-			useMemMap = false;
-
-			for (int attempt = 1; attempt <= 2; ++attempt)
-			{
-				if (cancelInit.load(std::memory_order_acquire))
-					break;
-
-				std::this_thread::sleep_for(std::chrono::milliseconds(750));
-				newHandle = tryInitializeVmm();
-
-				if (newHandle)
-				{
-					MemoryLogInfo("DMA connected without mmap.txt fallback");
-					break;
-				}
-			}
-		}
+		VMM_HANDLE newHandle = VMMDLL_Initialize(
+			static_cast<DWORD>(args.size()),
+			args.data());
 
 		if (newHandle)
 		{
@@ -1524,9 +1408,10 @@ bool Memory::Init(bool memMap, bool debug)
 
 		if (!newHandle)
 		{
-			MemoryLogInfo(
-				"[!] DMA initialisation failed. Close Relizth/other DMA tools, "
-				"wait 3s, then reconnect. If it persists, re-seat USB or power-cycle the FPGA."
+			MemoryLogError(
+				"[!] DMA initialisation with required mmap.txt failed; no unmapped retry "
+				"will be attempted. Close DMA tools, wait 3s, then reconnect. If it "
+				"persists, rebuild mmap.txt or power-cycle the FPGA."
 			);
 
 			closeAndReset();
@@ -1536,13 +1421,12 @@ bool Memory::Init(bool memMap, bool debug)
 		bool fpgaConfigured = false;
 
 		{
-			std::lock_guard<PriorityDmaMutex> dmaLock(dmaOpsMutex);
+			std::lock_guard<std::mutex> dmaLock(dmaOpsMutex);
 			std::lock_guard<std::mutex> lock(handleMutex);
 
 			// A stale handle should not survive a reconnect attempt.
 			if (vHandle)
 			{
-				CloseScatterHandleLocked();
 				VMMDLL_Close(vHandle);
 				vHandle = nullptr;
 			}
@@ -1556,10 +1440,6 @@ bool Memory::Init(bool memMap, bool debug)
 			{
 				vHandle = newHandle;
 				newHandle = nullptr;
-				const auto refreshStarted = std::chrono::steady_clock::now();
-				lastMemoryCacheRefresh = refreshStarted;
-				lastTlbCacheRefresh = refreshStarted;
-				preferTlbCacheRefresh = true;
 				ULONG64 FPGA_ID = 0;
 				ULONG64 DEVICE_ID = 0;
 
@@ -1575,7 +1455,6 @@ bool Memory::Init(bool memMap, bool debug)
 				{
 					MemoryLogInfo("[!] Could not configure FPGA");
 
-					CloseScatterHandleLocked();
 					VMMDLL_Close(vHandle);
 					vHandle = nullptr;
 
@@ -1623,7 +1502,6 @@ bool Memory::Init(bool memMap, bool debug)
 		DWORD livePid = 0;
 		bool handleValid = false;
 
-		RefreshProcessInformationNow();
 		{
 			std::lock_guard<std::mutex> lock(handleMutex);
 
@@ -1661,7 +1539,6 @@ bool Memory::Init(bool memMap, bool debug)
 		DWORD foundPid = 0;
 		bool handleValid = false;
 
-		RefreshProcessInformationNow();
 		{
 			std::lock_guard<std::mutex> lock(handleMutex);
 
@@ -1706,7 +1583,6 @@ bool Memory::Init(bool memMap, bool debug)
 			DWORD livePid = 0;
 			bool innerHandleValid = false;
 
-			RefreshProcessInformationNow();
 			{
 				std::lock_guard<std::mutex> lock(handleMutex);
 
@@ -1714,7 +1590,7 @@ bool Memory::Init(bool memMap, bool debug)
 
 				if (innerHandleValid)
 				{
-					moduleBase = GetBaseDaddy(targetModule);
+					moduleBase = GetBase(targetModule);
 
 					if (!moduleBase)
 						livePid = GetPidFromName(processName);
@@ -1809,7 +1685,7 @@ void Memory::CloseAndReset()
 {
 	{
 		// Wait for the active native DMA call before invalidating its handle
-		std::lock_guard<PriorityDmaMutex> dmaLock(dmaOpsMutex);
+		std::lock_guard<std::mutex> dmaLock(dmaOpsMutex);
 		std::lock_guard<std::mutex> lock(handleMutex);
 
 		memoryGlobals::processFound.store(false, std::memory_order_release);
@@ -1824,15 +1700,11 @@ void Memory::CloseAndReset()
 
 		if (vHandle)
 		{
-			CloseScatterHandleLocked();
 			VMMDLL_Close(vHandle);
 			vHandle = nullptr;
 		}
 
 		DMA_INITIALIZED = FALSE;
-		lastMemoryCacheRefresh = {};
-		lastTlbCacheRefresh = {};
-		preferTlbCacheRefresh = true;
 	}
 
 	memoryGlobals::dmaConnected.store(false, std::memory_order_release);
@@ -2025,7 +1897,7 @@ bool Memory::GetModuleInfo(const std::string& moduleName, uintptr_t& moduleBase,
 	return TryGetModuleInfo(moduleName, moduleBase, moduleSize);
 }
 
-uintptr_t Memory::GetBaseDaddy(const std::string& module_name)
+uintptr_t Memory::GetBase(const std::string& module_name)
 {
 	uintptr_t moduleBase = 0;
 	size_t moduleSize = 0;
@@ -2562,117 +2434,34 @@ bool Memory::Read(
 	std::string_view callingFunc,
 	std::source_location caller) const
 {
-	if (!address)
-	{
-		//MemoryLogError("Read failed: address is null"); // spams log files allot
-		return false;
-	}
+	(void)callingFunc;
+	(void)caller;
 
-	if (!buffer)
-	{
-		MemoryLogError("Read failed: output buffer is null at " + Hex64(address));
-		return false;
-	}
-
-	if (size == 0)
+	if (!address || !buffer || size == 0 || size > MAXDWORD)
 		return false;
 
 	std::memset(buffer, 0, size);
-
-	const size_t transferLimit = GetDmaTransferLimit();
-
-	if (size > transferLimit)
-	{
-		auto* output = static_cast<std::byte*>(buffer);
-		size_t offset = 0;
-
-		while (offset < size)
-		{
-			const size_t chunkSize =
-				(std::min)(transferLimit, size - offset);
-
-			if (!Read(
-				address + offset,
-				output + offset,
-				chunkSize,
-				cacheMode,
-				callingFunc,
-				caller))
-			{
-				return false;
-			}
-
-			offset += chunkSize;
-		}
-
-		return true;
-	}
-
 	DWORD readSize = 0;
+	bool ok = false;
 
-	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
-	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
-
-	if (!vHandle)
 	{
-		MemoryLogErrorThrottled("read_vhandle", "Read failed: vHandle is null");
-		return false;
-	}
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+		const DWORD pid = current_process.PID;
+		if (!vHandle || !pid)
+			return false;
 
-	const DWORD pid = current_process.PID;
-	if (!pid)
-	{
-		MemoryLogErrorThrottled("read_pid", "Read failed: process PID is zero");
-		return false;
+		ok = VMMDLL_MemReadEx(
+			vHandle,
+			pid,
+			address,
+			static_cast<PBYTE>(buffer),
+			static_cast<DWORD>(size),
+			&readSize,
+			BuildReadFlags(cacheMode));
 	}
-
-	const auto executeStarted = std::chrono::steady_clock::now();
-	const bool ok = VMMDLL_MemReadEx(
-		vHandle,
-		pid,
-		address,
-		static_cast<PBYTE>(buffer),
-		size,
-		&readSize,
-		BuildReadFlags(cacheMode)
-	);
-	const double executeMs = ElapsedMilliseconds(executeStarted);
 
 	const bool completeRead = ok && readSize == size;
-
-	RecordDirectRead(
-		size,
-		readSize,
-		completeRead
-	);
-
-	lock.unlock();
-
-	if (lockWaitMs >= PerfMonitor::kSlowDmaLockWaitMs ||
-		executeMs >= PerfMonitor::kSlowScatterMs)
-	{
-		const std::string detail = std::to_string(size) + " bytes";
-		const std::string label =
-			BuildDirectReadLabel(callingFunc, caller);
-
-		RecordDmaTiming(
-			"dma.lock_wait",
-			label,
-			lockWaitMs,
-			PerfMonitor::kSlowDmaLockWaitMs,
-			detail
-		);
-
-		RecordDmaTiming(
-			"dma.execute",
-			label,
-			executeMs,
-			PerfMonitor::kSlowScatterMs,
-			detail
-		);
-	}
-
+	RecordDirectRead(size, readSize, completeRead);
 	return completeRead;
 }
 
@@ -2685,111 +2474,33 @@ bool Memory::Read(
 	std::string_view callingFunc,
 	std::source_location caller) const
 {
-	if (!pid)
-	{
-		MemoryLogError("Read(pid) failed: pid is zero");
-		return false;
-	}
+	(void)callingFunc;
+	(void)caller;
 
-	if (!buffer)
-	{
-		MemoryLogError("Read(pid) failed: output buffer is null at " + Hex64(address));
-		return false;
-	}
-
-	if (size == 0)
+	if (!address || !buffer || !pid || size == 0 || size > MAXDWORD)
 		return false;
 
 	std::memset(buffer, 0, size);
-
-	const size_t transferLimit = GetDmaTransferLimit();
-
-	if (size > transferLimit)
-	{
-		auto* output = static_cast<std::byte*>(buffer);
-		size_t offset = 0;
-
-		while (offset < size)
-		{
-			const size_t chunkSize =
-				(std::min)(transferLimit, size - offset);
-
-			if (!Read(
-				address + offset,
-				output + offset,
-				chunkSize,
-				pid,
-				cacheMode,
-				callingFunc,
-				caller))
-			{
-				return false;
-			}
-
-			offset += chunkSize;
-		}
-
-		return true;
-	}
-
 	DWORD readSize = 0;
+	bool ok = false;
 
-	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
-	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
-
-	if (!vHandle)
 	{
-		MemoryLogError("Read(pid) failed: vHandle is null");
-		return false;
-	}
+		std::lock_guard<std::mutex> lock(dmaOpsMutex);
+		if (!vHandle)
+			return false;
 
-	const auto executeStarted = std::chrono::steady_clock::now();
-	const bool ok = VMMDLL_MemReadEx(
-		vHandle,
-		pid,
-		address,
-		static_cast<PBYTE>(buffer),
-		size,
-		&readSize,
-		BuildReadFlags(cacheMode)
-	);
-	const double executeMs = ElapsedMilliseconds(executeStarted);
+		ok = VMMDLL_MemReadEx(
+			vHandle,
+			static_cast<DWORD>(pid),
+			address,
+			static_cast<PBYTE>(buffer),
+			static_cast<DWORD>(size),
+			&readSize,
+			BuildReadFlags(cacheMode));
+	}
 
 	const bool completeRead = ok && readSize == size;
-
-	RecordDirectRead(
-		size,
-		readSize,
-		completeRead
-	);
-
-	lock.unlock();
-
-	if (lockWaitMs >= PerfMonitor::kSlowDmaLockWaitMs ||
-		executeMs >= PerfMonitor::kSlowScatterMs)
-	{
-		const std::string detail = std::to_string(size) + " bytes";
-		const std::string label =
-			BuildDirectReadLabel(callingFunc, caller);
-
-		RecordDmaTiming(
-			"dma.lock_wait",
-			label,
-			lockWaitMs,
-			PerfMonitor::kSlowDmaLockWaitMs,
-			detail
-		);
-
-		RecordDmaTiming(
-			"dma.execute",
-			label,
-			executeMs,
-			PerfMonitor::kSlowScatterMs,
-			detail
-		);
-	}
-
+	RecordDirectRead(size, readSize, completeRead);
 	return completeRead;
 }
 
@@ -3024,17 +2735,17 @@ std::string Memory::readUnicodeString(uintptr_t address, SIZE_T charCount, DmaCa
 bool Memory::TryReadLootTransformFallback(uint64_t gameObject, uint64_t& output)
 {
     try {
-        std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
+        std::unique_lock<std::mutex> lock(dmaOpsMutex);
         if (!vHandle || !current_process.PID) return false;
-        const std::array<uint64_t,4> offsets = {
-            UnityOffsets::GameObject_ComponentsOffset, 0x8,
-            UnityOffsets::Component_ObjectClassOffset, 0x10
-        };
+		const std::array<uint64_t,4> offsets = {
+			UnityOffsets::GameObject_ComponentsOffset, 0x8,
+			0x10, 0x0
+		};
         return LootTransformFallback::Resolve(gameObject, offsets, output,
             [&](uint64_t address, void* buffer, size_t size) {
                 DWORD bytes = 0;
-                const BOOL ok = VMMDLL_MemReadEx(vHandle, current_process.PID, address,
-					static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, VMMDLL_FLAG_NOCACHE | VMMDLL_FLAG_NOPAGING);
+				const BOOL ok = VMMDLL_MemReadEx(vHandle, current_process.PID, address,
+					static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, BuildReadFlags(DmaCacheMode::Uncached));
                 const bool complete = ok && bytes == size;
                 RecordDirectRead(size, bytes, complete);
                 return complete;
@@ -3044,14 +2755,14 @@ bool Memory::TryReadLootTransformFallback(uint64_t gameObject, uint64_t& output)
 bool Memory::TryReadLootIdFallback(uint64_t fieldAddress, std::string& output)
 {
     try {
-        std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex);
+        std::unique_lock<std::mutex> lock(dmaOpsMutex);
         if (!vHandle || !current_process.PID) return false;
         return LootIdFallback::Resolve(fieldAddress, output,
             [&](uint64_t address, void* buffer, size_t size) {
                 DWORD bytes = 0;
                 // Keep fallback probes fresh, cache-populating and deterministic.
-                const BOOL ok = VMMDLL_MemReadEx(vHandle, current_process.PID, address,
-					static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, VMMDLL_FLAG_NOCACHE | VMMDLL_FLAG_NOPAGING);
+				const BOOL ok = VMMDLL_MemReadEx(vHandle, current_process.PID, address,
+					static_cast<PBYTE>(buffer), static_cast<DWORD>(size), &bytes, BuildReadFlags(DmaCacheMode::Uncached));
                 const bool complete = ok && bytes == size;
                 RecordDirectRead(size, bytes, complete);
                 return complete;
@@ -3060,29 +2771,25 @@ bool Memory::TryReadLootIdFallback(uint64_t fieldAddress, std::string& output)
 }
 bool Memory::ReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc, int pid)
 {
-	return TryReadScatter(
-		requests,
-		requestCount,
-		cacheMode,
-		callingFunc,
-		{},
-		DmaPagingMode::NoPaging,
-		DmaLockMode::Wait,
-		pid) == TryScatterReadResult::Success;
+	return TryReadScatter(requests, requestCount, cacheMode, callingFunc, {}, pid) ==
+		TryScatterReadResult::Success;
 }
 
-Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* requests, size_t requestCount, DmaCacheMode cacheMode, std::string_view callingFunc, std::span<DWORD> bytesRead, DmaPagingMode pagingMode, DmaLockMode lockMode, int pid)
+Memory::TryScatterReadResult Memory::TryReadScatter(
+	const ScatterReadRequest* requests,
+	size_t requestCount,
+	DmaCacheMode cacheMode,
+	std::string_view callingFunc,
+	std::span<DWORD> bytesRead,
+	int pid)
 {
+	(void)callingFunc;
 	std::fill(bytesRead.begin(), bytesRead.end(), 0);
 	if (!requests || requestCount == 0)
 		return TryScatterReadResult::Failed;
 
 	if (!bytesRead.empty() && bytesRead.size() < requestCount)
 		return TryScatterReadResult::Failed;
-
-	const size_t transferLimit = GetDmaTransferLimit();
-	bool requiresChunking = requestCount > MaxDmaScatterRequests;
-	size_t totalBytes = 0;
 
 	for (size_t i = 0; i < requestCount; ++i)
 	{
@@ -3091,169 +2798,46 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 			return TryScatterReadResult::Failed;
 
 		std::memset(request.buffer, 0, request.size);
-
-		if (request.size > transferLimit || totalBytes > transferLimit - (std::min)(request.size, transferLimit))
-		{
-			requiresChunking = true;
-			totalBytes = transferLimit + 1;
-		}
-		else
-		{
-			totalBytes += request.size;
-		}
 	}
 
-	if (requiresChunking)
-	{
-		std::vector<ScatterReadRequest> chunk;
-		std::vector<size_t> sourceIndices;
-		chunk.reserve(MaxDmaScatterRequests);
-		sourceIndices.reserve(MaxDmaScatterRequests);
-
-		size_t requestIndex = 0;
-		size_t requestOffset = 0;
-
-		while (requestIndex < requestCount)
-		{
-			chunk.clear();
-			sourceIndices.clear();
-			size_t chunkBytes = 0;
-
-			while (requestIndex < requestCount && chunk.size() < MaxDmaScatterRequests && chunkBytes < transferLimit)
-			{
-				const ScatterReadRequest& request = requests[requestIndex];
-				const size_t bytesToQueue = (std::min)(request.size - requestOffset, transferLimit - chunkBytes);
-
-				chunk.push_back({ request.address + requestOffset, static_cast<std::byte*>(request.buffer) + requestOffset, bytesToQueue, request.diagnosticBase, request.diagnosticOffset + requestOffset, request.diagnosticExpression });
-				sourceIndices.push_back(requestIndex);
-				chunkBytes += bytesToQueue;
-				requestOffset += bytesToQueue;
-
-				if (requestOffset == request.size)
-				{
-					++requestIndex;
-					requestOffset = 0;
-				}
-			}
-
-			if (chunk.empty())
-				return TryScatterReadResult::Failed;
-
-			std::vector<DWORD> chunkBytesRead(chunk.size(), 0);
-			const TryScatterReadResult result = TryReadScatter(chunk.data(), chunk.size(), cacheMode, callingFunc, chunkBytesRead, pagingMode, lockMode, pid);
-
-			if (!bytesRead.empty())
-			{
-				for (size_t i = 0; i < chunk.size(); ++i)
-					bytesRead[sourceIndices[i]] += chunkBytesRead[i];
-			}
-
-			if (result != TryScatterReadResult::Success)
-				return result;
-		}
-
-		return TryScatterReadResult::Success;
-	}
-
-	const auto lockWaitStarted = std::chrono::steady_clock::now();
-	std::unique_lock<PriorityDmaMutex> lock(dmaOpsMutex, std::defer_lock);
-
-	if (lockMode == DmaLockMode::Wait)
-	{
-		lock.lock();
-	}
-	else if (!lock.try_lock())
-	{
-		return TryScatterReadResult::Busy;
-	}
-	const double lockWaitMs = ElapsedMilliseconds(lockWaitStarted);
-
+	std::lock_guard<std::mutex> lock(dmaOpsMutex);
 	const DWORD targetPid = pid > 0 ? static_cast<DWORD>(pid) : current_process.PID;
 	if (!vHandle || !targetPid)
 		return TryScatterReadResult::Failed;
 
-	const DWORD scatterFlags = BuildScatterFlags(cacheMode, pagingMode);
-	bool reusedHandle = reusableScatterHandle != nullptr;
-	if (reusableScatterHandle && !VMMDLL_Scatter_Clear(reusableScatterHandle, targetPid, scatterFlags))
-	{
-		RecordScatterClearFailure();
-		CloseScatterHandleLocked();
-		reusedHandle = false;
-	}
-
-	if (!reusableScatterHandle)
-	{
-		reusableScatterHandle = VMMDLL_Scatter_Initialize(vHandle, targetPid, scatterFlags);
-		if (reusableScatterHandle)
-			statsScatterHandleInitializations.fetch_add(1, std::memory_order_relaxed);
-	}
-	else if (reusedHandle)
-	{
-		statsScatterHandleReuses.fetch_add(1, std::memory_order_relaxed);
-	}
-
-	const VMMDLL_SCATTER_HANDLE handle = reusableScatterHandle;
-
+	const DWORD scatterFlags = BuildScatterFlags(cacheMode);
+	const VMMDLL_SCATTER_HANDLE handle =
+		VMMDLL_Scatter_Initialize(vHandle, targetPid, scatterFlags);
 	if (!handle)
-	{
-		lock.unlock();
-		MemoryLogError("TryReadScatter failed to create scatter handle");
 		return TryScatterReadResult::Failed;
-	}
+
+	statsScatterHandleInitializations.fetch_add(1, std::memory_order_relaxed);
 
 	std::vector<DWORD> actualBytesRead(requestCount, 0);
-	bool prepared = true;
-	uint64_t failedAddress = 0;
-
 	for (size_t i = 0; i < requestCount; ++i)
 	{
 		const ScatterReadRequest& request = requests[i];
-
 		if (!VMMDLL_Scatter_PrepareEx(
 			handle,
 			request.address,
-			request.size,
+			static_cast<DWORD>(request.size),
 			static_cast<PBYTE>(request.buffer),
 			&actualBytesRead[i]))
 		{
-			prepared = false;
-			failedAddress = request.address;
-			break;
+			VMMDLL_Scatter_CloseHandle(handle);
+			return TryScatterReadResult::Failed;
 		}
 
 		RecordScatterReadRequest(request.size);
 	}
 
-	if (!prepared)
-	{
-		if (!VMMDLL_Scatter_Clear(handle, targetPid, scatterFlags))
-		{
-			RecordScatterClearFailure();
-			CloseScatterHandleLocked();
-		}
-		lock.unlock();
-
-		MemoryLogError(
-			"TryReadScatter failed to prepare read at " +
-			Hex64(failedAddress)
-		);
-
-		return TryScatterReadResult::Failed;
-	}
-
-	const auto executeStarted = std::chrono::steady_clock::now();
 	const bool executed = VMMDLL_Scatter_ExecuteRead(handle);
-	const double executeMs = ElapsedMilliseconds(executeStarted);
-
 	bool complete = executed;
-	size_t incompleteIndex = requestCount;
 	for (size_t i = 0; i < requestCount; ++i)
 	{
 		if (actualBytesRead[i] != requests[i].size)
 		{
 			complete = false;
-			incompleteIndex = i;
-			break;
 		}
 	}
 
@@ -3261,52 +2845,12 @@ Memory::TryScatterReadResult Memory::TryReadScatter(const ScatterReadRequest* re
 		std::copy(actualBytesRead.begin(), actualBytesRead.end(), bytesRead.begin());
 
 	RecordScatterReadExecute(complete);
+	VMMDLL_Scatter_CloseHandle(handle);
 
-	if (!VMMDLL_Scatter_Clear(handle, targetPid, scatterFlags))
-	{
-		RecordScatterClearFailure();
-		CloseScatterHandleLocked();
-	}
-	lock.unlock();
-
-	if (lockWaitMs >= PerfMonitor::kSlowDmaLockWaitMs || executeMs >= PerfMonitor::kSlowScatterMs)
-	{
-		const std::string detail = std::to_string(requestCount) + " reads";
-		const std::string_view label = callingFunc.empty()
-			? std::string_view("Try Scatter Read")
-			: callingFunc;
-
-		RecordDmaTiming(
-			"dma.lock_wait",
-			label,
-			lockWaitMs,
-			PerfMonitor::kSlowDmaLockWaitMs,
-			detail
-		);
-
-		RecordDmaTiming(
-			"dma.execute",
-			label,
-			executeMs,
-			PerfMonitor::kSlowScatterMs,
-			detail
-		);
-	}
-
-	if (!complete)
-	{
-		const std::string label = callingFunc.empty() ? "Try Scatter Read" : std::string(callingFunc);
-		if (executed && incompleteIndex < requestCount)
-		{
-			return TryScatterReadResult::Incomplete;
-		}
-
-		const std::string key = "scatter_execute:" + label;
-		MemoryLogErrorThrottled(key.c_str(), "Scatter execution failed [" + label + "]", std::chrono::seconds(2));
+	if (!executed)
 		return TryScatterReadResult::Failed;
-	}
 
-	return TryScatterReadResult::Success;
+	return complete ? TryScatterReadResult::Success : TryScatterReadResult::Incomplete;
 }
 
 // ------------------------------------------------------------

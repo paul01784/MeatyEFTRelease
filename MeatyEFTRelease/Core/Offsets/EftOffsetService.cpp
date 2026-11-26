@@ -370,7 +370,7 @@ namespace
     bool IsValidClass(const ResolverSession& session, std::uint64_t klass)
     {
         std::uint64_t namePointer = 0;
-        return IsPointer(klass) && session.Read(klass + 0x10, namePointer) && !ReadString(session, namePointer).empty();
+        return IsPointer(klass) && session.Read(klass + sdk::Runtime::Il2CppClassLayout::Name, namePointer) && !ReadString(session, namePointer).empty();
     }
 
     bool ProbeTable(const ResolverSession& session, std::uint64_t table, std::size_t start, std::size_t count, std::size_t required)
@@ -493,7 +493,7 @@ namespace
             std::vector<ScatterRead> headerReads;
             for (std::size_t i = 0; i < count; ++i)
                 if (IsPointer(pointers[i]))
-                    headerReads.push_back({pointers[i] + 0x10, &headers[i], sizeof(NamePointers)});
+                    headerReads.push_back({pointers[i] + sdk::Runtime::Il2CppClassLayout::Name, &headers[i], sizeof(NamePointers)});
             if (headerReads.empty())
                 break;
             (void)session.ReadScatter(headerReads);
@@ -563,8 +563,8 @@ namespace
         {
             std::uint16_t count = 0;
             std::uint64_t fieldPointer = 0;
-            (void)session.Read(klass + 0x124, count);
-            (void)session.Read(klass + 0x80, fieldPointer);
+            (void)session.Read(klass + sdk::Runtime::Il2CppClassLayout::FieldCount, count);
+            (void)session.Read(klass + sdk::Runtime::Il2CppClassLayout::Fields, fieldPointer);
             if (count && count <= 4096 && IsPointer(fieldPointer))
             {
                 std::vector<RawFieldInfo> raw(count);
@@ -587,7 +587,7 @@ namespace
                 }
             }
             std::uint64_t parent = 0;
-            if (!session.Read(klass + 0x58, parent) || !IsPointer(parent))
+            if (!session.Read(klass + sdk::Runtime::Il2CppClassLayout::Parent, parent) || !IsPointer(parent))
                 break;
             klass = parent;
         }

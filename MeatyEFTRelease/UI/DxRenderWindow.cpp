@@ -211,6 +211,16 @@ bool DxRenderWindow::IsDrawCommandSafe(const DxRenderWindow::DrawCommand& cmd) n
             IsSafeCoord(cmd.y) &&
             IsSafePositiveSize(cmd.radius);
 
+    case DrawCommandType::Silhouette:
+        return !cmd.silhouetteSegments.empty() && cmd.silhouetteSegments.size() <= 128 &&
+            IsSafeThickness(cmd.thickness) &&
+            std::all_of(cmd.silhouetteSegments.begin(), cmd.silhouetteSegments.end(), [](const DxSilhouetteSegment& segment)
+                {
+                    return IsSafeCoord(segment.start.x) && IsSafeCoord(segment.start.y) &&
+                        IsSafeCoord(segment.end.x) && IsSafeCoord(segment.end.y) &&
+                        IsSafePositiveSize(segment.startRadius) && IsSafePositiveSize(segment.endRadius);
+                });
+
     case DrawCommandType::Text:
         return IsSafeCoord(cmd.x) &&
             IsSafeCoord(cmd.y) &&
@@ -628,6 +638,20 @@ void DxRenderWindow::DrawFilledCircle(float x, float y, float radius, const glm:
     cmd.y = y;
     cmd.radius = radius;
     cmd.colour = colour;
+    PushDrawCommand(std::move(cmd));
+}
+
+void DxRenderWindow::DrawSilhouette(const std::vector<DxSilhouetteSegment>& segments, const glm::vec4& fillColour, const glm::vec4& outlineColour, float outlineThickness)
+{
+    if (segments.empty())
+        return;
+
+    DrawCommand cmd{};
+    cmd.type = DrawCommandType::Silhouette;
+    cmd.silhouetteSegments = segments;
+    cmd.fillColour = fillColour;
+    cmd.outlineColour = outlineColour;
+    cmd.thickness = outlineThickness;
     PushDrawCommand(std::move(cmd));
 }
 
@@ -1532,6 +1556,117 @@ void DxRenderWindow::RenderDrawCommands(const std::vector<DrawCommand>& commands
             const float radius = std::max(0.1f, std::min(cmd.radius * scale, MAX_DRAW_SIZE));
             const D2D1_ELLIPSE ellipse = D2D1::Ellipse(D2D1::Point2F(cmd.x, cmd.y), radius, radius);
             m_d2dRenderTarget->FillEllipse(ellipse, m_solidBrush.Get());
+            break;
+        }
+
+        case DrawCommandType::Silhouette:
+        {
+            if (!m_d2dFactory)
+                break;
+
+            const auto makeBodyPart = [&](const DxSilhouetteSegment& segment, ComPtr<ID2D1PathGeometry>& result)
+            {
+                if (FAILED(m_d2dFactory->CreatePathGeometry(result.GetAddressOf())))
+                    return false;
+
+                ComPtr<ID2D1GeometrySink> sink;
+                if (FAILED(result->Open(sink.GetAddressOf())))
+                    return false;
+
+                const float dx = segment.end.x - segment.start.x;
+                const float dy = segment.end.y - segment.start.y;
+                const float length = std::sqrt(dx * dx + dy * dy);
+                const float startRadius = std::min(segment.startRadius * scale, MAX_DRAW_SIZE);
+                const float endRadius = std::min(segment.endRadius * scale, MAX_DRAW_SIZE);
+                if (length <= 0.001f)
+                    return false;
+
+                const glm::vec2 along(dx / length, dy / length);
+                const glm::vec2 across(along.y, -along.x);
+                const float templateLength = segment.shape == DxSilhouetteShape::Head ? length * scale : length;
+                const auto point = [&](float x, float y)
+                {
+                    return D2D1::Point2F(segment.start.x + across.x * x * startRadius + along.x * y * templateLength,
+                        segment.start.y + across.y * x * startRadius + along.y * y * templateLength);
+                };
+                const auto curve = [&](float x1, float y1, float x2, float y2, float x3, float y3)
+                {
+                    sink->AddBezier(D2D1::BezierSegment(point(x1, y1), point(x2, y2), point(x3, y3)));
+                };
+
+                switch (segment.shape)
+                {
+                case DxSilhouetteShape::Torso:
+                    sink->BeginFigure(point(-0.24f, 0.0f), D2D1_FIGURE_BEGIN_FILLED);
+                    sink->AddLine(point(0.24f, 0.0f));
+                    curve(0.26f, 0.10f, 0.80f, 0.10f, 0.96f, 0.17f);
+                    curve(1.05f, 0.27f, 0.96f, 0.43f, 0.85f, 0.58f);
+                    curve(0.78f, 0.68f, 0.64f, 0.77f, 0.66f, 0.85f);
+                    curve(0.68f, 0.92f, 0.80f, 1.02f, 0.64f, 1.04f);
+                    sink->AddLine(point(-0.64f, 1.04f));
+                    curve(-0.80f, 1.02f, -0.68f, 0.92f, -0.66f, 0.85f);
+                    curve(-0.64f, 0.77f, -0.78f, 0.68f, -0.85f, 0.58f);
+                    curve(-0.96f, 0.43f, -1.05f, 0.27f, -0.96f, 0.17f);
+                    curve(-0.80f, 0.10f, -0.26f, 0.10f, -0.24f, 0.0f);
+                    break;
+                case DxSilhouetteShape::Head:
+                    sink->BeginFigure(point(0.0f, -1.40f), D2D1_FIGURE_BEGIN_FILLED);
+                    curve(0.65f, -1.40f, 1.0f, -0.98f, 1.0f, -0.45f);
+                    curve(1.0f, 0.22f, 0.48f, 1.18f, 0.0f, 1.20f);
+                    curve(-0.48f, 1.18f, -1.0f, 0.22f, -1.0f, -0.45f);
+                    curve(-1.0f, -0.98f, -0.65f, -1.40f, 0.0f, -1.40f);
+                    break;
+                default:
+                {
+                    const float tip = endRadius / startRadius;
+                    const float bulgeAt = segment.shape == DxSilhouetteShape::UpperLimb ? 0.28f : 0.35f;
+                    sink->BeginFigure(point(-0.70f, 0.0f), D2D1_FIGURE_BEGIN_FILLED);
+                    curve(-0.55f, -0.05f, 0.55f, -0.05f, 0.70f, 0.0f);
+                    curve(1.05f, 0.10f, 1.05f, bulgeAt, 0.92f, 0.48f);
+                    curve(0.80f, 0.70f, tip, 0.85f, tip, 1.0f);
+                    curve(tip, 1.06f, -tip, 1.06f, -tip, 1.0f);
+                    curve(-tip, 0.85f, -0.80f, 0.70f, -0.92f, 0.48f);
+                    curve(-1.05f, bulgeAt, -1.05f, 0.10f, -0.70f, 0.0f);
+                    break;
+                }
+                }
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                return SUCCEEDED(sink->Close());
+            };
+
+            ComPtr<ID2D1PathGeometry> combined;
+            for (const DxSilhouetteSegment& segment : cmd.silhouetteSegments)
+            {
+                ComPtr<ID2D1PathGeometry> part;
+                if (!makeBodyPart(segment, part))
+                    continue;
+                if (!combined)
+                {
+                    combined = std::move(part);
+                    continue;
+                }
+
+                ComPtr<ID2D1PathGeometry> unionGeometry;
+                ComPtr<ID2D1GeometrySink> unionSink;
+                if (SUCCEEDED(m_d2dFactory->CreatePathGeometry(unionGeometry.GetAddressOf())) &&
+                    SUCCEEDED(unionGeometry->Open(unionSink.GetAddressOf())) &&
+                    SUCCEEDED(combined->CombineWithGeometry(part.Get(), D2D1_COMBINE_MODE_UNION, nullptr, 0.25f, unionSink.Get())) &&
+                    SUCCEEDED(unionSink->Close()))
+                {
+                    combined = std::move(unionGeometry);
+                }
+            }
+
+            if (combined)
+            {
+                m_solidBrush->SetColor(ToD2DColour(cmd.fillColour));
+                m_d2dRenderTarget->FillGeometry(combined.Get(), m_solidBrush.Get());
+                if (cmd.outlineColour.a > 0.0f && cmd.thickness > 0.0f)
+                {
+                    m_solidBrush->SetColor(ToD2DColour(cmd.outlineColour));
+                    m_d2dRenderTarget->DrawGeometry(combined.Get(), m_solidBrush.Get(), std::max(0.1f, std::min(cmd.thickness * scale, MAX_DRAW_THICKNESS)));
+                }
+            }
             break;
         }
 

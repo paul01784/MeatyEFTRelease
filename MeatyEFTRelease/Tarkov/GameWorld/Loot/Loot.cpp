@@ -1304,6 +1304,10 @@ bool loot::buildNewLootItemsScatter(
 
         LootShellRead shell{};
         shell.instance = pointer;
+        // LootList contains managed EFT.Interactive objects. Keep that managed
+        // pointer for EFT field reads; native Unity offsets are only needed to
+        // reach the GameObject and transform.
+        shell.interactiveClass = pointer;
         shellReads.emplace_back(shell);
 
         LootEntity item{};
@@ -1331,7 +1335,7 @@ bool loot::buildNewLootItemsScatter(
         }
     }
 
-    // interactive class and GameObject.
+    // GameObject from the native MonoBehaviour.
     {
         ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
@@ -1340,9 +1344,7 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.monoBehaviour))
                 continue;
 
-            batch.AddTraced(shell.monoBehaviour, UnityOffsets::Component_ObjectClassOffset, shell.interactiveClass, "shell.monoBehaviour+UnityOffsets::Component_ObjectClassOffset");
-
-            batch.AddTraced(shell.monoBehaviour, UnityOffsets::Component_GameObjectOffset, shell.gameObject, "shell.monoBehaviour+UnityOffsets::Component_GameObjectOffset");
+            batch.AddTraced(shell.monoBehaviour, UnityOffsets::MonoBehaviour_GameObjectOffset, shell.gameObject, "shell.monoBehaviour+UnityOffsets::MonoBehaviour_GameObjectOffset");
         }
 
         if (!batch.Execute())
@@ -1398,7 +1400,7 @@ bool loot::buildNewLootItemsScatter(
         }
     }
 
-    // transform object class.
+    // transform native wrapper.
     {
         ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
 
@@ -1407,7 +1409,7 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.transformComponent))
                 continue;
 
-            batch.AddTraced(shell.transformComponent, UnityOffsets::Component_ObjectClassOffset, shell.transformObjectClass, "shell.transformComponent+UnityOffsets::Component_ObjectClassOffset");
+            batch.AddTraced(shell.transformComponent, 0x10, shell.transformObjectClass, "shell.transformComponent+0x10");
         }
 
         if (!batch.Execute())
@@ -1426,7 +1428,7 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.transformObjectClass))
                 continue;
 
-            batch.AddTraced(shell.transformObjectClass, 0x10, shell.transformInternal, "shell.transformObjectClass+0x10");
+            batch.AddTraced(shell.transformObjectClass, 0x0, shell.transformInternal, "shell.transformObjectClass+0x0");
         }
 
         if (!batch.Execute())

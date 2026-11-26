@@ -72,52 +72,24 @@ protected:
         const glm::vec3& sample,
         const std::chrono::steady_clock::time_point now) const noexcept
     {
-        const float speed = glm::length(sample);
-        const bool sampleValid =
-            std::isfinite(sample.x) &&
-            std::isfinite(sample.y) &&
-            std::isfinite(sample.z) &&
-            std::isfinite(speed) &&
-            speed <= 15.0f;
-
-        // Keep the last good sample across a transient bad DMA read. The aim
-        // path already expires stale velocity, so one bad sample must not
-        // instantly turn prediction off and back on again.
-        if (!sampleValid)
+        if (!player.velocityFilter.update(sample, now))
             return;
 
-        if (!player.velocityValid ||
-            player.lastVelocityUpdate == std::chrono::steady_clock::time_point{})
-        {
-            player.velocity = sample;
-        }
-        else
-        {
-            constexpr float kSmoothingTimeSeconds = 0.08f;
-            float elapsedSeconds =
-                std::chrono::duration<float>(now - player.lastVelocityUpdate).count();
-
-            if (!std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0f)
-                elapsedSeconds = 0.02f;
-
-            const float blend = std::clamp(
-                1.0f - std::exp(-elapsedSeconds / kSmoothingTimeSeconds),
-                0.05f,
-                1.0f);
-
-            player.velocity += (sample - player.velocity) * blend;
-
-            if (speed < 0.01f && glm::length(player.velocity) < 0.01f)
-                player.velocity = {};
-        }
-
-        // A stationary player is a valid zero-velocity prediction sample.
+        player.velocity = player.velocityFilter.value();
         player.velocityValid = true;
         player.lastVelocityUpdate = now;
     }
 
     void initializeSnapshot(Player& player) const noexcept
     {
+        player.velocity = {};
+        player.velocityFilter = {};
+        player.velocityValid = false;
+        player.lastVelocityUpdate = {};
+        player.worldVelocityTracker = {};
+        player.worldVelocity = {};
+        player.worldVelocityValid = false;
+        player.lastWorldVelocityUpdate = {};
         player.equipInited = false;
         player.lastEquipmentUpdate = {};
         player.playerBoneMatrixPtr = 0;
