@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -100,6 +100,9 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="UI\BodySilhouette.h" />
+    <ClInclude Include="UI\SilhouetteHeadwear.h" />
+    <ClInclude Include="UI\PlayerSilhouetteStyle.h" />
     <ClInclude Include="UI\Appearance.h" />
     <ClInclude Include="Web\WebRadar\WebRadar.h" />
     <ClInclude Include="UI\aimview.h" />

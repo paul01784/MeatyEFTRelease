@@ -1,4 +1,5 @@
 #pragma once
+#include "PlayerSilhouetteStyle.h"
 
 #include "DxRenderWindow.h"
 
@@ -1297,6 +1298,32 @@ namespace fuserRender
         const PlayerMarkerStyle style = appearanceManager.GetPlayerMarkerStyle(PlayerAppearance::resolveMarkerType(player));
         if (!style.entitySilhouette)
             return;
+
+        if (style.silhouetteModel == SilhouetteModel::Human)
+        {
+            BodySilhouette::Pose pose{};
+            for (int index = 0; index < BodySilhouette::Count; ++index)
+            {
+                glm::vec2 screen{};
+                if (HasBone(player, index) && ProjectWorldToScreen(player.bonePositions[index], &screen))
+                    pose[index] = {{screen.x, screen.y}, true};
+            }
+            const auto shapes = BodySilhouette::build(pose, BodySilhouette::styleForPlayer(player),
+                BodySilhouette::headwearForPlayer(player, radarGlobals::getPlayerEquip));
+            std::vector<std::vector<glm::vec2>> polygons;
+            for (const auto& shape : shapes)
+            {
+                if (shape.detail) continue; // Uniform silhouette, no internal seams.
+                auto& polygon = polygons.emplace_back();
+                for (const auto& point : shape) polygon.emplace_back(point.x, point.y);
+            }
+            glm::vec4 fillColour = colour;
+            fillColour.a = std::clamp(fillColour.a * style.silhouetteOpacity, 0.0f, 1.0f);
+            glm::vec4 outlineColour = colour;
+            outlineColour.a *= 0.9f;
+            g_DxWindow.DrawSilhouettePolygons(polygons, fillColour, outlineColour, 1.2f);
+            return;
+        }
 
         const auto projectBone = [&](boneListIndexes bone, glm::vec2& screen)
         {

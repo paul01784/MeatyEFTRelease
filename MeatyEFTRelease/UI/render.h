@@ -50,7 +50,8 @@ enum boneListIndexes
     LFoot,       // 9
     RThigh,      // 10
     RFoot,       // 11
-    Base         // 12
+    Base,        // 12 -- existing indices stay stable
+    LShoulder, RShoulder, LElbow, RElbow, LKnee, RKnee, LToe, RToe
 };
 
 enum class BoneList

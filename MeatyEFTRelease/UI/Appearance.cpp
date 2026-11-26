@@ -116,7 +116,8 @@ nlohmann::json PlayerMarkerStyleJson(const PlayerMarkerStyle& style)
         {"shape", static_cast<int>(style.shape)},
         {"size", style.size},
         {"entitySilhouette", style.entitySilhouette},
-        {"silhouetteOpacity", style.silhouetteOpacity}
+        {"silhouetteOpacity", style.silhouetteOpacity},
+        {"silhouetteModel", static_cast<int>(style.silhouetteModel)}
     };
 }
 
@@ -125,6 +126,10 @@ void ReadPlayerMarkerStyle(const nlohmann::json& json, PlayerMarkerStyle& style,
     style.shape = static_cast<MarkerShape>(std::clamp(json.value("shape", static_cast<int>(style.shape)), 0, allowTank ? 6 : 5));
     style.size = std::clamp(json.value("size", style.size), 3.0f, 30.0f);
     style.entitySilhouette = json.value("entitySilhouette", style.entitySilhouette);
+    // Older files and unknown future model IDs retain the existing renderer.
+    const auto model = json.find("silhouetteModel");
+    style.silhouetteModel = model != json.end() && model->is_number_integer() && *model == 1
+        ? SilhouetteModel::Human : SilhouetteModel::Classic;
     style.silhouetteOpacity = std::clamp(json.value("silhouetteOpacity", style.silhouetteOpacity), 0.05f, 0.8f);
 }
 

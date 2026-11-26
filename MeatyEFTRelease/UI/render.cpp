@@ -1049,11 +1049,19 @@ static void RenderMarkerEditorPanel()
         changed |= ImGui::Checkbox("##entitySilhouette", &silhouetteStyle.entitySilhouette);
         if (silhouetteStyle.entitySilhouette)
         {
+            beginRow("Model");
+            ImGui::SetNextItemWidth(controlWidth);
+            int model = static_cast<int>(silhouetteStyle.silhouetteModel);
+            if (ImGui::Combo("##silhouetteModel", &model, "Classic\0Human\0"))
+            {
+                silhouetteStyle.silhouetteModel = static_cast<SilhouetteModel>(model);
+                changed = true;
+            }
             beginRow("Fill opacity");
             ImGui::SetNextItemWidth(controlWidth);
             changed |= ImGui::SliderFloat("##silhouetteOpacity", &silhouetteStyle.silhouetteOpacity, 0.05f, 0.8f, "%.2f");
         }
-        ImGui::TextWrapped("Rounded fill follows the projected skeleton and scales with the current camera view.");
+        ImGui::TextWrapped("Classic uses the original rounded silhouette. Human adds shaped limbs, a fitted torso, hands and feet. Both follow projected bones; neither is a hitbox.");
     }
     else if (category == MarkerCategory::Tripwire)
     {
