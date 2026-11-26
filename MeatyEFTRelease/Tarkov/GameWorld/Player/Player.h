@@ -168,6 +168,9 @@ public:
 	std::string profileId;
 	std::string side;
 	std::string voice;
+	std::string aiRoleReadStatus{ "not_requested" };
+	uint32_t aiRoleReadAttempts{ 0 };
+	std::chrono::steady_clock::time_point nextAiRoleRefresh{};
 	EPlayerSide playerSide;
 
 	glm::vec3 location;

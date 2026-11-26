@@ -69,16 +69,20 @@ std::optional<Player> ClientPlayer::tryCreate(uint64_t instance, std::string_vie
 
     player.P_CorpseAddr = instance + sdk::Player::Corpse;
 
-    if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::Profile, player.P_Profile, DmaCacheMode::Uncached) ||
-        !PlayerMemoryAccess::tryReadPointer(player.P_Profile + sdk::Profile::Info, player.P_Info, DmaCacheMode::Uncached) ||
-        !PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::_playerBody, player.P_Body, DmaCacheMode::Uncached))
-    {
+    PlayerMemoryAccess::initializationStage("profile");
+    if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::Profile, player.P_Profile, DmaCacheMode::Uncached))
         return std::nullopt;
-    }
+    PlayerMemoryAccess::initializationStage("profile info");
+    if (!PlayerMemoryAccess::tryReadPointer(player.P_Profile + sdk::Profile::Info, player.P_Info, DmaCacheMode::Uncached))
+        return std::nullopt;
+    PlayerMemoryAccess::initializationStage("player body");
+    if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::_playerBody, player.P_Body, DmaCacheMode::Uncached))
+        return std::nullopt;
 
     PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::ProceduralWeaponAnimation, player.P_PWA, DmaCacheMode::Uncached);
     configureControllerAddresses(player);
 
+    PlayerMemoryAccess::initializationStage("player side");
     if (!PlayerMemoryAccess::tryRead(player.P_Info + sdk::PlayerInfo::Side, player.playerSide, DmaCacheMode::Uncached))
         return std::nullopt;
 
@@ -90,6 +94,7 @@ std::optional<Player> ClientPlayer::tryCreate(uint64_t instance, std::string_vie
         return std::nullopt;
     }
 
+    PlayerMemoryAccess::initializationStage("movement context");
     if (!PlayerMemoryAccess::tryReadPointer(instance + sdk::Player::MovementContext, player.P_MovementContext, DmaCacheMode::Uncached))
         return std::nullopt;
 

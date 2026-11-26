@@ -256,6 +256,8 @@ namespace
             { "side", player.side },
             { "player_side_value", static_cast<int>(player.playerSide) },
             { "voice", player.voice },
+            { "ai_role_read_status", player.aiRoleReadStatus },
+            { "ai_role_read_attempts", player.aiRoleReadAttempts },
             { "position", Vec3Json(player.location) },
             { "velocity", Vec3Json(player.velocity) },
             { "velocity_valid", player.velocityValid },

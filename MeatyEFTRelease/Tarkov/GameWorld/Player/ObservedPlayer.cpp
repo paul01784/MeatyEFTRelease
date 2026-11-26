@@ -71,6 +71,41 @@ PlayerKind ObservedPlayer::getKind() const noexcept
     return PlayerKind::Observed;
 }
 
+bool ObservedPlayer::tryRefreshAiRole(Player& player)
+{
+    if (player.getKind() != PlayerKind::Observed || !player.isAi ||
+        player.playerSide != EPlayerSide::Savage || player.isBTR ||
+        player.isDead || player.hasExfiled || !player.voice.empty())
+        return false;
+
+    ++player.aiRoleReadAttempts;
+    uint64_t voicePointer = 0;
+    if (!PlayerMemoryAccess::tryReadPointer(player.instance + sdk::ObservedPlayerView::Voice,
+        voicePointer, DmaCacheMode::Uncached))
+    {
+        player.aiRoleReadStatus = "voice_pointer_unreadable";
+        return false;
+    }
+
+    const std::string voice = PlayerMemoryAccess::readString(voicePointer);
+    if (voice.empty())
+    {
+        player.aiRoleReadStatus = "voice_string_unreadable_or_empty";
+        return false;
+    }
+
+    const AIRole role = getAiRole(voice);
+    player.voice = voice;
+    player.name = role.Name;
+    player.type = role.Type;
+    player.isZombie = containsIgnoreCase(voice, "Zombie");
+    player.isBoss = role.Type == PlayerType::AIBoss;
+    player.isBlackDivision = role.IsBlackDivision;
+    player.isCultist = role.IsCultist;
+    player.aiRoleReadStatus = "resolved";
+    return true;
+}
+
 bool ObservedPlayer::matches(std::string_view, bool isLocal) const noexcept
 {
     return !isLocal;
@@ -159,21 +194,12 @@ std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_v
 
     if (isSavage && player.isAi)
     {
-        uint64_t voicePointer = 0;
-        std::string voice;
-
-        if (PlayerMemoryAccess::tryReadPointer(instance + sdk::ObservedPlayerView::Voice, voicePointer, DmaCacheMode::Uncached))
-            voice = PlayerMemoryAccess::readString(voicePointer);
-
-        player.isZombie = containsIgnoreCase(voice, "Zombie");
-        const AIRole role = getAiRole(voice);
-		player.type = role.Type;
-        player.name = role.Name.empty() ? "Ai" : role.Name;
-        player.isBoss = role.Type == PlayerType::AIBoss;
-        player.isBlackDivision = role.IsBlackDivision;
-        player.isCultist = role.IsCultist;
+        player.type = PlayerType::AIScav;
+        player.name = "Ai";
         player.isPlayerScav = false;
         player.isPlayer = false;
+        tryRefreshAiRole(player);
+        player.nextAiRoleRefresh = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     }
     else if (isSavage)
     {
