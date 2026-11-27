@@ -204,8 +204,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
                 }
 
                 splash.SetStatus(L"Loading EFT offsets...");
-                EftOffsetService::Instance().Load();
-                UnityOffsetService::Instance().Load();
+                if (!EftOffsetService::Instance().Load())
+                    throw std::runtime_error("Unable to load configs/offsets.json: " + EftOffsetService::Instance().LastError());
+                if (!UnityOffsetService::Instance().Load())
+                    throw std::runtime_error("Unable to load validated Unity offsets: " + UnityOffsetService::Instance().LastError());
 
                 splash.SetStatus(L"Configuring services...");
 

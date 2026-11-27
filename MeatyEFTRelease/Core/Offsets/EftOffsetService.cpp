@@ -39,7 +39,6 @@ namespace
         const char* className;
         const char* fieldName;
         std::uint64_t* value;
-        std::uint64_t fallback;
         OffsetKind kind;
         bool staticField;
         bool required;
@@ -48,10 +47,10 @@ namespace
     std::vector<OffsetDescriptor>& Descriptors()
     {
         static std::vector<OffsetDescriptor> descriptors = {
-#define EFT_FIELD(group, name, className, fieldName, fallback, isStatic, required) \
-            {#group, #name, className, fieldName, &sdk::group::name, fallback, OffsetKind::Field, isStatic, required},
-#define EFT_TYPE(group, name, className, fallback, required) \
-            {#group, #name, className, "", &sdk::group::name, fallback, OffsetKind::TypeIndex, false, required},
+#define EFT_FIELD(group, name, className, fieldName, isStatic, required) \
+            {#group, #name, className, fieldName, &sdk::group::name, OffsetKind::Field, isStatic, required},
+#define EFT_TYPE(group, name, className, required) \
+            {#group, #name, className, "", &sdk::group::name, OffsetKind::TypeIndex, false, required},
 #define EFT_ALIAS(group, name, targetGroup, targetName)
 #include "../../Tarkov/SDK/EftOffsetDefinitions.inc"
 #undef EFT_ALIAS
@@ -818,7 +817,7 @@ bool EftOffsetService::Load()
     std::ifstream input(path, std::ios::binary);
     if (!input.is_open())
     {
-        SetStatus("Using built-in offsets (offsets.json not found)");
+        SetStatus("Offsets unavailable", "configs/offsets.json was not found");
         return false;
     }
 
@@ -826,7 +825,10 @@ bool EftOffsetService::Load()
     {
         const nlohmann::json document = nlohmann::json::parse(input);
         const int schemaVersion = document.value("schemaVersion", 0);
-        if ((schemaVersion != 1 && schemaVersion != 2) || !document.contains("bootstrap") || !document.contains("offsets"))
+        if (schemaVersion != 2 || !document.contains("bootstrap") || !document.contains("offsets") ||
+            !document.contains("target") || document.at("target").value("process", std::string{}) != "EscapeFromTarkov.exe" ||
+            document.at("target").value("module", std::string{}) != "GameAssembly.dll" ||
+            !document.contains("generatedAtUtc") || !document.at("generatedAtUtc").is_string() || document.at("generatedAtUtc").get<std::string>().empty())
             throw std::runtime_error("unsupported or incomplete schema");
 
         std::uint64_t tableRva = 0, staticFields = 0;
@@ -859,7 +861,7 @@ bool EftOffsetService::Load()
     }
     catch (const std::exception& exception)
     {
-        SetStatus("Using built-in offsets", std::string("offsets.json was ignored: ") + exception.what());
+        SetStatus("Offsets unavailable", std::string("offsets.json was rejected: ") + exception.what());
         return false;
     }
 }

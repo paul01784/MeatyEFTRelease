@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAtUtc": "29-10-2026T17:46:50Z",
+  "generatedAtUtc": "27-11-2026T00:00:00Z",
   "target": {
     "process": "EscapeFromTarkov.exe",
     "module": "GameAssembly.dll"
@@ -8,8 +8,8 @@
   "unity": {
     "rvas": {
       "UnityPlayer.dll": {
-        "gameObjectManager": "0x2054CB0",
-        "allCameras": "0x1F7DB00"
+        "gameObjectManager": "0x2053CB0",
+        "allCameras": "0x1FAC150"
       }
     },
     "layouts": {
@@ -25,37 +25,37 @@
     },
     "resolution": {
       "GameObjectManager": {
-        "method": "Loaded from offsets.json",
-        "runtimeValidated": false
+        "method": "Live DMA probe (UnityPlayer 6000.5.7f1)",
+        "runtimeValidated": true
       },
       "AllCameras": {
-        "method": "Loaded from offsets.json",
-        "runtimeValidated": false
+        "method": "Live DMA probe (UnityPlayer 6000.5.7f1)",
+        "runtimeValidated": true
       },
       "LastActiveNode": {
-        "method": "Loaded from offsets.json",
-        "runtimeValidated": false
+        "method": "Live DMA probe (UnityPlayer 6000.5.7f1)",
+        "runtimeValidated": true
       },
       "ActiveNodes": {
-        "method": "Loaded from offsets.json",
-        "runtimeValidated": false
+        "method": "Live DMA probe (UnityPlayer 6000.5.7f1)",
+        "runtimeValidated": true
       },
       "ViewMatrix": {
-        "method": "Loaded from offsets.json",
-        "runtimeValidated": false
+        "method": "Live DMA probe (camera members verified in raid)",
+        "runtimeValidated": true
       },
       "FOV": {
-        "method": "Loaded from offsets.json",
-        "runtimeValidated": false
+        "method": "Live DMA probe (camera members verified in raid)",
+        "runtimeValidated": true
       },
       "AspectRatio": {
-        "method": "Loaded from offsets.json",
-        "runtimeValidated": false
+        "method": "Live DMA probe (camera members verified in raid)",
+        "runtimeValidated": true
       }
     }
   },
   "bootstrap": {
-    "typeInfoTableRva": "0x75DA668",
+    "typeInfoTableRva": "0x75E1488",
     "il2CppClassStaticFields": "0xA0"
   },
   "offsets": {
@@ -141,6 +141,12 @@
     },
     "BifacialTransform": {
       "Original": "0x10"
+    },
+    "PlayerBody": {
+      "SkeletonRootJoint": "0x40"
+    },
+    "Skeleton": {
+      "Values": "0x30"
     },
     "PlayerBones": {
       "WeaponRootThird": "0x40",

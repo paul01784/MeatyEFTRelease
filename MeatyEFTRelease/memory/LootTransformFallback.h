@@ -1,10 +1,11 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 namespace LootTransformFallback {
-template<class ReadExact, class ValidPointer>
-bool Resolve(uint64_t gameObject, const std::array<uint64_t,4>& offsets,
+template<std::size_t N, class ReadExact, class ValidPointer>
+bool Resolve(uint64_t gameObject, const std::array<uint64_t,N>& offsets,
              uint64_t& output, ReadExact&& readExact, ValidPointer&& validPointer) {
     uint64_t current = gameObject;
     constexpr auto maxAddress = (std::numeric_limits<uint64_t>::max)();

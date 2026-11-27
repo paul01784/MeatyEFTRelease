@@ -53,7 +53,7 @@ private:
     std::atomic_bool resolving_{false};
     mutable std::mutex mutex_;
     std::thread worker_;
-    std::string status_ = "Using built-in offsets";
+    std::string status_ = "Offsets not loaded";
     std::string lastError_;
     std::string jsonText_;
     std::string resolveLog_;

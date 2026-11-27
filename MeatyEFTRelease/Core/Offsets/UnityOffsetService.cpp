@@ -19,6 +19,7 @@
 #include <set>
 #include <sstream>
 #include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -358,13 +359,19 @@ namespace
         std::uint64_t manager = 0;
         if (!session.Read(slot, manager) || !IsPointer(manager))
             return {};
-        constexpr std::array<std::pair<std::uint64_t, std::uint64_t>, 2> layouts = {{{0x20, 0x28}, {0x28, 0x30}}};
+        constexpr std::array<std::pair<std::uint64_t, std::uint64_t>, 3> layouts = {{{0x18, 0x20}, {0x20, 0x28}, {0x28, 0x30}}};
         for (const auto& [lastOffset, activeOffset] : layouts)
         {
-            std::uint64_t last = 0, active = 0, firstObject = 0, lastObject = 0;
-            if (session.Read(manager + lastOffset, last) && session.Read(manager + activeOffset, active) && IsPointer(last) && IsPointer(active) &&
-                session.Read(active + 0x10, firstObject) && session.Read(last + 0x10, lastObject) && IsPointer(firstObject) && IsPointer(lastObject))
-                return {true, lastOffset, activeOffset};
+            std::uint64_t last = 0, active = 0;
+            if (!session.Read(manager + lastOffset, last) || !session.Read(manager + activeOffset, active) || !IsPointer(last) || !IsPointer(active))
+                continue;
+            for (const std::uint64_t objectOffset : {0x10ULL, 0x18ULL})
+            {
+                std::uint64_t firstObject = 0, lastObject = 0;
+                if (session.Read(active + objectOffset, firstObject) && session.Read(last + objectOffset, lastObject) &&
+                    IsPointer(firstObject) && IsPointer(lastObject))
+                    return {true, lastOffset, activeOffset};
+            }
         }
         return {};
     }
@@ -372,7 +379,8 @@ namespace
     struct CameraContainer
     {
         bool valid{};
-        std::uint64_t firstCamera{};
+        std::uint64_t items{};
+        std::uint32_t count{};
     };
 
     CameraContainer ValidateAllCameras(const ResolverSession& session, std::uint64_t slot)
@@ -392,7 +400,7 @@ namespace
             if (layout.hasCapacity && (!session.Read(container + layout.capacity, capacity) || capacity < count || capacity > kMaximumCameraCount * 16))
                 continue;
             if (IsPointer(items) && session.Read(items, firstCamera) && IsPointer(firstCamera))
-                return {true, firstCamera};
+                return {true, items, count};
         }
         return {};
     }
@@ -541,7 +549,7 @@ namespace
         std::string method;
     };
 
-    std::optional<MemberResult> ResolveMember(const ResolverSession& session, std::uint64_t camera, const MemberPattern& pattern,
+    std::optional<MemberResult> ResolveMember(const ResolverSession& session, const MemberPattern& pattern,
                                                const std::function<bool(std::uint64_t)>& validator)
     {
         struct Candidate { std::size_t matches{}; std::uint64_t firstMatch{}; };
@@ -665,18 +673,17 @@ bool UnityOffsetService::Load()
     std::ifstream input(FilePath(), std::ios::binary);
     if (!input.is_open())
     {
-        SetStatus("Using built-in Unity offsets (offsets.json not found)");
+        SetStatus("Unity offsets unavailable", "configs/offsets.json was not found");
         return false;
     }
 
     try
     {
         const nlohmann::json document = nlohmann::json::parse(input);
-        if (!document.contains("unity"))
-        {
-            SetStatus("Using built-in Unity offsets (no Unity section in offsets.json)");
-            return false;
-        }
+        if (document.value("schemaVersion", 0) != 2 || !document.contains("unity") ||
+            !document.contains("target") || document.at("target").value("process", std::string{}) != "EscapeFromTarkov.exe" ||
+            document.at("target").value("module", std::string{}) != "GameAssembly.dll")
+            throw std::runtime_error("unsupported or incomplete schema");
 
         const auto& unity = document.at("unity");
         const auto& descriptors = Descriptors();
@@ -688,13 +695,13 @@ bool UnityOffsetService::Load()
             const auto& descriptor = descriptors[i];
             if (!ParseValue(unity.at(descriptor.jsonCategory).at(descriptor.jsonGroup).at(descriptor.jsonName), values[i]) || !values[i])
                 throw std::runtime_error(std::string("invalid Unity value: ") + descriptor.name);
-            methods[i] = "Loaded from offsets.json";
-            if (unity.contains("resolution") && unity["resolution"].contains(descriptor.name))
-            {
-                const auto& resolution = unity["resolution"][descriptor.name];
-                methods[i] = resolution.value("method", methods[i]);
-                validated[i] = resolution.value("runtimeValidated", false);
-            }
+            if (!unity.contains("resolution") || !unity.at("resolution").contains(descriptor.name))
+                throw std::runtime_error(std::string("missing Unity validation: ") + descriptor.name);
+            const auto& resolution = unity.at("resolution").at(descriptor.name);
+            methods[i] = resolution.value("method", std::string{});
+            validated[i] = resolution.value("runtimeValidated", false);
+            if (methods[i].empty() || !validated[i])
+                throw std::runtime_error(std::string("unvalidated Unity value: ") + descriptor.name);
         }
         ApplyValues(values);
         {
@@ -707,7 +714,7 @@ bool UnityOffsetService::Load()
     }
     catch (const std::exception& exception)
     {
-        SetStatus("Using built-in Unity offsets", std::string("The Unity section was ignored: ") + exception.what());
+        SetStatus("Unity offsets unavailable", std::string("offsets.json was rejected: ") + exception.what());
         return false;
     }
 }
@@ -781,13 +788,35 @@ bool UnityOffsetService::ResolveNow()
     }
 
     SetStatus("Extracting and validating live camera member offsets...");
+    std::vector<std::uint64_t> cameras;
+    cameras.reserve(allCameras->cameras.count);
+    for (std::uint32_t index = 0; index < allCameras->cameras.count; ++index)
+    {
+        std::uint64_t camera = 0;
+        if (session.Read(allCameras->cameras.items + static_cast<std::uint64_t>(index) * sizeof(camera), camera) && IsPointer(camera))
+            cameras.emplace_back(camera);
+    }
+    if (cameras.empty())
+    {
+        SetStatus("Active-raid resolve failed; existing offsets were kept", "AllCameras did not contain any readable camera pointers");
+        return false;
+    }
+
     const MemberPattern viewPattern{"Camera view-matrix getter", "E8 ? ? ? ? 48 3B 58 ? 0F 83 ? ? ? ? ? ? ? 48 8D 0C 5D ? ? ? ? 48 03 CB ? ? ? ? E8 ? ? ? ? 4C 8B C7 49 FF C0 ? ? ? ? ? 75", 0, true, 3};
     const MemberPattern fovPattern{"Camera FOV getter", "83 B9 ? ? ? ? 02 75 ? F3 0F 10 81 ? ? ? ? C3 F3 0F 10 81 ? ? ? ? C3", 22, false, 0};
     const MemberPattern aspectPattern{"Camera aspect getter", "E8 ? ? ? ? F3 44 0F 59 05 ? ? ? ? F3 0F 59 C6", 0, true, 4};
-    const auto camera = allCameras->cameras.firstCamera;
-    const auto view = ResolveMember(session, camera, viewPattern, [&](const auto value) { return ValidateMatrix(session, camera, value); });
-    const auto fov = ResolveMember(session, camera, fovPattern, [&](const auto value) { return ValidateFloat(session, camera, value, 1.0f, 180.0f); });
-    const auto aspect = ResolveMember(session, camera, aspectPattern, [&](const auto value) { return ValidateFloat(session, camera, value, 0.1f, 5.0f); });
+    const auto view = ResolveMember(session, viewPattern, [&](const auto value)
+    {
+        return std::any_of(cameras.begin(), cameras.end(), [&](const auto camera) { return ValidateMatrix(session, camera, value); });
+    });
+    const auto fov = ResolveMember(session, fovPattern, [&](const auto value)
+    {
+        return std::any_of(cameras.begin(), cameras.end(), [&](const auto camera) { return ValidateFloat(session, camera, value, 1.0f, 180.0f); });
+    });
+    const auto aspect = ResolveMember(session, aspectPattern, [&](const auto value)
+    {
+        return std::any_of(cameras.begin(), cameras.end(), [&](const auto camera) { return ValidateFloat(session, camera, value, 0.1f, 5.0f); });
+    });
     if (!view || !fov || !aspect)
     {
         std::string missing;

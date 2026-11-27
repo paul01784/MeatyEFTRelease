@@ -81,7 +81,7 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
             resolvedMatrixPtr + 0x20 + static_cast<uint64_t>(player.boneList[index]) * 0x8,
             &firstLinks[index],
             sizeof(firstLinks[index])
-            });
+        });
     }
 
     std::vector<DWORD> firstBytes(firstRequests.size(), 0);
@@ -104,7 +104,7 @@ bool RegisteredPlayers::getBonePtrs(Player& player, bool waitForDma)
             continue;
 
         secondIndexes.emplace_back(index);
-        secondRequests.push_back({ firstLinks[index] + 0x10, &resolvedBonePtrs[index], sizeof(resolvedBonePtrs[index]) });
+        secondRequests.push_back({ firstLinks[index] + UnityOffsets::ManagedObject_NativePointerOffset, &resolvedBonePtrs[index], sizeof(resolvedBonePtrs[index]) });
     }
 
     if (secondRequests.empty())
@@ -194,9 +194,10 @@ namespace
         uint64_t boneTransform{};
 
         int boneSlot{ -1 };
+        int32_t transformIndex{ -1 };
 
         BoneTransformCacheEntry cache{};
-        TransformAccessReadOnly access{};
+        uint64_t hierarchy{};
 
         int count{};
         size_t bufOffset{};
@@ -233,6 +234,7 @@ namespace
 
     struct TransformHierarchyKey
     {
+        uint64_t transformData{};
         uint64_t transformArray{};
         uint64_t transformIndices{};
 
@@ -243,16 +245,17 @@ namespace
     {
         size_t operator()(const TransformHierarchyKey& key) const noexcept
         {
-            const size_t first = std::hash<uint64_t>{}(key.transformArray);
-            const size_t second = std::hash<uint64_t>{}(key.transformIndices);
-            return first ^ (second + 0x9e3779b97f4a7c15ULL + (first << 6) + (first >> 2));
+            const size_t first = std::hash<uint64_t>{}(key.transformData);
+            const size_t second = std::hash<uint64_t>{}(key.transformArray);
+            const size_t third = std::hash<uint64_t>{}(key.transformIndices);
+            return first ^ (second + 0x9e3779b97f4a7c15ULL + (first << 6) + (first >> 2)) ^ (third << 1);
         }
     };
 
     struct TransformHierarchyRead
     {
         TransformHierarchyKey key{};
-        size_t count{};
+        uint32_t count{};
         size_t bufOffset{};
         bool readComplete{};
         std::vector<LiveBoneRead*> bones;
@@ -481,17 +484,18 @@ namespace
             read.cache.boneTransform == read.boneTransform &&
             Utils::valid_pointer(read.cache.transformArray) &&
             Utils::valid_pointer(read.cache.transformIndices) &&
+            read.cache.transformIndex == read.transformIndex &&
             read.cache.transformIndex >= 0 &&
             read.cache.transformIndex < kMaxTransformChain;
     }
 
     static glm::vec3 computeTransformPosition(
-        const Matrix34* matrices,
+        const UnityTransform::TrsX* transforms,
         const int32_t* indices,
         int32_t index,
         int count)
     {
-        if (!matrices ||
+        if (!transforms ||
             !indices ||
             index < 0 ||
             count <= 0 ||
@@ -501,8 +505,8 @@ namespace
         }
 
         __m128 result = *(__m128*)(
-            (uint8_t*)matrices +
-            sizeof(Matrix34) *
+            (uint8_t*)transforms +
+            sizeof(UnityTransform::TrsX) *
             static_cast<size_t>(index)
             );
 
@@ -530,53 +534,53 @@ namespace
             if (transformIndex >= count)
                 break;
 
-            const Matrix34& matrix34 =
-                matrices[transformIndex];
+            const UnityTransform::TrsX& transform =
+                transforms[transformIndex];
 
             __m128 xxxx = _mm_castsi128_ps(
                 _mm_shuffle_epi32(
-                    *(__m128i*)(&matrix34.vec1),
+                    *(__m128i*)(&transform.q),
                     0x00
                 )
             );
 
             __m128 yyyy = _mm_castsi128_ps(
                 _mm_shuffle_epi32(
-                    *(__m128i*)(&matrix34.vec1),
+                    *(__m128i*)(&transform.q),
                     0x55
                 )
             );
 
             __m128 zwxy = _mm_castsi128_ps(
                 _mm_shuffle_epi32(
-                    *(__m128i*)(&matrix34.vec1),
+                    *(__m128i*)(&transform.q),
                     0x8E
                 )
             );
 
             __m128 wzyw = _mm_castsi128_ps(
                 _mm_shuffle_epi32(
-                    *(__m128i*)(&matrix34.vec1),
+                    *(__m128i*)(&transform.q),
                     0xDB
                 )
             );
 
             __m128 zzzz = _mm_castsi128_ps(
                 _mm_shuffle_epi32(
-                    *(__m128i*)(&matrix34.vec1),
+                    *(__m128i*)(&transform.q),
                     0xAA
                 )
             );
 
             __m128 yxwy = _mm_castsi128_ps(
                 _mm_shuffle_epi32(
-                    *(__m128i*)(&matrix34.vec1),
+                    *(__m128i*)(&transform.q),
                     0x71
                 )
             );
 
             __m128 tmp7 = _mm_mul_ps(
-                *(__m128*)(&matrix34.vec2),
+                *(__m128*)(&transform.s),
                 result
             );
 
@@ -642,7 +646,7 @@ namespace
                         tmp7
                     )
                 ),
-                *(__m128*)(&matrix34.vec0)
+                *(__m128*)(&transform.t)
             );
 
             const int previousTransformIndex =
@@ -690,7 +694,7 @@ namespace
         {
             std::vector<Memory::ScatterReadRequest> metadataRequests;
             std::vector<LiveBoneRead*> metadataReads;
-            metadataRequests.reserve(reads.size());
+            metadataRequests.reserve(reads.size() * 2);
             metadataReads.reserve(reads.size());
 
             for (LiveBoneRead& read : reads)
@@ -702,21 +706,20 @@ namespace
                 read.metadataDirty = true;
                 read.cache = {};
                 read.cache.boneTransform = read.boneTransform;
-                read.access = {};
+                read.hierarchy = 0;
+                read.transformIndex = -1;
 
-                const uint64_t accessAddress =
-                    read.boneTransform +
-                    UnityOffsets::TransformInternal_TransformAccessOffset;
+                const uint64_t hierarchyAddress = read.boneTransform + UnityOffsets::TransformAccess_HierarchyOffset;
+                const uint64_t indexAddress = read.boneTransform + UnityOffsets::TransformAccess_IndexOffset;
 
-                if (!Memory::IsValidPointer(accessAddress))
+                if (!Memory::IsValidPointer(hierarchyAddress) || !Memory::IsValidPointer(indexAddress))
                 {
                     read.cache.valid = false;
                     continue;
                 }
 
-                metadataRequests.push_back(
-                    { accessAddress, &read.access, sizeof(read.access) }
-                );
+                metadataRequests.push_back({ hierarchyAddress, &read.hierarchy, sizeof(read.hierarchy) });
+                metadataRequests.push_back({ indexAddress, &read.transformIndex, sizeof(read.transformIndex) });
                 metadataReads.emplace_back(&read);
             }
 
@@ -731,7 +734,8 @@ namespace
 
             for (size_t i = 0; i < metadataReads.size(); ++i)
             {
-                if (completed[i])
+                const size_t requestIndex = i * 2;
+                if (completed[requestIndex] && completed[requestIndex + 1])
                     metadataReads[i]->metadataCompleted = true;
                 else
                     metadataReads[i]->cache.valid = false;
@@ -743,21 +747,17 @@ namespace
             if (!read.needsMetadata)
                 continue;
 
-            if (!Utils::valid_pointer(read.access.pTransformData) ||
-                read.access.index < 0 ||
-                read.access.index >= kMaxTransformChain)
+            if (!Utils::valid_pointer(read.hierarchy) ||
+                read.transformIndex < 0 ||
+                read.transformIndex >= kMaxTransformChain)
             {
                 read.cache.valid = false;
                 read.sampleCompleted = read.metadataCompleted;
                 continue;
             }
 
-            read.cache.transformData =
-                read.access.pTransformData;
-
-            read.cache.transformIndex =
-                read.access.index;
-
+            read.cache.transformData = read.hierarchy;
+            read.cache.transformIndex = read.transformIndex;
             read.needsHierarchy = true;
         }
 
@@ -862,22 +862,9 @@ namespace
             if (!HasUsableTransformMetadata(read))
                 continue;
 
-            const size_t matrixCount =
-                static_cast<size_t>(
-                    read.cache.transformIndex + 1
-                    );
-
-            if (matrixCount == 0 ||
-                matrixCount > kMaxTransformChain)
-            {
-                read.cache.valid = false;
-                continue;
-            }
-
-            read.count = static_cast<int>(matrixCount);
-
             const TransformHierarchyKey key
             {
+                read.cache.transformData,
                 read.cache.transformArray,
                 read.cache.transformIndices
             };
@@ -894,14 +881,18 @@ namespace
             }
 
             TransformHierarchyRead& hierarchy = hierarchyReads[it->second];
-            hierarchy.count = (std::max)(hierarchy.count, matrixCount);
+            hierarchy.count = (std::max)(hierarchy.count, static_cast<uint32_t>(read.cache.transformIndex + 1));
             hierarchy.bones.emplace_back(&read);
         }
 
         if (hierarchyReads.empty())
             return dmaComplete;
 
-        thread_local std::vector<Matrix34> matrices;
+        for (TransformHierarchyRead& hierarchy : hierarchyReads)
+            for (LiveBoneRead* read : hierarchy.bones)
+                read->count = static_cast<int>(hierarchy.count);
+
+        thread_local std::vector<UnityTransform::TrsX> matrices;
         thread_local std::vector<int32_t> indices;
 
         size_t start = 0;
@@ -916,7 +907,7 @@ namespace
             {
                 const size_t matrixCount = hierarchyReads[end].count;
                 const size_t hierarchyBytes = matrixCount *
-                    (sizeof(Matrix34) + sizeof(int32_t));
+                    (sizeof(UnityTransform::TrsX) + sizeof(int32_t));
 
                 if (hierarchyBytes > kMaxBoneScatterBytes ||
                     end - start >= kMaxBoneHierarchiesPerScatter ||
@@ -965,7 +956,7 @@ namespace
                 {
                     hierarchy.key.transformArray,
                     matrices.data() + hierarchy.bufOffset,
-                    sizeof(Matrix34) * matrixCount
+                    sizeof(UnityTransform::TrsX) * matrixCount
                 };
                 positionRequests[positionRequestCount++] =
                 {
@@ -1008,11 +999,16 @@ namespace
                     continue;
                 }
 
-                for (LiveBoneRead* read : hierarchy.bones)
+                const glm::vec3 rootPosition = matrices[hierarchy.bufOffset].t;
+                std::vector<glm::vec3> groupPositions(hierarchy.bones.size());
+                bool groupValid = IsUsableBonePosition(rootPosition) && IsPlausibleBoneWorldPosition(rootPosition);
+
+                for (size_t boneIndex = 0; boneIndex < hierarchy.bones.size(); ++boneIndex)
                 {
+                    LiveBoneRead* read = hierarchy.bones[boneIndex];
                     read->sampleCompleted = true;
 
-                    const glm::vec3 position =
+                    groupPositions[boneIndex] =
                         computeTransformPosition(
                             matrices.data() + hierarchy.bufOffset,
                             indices.data() + hierarchy.bufOffset,
@@ -1020,14 +1016,22 @@ namespace
                             static_cast<int>(hierarchy.count)
                         );
 
-                    if (!IsUsableBonePosition(position) ||
-                        !IsPlausibleBoneWorldPosition(position))
+                    if (!IsUsableBonePosition(groupPositions[boneIndex]) ||
+                        !IsPlausibleBoneWorldPosition(groupPositions[boneIndex]) ||
+                        DistanceSquared(groupPositions[boneIndex], rootPosition) > 25.0f)
                     {
-                        read->cache.valid = false;
-                        continue;
+                        groupValid = false;
+                        break;
                     }
+                }
 
-                    read->position = position;
+                if (!groupValid)
+                    continue;
+
+                for (size_t boneIndex = 0; boneIndex < hierarchy.bones.size(); ++boneIndex)
+                {
+                    LiveBoneRead* read = hierarchy.bones[boneIndex];
+                    read->position = groupPositions[boneIndex];
                     read->hasPosition = true;
                 }
             }
@@ -1151,6 +1155,32 @@ namespace
             player->bonePointersNeedResolve = player->isZombie
                 ? !HasAnyBonePointers(*player)
                 : !HasAnchorBonePointer(*player);
+
+            bool jumped = false;
+            for (size_t index = 0; index < pose.positions.size() && index < player->bonePositions.size(); ++index)
+            {
+                if (pose.successfulSlots[index] && IsUsableBonePosition(player->bonePositions[index]) &&
+                    DistanceSquared(pose.positions[index], player->bonePositions[index]) > 2500.0f)
+                {
+                    jumped = true;
+                    break;
+                }
+            }
+
+            if (jumped)
+            {
+                player->playerBoneMatrixPtr = 0;
+                player->bonePtrs.assign(player->bonePtrs.size(), 0);
+                player->boneTransformCache.assign(player->boneTransformCache.size(), {});
+                player->bonePointersNeedResolve = true;
+                player->minimalBonePointersReady = false;
+                player->fullBonePointersReady = false;
+                player->minimalBonePoseValid = false;
+                player->fullBonePoseValid = false;
+                player->invalidBones = true;
+                player->nextBonePointerResolve = Clock::time_point{};
+                continue;
+            }
 
             const size_t baseIndex = static_cast<size_t>(boneListIndexes::Base);
             const size_t leftFootIndex = static_cast<size_t>(boneListIndexes::LFoot);

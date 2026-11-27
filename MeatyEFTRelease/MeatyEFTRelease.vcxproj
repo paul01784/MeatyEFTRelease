@@ -800,10 +800,10 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
     <ResourceCompile Include="MeatyEFTRelease.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="UI\resources\MeatyEFT.ico" />
     <Image Include="UI\resources\MeatyEFT.png" />
     <Image Include="bitmap1.bmp" />
     <Image Include="resources\MeatyEFT.png" />
+    <Image Include="UI\resources\MeatyEFT_frozen.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
@@ -831,5 +831,11 @@ dwmapi.lib;Crypt32.Lib;Wldap32.Lib;Ws2_32.Lib;d3dx9.lib;d3d9.lib;Normaliz.lib;li
       <MemProcFSRuntimeAsset Include="$(ProjectDir)runtime\memprocfs\vmm.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(MemProcFSRuntimeAsset)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyConfigRuntimeAssets" AfterTargets="Build">
+    <ItemGroup>
+      <ConfigRuntimeAsset Include="$(ProjectDir)configs\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ConfigRuntimeAsset)" DestinationFiles="@(ConfigRuntimeAsset->'$(OutDir)configs\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 </Project>

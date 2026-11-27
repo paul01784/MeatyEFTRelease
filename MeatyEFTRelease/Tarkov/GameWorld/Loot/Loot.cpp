@@ -204,8 +204,6 @@ namespace
         uint64_t gameObject = 0;
         uint64_t gameObjectNamePtr = 0;
         uint64_t components = 0;
-        uint64_t transformComponent = 0;
-        uint64_t transformObjectClass = 0;
         uint64_t transformInternal = 0;
     };
 
@@ -1390,51 +1388,13 @@ bool loot::buildNewLootItemsScatter(
             if (!Utils::valid_pointer(shell.components))
                 continue;
 
-            batch.AddTraced(shell.components, 0x8, shell.transformComponent, "shell.components+0x8");
+            batch.AddTraced(shell.components, 0x8, shell.transformInternal, "shell.components+0x8");
         }
 
         if (!batch.Execute())
         {
             for (size_t i = 0; i < candidates.size(); ++i)
-                shellReads[i].transformComponent = 0;
-        }
-    }
-
-    // transform native wrapper.
-    {
-        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
-
-        for (auto& shell : shellReads)
-        {
-            if (!Utils::valid_pointer(shell.transformComponent))
-                continue;
-
-            batch.AddTraced(shell.transformComponent, 0x10, shell.transformObjectClass, "shell.transformComponent+0x10");
-        }
-
-        if (!batch.Execute())
-        {
-            for (auto& shell : shellReads)
-                shell.transformObjectClass = 0;
-        }
-    }
-
-    // native transform access.
-    {
-        ScatterReadBatch batch(mem, DmaCacheMode::Uncached, "Loot");
-
-        for (auto& shell : shellReads)
-        {
-            if (!Utils::valid_pointer(shell.transformObjectClass))
-                continue;
-
-            batch.AddTraced(shell.transformObjectClass, 0x0, shell.transformInternal, "shell.transformObjectClass+0x0");
-        }
-
-        if (!batch.Execute())
-        {
-            for (auto& shell : shellReads)
-                shell.transformInternal = 0;
+                shellReads[i].transformInternal = 0;
         }
     }
 

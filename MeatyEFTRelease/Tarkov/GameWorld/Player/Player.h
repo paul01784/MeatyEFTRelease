@@ -12,24 +12,6 @@
 #include <vector>
 #include "HandsManager.h"
 #include "PlayerVelocityFilter.h"
-
-
-
-struct TransformAccessReadOnly
-{
-	uint64_t pTransformData; // relative offset 0x0 (Transform + 0x50)
-	int32_t index;          // relative offset 0x8 (Transform + 0x58)
-	int32_t pad;            // optional padding for alignment
-};
-
-struct Matrix34
-{
-	DirectX::SimpleMath::Vector4 vec0;
-	DirectX::SimpleMath::Vector4 vec1;
-	DirectX::SimpleMath::Vector4 vec2;
-};
-
-
 enum allPlayerBones : int
 {
 	HumanBase = 0,

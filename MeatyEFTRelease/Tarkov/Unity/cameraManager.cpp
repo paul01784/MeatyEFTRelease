@@ -430,7 +430,7 @@ bool CameraManager::resolveOpticCameraManager()
     std::uint64_t cameraReference = 0;
     std::uint64_t nativeCamera = 0;
     if (readPointer(manager + opticManagerCameraOffset(manager), cameraReference) &&
-        classNameMatches(readManagedComponentName(cameraReference), "Camera") &&
+        classNameMatches(readManagedObjectClassName(cameraReference), "Camera") &&
         readPointer(cameraReference + kUnityObjectCachedPointer, nativeCamera) && nativeCamera != m_fpsCamera)
     {
         const std::uint64_t matrixAddress = resolveViewMatrixAddress(nativeCamera, true);
@@ -630,29 +630,31 @@ bool CameraManager::resolveCameras()
 {
     std::uint64_t fps = 0;
     std::uint64_t optic = 0;
-    (void)resolveCamerasFromAllCameras(fps, optic);
+    std::uint64_t fpsMatrix = 0;
+    m_eftCameraManager = resolveCameraManagerInstance();
+    const std::uint64_t cameraOffset = cameraManagerCameraOffset(m_eftCameraManager);
+    std::uint64_t cameraReference = 0;
+    std::uint64_t nativeCamera = 0;
 
-    std::uint64_t fpsMatrix = resolveViewMatrixAddress(fps);
-    bool fpsResolvedFromAllCameras = validPointer(fps) && validPointer(fpsMatrix);
-
-    if (!fpsResolvedFromAllCameras)
+    if (cameraOffset &&
+        readPointer(m_eftCameraManager + cameraOffset, cameraReference) &&
+        classNameMatches(readManagedObjectClassName(cameraReference), "Camera") &&
+        readPointer(cameraReference + kUnityObjectCachedPointer, nativeCamera))
     {
-        m_eftCameraManager = resolveCameraManagerInstance();
-        const std::uint64_t cameraOffset = cameraManagerCameraOffset(m_eftCameraManager);
-        std::uint64_t cameraReference = 0;
-        std::uint64_t nativeCamera = 0;
-
-        if (cameraOffset &&
-            readPointer(m_eftCameraManager + cameraOffset, cameraReference) &&
-            classNameMatches(readManagedComponentName(cameraReference), "Camera") &&
-            readPointer(cameraReference + kUnityObjectCachedPointer, nativeCamera))
-        {
-            fps = nativeCamera;
-            const std::uint64_t managedMatrix = resolveViewMatrixAddress(nativeCamera);
-            if (validPointer(managedMatrix))
-                fpsMatrix = managedMatrix;
-        }
+        fps = nativeCamera;
+        fpsMatrix = resolveViewMatrixAddress(nativeCamera);
     }
+
+    const bool fpsResolvedFromManager = validPointer(fps) && validPointer(fpsMatrix);
+    if (!fpsResolvedFromManager)
+    {
+        fps = 0;
+        fpsMatrix = 0;
+        (void)resolveCamerasFromAllCameras(fps, optic);
+        fpsMatrix = resolveViewMatrixAddress(fps);
+    }
+
+    const bool fpsResolvedFromAllCameras = !fpsResolvedFromManager && validPointer(fps) && validPointer(fpsMatrix);
 
     if (!validPointer(fps))
     {
@@ -978,7 +980,8 @@ bool CameraManager::updateFrame(std::uint64_t localPwa, bool isAds, std::uint64_
     if (isAds && !m_lastAds && !validPointer(m_allCamerasOpticCamera))
         m_lastAllCamerasResolve = {};
 
-    if (!validPointer(m_allCamerasFpsCamera) || !validPointer(m_allCamerasOpticCamera))
+    if (!validPointer(m_fpsCamera) &&
+        (!validPointer(m_allCamerasFpsCamera) || !validPointer(m_allCamerasOpticCamera)))
     {
         std::uint64_t cachedFps = 0;
         std::uint64_t cachedOptic = 0;

@@ -48,7 +48,7 @@ private:
     std::atomic_bool resolving_{false};
     mutable std::mutex mutex_;
     std::thread worker_;
-    std::string status_ = "Using built-in Unity offsets";
+    std::string status_ = "Unity offsets not loaded";
     std::string lastError_;
     std::vector<UnityOffsetView> entries_;
 };

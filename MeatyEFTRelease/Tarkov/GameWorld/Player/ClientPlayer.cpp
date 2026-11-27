@@ -44,7 +44,7 @@ void ClientPlayer::configureControllerAddresses(Player& player) const noexcept
 
 bool ClientPlayer::tryResolveBoneMatrix(const Player& player, uint64_t& matrixPointer) const
 {
-    return PlayerMemoryAccess::tryReadChain(player.instance, { sdk::Player::_playerBody, 0x40, 0x30, 0x10 }, matrixPointer, DmaCacheMode::Uncached);
+    return PlayerMemoryAccess::tryReadChain(player.instance, { sdk::Player::_playerBody, sdk::PlayerBody::SkeletonRootJoint, sdk::Skeleton::Values, 0x10 }, matrixPointer, DmaCacheMode::Uncached);
 }
 
 std::optional<Player> ClientPlayer::tryCreate(uint64_t instance, std::string_view className) const

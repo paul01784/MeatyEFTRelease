@@ -7,7 +7,7 @@
 
 
 //define globals
-std::string globals::appVersion = "1.0.48";
+std::string globals::appVersion = "1.0.49";
 std::string globals::latestAppVersion = "";
 bool globals::showVersionMismatchWarning = false;
 float globals::appTextScale = 1.f;

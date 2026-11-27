@@ -2737,9 +2737,8 @@ bool Memory::TryReadLootTransformFallback(uint64_t gameObject, uint64_t& output)
     try {
         std::unique_lock<std::mutex> lock(dmaOpsMutex);
         if (!vHandle || !current_process.PID) return false;
-		const std::array<uint64_t,4> offsets = {
-			UnityOffsets::GameObject_ComponentsOffset, 0x8,
-			0x10, 0x0
+		const std::array<uint64_t,2> offsets = {
+			UnityOffsets::GameObject_ComponentsOffset, 0x8
 		};
         return LootTransformFallback::Resolve(gameObject, offsets, output,
             [&](uint64_t address, void* buffer, size_t size) {

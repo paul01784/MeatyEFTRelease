@@ -98,7 +98,7 @@ void ObservedPlayer::configureControllerAddresses(Player& player) const noexcept
 
 bool ObservedPlayer::tryResolveBoneMatrix(const Player& player, uint64_t& matrixPointer) const
 {
-    return PlayerMemoryAccess::tryReadChain(player.instance, { sdk::ObservedPlayerView::PlayerBody, 0x40, 0x30, 0x10 }, matrixPointer, DmaCacheMode::Uncached);
+    return PlayerMemoryAccess::tryReadChain(player.instance, { sdk::ObservedPlayerView::PlayerBody, sdk::PlayerBody::SkeletonRootJoint, sdk::Skeleton::Values, 0x10 }, matrixPointer, DmaCacheMode::Uncached);
 }
 
 std::optional<Player> ObservedPlayer::tryCreate(uint64_t instance, std::string_view className) const

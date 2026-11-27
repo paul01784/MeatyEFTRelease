@@ -32,6 +32,8 @@ public:
     };
 #pragma pack(pop)
 
+    static_assert(sizeof(TrsX) == 0x30);
+
 public:
     UnityTransform(uint64_t transformInternal, bool useCache = false);
 

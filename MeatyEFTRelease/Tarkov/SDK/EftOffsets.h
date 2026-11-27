@@ -4,10 +4,10 @@
 
 namespace sdk
 {
-#define EFT_FIELD(group, name, className, fieldName, fallback, isStatic, required) \
-    namespace group { inline std::uint64_t name = fallback; }
-#define EFT_TYPE(group, name, className, fallback, required) \
-    namespace group { inline std::uint64_t name = fallback; }
+#define EFT_FIELD(group, name, className, fieldName, isStatic, required) \
+    namespace group { inline std::uint64_t name = 0; }
+#define EFT_TYPE(group, name, className, required) \
+    namespace group { inline std::uint64_t name = 0; }
 #define EFT_ALIAS(group, name, targetGroup, targetName) \
     namespace group { inline std::uint64_t& name = targetGroup::targetName; }
 #include "EftOffsetDefinitions.inc"
@@ -29,9 +29,9 @@ namespace sdk
             static constexpr std::uint32_t FieldCount = 0x124;
         };
 
-        inline std::uint64_t TypeInfoTableRva = 0x75DA668;
-        inline std::uint64_t InGameStatusRva = 0x72CF648;
-        inline std::uint64_t GamePlayerOwnerRva = 0x731CE40;
-        inline std::uint64_t Il2CppClassStaticFields = Il2CppClassLayout::StaticFields;
+        inline std::uint64_t TypeInfoTableRva = 0;
+        inline std::uint64_t InGameStatusRva = 0;
+        inline std::uint64_t GamePlayerOwnerRva = 0;
+        inline std::uint64_t Il2CppClassStaticFields = 0;
     }
 }
